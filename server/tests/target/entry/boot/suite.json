@@ -1,14 +1,18 @@
 {
   "id": "boot-handoff",
-  "profiles": ["debug", "release"],
+  "profiles": [
+    "debug",
+    "release"
+  ],
   "sources": [
-    "server/src/**",
-    "server/build.rs",
-    "server/link.x",
-    "server/Cargo.toml",
-    ".cargo/config.toml",
-    "Cargo.toml",
-    "Cargo.lock"
+    "server/src/lib.rs",
+    "server/src/entry/mod.rs",
+    "server/src/metal/mod.rs",
+    "server/src/entry/boot/**",
+    "server/src/metal/riscv/mod.rs",
+    "server/src/metal/riscv/boot/**",
+    "server/src/metal/riscv/sbi/**",
+    "server/link.x"
   ],
   "run": {
     "kind": "qemu",

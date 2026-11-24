@@ -1,6 +1,6 @@
 use crate::{
     composition, qmp,
-    suite::{self, Run, Suite},
+    suite::{self, Board, Run, Suite},
     verify,
 };
 use clap::Args;
@@ -24,6 +24,8 @@ pub struct Inputs {
     profile: String,
     #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u8).range(4..=4))]
     harts: u8,
+    #[arg(long, value_enum)]
+    board: Option<Board>,
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=100))]
     rounds: u8,
 }
@@ -225,6 +227,12 @@ pub fn run(args: Inputs) -> Result<()> {
         suite.profiles.contains(&args.profile),
         "profile not supported by this test project",
     )?;
+    if let Some(board) = args.board {
+        require(
+            matches!(&suite.run, Run::BoardBoot { boards } if boards.contains(&board)),
+            "board not supported by this suite",
+        )?;
+    }
     let mut args = args;
     args.kernel = args.kernel.canonicalize()?;
     fresh(&args.output)?;
@@ -242,7 +250,10 @@ pub fn run(args: Inputs) -> Result<()> {
                 }),
             )?;
             let script = provider.join("server/tests").join(relative).join("run.sh");
-            for board in boards {
+            for board in boards
+                .iter()
+                .filter(|board| args.board.is_none_or(|want| want == **board))
+            {
                 for round in 0..args.rounds {
                     let label = format!("{}-{round}", board.name());
                     let mut command = Command::new("bash");

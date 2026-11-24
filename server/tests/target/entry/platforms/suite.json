@@ -1,10 +1,32 @@
 {
   "id": "platform-boot",
-  "profiles": ["debug", "release"],
-  "sources": [
-    "server/src/lib.rs", "server/src/entry/mod.rs", "server/src/entry/boot/mod.rs",
-    "server/src/metal/mod.rs", "server/src/metal/stack.rs", "server/src/metal/x86_64/**", "server/src/metal/aarch64/**",
-    "server/Cargo.toml", "server/build.rs", ".cargo/config.toml", "Cargo.toml", "Cargo.lock"
+  "profiles": [
+    "debug",
+    "release"
   ],
-  "run": { "kind": "board-boot", "boards": ["q35", "virt"] }
+  "sources": [
+    "server/src/lib.rs",
+    "server/src/entry/mod.rs",
+    "server/src/entry/boot/mod.rs",
+    "server/src/metal/mod.rs",
+    "server/src/metal/stack.rs"
+  ],
+  "run": {
+    "kind": "board-boot",
+    "boards": [
+      "q35",
+      "virt"
+    ],
+    "board_sources": {
+      "q35": [
+        "server/src/metal/x86_64/**",
+        "server/tests/target/entry/platforms/q35.rs"
+      ],
+      "virt": [
+        "server/src/metal/aarch64/**",
+        "server/tests/target/entry/platforms/virt.rs",
+        "server/tests/target/entry/platforms/virt.x"
+      ]
+    }
+  }
 }

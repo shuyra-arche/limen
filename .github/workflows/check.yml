@@ -1,7 +1,7 @@
 name: Check
 
 # Documentation-only changes do not need Kernel builds or QEMU tests.
-# Mixed source/documentation changes still run the complete checks.
+# Release calls run the full workspace checks.
 # workflow_call intentionally remains unfiltered for releases.
 on:
   pull_request:
@@ -16,6 +16,10 @@ on:
       - '**/*.mdx'
       - 'docs/**'
   workflow_call:
+    inputs:
+      full:
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -40,13 +44,24 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select checks
+        id: scope
+        env:
+          BASE_SHA: ${{ !inputs.full && github.ref_type != 'tag' && (github.event.pull_request.base.sha || github.event.before) || '' }}
+        run: |
+          plan=$(bash tools/tests/checks.sh "$PWD" "$BASE_SHA")
+          echo "plan=$plan" >> "$GITHUB_OUTPUT"
       - name: Check repository contracts
         run: |
           bash tools/tests/layout.sh
           bash tools/tests/release.sh
           bash tools/check-layout.sh
           bash tools/check-tooling.sh
-          bash -n tools/tests/discover.sh
+          bash tools/tests/selection.sh
+          bash -n tools/tests/batch.sh
           bash -n server/tests/target/entry/platforms/run.sh
       - name: Install host toolchain
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy
@@ -63,47 +78,33 @@ jobs:
           key: kernel-host-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler.outputs.hash }}-${{ hashFiles('Cargo.lock', 'server/tests/runner/Cargo.lock', '**/Cargo.toml', '.github/workflows/check.yml') }}
           restore-keys: |
             kernel-host-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler.outputs.hash }}-
-      - name: Check formatting and runner
+      - name: Check formatting
         run: |
           cargo fmt --all -- --check
           cargo fmt --manifest-path server/tests/runner/Cargo.toml -- --check
           cargo fmt --manifest-path server/tests/target/entry/platforms/Cargo.toml -- --check
+      - name: Check runner
+        if: fromJSON(steps.scope.outputs.plan).runner
+        run: |
           cargo clippy --locked --manifest-path server/tests/runner/Cargo.toml --all-targets --target x86_64-unknown-linux-gnu -- -Dwarnings
       - name: Test host contracts
         env:
           RUSTFLAGS: "-Dwarnings"
+          PLAN: ${{ steps.scope.outputs.plan }}
         run: |
-          cargo test --locked --workspace --target x86_64-unknown-linux-gnu
-          cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
-
-  rv64:
-    name: RV64 (${{ matrix.profile }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [debug, release]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install target toolchain
-        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rust-src --target riscv64gc-unknown-none-elf
-      - name: Identify compiler
-        id: compiler
-        run: echo "hash=$(rustc -Vv | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - name: Cache target compilation
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            target
-          key: kernel-rv64-v3-${{ matrix.profile }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler.outputs.hash }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/config.toml') }}
-          restore-keys: |
-            kernel-rv64-v3-${{ matrix.profile }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler.outputs.hash }}-
-      - name: Build workspace
-        env:
-          PROFILE: ${{ matrix.profile }}
+          if jq -e .full <<<"$PLAN" >/dev/null; then
+            cargo test --locked --workspace --target x86_64-unknown-linux-gnu
+          else
+            while IFS= read -r manifest; do
+              cargo test --locked --manifest-path "$manifest" --target x86_64-unknown-linux-gnu
+            done < <(jq -r '.manifests[]' <<<"$PLAN")
+          fi
+          if jq -e .runner <<<"$PLAN" >/dev/null; then
+            cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
+          fi
+      - name: Build RV64 workspace in both profiles
+        if: fromJSON(steps.scope.outputs.plan).rv64
         run: |
-          args=()
-          if [[ "$PROFILE" == release ]]; then args+=(--release); fi
-          cargo build --locked --workspace --target riscv64gc-unknown-none-elf "${args[@]}"
+          rustup target add riscv64gc-unknown-none-elf
+          cargo build --locked --workspace --target riscv64gc-unknown-none-elf
+          cargo build --locked --workspace --target riscv64gc-unknown-none-elf --release

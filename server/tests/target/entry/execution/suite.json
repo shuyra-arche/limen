@@ -1,13 +1,21 @@
 {
   "id": "kernel-execution",
-  "profiles": ["debug", "release"],
+  "profiles": [
+    "debug",
+    "release"
+  ],
   "sources": [
-    "server/src/**",
-    "server/build.rs",
+    "server/src/lib.rs",
+    "server/src/entry/mod.rs",
+    "server/src/metal/mod.rs",
+    "server/src/entry/boot/**",
+    "server/src/metal/riscv/mod.rs",
+    "server/src/metal/riscv/boot/**",
+    "server/src/metal/riscv/sbi/**",
     "server/link.x",
-    "server/Cargo.toml",
-    "Cargo.toml",
-    ".cargo/config.toml"
+    "server/src/basis/**",
+    "server/src/entry/execution.rs",
+    "server/src/metal/riscv/execution/**"
   ],
   "run": {
     "kind": "qemu",

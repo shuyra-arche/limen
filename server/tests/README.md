@@ -37,6 +37,14 @@ and verdict are preserved with the candidate revision.
 The Target workflow runs affected owner-local `suite.json` scenarios on four virtual CPUs and uploads their evidence. Ordinary boots enter on the
 firmware-selected CPU. Only the cross-Hart scenario starts a second participant.
 
+Target discovery compares the PR against its merge base and selects each board and
+profile from the owner manifests. Changes to a board backend or its fixture select
+that board. Shared boot entry, verification runner, and QEMU version changes select
+all affected guests. Manual dispatch runs the full suite. One Target job installs
+the selected emulators, firmware and Rust targets, builds the host runner once,
+and executes up to two guests concurrently. The artifact contains a per-case log,
+evidence directory and exit status, plus the selected plan and combined results.
+
 Hardware execution and later runtime contracts require separate verification.
 
 ## RV64 Kernel Unit execution
@@ -89,7 +97,8 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --output /tmp/limen-platforms --profile debug --harts 4
 ```
 
-The runner boots both boards from the candidate Git archive. Use `--profile
+The runner boots both boards from the candidate Git archive. Pass `--board q35`
+or `--board virt` to run just one. Use `--profile
 release` with a fresh output directory for optimized images. q35 requires
 the exact debug-console assertions and the guest's debug-exit status 33.
 Arm virt requires serial assertions, a QMP guest-shutdown event and exit 0.
