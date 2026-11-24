@@ -11,6 +11,7 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[path = "pl011.rs"]
 mod pl011;
+static FIRMWARE_VECTORS: AtomicUsize = AtomicUsize::new(0);
 static UART: AtomicUsize = AtomicUsize::new(0);
 static USE_HVC: AtomicBool = AtomicBool::new(false);
 
@@ -83,6 +84,9 @@ pub(super) fn hart() -> usize {
 }
 
 pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
+    let vectors: usize;
+    unsafe { asm!("mrs {}, VBAR_EL1", out(reg) vectors, options(nostack, nomem, preserves_flags)) };
+    FIRMWARE_VECTORS.store(vectors, Ordering::Relaxed);
     let source = uefi::system::with_config_table(|entries| {
         entries
             .iter()
@@ -156,10 +160,18 @@ pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
     }
     assert!(el == 4 && daif & 0x3c0 == 0x3c0 && spsel == 1);
     assert!(boot::stack_range().contains(&sp));
-    unsafe extern "C" {
-        static limen_vectors: u8;
-    }
-    assert!(vectors == (&raw const limen_vectors) as usize && vectors & 2047 == 0);
+    assert_ne!(vectors, FIRMWARE_VECTORS.load(Ordering::Relaxed));
+    assert!(vectors != 0 && vectors.is_multiple_of(2048));
+    // All 16 architectural vector slots must fit inside loaded image code.
+    let end = vectors.checked_add(2048).unwrap() as u64;
+    assert!(map.entries().any(|d| {
+        d.ty == MemoryType::LOADER_CODE
+            && d.phys_start <= vectors as u64
+            && d.page_count
+                .checked_mul(PAGE_SIZE as u64)
+                .and_then(|bytes| d.phys_start.checked_add(bytes))
+                .is_some_and(|limit| end <= limit)
+    }));
     let tree = boot.device_tree().expect("UEFI virt DTB");
     let size = unsafe { dtb_size(tree.start as *const u8, map, &[MemoryType::LOADER_DATA]) };
     assert_eq!(size, Ok(tree.len()));

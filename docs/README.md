@@ -95,9 +95,9 @@ user traps and calls require separate implementation and verification.
 Each architecture implements major and minor CPU startup under `metal/<arch>/boot/`.
 The common gate uses `metal::boot` to check the selected implementation.
 Declare `major` in `boot/major.rs` and `minor` in `boot/minor.rs` as Rust naked functions, with its firmware or loader ABI. Put the instructions and
-operands directly in `naked_asm!`. Export fixed linker or vector symbols
-from their Rust definitions and set hardware-required alignment on the
-function. Use `sym` for Rust-owned
+operands directly in `naked_asm!`. Export a fixed name when the external entry contract requires one, such as
+RV64 ELF `_start`. Refer to private CPU entries and vectors by address and
+apply their required alignment to the function. Use `sym` for Rust-owned
 storage and `const` for sizes or layout offsets. The linker supplies final
 image and section boundaries. The platform image supplies any board-specific diagnostics and startup
 resources. The QEMU platform images live under `server/tests/target/entry/platforms/`.

@@ -29,7 +29,6 @@ pub(crate) unsafe fn wake_minor(
 }
 
 #[unsafe(naked)]
-#[unsafe(export_name = "_limen_secondary_start")]
 unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
     naked_asm!(
         establish_supervisor!(),

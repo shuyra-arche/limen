@@ -9,7 +9,8 @@ use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 unsafe extern "C" {
     static _trap_stack_start: u8;
     static _trap_stack_end: u8;
-    static _limen_early_trap: u8;
+    static limen_test_text_start: u8;
+    static limen_test_text_end: u8;
     static _bss_start: u8;
     static _bss_end: u8;
 }
@@ -72,8 +73,9 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     }
     assert!(satp == 0, "translation enabled before the handoff");
     assert!(sstatus & 2 == 0 && sie == 0, "interrupt delivery enabled");
+    let code = (&raw const limen_test_text_start).addr()..(&raw const limen_test_text_end).addr();
     assert!(
-        stvec == (&raw const _limen_early_trap).addr() && stvec.is_multiple_of(4),
+        code.contains(&stvec) && stvec.is_multiple_of(4),
         "direct early trap vector missing",
     );
     assert!(

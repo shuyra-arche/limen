@@ -4,7 +4,6 @@ use core::arch::naked_asm;
 
 #[unsafe(naked)]
 #[rustc_align(2048)]
-#[unsafe(export_name = "limen_vectors")]
 pub(super) unsafe extern "C" fn vectors() -> ! {
     naked_asm!(
         ".rept 16",

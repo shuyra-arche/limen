@@ -55,7 +55,6 @@ unsafe extern "C" fn major(hart: usize, dtb: usize) -> ! {
 
 #[unsafe(naked)]
 #[rustc_align(4)]
-#[unsafe(export_name = "_limen_early_trap")]
 pub(super) unsafe extern "C" fn trap() -> ! {
     naked_asm!(
         "csrrw sp, sscratch, sp",
