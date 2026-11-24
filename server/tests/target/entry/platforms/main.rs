@@ -10,6 +10,8 @@ static TARGET: AtomicUsize = AtomicUsize::new(usize::MAX);
 static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 fn minor_ready(hart: usize, expected: usize) -> ! {
+    assert_eq!(MINOR.stack_range().len(), boot::stack_range().len());
+    assert_eq!(boot::stack_range().len(), 32 * 1024);
     assert_eq!(hart, expected);
     assert_eq!(hart, board::hart());
     let sp: usize;

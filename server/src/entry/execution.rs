@@ -27,7 +27,6 @@ use crate::{
         execution::{Hart, LeaveReceipt, LocalHart},
     },
 };
-pub use Minor as Secondary;
 
 use super::boot::{self, Boot};
 
@@ -51,15 +50,15 @@ struct Launch {
     entry: fn(&'static Execution) -> !,
 }
 
-/// Cooperative execution on the Boot Hart and one optional secondary Hart.
+/// Cooperative execution on the Boot Hart and one optional minor Hart.
 pub struct Execution {
     control: Lock<Control>,
     nest: KernelNest,
-    primary: Hart,
-    primary_id: usize,
-    secondary: Hart,
-    secondary_id: AtomicUsize,
-    secondary_boot: Option<&'static Minor>,
+    major: Hart,
+    major_id: usize,
+    minor: Hart,
+    minor_id: AtomicUsize,
+    minor_boot: Option<&'static Minor>,
 }
 
 impl Execution {
@@ -72,28 +71,17 @@ impl Execution {
     pub fn with_minor(
         boot: Boot,
         stacks: &'static mut Stacks,
-        secondary: &'static Minor,
+        minor: &'static Minor,
     ) -> Result<Self, Error> {
-        Self::establish(boot, stacks, Some(secondary))
-    }
-
-    /// Compatibility spelling for `with_minor`.
-    pub fn with_secondary(
-        boot: Boot,
-        stacks: &'static mut Stacks,
-        secondary: &'static Minor,
-    ) -> Result<Self, Error> {
-        Self::with_minor(boot, stacks, secondary)
+        Self::establish(boot, stacks, Some(minor))
     }
 
     fn establish(
         boot: Boot,
         stacks: &'static mut Stacks,
-        secondary: Option<&'static Minor>,
+        minor: Option<&'static Minor>,
     ) -> Result<Self, Error> {
-        if hardware::current_hart() != boot.hart()
-            || !Hart::supported(hardware::primary_trap_stack())
-        {
+        if hardware::current_hart() != boot.hart() || !Hart::supported() {
             return Err(Error::Unsupported);
         }
         Ok(Self {
@@ -103,11 +91,11 @@ impl Execution {
                 launch: None,
             }),
             nest: KernelNest::bare(stacks),
-            primary: Hart::new(),
-            primary_id: boot.hart(),
-            secondary: Hart::new(),
-            secondary_id: AtomicUsize::new(0),
-            secondary_boot: secondary,
+            major: Hart::new(),
+            major_id: boot.hart(),
+            minor: Hart::new(),
+            minor_id: AtomicUsize::new(0),
+            minor_boot: minor,
         })
     }
 
@@ -115,32 +103,25 @@ impl Execution {
         self.control.try_lock().ok_or(Error::Busy)
     }
 
-    fn local(&self) -> Result<(usize, usize, LocalHart<'_>), Error> {
+    fn local(&self) -> Result<(usize, LocalHart<'_>), Error> {
         let id = hardware::current_hart();
-        if id == self.primary_id {
-            return Ok((id, hardware::primary_trap_stack(), unsafe {
-                self.primary.local()
-            }));
+        if id == self.major_id {
+            return Ok((id, unsafe { self.major.local() }));
         }
-        let secondary = self.secondary_id.load(Acquire);
-        if secondary != 0 && id == secondary - 1 {
-            let trap = self
-                .secondary_boot
-                .expect("resident secondary boot storage")
-                .trap_stack();
-            return Ok((id, trap, unsafe { self.secondary.local() }));
+        let minor = self.minor_id.load(Acquire);
+        if minor != 0 && id == minor - 1 {
+            return Ok((id, unsafe { self.minor.local() }));
         }
         Err(Error::Unsupported)
     }
 
-    /// Ask OpenSBI to start a Hart. It attaches on its own dispatcher and
-    /// trap stacks before calling the platform entry.
+    /// Ask OpenSBI to start a Hart. It attaches on its own dispatcher stack with the early trap vector installed before calling the platform entry.
     ///
     /// # Safety
     ///
     /// The entry must be trusted supervisor code built for the Bare Nest.
     /// It must preserve gp, tp, masked interrupts, disabled extensions and
-    /// the configured traps. The 16 KiB dispatcher stack is shared by the
+    /// the configured traps. The 32 KiB dispatcher stack is shared by the
     /// live Limen startup frames, the entry and all dispatcher-side callees.
     /// The caller must include those startup frames in the total stack
     /// budget when bounding the entry and its callees.
@@ -149,13 +130,11 @@ impl Execution {
         hart: usize,
         entry: fn(&'static Execution) -> !,
     ) -> Result<(), Error> {
-        let secondary = self.secondary_boot.ok_or(Error::Unsupported)?;
-        if hardware::current_hart() != self.primary_id
-            || !Hart::supported(hardware::primary_trap_stack())
-        {
+        let minor = self.minor_boot.ok_or(Error::Unsupported)?;
+        if hardware::current_hart() != self.major_id || !Hart::supported() {
             return Err(Error::Unsupported);
         }
-        if hart == self.primary_id {
+        if hart == self.major_id {
             return Err(Error::Busy);
         }
         hart.checked_add(1).ok_or(Error::Unsupported)?;
@@ -167,8 +146,7 @@ impl Execution {
             control.launch = Some(Launch { hart, entry });
         }
         let argument = ptr::from_ref(self).expose_provenance();
-        if let Err(error) =
-            unsafe { secondary.start(hart, start_secondary, argument, boot::Startup::Sbi) }
+        if let Err(error) = unsafe { minor.start(hart, start_minor, argument, boot::Startup::Sbi) }
         {
             self.control.lock().launch = None;
             return Err(match error {
@@ -189,7 +167,7 @@ impl Execution {
     /// FP/vector state disabled. Any local borrow must allow suspension at
     /// `yield_now`. The Unit stays on the constructing Hart.
     pub unsafe fn create(&self, entry: Entry) -> Result<UnitId, Error> {
-        let (hart, _, _) = self.local()?;
+        let (hart, _) = self.local()?;
         self.create_unit(entry, Some(hart))
     }
 
@@ -243,8 +221,8 @@ impl Execution {
     /// Run one ready Unit until it yields or returns on its own stack.
     /// The original admission remains occupied until `vacate`.
     pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
-        let (id, trap, hart) = self.local()?;
-        if !Hart::supported(trap) {
+        let (id, hart) = self.local()?;
+        if !Hart::supported() {
             return Err(Error::Unsupported);
         }
         let (occupancy, storage, entry) = {
@@ -267,11 +245,11 @@ impl Execution {
     }
 
     pub fn pending_leave(&self) -> Option<Occupancy> {
-        self.local().ok()?.2.stopped().map(LeaveReceipt::occupancy)
+        self.local().ok()?.1.stopped().map(LeaveReceipt::occupancy)
     }
 
     pub fn vacate(&self, occupancy: Occupancy) -> Result<(), Error> {
-        let (_, _, hart) = self.local()?;
+        let (_, hart) = self.local()?;
         let mut control = self.control()?;
         control.room.on_hart(occupancy)?;
         let receipt = hart
@@ -306,8 +284,8 @@ impl Execution {
     }
 
     fn leave(&self, unit: UnitId, end: Option<u64>) -> Result<(), Error> {
-        let (_, trap, hart) = self.local()?;
-        if !Hart::supported(trap) {
+        let (_, hart) = self.local()?;
+        if !Hart::supported() {
             return Err(Error::Unsupported);
         }
         let occupancy = hart
@@ -374,7 +352,7 @@ struct Start {
 extern "C" fn start(argument: *const ()) -> ! {
     // On first entry this points to the suspended dispatcher's live Start.
     let Start { execution, entry } = unsafe { argument.cast::<Start>().read() };
-    let (_, _, hart) = execution.local().expect("attached Hart");
+    let (_, hart) = execution.local().expect("attached Hart");
     let unit = hart.running().expect("authorized Kernel Unit").unit();
     let value = entry(&mut Current {
         execution,
@@ -386,17 +364,14 @@ extern "C" fn start(argument: *const ()) -> ! {
     boot::shutdown(false)
 }
 
-fn start_secondary(hart: usize, argument: usize) -> ! {
+fn start_minor(hart: usize, argument: usize) -> ! {
     // The firmware launch holds a resident Execution for this callback.
     let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
-    let secondary = execution
-        .secondary_boot
-        .expect("resident secondary boot storage");
     assert_eq!(hardware::current_hart(), hart);
-    assert!(Hart::supported(secondary.trap_stack()));
+    assert!(Hart::supported());
     let entry = {
         let mut control = execution.control.lock();
-        let launch = control.launch.expect("reserved secondary launch");
+        let launch = control.launch.expect("reserved minor launch");
         assert_eq!(launch.hart, hart);
         control
             .room
@@ -404,6 +379,6 @@ fn start_secondary(hart: usize, argument: usize) -> ! {
             .expect("reserved Room participation");
         launch.entry
     };
-    execution.secondary_id.store(hart + 1, Release);
+    execution.minor_id.store(hart + 1, Release);
     entry(execution)
 }

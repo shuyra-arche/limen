@@ -59,6 +59,8 @@ change server/src/entry/boot/handoff.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/generic/boot/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/generic/boot/trap.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/generic/boot/major.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/generic/boot/minor.rs

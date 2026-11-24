@@ -1,5 +1,6 @@
-use super::{STACK, vectors};
+use super::vectors;
 use crate::entry::boot::Loader;
+use crate::metal::generic::boot::{STACK_BYTES, major::STACK};
 use core::arch::naked_asm;
 
 /// Establish the major CPU stack and exception vectors before delivering Boot.
@@ -28,6 +29,6 @@ pub unsafe extern "C" fn major(hart: usize, input: &Loader<'_>) -> ! {
         vectors = sym vectors,
         loaded = sym crate::entry::boot::start,
         stack = sym STACK,
-        size = const super::STACK_BYTES,
+        size = const STACK_BYTES,
     );
 }

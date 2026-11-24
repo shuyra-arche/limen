@@ -64,7 +64,7 @@ static SERVICES: Services = Services {
 
 /// The trap vector is live before BSS has been cleared. Its failure path
 /// probes firmware directly and never depends on a published service table.
-pub(crate) fn services() -> Services {
+pub(crate) fn trap_services() -> Services {
     let available = extensions();
     Services {
         output: SERVICES.output.filter(|_| available.console),
@@ -73,7 +73,7 @@ pub(crate) fn services() -> Services {
 }
 
 pub(crate) fn services_on_entry() -> &'static Services {
-    let available = services();
+    let available = trap_services();
     if available.output.is_none() || available.reset.is_none() {
         available.reject(format_args!(
             "FAIL Limen boot: required SBI debug console or system reset unavailable\n"

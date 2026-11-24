@@ -19,7 +19,7 @@ pub enum StartError {
     Unconfirmed(boot::DeliveryError),
 }
 
-const DISPATCH_BYTES: usize = 16 * 1024;
+use super::STACK_BYTES;
 
 #[repr(u32)]
 enum State {
@@ -43,7 +43,7 @@ struct Launch {
 pub struct Minor {
     state: AtomicU32,
     launch: UnsafeCell<MaybeUninit<Launch>>,
-    stack: Stack<DISPATCH_BYTES>,
+    stack: Stack<STACK_BYTES>,
     pub(crate) context: boot::MinorContext,
 }
 
@@ -74,7 +74,7 @@ impl Minor {
     }
 
     pub fn stack_range(&self) -> Range<usize> {
-        self.stack.top() - DISPATCH_BYTES..self.stack.top()
+        self.stack.top() - STACK_BYTES..self.stack.top()
     }
 
     /// Request startup of an exclusively owned, inactive CPU.

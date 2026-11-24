@@ -14,7 +14,7 @@ use core::{
 };
 use kernel::entry::{
     boot::{Boot, shutdown, write},
-    execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Minor, Stacks, UnitId},
+    execution::{Current, End, Error, Execution, Lifecycle, Minor, Occupancy, Stacks, UnitId},
 };
 
 global_asm!(include_str!("register-probe.S"));
@@ -182,6 +182,11 @@ fn secondary(execution: &'static Execution) -> ! {
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
+    assert_eq!(
+        MINOR.stack_range().len(),
+        kernel::entry::boot::stack_range().len()
+    );
+    assert_eq!(MINOR.stack_range().len(), 32 * 1024);
     let primary = boot.hart();
     let second_hart = usize::from(primary == 0);
     assert!(primary < 4, "unexpected QEMU Boot Hart");

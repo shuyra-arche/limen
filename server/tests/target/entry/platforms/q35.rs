@@ -120,7 +120,7 @@ pub(super) fn inspect(boot: boot::Boot, _: &impl MemoryMap) -> ! {
     assert!(cs & 3 == 0 && cr0 & (1 << 31) != 0);
     assert!(flags & (1 << 9) == 0 && boot::stack_range().contains(&sp));
     assert!(idtr.limit == 4095 && idtr.base != 0 && idtr.base != OLD_IDT.load(Ordering::Relaxed));
-    // Confirm the active table consists of the kernel's fail-stop gates.
+    // Confirm the active table consists of the kernel's diagnostic gates.
     for i in 0..256 {
         let gate = (idtr.base + 16 * i) as *const u8;
         assert!(unsafe { gate.add(5).read_volatile() } == 0x8e);

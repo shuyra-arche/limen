@@ -1,4 +1,4 @@
-use crate::metal::generic::stack::Stack;
+use crate::metal::generic::boot::trap as diagnostic;
 use core::arch::{asm, naked_asm};
 
 // Both entries establish supervisor state before using either stack.
@@ -22,20 +22,6 @@ mod major;
 mod minor;
 pub(crate) use minor::{MinorContext, minor_context, wake_minor};
 
-pub(crate) type TrapStack = Stack<4096>;
-
-#[unsafe(link_section = ".limen.trap.stack")]
-static mut TRAP_STACK: TrapStack = TrapStack::new();
-
-/// Checks the state established by the assembly entry without changing translation.
-pub(crate) fn established() -> bool {
-    established_on(primary_trap_stack())
-}
-
-pub(crate) fn primary_trap_stack() -> usize {
-    (&raw const TRAP_STACK).addr() + size_of::<TrapStack>()
-}
-
 /// Trusted firmware identity retained in the kernel's ABI-reserved register.
 pub(crate) fn current_hart() -> usize {
     let hart;
@@ -45,7 +31,7 @@ pub(crate) fn current_hart() -> usize {
     hart
 }
 
-pub(crate) fn established_on(trap_stack: usize) -> bool {
+pub(crate) fn established() -> bool {
     let (status, interrupt_enable, translation, vector, scratch): (
         usize,
         usize,
@@ -72,7 +58,7 @@ pub(crate) fn established_on(trap_stack: usize) -> bool {
         && interrupt_enable == 0
         && translation == 0
         && vector == trap as *const () as usize
-        && scratch == trap_stack
+        && scratch == (&raw const diagnostic::STACK).addr() + diagnostic::BYTES
 }
 
 pub(crate) fn image() -> core::ops::Range<usize> {
@@ -95,10 +81,6 @@ pub(crate) mod interface {
     pub use super::minor::Startup;
 }
 
-pub(crate) const STACK_BYTES: usize = 16 * 1024;
-#[unsafe(link_section = ".limen.boot.stack")]
-pub(in crate::metal) static mut STACK: Stack<STACK_BYTES> = Stack::new();
-
 pub(crate) fn stack_pointer() -> usize {
     let sp: usize;
     unsafe { asm!("mv {}, sp", out(reg) sp, options(nomem, nostack)) };
@@ -111,22 +93,19 @@ pub type DeliveryError = core::convert::Infallible;
 #[rustc_align(4)]
 unsafe extern "C" fn trap() -> ! {
     naked_asm!(
+        "la t0, {available}",
+        "amoswap.w.aq t0, zero, (t0)",
+        "beqz t0, 2f",
         "csrrw sp, sscratch, sp",
-        "beqz sp, 2f",
         "csrr a3, sscratch",
-        "csrw sscratch, zero",
         "csrr a0, scause",
         "csrr a1, sepc",
         "csrr a2, stval",
+        "csrr a4, sstatus",
         "tail {report}",
         "2: wfi",
         "j 2b",
-        report = sym report_trap,
+        available = sym diagnostic::AVAILABLE,
+        report = sym diagnostic::report,
     );
-}
-
-extern "C" fn report_trap(cause: usize, pc: usize, value: usize, stack: usize) -> ! {
-    crate::metal::generic::firmware::sbi::services().reject(format_args!(
-        "FAIL Limen boot trap: cause={cause:#x} pc={pc:#x} value={value:#x} stack={stack:#x}\n"
-    ))
 }

@@ -1,4 +1,4 @@
-use crate::metal::generic::stack::Stack;
+use crate::metal::generic::boot::trap as diagnostic;
 mod major;
 pub(crate) use major::major as enter_major;
 
@@ -69,9 +69,6 @@ pub(crate) mod interface {
 }
 pub(crate) use minor::{MinorContext, minor_context, wake_minor};
 
-pub(crate) const STACK_BYTES: usize = 32 * 1024;
-pub(in crate::metal) static mut STACK: Stack<STACK_BYTES> = Stack::new();
-
 pub(crate) fn stack_pointer() -> usize {
     let sp: usize;
     unsafe { asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack)) };
@@ -79,3 +76,51 @@ pub(crate) fn stack_pointer() -> usize {
 }
 
 pub type DeliveryError = isize;
+
+// A 64-bit interrupt gate saves RIP, CS, RFLAGS, RSP and SS. Normalize the
+// hardware error-code slot before entering the common register-only stub.
+const VECTOR_BYTES: usize = 16;
+#[unsafe(naked)]
+unsafe extern "sysv64" fn vectors() -> ! {
+    naked_asm!(
+        ".set vector, 0",
+        ".rept 256",
+        "2:",
+        ".if vector != 8 && vector != 10 && vector != 11 && vector != 12 && vector != 13 && vector != 14 && vector != 17 && vector != 21 && vector != 29 && vector != 30",
+        "push 0",
+        ".endif",
+        "push vector",
+        "jmp 3f",
+        ".fill {stride} - (. - 2b), 1, 0x90",
+        ".set vector, vector + 1",
+        ".endr",
+        "3: cli",
+        "cld",
+        "xor eax, eax",
+        "xchg [rip + {available}], eax",
+        "test eax, eax",
+        "jz 5f",
+        "mov rdi, [rsp]",       // vector
+        "mov r8, [rsp + 8]",    // hardware error code or zero
+        "mov rsi, [rsp + 16]",  // RIP
+        "mov rcx, [rsp + 40]",  // interrupted RSP
+        "xor edx, edx",
+        "cmp edi, 14",
+        "jne 4f",
+        "mov rdx, cr2",
+        "4: lea rsp, [rip + {stack} + {bytes}]",
+        "call {report}",
+        "5: hlt",
+        "jmp 5b",
+        stride = const VECTOR_BYTES,
+        available = sym diagnostic::AVAILABLE,
+        stack = sym diagnostic::STACK,
+        bytes = const diagnostic::BYTES,
+        report = sym report,
+    );
+}
+
+// The assembly stub uses SysV registers even for a UEFI image.
+extern "sysv64" fn report(vector: usize, pc: usize, value: usize, sp: usize, error: usize) -> ! {
+    diagnostic::report(vector, pc, value, sp, error)
+}

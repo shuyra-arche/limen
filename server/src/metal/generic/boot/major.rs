@@ -1,11 +1,19 @@
 //! Admit the major CPU after the selected backend installs its stack and exception entry.
-use crate::{entry::boot::Boot, metal::boot};
+use super::STACK_BYTES;
+use crate::{
+    entry::boot::Boot,
+    metal::{boot, generic::stack::Stack},
+};
 use core::ops::Range;
+
+// The RV64 linker reserves this section outside the BSS cleared by the entry.
+#[unsafe(link_section = ".bootstk")]
+pub(in crate::metal) static mut STACK: Stack<STACK_BYTES> = Stack::new();
 
 /// Image-owned stack reservation for the major CPU.
 pub fn stack_range() -> Range<usize> {
-    let start = (&raw const boot::STACK).addr();
-    start..start + boot::STACK_BYTES
+    let start = (&raw const STACK).addr();
+    start..start + STACK_BYTES
 }
 
 /// # Safety

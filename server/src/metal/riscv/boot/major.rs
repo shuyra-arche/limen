@@ -1,5 +1,7 @@
 //! OpenSBI enters the major CPU with (hart, DTB).
-use super::{STACK, TRAP_STACK, TrapStack, trap};
+use super::trap;
+use crate::metal::generic::boot::trap as diagnostic;
+use crate::metal::generic::boot::{STACK_BYTES, major::STACK};
 use core::arch::naked_asm;
 
 #[unsafe(naked)]
@@ -25,9 +27,9 @@ unsafe extern "C" fn major(hart: usize, dtb: usize) -> ! {
         "j 2b",
         "3: tail {loaded}",
         stack = sym STACK,
-        size = const super::STACK_BYTES,
-        trap_stack = sym TRAP_STACK,
-        trap_size = const size_of::<TrapStack>(),
+        size = const STACK_BYTES,
+        trap_stack = sym diagnostic::STACK,
+        trap_size = const diagnostic::BYTES,
         vector = sym trap,
         loaded = sym crate::entry::boot::start,
     );

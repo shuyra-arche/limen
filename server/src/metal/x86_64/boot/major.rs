@@ -1,8 +1,9 @@
-use super::{Gate, IDT, STACK, load_idt, stop};
+use super::{Gate, IDT, VECTOR_BYTES, load_idt, vectors};
 use crate::entry::boot::Loader;
+use crate::metal::generic::boot::{STACK_BYTES, major::STACK};
 use core::arch::{asm, naked_asm};
 
-/// Transfer to the kernel stack and install fail-stop interrupt gates.
+/// Transfer to the kernel stack and install diagnostic interrupt gates.
 ///
 /// # Safety
 /// Call once, after successful ExitBootServices, on the sole boot CPU in
@@ -26,7 +27,7 @@ pub unsafe extern "sysv64" fn major(hart: usize, input: &Loader<'_>) -> ! {
         "3: pause",
         "jmp 3b",
         stack = sym STACK,
-        size = const super::STACK_BYTES,
+        size = const STACK_BYTES,
         install = sym install,
     );
 }
@@ -34,19 +35,18 @@ pub unsafe extern "sysv64" fn major(hart: usize, input: &Loader<'_>) -> ! {
 unsafe extern "sysv64" fn install(hart: usize, input: *const ()) -> ! {
     let selector: u16;
     unsafe { asm!("mov {:x}, cs", out(reg) selector, options(nomem, nostack, preserves_flags)) };
-    let addr = stop as *const () as usize;
-    let gate = Gate {
-        low: addr as u16,
-        selector,
-        ist: 0,
-        attributes: 0x8e,
-        middle: (addr >> 16) as u16,
-        high: (addr >> 32) as u32,
-        reserved: 0,
-    };
-    // The CPU retains this table after LIDT. Its storage belongs to the image.
     let slots = (&raw mut IDT).cast::<Gate>();
     for index in 0..256 {
+        let addr = vectors as *const () as usize + index * VECTOR_BYTES;
+        let gate = Gate {
+            low: addr as u16,
+            selector,
+            ist: 0,
+            attributes: 0x8e,
+            middle: (addr >> 16) as u16,
+            high: (addr >> 32) as u32,
+            reserved: 0,
+        };
         unsafe { slots.add(index).write(gate) };
     }
     load_idt();

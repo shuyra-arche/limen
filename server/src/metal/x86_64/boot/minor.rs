@@ -191,7 +191,7 @@ unsafe extern "sysv64" fn minor() -> ! {
     )
 }
 unsafe extern "sysv64" fn finish(hart: usize, slot: &Minor) -> ! {
-    // The major CPU has already published the complete, immutable fail-stop IDT.
+    // The major CPU has already published the complete, immutable diagnostic IDT.
     super::load_idt();
     minor::arrive(hart, slot)
 }

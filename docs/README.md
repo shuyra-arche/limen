@@ -13,10 +13,19 @@ hardware stack pointer lies in the boot stack and asks Metal to read back the in
 CPU state. It admits the firmware facts and calls the one image-defined
 `limen_platform_ready(Boot)` on all three architectures. A rejected handoff uses the shared diagnostic and shutdown path.
 
-One Metal stack definition backs `stack_range()` on all three targets. RV64
-places its 16 KiB ordinary stack and separate 4 KiB trap stack outside BSS.
-The linker still supplies the final ELF image bounds used for DTB overlap
-checks. The x86 and Arm entries use 32 KiB ordinary stacks.
+Generic Metal reserves a private 32 KiB ordinary stack for the major and for
+each provisioned minor. A separate 16 KiB emergency stack serves the first
+terminal exception anywhere in the image. The vector claims it atomically
+before switching stacks. Nested and concurrent exceptions park without using
+the winner's stack. RV64 places both image-owned stack sections outside BSS.
+
+All three backends report the interrupted PC and SP, native cause, value and
+status through the same generic handler. RV64 supplies scause, stval and
+sstatus. Arm supplies the vector slot, a valid abort address when available
+and the applicable ESR. x86 supplies the vector, CR2 for a page fault and the
+hardware error code when present. The handler requests failure shutdown even
+if output fails. On x86 the CPU must be able to push its interrupt frame
+before software can switch to the emergency stack.
 
 The active boot protocol supplies early services. OpenSBI images probe SBI debug console and system reset once during
 admission and publish their callbacks for subsequent use. An early RV64 trap
@@ -59,10 +68,10 @@ The trusted image consumes the Boot handoff to establish cooperative execution
 on the Boot Hart. It supplies two resident 16 KiB stacks in the shared Bare
 Kernel Nest. Each Unit reserves one stack and a generational identity.
 `Execution::with_minor` accepts a resident `Minor` with its own
-dispatcher and emergency stacks. The platform can use `start_hart` to start
+dispatcher stack. The platform can use `start_hart` to start
 one selected Hart through OpenSBI HSM. Room admits the secondary after its
 trusted supervisor entry establishes its local execution state.
-The 16 KiB secondary dispatcher stack holds the live startup frames, the
+The 32 KiB minor dispatcher stack holds the live startup frames, the
 platform entry and its dispatcher-side callees.
 
 Trusted Unit entries must fit their stack and run in supervisor mode with
@@ -124,21 +133,21 @@ firmware allocations and loader stack reserved while Metal takes over the CPU.
 
 On q35, the loader calls Metal using the System V ABI. Metal checks CPL0
 and CR0.PG, masks interrupts, switches to its 32 KiB stack and installs 256
-fail-stop interrupt gates using the current code selector. The loader's GDT
+diagnostic interrupt gates using the current code selector. The loader's GDT
 and page tables stay in use.
 
 On virt, the test selects non-secure EL1, GICv3, PSCI/HVC and device-tree
 firmware configuration. The loader obtains the DTB address from the UEFI
 configuration table, validates its extent, and copies it into loader-owned
 pages before exiting Boot Services. Metal masks DAIF, selects SP_EL1, switches to its 32 KiB
-stack and installs an aligned fail-stop vector table. The shared Boot admission gate verifies
+stack and installs an aligned exception vector table. The shared Boot admission gate verifies
 that the DTB header and its declared extent fit within the retained loader-data descriptor
 in the final memory map before reporting success.
 
 ## Minor CPU startup
 
 A major CPU receives Boot once. Each minor starts with an exclusive resident
-`Minor` record and its own 16 KiB stack. The major publishes the launch record
+`Minor` record and its own 32 KiB stack. The major publishes the launch record
 before requesting startup. The target claims it and reads back its hardware
 identity, active stack and exception entry before publishing Ready and calling
 the supplied minor entry. `Minor::ready()` observes that publication. A
@@ -147,15 +156,9 @@ record, trampoline, GDT and mappings reserved because the target may still enter
 
 | Profile | Startup request | State established on the minor |
 | --- | --- | --- |
-| RV64 / OpenSBI | SBI HSM hart start | Supervisor state, private ordinary and trap stacks, direct trap vector |
+| RV64 / OpenSBI | SBI HSM hart start | Supervisor state, private ordinary stack and armed emergency stack, direct trap vector |
 | x86_64 / q35 | xAPIC INIT and SIPI to a loader-reserved executable page below 1 MiB | Four-level paging, long mode, retained GDT, kernel IDT and private stack |
 | AArch64 / virt | PSCI CPU_ON over HVC with the launch record as context | Non-secure EL1, identity-mapped translation controls, SP_EL1 and kernel vectors |
-
-The 16 KiB RV64 and 32 KiB UEFI major stacks are image budgets. RV64
-reserves a separate diagnostic trap stack and clears BSS on ELF entry. The
-UEFI profiles rely on the loader to initialize their images. RV64 prints
-early trap details, while the q35 and Arm tables park the CPU on a fault.
-These are loader and diagnostic choices within the verified profiles.
 
 Before exiting Boot Services, the q35 test image enumerates healthy enabled APs
 with UEFI MP Services, reserves a low executable page and calibrates the major

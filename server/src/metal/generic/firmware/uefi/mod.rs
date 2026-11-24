@@ -22,3 +22,7 @@ pub(crate) unsafe fn admit<'a>(hart: usize, input: *const ()) -> Option<Boot<'a>
 pub(crate) fn services_on_entry() -> &'static Services {
     Services::active()
 }
+
+pub(crate) fn trap_services() -> &'static Services {
+    Services::active()
+}
