@@ -15,10 +15,17 @@ global_asm!(
 );
 
 unsafe extern "C" {
+    static _boot_stack_start: u8;
+    static _boot_stack_end: u8;
     static _kernel_base: u8;
     static _kernel_edge: u8;
     static _limen_early_trap: u8;
     static _trap_stack_end: u8;
+}
+
+/// Memory reserved by the linker for the bootstrap CPU's ordinary stack.
+pub fn stack_range() -> core::ops::Range<usize> {
+    (&raw const _boot_stack_start).addr()..(&raw const _boot_stack_end).addr()
 }
 
 /// Checks the state established by the assembly entry without changing translation.

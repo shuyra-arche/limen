@@ -4,6 +4,11 @@
 architecture and Treaty contracts. This repository documents the implementation
 it currently provides.
 
+All three boot paths are declared in [`entry::boot`](../server/src/entry/boot/mod.rs).
+The module documents the prerequisites and the facts each continuation receives.
+Its `stack_range()` identifies the boot CPU's ordinary stack on every target.
+Metal owns the stack storage or linker bounds and installs the CPU state.
+
 ## RV64 boot
 
 An OpenSBI platform image links the `kernel` library and supplies

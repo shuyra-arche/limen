@@ -3,7 +3,7 @@
 
 use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
-use kernel::entry::boot::{Boot, shutdown, write};
+use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 
 unsafe extern "C" {
     static _boot_stack_start: u8;
@@ -83,9 +83,10 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
             && sscratch.is_multiple_of(16),
         "emergency stack not armed",
     );
+    let reserved = (&raw const _boot_stack_start).addr()..(&raw const _boot_stack_end).addr();
+    assert_eq!(stack_range(), reserved, "boot stack reservation mismatch");
     assert!(
-        ((&raw const _boot_stack_start).addr()..(&raw const _boot_stack_end).addr()).contains(&sp)
-            && sp.is_multiple_of(16),
+        reserved.contains(&sp) && sp.is_multiple_of(16),
         "supervisor stack outside the boot stack",
     );
 

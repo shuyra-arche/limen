@@ -1,93 +1,32 @@
-//! Trusted RV64 firmware handoff before any memory or Unit is admitted.
+//! Trusted handoff on the boot CPU. The loader keeps the image, stacks and
+//! handoff inputs reserved while they are in use.
+//!
+//! - RV64: OpenSBI enters `_start`. Metal masks interrupts, establishes the
+//!   boot and trap stacks and clears BSS. The entry checks supervisor state,
+//!   SBI console/reset support and the DTB extent before delivering `Boot`.
+//! - x86_64: after ExitBootServices, the loader calls `enter` in 64-bit ring
+//!   0 with paging active. Metal masks interrupts, switches stacks and loads
+//!   a fail-stop IDT before calling the continuation with its input word.
+//! - AArch64: the loader calls `enter` in non-secure EL1. Metal masks DAIF,
+//!   selects SP_EL1 and installs the fail-stop vectors before forwarding the
+//!   input word to the continuation.
+//!
+//! All three expose the boot CPU stack reservation through [`stack_range`].
 
+#[cfg(target_arch = "riscv64")]
+mod opensbi;
+#[cfg(target_arch = "riscv64")]
 mod tree;
 
-use core::fmt::{self, Write};
-use core::ops::Range;
+#[cfg(target_arch = "riscv64")]
+pub use opensbi::{Boot, shutdown, write};
 
-use crate::metal::riscv::{boot, sbi};
+#[cfg(target_arch = "aarch64")]
+pub use crate::metal::aarch64::enter;
+#[cfg(target_arch = "x86_64")]
+pub use crate::metal::x86_64::enter;
 
-/// Facts from the admitted firmware handoff. These carry no authority over RAM.
-pub struct Boot {
-    hart: usize,
-    device_tree: Range<usize>,
-}
-
-impl Boot {
-    pub fn hart(&self) -> usize {
-        self.hart
-    }
-
-    /// Physical address interval occupied by the firmware device tree.
-    pub fn device_tree(&self) -> Range<usize> {
-        self.device_tree.clone()
-    }
-}
-
-unsafe extern "Rust" {
-    fn limen_platform_ready(boot: Boot) -> !;
-}
-
-// OpenSBI transfers control to _start on one boot hart, with placement and
-// readable ownership of the device tree guaranteed by the trusted platform.
-#[unsafe(no_mangle)]
-extern "C" fn limen_boot(hart: usize, device_tree: usize) -> ! {
-    let established = boot::established();
-    let firmware = sbi::extensions();
-    if !established || !firmware.console || !firmware.reset {
-        reject(
-            firmware,
-            format_args!("FAIL Limen boot: invalid supervisor or SBI handoff\n"),
-        );
-    }
-    let header = core::ptr::without_provenance(device_tree);
-    let Some(device_tree) = (unsafe { tree::extent(header, boot::image()) }) else {
-        reject(
-            firmware,
-            format_args!("FAIL Limen boot: invalid device tree header\n"),
-        );
-    };
-    unsafe { limen_platform_ready(Boot { hart, device_tree }) }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn limen_boot_trap(cause: usize, pc: usize, value: usize, stack: usize) -> ! {
-    reject(
-        sbi::extensions(),
-        format_args!(
-            "FAIL Limen boot trap: cause={cause:#x} pc={pc:#x} value={value:#x} stack={stack:#x}\n"
-        ),
-    )
-}
-
-fn reject(firmware: sbi::Extensions, message: fmt::Arguments<'_>) -> ! {
-    if firmware.console {
-        let _ = Console.write_fmt(message);
-    }
-    if firmware.reset {
-        shutdown(false);
-    }
-    boot::park()
-}
-
-/// Write an early diagnostic to the firmware debug console.
-pub fn write(message: &str) {
-    let _ = Console.write_str(message);
-}
-
-/// End the trusted boot path through firmware system reset.
-pub fn shutdown(success: bool) -> ! {
-    sbi::shutdown(success)
-}
-
-struct Console;
-
-impl Write for Console {
-    fn write_str(&mut self, message: &str) -> fmt::Result {
-        if message.bytes().all(sbi::write_byte) {
-            Ok(())
-        } else {
-            Err(fmt::Error)
-        }
-    }
-}
+#[cfg(target_arch = "riscv64")]
+pub use crate::metal::riscv::boot::stack_range;
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+pub use crate::metal::stack::stack_range;

@@ -1,4 +1,4 @@
-use crate::entry::boot::{STACK, Stack};
+use super::stack::{STACK, Stack};
 use core::arch::{global_asm, naked_asm};
 
 global_asm!(
