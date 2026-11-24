@@ -97,30 +97,51 @@ unsafe extern "sysv64" fn vectors() -> ! {
         "3: cli",
         "cld",
         "xor eax, eax",
-        "xchg [rip + {available}], eax",
-        "test eax, eax",
-        "jz 5f",
-        "mov rdi, [rsp]",       // vector
-        "mov r8, [rsp + 8]",    // hardware error code or zero
-        "mov rsi, [rsp + 16]",  // RIP
-        "mov rcx, [rsp + 40]",  // interrupted RSP
-        "xor edx, edx",
-        "cmp edi, 14",
-        "jne 4f",
-        "mov rdx, cr2",
-        "4: lea rsp, [rip + {stack} + {bytes}]",
-        "call {report}",
-        "5: hlt",
-        "jmp 5b",
+        "xchg [rip + {top}], rax",
+        "test rax, rax",
+        "jz 4f",
+        "mov rdi, rsp",
+        "mov rsp, rax",
+        "call {capture}",
+        "4: hlt",
+        "jmp 4b",
         stride = const VECTOR_BYTES,
-        available = sym diagnostic::AVAILABLE,
-        stack = sym diagnostic::STACK,
-        bytes = const diagnostic::BYTES,
-        report = sym report,
+        top = sym diagnostic::TOP,
+        capture = sym capture,
     );
 }
 
-// The assembly stub uses SysV registers even for a UEFI image.
-extern "sysv64" fn report(vector: usize, pc: usize, value: usize, sp: usize, error: usize) -> ! {
-    diagnostic::report(vector, pc, value, sp, error)
+// The vector stubs normalize the error-code slot. Hardware supplies the rest
+// of the 64-bit frame, including the interrupted RSP even for a same-ring trap.
+#[repr(C)]
+struct Frame {
+    vector: usize,
+    error: usize,
+    rip: usize,
+    cs: usize,
+    flags: usize,
+    rsp: usize,
+    ss: usize,
+}
+
+unsafe extern "sysv64" fn capture(frame: *const Frame) -> ! {
+    let Frame {
+        vector,
+        error,
+        rip,
+        rsp,
+        ..
+    } = unsafe { frame.read() };
+    let mut value = 0;
+    if vector == 14 {
+        unsafe { asm!("mov {}, cr2", out(reg) value, options(nomem, nostack, preserves_flags)) };
+    }
+    diagnostic::Trap {
+        cause: vector,
+        pc: rip,
+        value,
+        stack: rsp,
+        status: error,
+    }
+    .report()
 }

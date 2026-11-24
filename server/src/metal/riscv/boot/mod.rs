@@ -58,7 +58,7 @@ pub(crate) fn established() -> bool {
         && interrupt_enable == 0
         && translation == 0
         && vector == trap as *const () as usize
-        && scratch == (&raw const diagnostic::STACK).addr() + diagnostic::BYTES
+        && scratch == (&raw const diagnostic::TOP).addr()
 }
 
 pub(crate) fn image() -> core::ops::Range<usize> {
@@ -93,19 +93,32 @@ pub type DeliveryError = core::convert::Infallible;
 #[rustc_align(4)]
 unsafe extern "C" fn trap() -> ! {
     naked_asm!(
-        "la t0, {available}",
-        "amoswap.w.aq t0, zero, (t0)",
+        "csrr t0, sscratch",
+        "amoswap.d.aq t0, zero, (t0)",
         "beqz t0, 2f",
-        "csrrw sp, sscratch, sp",
-        "csrr a3, sscratch",
-        "csrr a0, scause",
-        "csrr a1, sepc",
-        "csrr a2, stval",
-        "csrr a4, sstatus",
-        "tail {report}",
+        "mv a0, sp",
+        "mv sp, t0",
+        "tail {capture}",
         "2: wfi",
         "j 2b",
-        available = sym diagnostic::AVAILABLE,
-        report = sym diagnostic::report,
+        capture = sym capture,
     );
+}
+
+extern "C" fn capture(stack: usize) -> ! {
+    let (cause, pc, value, status);
+    unsafe {
+        asm!(
+            "csrr {}, scause", "csrr {}, sepc", "csrr {}, stval", "csrr {}, sstatus",
+            out(reg) cause, out(reg) pc, out(reg) value, out(reg) status, options(nomem, nostack)
+        )
+    }
+    diagnostic::Trap {
+        cause,
+        pc,
+        value,
+        stack,
+        status,
+    }
+    .report()
 }

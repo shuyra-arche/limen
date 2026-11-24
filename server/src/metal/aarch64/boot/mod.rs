@@ -54,45 +54,49 @@ unsafe extern "C" fn vectors() -> ! {
         ".set slot, slot + 1",
         ".endr",
         "2: msr daifset, #15",
-        "adrp x5, {available}",
-        "add x5, x5, :lo12:{available}",
-        "3: ldaxr w6, [x5]",
-        "cbz w6, 6f",
-        "stxr w7, wzr, [x5]",
-        "cbnz w7, 3b",
-        // SP_EL1 is active on vector entry. Slot group 1 interrupted SP_EL1.
-        "mrs x3, sp_el0",
-        "lsr x5, x0, #2",
-        "cmp x5, #1",
-        "b.ne 4f",
-        "mov x3, sp",
-        "4: mrs x1, elr_el1",
-        "mov x2, xzr",
-        "mov x4, xzr",
-        // IRQ and FIQ do not update ESR. FAR is meaningful for selected aborts.
-        "and x5, x0, #3",
-        "cmp x5, #1",
-        "b.eq 5f",
-        "cmp x5, #2",
-        "b.eq 5f",
-        "mrs x4, esr_el1",
-        "lsr x5, x4, #26",
-        "orr x5, x5, #1",
-        "cmp x5, #0x21",
-        "b.eq 7f",
-        "cmp x5, #0x25",
-        "b.ne 5f",
-        "7: tbnz x4, #10, 5f",
-        "mrs x2, far_el1",
-        "5: adrp x5, {stack}",
-        "add x5, x5, :lo12:{stack}",
-        "add sp, x5, {bytes}",
-        "b {report}",
-        "6: wfe",
-        "b 6b",
-        available = sym diagnostic::AVAILABLE,
-        stack = sym diagnostic::STACK,
-        bytes = const diagnostic::BYTES,
-        report = sym diagnostic::report,
+        "adrp x2, {top}",
+        "add x2, x2, :lo12:{top}",
+        "3: ldaxr x3, [x2]",
+        "cbz x3, 4f",
+        "stxr w4, xzr, [x2]",
+        "cbnz w4, 3b",
+        "mov x1, sp",
+        "mov sp, x3",
+        "b {capture}",
+        "4: wfe",
+        "b 4b",
+        top = sym diagnostic::TOP,
+        capture = sym capture,
     );
+}
+
+extern "C" fn capture(slot: usize, old_sp_el1: usize) -> ! {
+    let pc;
+    unsafe { asm!("mrs {}, elr_el1", out(reg) pc, options(nomem, nostack)) };
+    let stack = if slot / 4 == 1 {
+        old_sp_el1
+    } else {
+        let sp_el0;
+        unsafe { asm!("mrs {}, sp_el0", out(reg) sp_el0, options(nomem, nostack)) };
+        sp_el0
+    };
+
+    // Only synchronous exceptions and SError supply an applicable syndrome.
+    let mut status = 0;
+    let mut value = 0;
+    if matches!(slot % 4, 0 | 3) {
+        unsafe { asm!("mrs {}, esr_el1", out(reg) status, options(nomem, nostack)) };
+        let exception_class = status >> 26 & 0x3f;
+        if matches!(exception_class, 0x20 | 0x21 | 0x24 | 0x25) && status & (1 << 10) == 0 {
+            unsafe { asm!("mrs {}, far_el1", out(reg) value, options(nomem, nostack)) };
+        }
+    }
+    diagnostic::Trap {
+        cause: slot,
+        pc,
+        value,
+        stack,
+        status,
+    }
+    .report()
 }

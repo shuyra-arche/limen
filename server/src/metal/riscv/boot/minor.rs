@@ -27,9 +27,7 @@ pub(crate) unsafe fn wake_minor(
 unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
     naked_asm!(
         establish_supervisor!(),
-        "la t0, {trap_stack}",
-        "li t1, {trap_bytes}",
-        "add t0, t0, t1",
+        "la t0, {top}",
         "csrw sscratch, t0",
         "la t0, {vector}",
         "csrw stvec, t0",
@@ -56,8 +54,7 @@ unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
         entered = const minor::ENTERED,
         hart = const minor::HART_OFFSET,
         stack = const minor::STACK_OFFSET,
-        trap_stack = sym diagnostic::STACK,
-        trap_bytes = const diagnostic::BYTES,
+        top = sym diagnostic::TOP,
         loaded = sym minor::arrive,
     );
 }

@@ -11,6 +11,8 @@ unsafe extern "C" {
     static _trap_stack_end: u8;
     static limen_test_text_start: u8;
     static limen_test_text_end: u8;
+    static _kernel_base: u8;
+    static _kernel_edge: u8;
     static _bss_start: u8;
     static _bss_end: u8;
 }
@@ -78,10 +80,18 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         code.contains(&stvec) && stvec.is_multiple_of(4),
         "direct early trap vector missing",
     );
+    let image = (&raw const _kernel_base).addr()..(&raw const _kernel_edge).addr();
     assert!(
-        sscratch == (&raw const _trap_stack_end).addr()
-            && sscratch > (&raw const _trap_stack_start).addr()
-            && sscratch.is_multiple_of(16),
+        sscratch.is_multiple_of(8)
+            && image.contains(&sscratch)
+            && sscratch.checked_add(8).is_some_and(|end| end <= image.end)
+    );
+    let top: usize;
+    unsafe { asm!("ld {}, 0({})", out(reg) top, in(reg) sscratch, options(nostack, readonly)) };
+    assert!(
+        top == (&raw const _trap_stack_end).addr()
+            && top > (&raw const _trap_stack_start).addr()
+            && top.is_multiple_of(16),
         "emergency stack not armed",
     );
     // Linker boundary labels may alias the Rust stack object. Observe the
