@@ -112,4 +112,4 @@ completion condition. @assurance explains the evidence required before
 the Kernel can release the underlying resources.
 
 For current call permissions and failure results, see the
-#link("https://github.com/shuyra-arche/kernel/blob/main/api/README.md#authorization-and-lifecycle")[Kernel API].
+#link("https://github.com/shuyra-arche/limen/blob/main/api/README.md#authorization-and-lifecycle")[Kernel API].
