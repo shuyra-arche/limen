@@ -15,9 +15,10 @@ impl Write for Console {
     }
 }
 
-pub(crate) struct Services {
-    pub(crate) output: Option<fn(u8) -> bool>,
-    pub(crate) reset: Option<fn(bool)>,
+#[derive(Clone, Copy)]
+pub struct Services {
+    pub output: Option<fn(u8) -> bool>,
+    pub reset: Option<fn(bool)>,
 }
 
 impl Services {
@@ -38,4 +39,45 @@ impl Services {
         }
         boot::park()
     }
+}
+
+#[cfg(not(target_arch = "riscv64"))]
+static ACTIVE: core::sync::atomic::AtomicPtr<Services> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
+#[cfg(not(target_arch = "riscv64"))]
+pub(crate) fn install(services: &'static Services) {
+    ACTIVE.store(
+        core::ptr::from_ref(services).cast_mut(),
+        core::sync::atomic::Ordering::Release,
+    );
+}
+
+#[cfg(not(target_arch = "riscv64"))]
+pub(crate) fn services() -> Services {
+    let ptr = ACTIVE.load(core::sync::atomic::Ordering::Acquire);
+    // The major publishes an immutable, image-owned static before switching stacks.
+    unsafe { ptr.as_ref() }.copied().unwrap_or(Services {
+        output: None,
+        reset: None,
+    })
+}
+#[cfg(target_arch = "riscv64")]
+pub(crate) use crate::metal::riscv::firmware::sbi::services;
+
+/// Obtain a writer only if this platform supplies a diagnostic device.
+pub fn console() -> Option<Console> {
+    services().console()
+}
+
+/// Best-effort output for trusted early boot code.
+pub fn write(message: &str) {
+    if let Some(mut console) = console() {
+        let _ = console.write_str(message);
+    }
+}
+
+/// Request platform termination and park if no reset is available or it returns.
+pub fn shutdown(success: bool) -> ! {
+    services().shutdown(success)
 }

@@ -34,7 +34,7 @@ change server/src/metal/x86_64/mod.rs
 bash "$discover" . "$base" | jq -e 'map(.profile) | sort == ["debug","release"]' >/dev/null
 bash "$checks" . "$base" | jq -e '(.full or .runner or .rv64) == false and .manifests == []' >/dev/null
 
-change server/src/entry/platform/q35.rs
+change server/tests/target/entry/platforms/io.rs
 [[ $(boards) == q35 ]]
 change server/tests/target/entry/platforms/virt.rs
 [[ $(boards) == virt ]]

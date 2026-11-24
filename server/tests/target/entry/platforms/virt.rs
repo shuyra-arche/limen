@@ -7,6 +7,75 @@ use uefi::{
     mem::memory_map::{MemoryMap, MemoryType},
 };
 
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+#[path = "pl011.rs"]
+mod pl011;
+static UART: AtomicUsize = AtomicUsize::new(0);
+static USE_HVC: AtomicBool = AtomicBool::new(false);
+
+fn conduit() -> boot::Conduit {
+    if USE_HVC.load(Ordering::Acquire) {
+        boot::Conduit::Hvc
+    } else {
+        boot::Conduit::Smc
+    }
+}
+pub(super) fn startup() -> boot::Startup {
+    boot::Startup::Psci(conduit())
+}
+pub(super) static SERVICES: boot::Services = boot::Services {
+    output: Some(|b| unsafe { pl011::write_byte(UART.load(Ordering::Acquire), b) }),
+    reset: Some(|_| unsafe { conduit().system_off() }),
+};
+
+fn discover(bytes: &[u8]) -> Result<(), Status> {
+    let tree = fdt::Fdt::new(bytes).map_err(|_| Status::COMPROMISED_DATA)?;
+    let psci = tree
+        .find_compatible(&["arm,psci-1.0", "arm,psci-0.2"])
+        .ok_or(Status::NOT_FOUND)?;
+    let hvc = match psci.property("method").and_then(|p| p.as_str()) {
+        Some("hvc") => true,
+        Some("smc") => false,
+        _ => return Err(Status::UNSUPPORTED),
+    };
+    tree.find_node("/chosen").ok_or(Status::NOT_FOUND)?;
+    tree.find_node("/cpus").ok_or(Status::NOT_FOUND)?;
+    let serial = tree
+        .chosen()
+        .stdout()
+        .filter(|node| {
+            node.compatible()
+                .is_some_and(|c| c.all().any(|s| s == "arm,pl011"))
+        })
+        .ok_or(Status::NOT_FOUND)?;
+    let range = serial
+        .reg()
+        .and_then(|mut r| r.next())
+        .filter(|r| {
+            !r.starting_address.is_null()
+                && r.starting_address.addr().is_multiple_of(4)
+                && r.size.is_some_and(|s| s >= 0x1c)
+        })
+        .ok_or(Status::COMPROMISED_DATA)?;
+    let target = tree
+        .cpus()
+        .filter(|cpu| {
+            cpu.property("reg").is_some()
+                && cpu.property("enable-method").and_then(|p| p.as_str()) == Some("psci")
+                && cpu
+                    .property("status")
+                    .is_none_or(|p| matches!(p.as_str(), Some("okay" | "ok")))
+        })
+        .flat_map(|cpu| cpu.ids().all())
+        .find(|id| *id != hart())
+        .ok_or(Status::NOT_FOUND)?;
+    USE_HVC.store(hvc, Ordering::Release);
+    UART.store(range.starting_address.addr(), Ordering::Release);
+    crate::TARGET.store(target, Ordering::Release);
+    Ok(())
+}
+
 pub(super) fn hart() -> usize {
     let mpidr: usize;
     unsafe { asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nomem, nostack)) };
@@ -31,6 +100,7 @@ pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
             &[MemoryType::BOOT_SERVICES_DATA, MemoryType::ACPI_RECLAIM],
         )
     }?;
+    discover(unsafe { core::slice::from_raw_parts(source, size) })?;
     let dtb = firmware::allocate_pages(
         AllocateType::AnyPages,
         MemoryType::LOADER_DATA,

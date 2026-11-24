@@ -20,7 +20,6 @@ pub(crate) fn park() -> ! {
     }
 }
 
-#[cfg(feature = "qemu-virt")]
 mod minor;
-#[cfg(feature = "qemu-virt")]
-pub(crate) use minor::{MINOR_CONTEXT, MinorContext, current_hart, wake_minor};
+pub use minor::Startup;
+pub(crate) use minor::{MinorContext, current_hart, minor_context, wake_minor};

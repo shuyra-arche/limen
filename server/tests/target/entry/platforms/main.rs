@@ -6,6 +6,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use kernel::entry::boot;
 
 static MINOR: boot::Minor = boot::Minor::new();
+static TARGET: AtomicUsize = AtomicUsize::new(usize::MAX);
 static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 fn minor_ready(hart: usize, expected: usize) -> ! {
@@ -58,7 +59,7 @@ fn main() -> Status {
         },
         device_tree: board,
     };
-    unsafe { boot::major(board::hart(), &input) }
+    unsafe { boot::major(board::hart(), &input, &board::SERVICES) }
 }
 
 #[unsafe(no_mangle)]
@@ -76,14 +77,15 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     )
     .unwrap();
     assert!(view.entries().any(|d| d.page_count > 0));
-    // These four-CPU QEMU profiles have affinity/APIC IDs 0 through 3.
-    let target = if boot.hart() == 0 { 1 } else { 0 };
-    assert!(unsafe { MINOR.start(boot.hart(), minor_ready, target) }.is_err());
-    unsafe { MINOR.start(target, minor_ready, target) }.expect("minor startup request");
+    let target = TARGET.load(Ordering::Acquire);
+    assert_ne!(target, boot.hart());
+    let startup = board::startup();
+    assert!(unsafe { MINOR.start(boot.hart(), minor_ready, target, startup) }.is_err());
+    unsafe { MINOR.start(target, minor_ready, target, startup) }.expect("minor startup request");
     while OBSERVED.load(Ordering::Acquire) != target {
         core::hint::spin_loop();
     }
-    assert!(MINOR.ready() && unsafe { MINOR.start(target, minor_ready, target) }.is_err());
+    assert!(MINOR.ready() && unsafe { MINOR.start(target, minor_ready, target, startup) }.is_err());
     writeln!(
         boot::console().expect("console"),
         "OBSERVED major={} minor={}",

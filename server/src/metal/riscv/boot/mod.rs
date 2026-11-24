@@ -4,7 +4,7 @@ mod start;
 
 pub(crate) use super::firmware::sbi::services;
 mod minor;
-pub(crate) use minor::{MINOR_CONTEXT, MinorContext, wake_minor};
+pub(crate) use minor::{MinorContext, minor_context, wake_minor};
 pub(crate) const REQUIRES_DIAGNOSTICS: bool = true;
 
 #[repr(C, align(16))]
@@ -76,3 +76,4 @@ pub(crate) fn park() -> ! {
         unsafe { asm!("wfi", options(nomem, nostack)) };
     }
 }
+pub use minor::Startup;

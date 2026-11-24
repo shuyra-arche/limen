@@ -1,4 +1,4 @@
-//! QEMU q35 xAPIC startup. The loader reserves one executable SIPI page
+//! Legacy xAPIC startup. The loader reserves one executable SIPI page
 //! below 1 MiB. Its contents and the BSP's identity mappings stay resident.
 use super::Descriptor;
 use crate::metal::minor::{self, Minor, StartError};
@@ -6,11 +6,23 @@ use core::{
     arch::{asm, naked_asm, x86_64::__cpuid},
     mem::offset_of,
     ptr,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::Ordering,
 };
 
-pub(crate) type MinorContext = AtomicUsize;
-pub(crate) const MINOR_CONTEXT: MinorContext = AtomicUsize::new(0);
+pub(crate) struct MinorContext;
+pub(crate) const fn minor_context() -> MinorContext {
+    MinorContext
+}
+
+/// The caller owns the low executable page and a timer valid after firmware exit.
+/// The delay takes microseconds and reports whether the full interval elapsed.
+#[derive(Clone, Copy)]
+pub enum Startup {
+    Xapic {
+        trampoline: core::ptr::NonNull<[core::mem::MaybeUninit<u8>; 4096]>,
+        delay: fn(u32) -> bool,
+    },
+}
 const CODE: usize = 128;
 const PARAMS: usize = CODE;
 #[repr(C, packed)]
@@ -27,30 +39,6 @@ struct Parameters {
 }
 const _: () = assert!(PARAMS + size_of::<Parameters>() <= 4096);
 
-impl Minor {
-    /// Reserve this descriptor's real-mode entry page before starting the AP.
-    ///
-    /// # Safety
-    /// Supply an exclusively reserved, identity-mapped executable page below
-    /// 1 MiB. Retain it and the current GDT and page tables across AP execution.
-    pub(crate) fn configure_trampoline(
-        &self,
-        page: &'static mut [core::mem::MaybeUninit<u8>; 4096],
-        timer: u16,
-    ) -> Result<(), isize> {
-        let address = page.as_mut_ptr().expose_provenance();
-        if !(4096..0x100000).contains(&address) || !address.is_multiple_of(4096) {
-            return Err(-2);
-        }
-        // Also publish the PM timer port in the upper 32 bits of this one-shot record.
-        let configuration = address | (usize::from(timer) << 32);
-        self.context
-            .compare_exchange(0, configuration, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| ())
-            .map_err(|_| -6)
-    }
-}
-
 pub(crate) fn current_hart() -> usize {
     (__cpuid(1).ebx >> 24) as usize
 }
@@ -60,21 +48,23 @@ fn rdmsr(index: u32) -> u64 {
     unsafe { asm!("rdmsr", in("ecx") index,out("eax") lo,out("edx") hi,options(nostack,nomem)) };
     u64::from(lo) | (u64::from(hi) << 32)
 }
-fn delay(port: u16, ticks: u32) -> bool {
-    let read = || unsafe { super::super::io::read32(port) };
-    let start = read();
-    (0..1_000_000).any(|_| read().wrapping_sub(start) & 0xff_ffff >= ticks)
-}
 fn idle(icr: *mut u32) -> bool {
     (0..100_000).any(|_| unsafe { icr.read_volatile() } & (1 << 12) == 0)
 }
 
-pub(crate) unsafe fn wake_minor(slot: &Minor, hart: usize) -> Result<(), StartError> {
-    let configuration = slot.context.load(Ordering::Acquire);
-    let page = configuration & 0xffff_ffff;
-    let timer = (configuration >> 32) as u16;
+pub(crate) unsafe fn wake_minor(
+    slot: &Minor,
+    hart: usize,
+    method: Startup,
+) -> Result<(), StartError> {
+    let Startup::Xapic { trampoline, delay } = method;
+    let page = trampoline.addr().get();
     let apic = rdmsr(0x1b);
-    if page == 0 || hart >= 255 || apic & 0xc00 != 0x800 {
+    if !(4096..0x100000).contains(&page)
+        || !page.is_multiple_of(4096)
+        || hart >= 255
+        || apic & 0xc00 != 0x800
+    {
         return Err(StartError::Rejected(-2));
     }
     let mut gdt = Descriptor { limit: 0, base: 0 };
@@ -101,9 +91,9 @@ pub(crate) unsafe fn wake_minor(slot: &Minor, hart: usize) -> Result<(), StartEr
         destination: low(minor as *const () as usize)?,
         selector: cs,
     };
-    let target = ptr::with_exposed_provenance_mut::<u8>(page);
+    let target = trampoline.cast::<u8>().as_ptr();
     unsafe {
-        ptr::copy_nonoverlapping(trampoline as *const u8, target, CODE);
+        ptr::copy_nonoverlapping(reset_stub as *const u8, target, CODE);
         target
             .add(PARAMS)
             .cast::<Parameters>()
@@ -113,7 +103,7 @@ pub(crate) unsafe fn wake_minor(slot: &Minor, hart: usize) -> Result<(), StartEr
     let base = (apic as usize) & 0x000f_ffff_ffff_f000;
     let icr = ptr::without_provenance_mut::<u32>(base + 0x300);
     let destination = ptr::without_provenance_mut::<u32>(base + 0x310);
-    if !idle(icr) || !delay(timer, 4) {
+    if !idle(icr) || !delay(1) {
         return Err(StartError::Rejected(-1));
     }
     let send = |cmd| unsafe {
@@ -121,7 +111,7 @@ pub(crate) unsafe fn wake_minor(slot: &Minor, hart: usize) -> Result<(), StartEr
         icr.write_volatile(cmd);
     };
     send(0xc500); // INIT, level-triggered, assert.
-    if !idle(icr) || !delay(timer, 35_796) {
+    if !idle(icr) || !delay(10_000) {
         return Err(StartError::Unconfirmed(-1));
     }
     send(0x8500); // Deassert INIT, then deliver the startup vector.
@@ -130,7 +120,7 @@ pub(crate) unsafe fn wake_minor(slot: &Minor, hart: usize) -> Result<(), StartEr
     }
     for _ in 0..2 {
         send(0x600 | (page as u32 >> 12));
-        if !idle(icr) || !delay(timer, 716) {
+        if !idle(icr) || !delay(200) {
             return Err(StartError::Unconfirmed(-1));
         }
     }
@@ -140,7 +130,7 @@ pub(crate) unsafe fn wake_minor(slot: &Minor, hart: usize) -> Result<(), StartEr
 // Position-independent reset code: DS addresses the SIPI page. The two
 // explicitly encoded far operands use a 16-bit address and a 32-bit base/IP.
 #[unsafe(naked)]
-unsafe extern "C" fn trampoline() -> ! {
+unsafe extern "C" fn reset_stub() -> ! {
     naked_asm!(
         ".code16",
         "2: cli",

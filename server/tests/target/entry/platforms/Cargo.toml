@@ -12,13 +12,8 @@ path = "main.rs"
 test = false
 bench = false
 
-[target.'cfg(target_arch = "aarch64")'.dependencies]
-kernel = { path = "../../../..", features = ["qemu-virt"] }
-
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-kernel = { path = "../../../..", features = ["qemu-q35"] }
-
 [dependencies]
+kernel = { path = "../../../.." }
 uefi = "=0.41.0"
 
 [profile.dev]
@@ -26,3 +21,6 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+fdt = "=0.1.5"

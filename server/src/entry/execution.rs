@@ -167,7 +167,9 @@ impl Execution {
             control.launch = Some(Launch { hart, entry });
         }
         let argument = ptr::from_ref(self).expose_provenance();
-        if let Err(error) = unsafe { secondary.start(hart, start_secondary, argument) } {
+        if let Err(error) =
+            unsafe { secondary.start(hart, start_secondary, argument, boot::Startup::Sbi) }
+        {
             self.control.lock().launch = None;
             return Err(match error {
                 boot::StartError::Busy => Error::Busy,

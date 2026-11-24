@@ -17,15 +17,11 @@ places its 16 KiB ordinary stack and separate 4 KiB trap stack outside BSS.
 The linker still supplies the final ELF image bounds used for DTB overlap
 checks. The x86 and Arm entries use 32 KiB ordinary stacks.
 
-The shared `boot::console()` returns an optional `core::fmt::Write` device.
-RV64 probes the SBI debug-console and system-reset extensions. The test
-images select explicit Cargo board profiles: `qemu-q35` requires debugcon at
-0xe9 and isa-debug-exit at 0xf4; `qemu-virt` requires the identity-mapped
-PL011 at 0x09000000 and PSCI/HVC. These devices and mappings must remain
-available whenever early services are used. Without those profiles x86_64
-and AArch64 provide no early console, and shutdown parks the CPU. PSCI
-SYSTEM_OFF cannot encode an exit reason; the Arm verifier checks the guest
-message and the shutdown receipt together.
+The active boot protocol supplies early services. OpenSBI images probe SBI
+debug console and system reset support. UEFI images pass a static table of
+post-exit output and shutdown operations to `boot::major`. Either operation
+can be absent. The kernel stores the selected operations for use on the major
+and minor CPUs. Boot Services calls must finish before ExitBootServices.
 
 ## RV64 boot
 
@@ -102,8 +98,10 @@ operands directly in `naked_asm!`. Export fixed linker or vector symbols
 from their Rust definitions and set hardware-required alignment on the
 function. Use `sym` for Rust-owned
 storage and `const` for sizes or layout offsets. The linker supplies final
-image and section boundaries. The trusted image selects board wiring under
-`entry/platform/`. Metal implements hardware access and firmware interfaces.
+image and section boundaries. The platform image supplies any board-specific diagnostics and startup
+resources. The QEMU platform images live under `server/tests/target/entry/platforms/`.
+The kernel builds once per target architecture. Metal implements CPU mechanisms
+and firmware interfaces.
 UEFI map and loader types live in `metal/firmware/uefi.rs`. SBI and PSCI
 live under their respective architecture’s `firmware/`.
 
@@ -142,9 +140,17 @@ record, trampoline, GDT and mappings reserved because the target may still enter
 | x86_64 / q35 | xAPIC INIT and SIPI to a loader-reserved executable page below 1 MiB | Four-level paging, long mode, retained GDT, kernel IDT and private stack |
 | AArch64 / virt | PSCI CPU_ON over HVC with the launch record as context | Non-secure EL1, identity-mapped translation controls, SP_EL1 and kernel vectors |
 
+Before exiting Boot Services, the q35 test image enumerates healthy enabled APs
+with UEFI MP Services, reserves a low executable page and calibrates the major
+CPU’s TSC using UEFI Stall. It supplies that page and the post-exit delay
+function to the xAPIC startup mechanism. Its QEMU debug ports belong to the
+test image. The Arm image reads the PSCI conduit, enabled target CPU and
+chosen PL011 address from the DTB provided by UEFI. Its PSCI calls after
+ExitBootServices use that discovered conduit.
+
 The q35 reset stub needs the page-table root, GDT base, entry and launch record
 below 4 GiB. The loader keeps the GDT and identity mappings resident. The
 virt profile uses Cortex-A57 cores and the major’s EL1 translation tables.
-The caller selects a known inactive target. CPU hotplug, topology discovery,
+The caller selects a known inactive target. CPU hotplug, general-purpose topology admission,
 general interrupt routing and Unit scheduling on x86 and Arm are outside the
 verified boot path.

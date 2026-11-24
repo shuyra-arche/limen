@@ -9,18 +9,87 @@ pub(super) fn hart() -> usize {
     (core::arch::x86_64::__cpuid(1).ebx >> 24) as usize
 }
 
+use core::{
+    ptr::NonNull,
+    sync::atomic::{AtomicPtr, AtomicU64},
+    time::Duration,
+};
+use uefi::proto::pi::mp::MpServices;
+
+#[path = "io.rs"]
+mod io;
+
+static TRAMPOLINE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+static TICKS_PER_US: AtomicU64 = AtomicU64::new(0);
+
+pub(super) static SERVICES: boot::Services = boot::Services {
+    output: Some(|byte| {
+        unsafe { io::write8(0xe9, byte) };
+        true
+    }),
+    reset: Some(|success| unsafe { io::write32(0xf4, if success { 0x10 } else { 0x11 }) }),
+};
+
+fn tsc() -> u64 {
+    use core::arch::x86_64::{_mm_lfence, _rdtsc};
+    unsafe {
+        _mm_lfence();
+        _rdtsc()
+    }
+}
+
+fn delay(microseconds: u32) -> bool {
+    let Some(ticks) = TICKS_PER_US
+        .load(Ordering::Acquire)
+        .checked_mul(u64::from(microseconds))
+    else {
+        return false;
+    };
+    let start = tsc();
+    while tsc().wrapping_sub(start) < ticks {
+        core::hint::spin_loop();
+    }
+    ticks != 0
+}
+
+pub(super) fn startup() -> boot::Startup {
+    boot::Startup::Xapic {
+        trampoline: NonNull::new(TRAMPOLINE.load(Ordering::Acquire))
+            .unwrap()
+            .cast(),
+        delay,
+    }
+}
+
 pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
+    let handle = uefi::boot::get_handle_for_protocol::<MpServices>().map_err(|e| e.status())?;
+    let mp = uefi::boot::open_protocol_exclusive::<MpServices>(handle).map_err(|e| e.status())?;
+    let count = mp.get_number_of_processors().map_err(|e| e.status())?;
+    let mut target = None;
+    for index in 0..count.total {
+        let cpu = mp.get_processor_info(index).map_err(|e| e.status())?;
+        if !cpu.is_bsp() && cpu.is_healthy() && cpu.is_enabled() && cpu.processor_id < 255 {
+            target = Some(cpu.processor_id as usize);
+            break;
+        }
+    }
+    crate::TARGET.store(target.ok_or(Status::NOT_FOUND)?, Ordering::Release);
+    // Stall is available until Boot Services exit. Save a TSC calibration
+    // for the subsequent INIT/SIPI delays on this same major CPU.
+    let start = tsc();
+    uefi::boot::stall(Duration::from_millis(10));
+    let ticks = tsc()
+        .checked_sub(start)
+        .filter(|v| *v != 0)
+        .ok_or(Status::DEVICE_ERROR)?;
+    TICKS_PER_US.store(ticks.div_ceil(10_000), Ordering::Release);
     let page = uefi::boot::allocate_pages(
         uefi::boot::AllocateType::MaxAddress(0xfffff),
         uefi::boot::MemoryType::LOADER_CODE,
         1,
     )
     .map_err(|e| e.status())?;
-    unsafe {
-        crate::MINOR
-            .reserve_trampoline(&mut *page.cast::<[core::mem::MaybeUninit<u8>; 4096]>().as_ptr())
-    }
-    .map_err(|_| Status::INVALID_PARAMETER)?;
+    TRAMPOLINE.store(page.as_ptr(), Ordering::Release);
     OLD_IDT.store(Idtr::read().base, Ordering::Relaxed);
     Ok(None)
 }

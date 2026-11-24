@@ -1,10 +1,16 @@
-//! QEMU virt, non-secure EL1, identity-mapped image and PSCI over HVC.
+//! Non-secure EL1 minor startup for an identity-mapped image.
 use crate::metal::minor::{self, Minor, StartError};
 use core::{
     arch::{asm, naked_asm},
     cell::UnsafeCell,
     mem::offset_of,
 };
+
+use super::super::firmware::psci::Conduit;
+#[derive(Clone, Copy)]
+pub enum Startup {
+    Psci(Conduit),
+}
 
 #[repr(C)]
 #[derive(Default)]
@@ -17,14 +23,16 @@ pub(crate) struct Registers {
     sctlr: usize,
 }
 pub(crate) type MinorContext = UnsafeCell<Registers>;
-pub(crate) const MINOR_CONTEXT: MinorContext = UnsafeCell::new(Registers {
-    mair: 0,
-    tcr: 0,
-    ttbr0: 0,
-    ttbr1: 0,
-    cpacr: 0,
-    sctlr: 0,
-});
+pub(crate) const fn minor_context() -> MinorContext {
+    UnsafeCell::new(Registers {
+        mair: 0,
+        tcr: 0,
+        ttbr0: 0,
+        ttbr1: 0,
+        cpacr: 0,
+        sctlr: 0,
+    })
+}
 
 pub(crate) fn current_hart() -> usize {
     let id: usize;
@@ -32,7 +40,11 @@ pub(crate) fn current_hart() -> usize {
     id & 0xff00ffffff
 }
 
-pub(crate) unsafe fn wake_minor(slot: &Minor, hart: usize) -> Result<(), StartError> {
+pub(crate) unsafe fn wake_minor(
+    slot: &Minor,
+    hart: usize,
+    Startup::Psci(conduit): Startup,
+) -> Result<(), StartError> {
     let mut regs = Registers::default();
     unsafe {
         asm!("mrs {}, mair_el1","mrs {}, tcr_el1","mrs {}, ttbr0_el1",
@@ -50,8 +62,7 @@ pub(crate) unsafe fn wake_minor(slot: &Minor, hart: usize) -> Result<(), StartEr
     for address in ((ptr & !(line - 1))..ptr + size_of::<Minor>()).step_by(line) {
         unsafe { asm!("dc cvac, {}", in(reg) address,options(nostack)) }
     }
-    unsafe { super::super::firmware::psci::cpu_on(hart, minor as *const (), ptr) }
-        .map_err(StartError::Rejected)
+    unsafe { conduit.cpu_on(hart, minor as *const (), ptr) }.map_err(StartError::Rejected)
 }
 
 #[unsafe(naked)]

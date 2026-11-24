@@ -76,7 +76,6 @@ pub(crate) fn park() -> ! {
     stop()
 }
 
-#[cfg(feature = "qemu-q35")]
 mod minor;
-#[cfg(feature = "qemu-q35")]
-pub(crate) use minor::{MINOR_CONTEXT, MinorContext, current_hart, wake_minor};
+pub use minor::Startup;
+pub(crate) use minor::{MinorContext, current_hart, minor_context, wake_minor};

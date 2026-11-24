@@ -50,7 +50,7 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
     struct Bytes<const N: usize>([u8; N]);
     let mut dtb = Bytes([0; 96]);
     let words = [0xd00d_feed_u32, 96, 56, 72, 40, 17, 16, 0, 0, 16];
-    for (dst, word) in dtb.0.chunks_exact_mut(4).zip(words) {
+    for (dst, word) in dtb.0.as_chunks_mut::<4>().0.iter_mut().zip(words) {
         dst.copy_from_slice(&word.to_be_bytes());
     }
     let mut descriptors = Bytes([0u8; 96]);

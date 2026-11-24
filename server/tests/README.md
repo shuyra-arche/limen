@@ -99,7 +99,9 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
 ```
 
 Both board fixtures receive the same `limen_platform_ready(Boot)` call. The
-major requests an inactive minor. The minor checks its own CPU ID and stack
+major requests a minor identified by UEFI MP Services on q35 or the firmware
+DTB on Arm. The loader prepares the startup page and delay calibration on q35,
+or reads the PSCI conduit and serial device on Arm. The minor checks its own CPU ID and stack
 before reporting back. The major records both observed IDs and verifies that
 a second start request is rejected. Both board fixtures emit their assertions and terminate through the shared
 boot console and shutdown API. The runner boots both boards from the candidate Git archive. Pass `--board q35`

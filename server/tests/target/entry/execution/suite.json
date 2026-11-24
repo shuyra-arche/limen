@@ -7,7 +7,6 @@
   "sources": [
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
-    "server/src/entry/platform/mod.rs",
     "server/src/metal/mod.rs",
     "server/src/metal/firmware/**",
     "server/src/entry/boot/**",

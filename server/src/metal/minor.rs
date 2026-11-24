@@ -88,7 +88,7 @@ impl Minor {
             stack: Stack::new(),
             #[cfg(target_arch = "riscv64")]
             trap_stack: Stack::new(),
-            context: boot::MINOR_CONTEXT,
+            context: boot::minor_context(),
         }
     }
 
@@ -113,11 +113,15 @@ impl Minor {
     /// tables and launch record must remain reserved and identity-addressable.
     /// The caller supplies a trusted entry within the shared kernel image.
     /// The entry must fit the minor stack and accept the supplied argument.
+    /// Use the firmware-verified startup method for this target. On x86, keep
+    /// the SIPI page exclusive, executable and identity-mapped, and supply a
+    /// delay that waits at least the requested microseconds after firmware exit.
     pub unsafe fn start(
         &'static self,
         hart: usize,
         entry: fn(usize, usize) -> !,
         argument: usize,
+        method: boot::Startup,
     ) -> Result<(), StartError> {
         if hart == boot::current_hart() {
             return Err(StartError::Busy);
@@ -142,7 +146,7 @@ impl Minor {
         }
         self.state.store(PUBLISHED, Ordering::Release);
 
-        let result = unsafe { boot::wake_minor(self, hart) };
+        let result = unsafe { boot::wake_minor(self, hart, method) };
         if matches!(result, Err(StartError::Rejected(_))) {
             self.state.store(State::Idle as u32, Ordering::Release);
         }

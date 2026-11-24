@@ -1,28 +1,46 @@
-//! PSCI services using the HVC conduit selected by the virt board.
+//! PSCI calls through the conduit advertised by firmware.
 use core::arch::asm;
 
-pub(in crate::metal::aarch64) unsafe fn cpu_on(
-    hart: usize,
-    entry: *const (),
-    ptr: usize,
-) -> Result<(), isize> {
-    let status: i64;
-    unsafe {
-        asm!("dsb sy","hvc #0", inout("x0") 0xc4000003u64 => status,
-        in("x1") hart,in("x2") entry,in("x3") ptr,
-        clobber_abi("C"),options(nostack));
-    }
-    if status == 0 {
-        Ok(())
-    } else {
-        Err(status as isize)
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Conduit {
+    Hvc,
+    Smc,
 }
 
-pub(crate) fn reset(_: bool) {
-    // PSCI SYSTEM_OFF has no success or failure reason field.
-    unsafe {
-        asm!("hvc #0", inout("x0") 0x8400_0008usize => _,
-             clobber_abi("C"), options(nostack));
+impl Conduit {
+    unsafe fn invoke(self, function: usize, first: usize, second: usize, third: usize) -> isize {
+        let result: isize;
+        macro_rules! invoke {
+            ($insn:literal) => {
+                unsafe { asm!("dsb sy", $insn, inout("x0") function => result,
+                    in("x1") first, in("x2") second, in("x3") third,
+                    clobber_abi("C"), options(nostack)) }
+            };
+        }
+        match self {
+            Self::Hvc => invoke!("hvc #0"),
+            Self::Smc => invoke!("smc #0"),
+        }
+        result
+    }
+
+    pub(in crate::metal::aarch64) unsafe fn cpu_on(
+        self,
+        hart: usize,
+        entry: *const (),
+        context: usize,
+    ) -> Result<(), isize> {
+        match unsafe { self.invoke(0xc4000003, hart, entry.addr(), context) } {
+            0 => Ok(()),
+            code => Err(code),
+        }
+    }
+
+    /// Request SYSTEM_OFF through this conduit.
+    ///
+    /// # Safety
+    /// The caller must have verified the conduit and own platform shutdown.
+    pub unsafe fn system_off(self) {
+        let _ = unsafe { self.invoke(0x84000008, 0, 0, 0) };
     }
 }

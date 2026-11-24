@@ -2,12 +2,18 @@ use super::start::establish_supervisor;
 use crate::metal::minor;
 use core::arch::naked_asm;
 
-pub(crate) type MinorContext = ();
-pub(crate) const MINOR_CONTEXT: MinorContext = ();
+pub enum Startup {
+    Sbi,
+}
+pub(crate) struct MinorContext;
+pub(crate) const fn minor_context() -> MinorContext {
+    MinorContext
+}
 
 pub(crate) unsafe fn wake_minor(
     slot: &crate::metal::minor::Minor,
     hart: usize,
+    Startup::Sbi: Startup,
 ) -> Result<(), crate::metal::minor::StartError> {
     super::super::firmware::sbi::start_hart(
         hart,
