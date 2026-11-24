@@ -1,11 +1,10 @@
 use core::arch::asm;
 
-mod firmware;
-mod secondary;
 mod start;
 
-pub(crate) use super::sbi::services;
-pub use secondary::Secondary;
+pub(crate) use super::firmware::sbi::services;
+mod minor;
+pub(crate) use minor::{MINOR_CONTEXT, MinorContext, wake_minor};
 pub(crate) const REQUIRES_DIAGNOSTICS: bool = true;
 
 #[repr(C, align(16))]

@@ -14,13 +14,13 @@ use core::{
 };
 use kernel::entry::{
     boot::{Boot, shutdown, write},
-    execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Secondary, Stacks, UnitId},
+    execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Minor, Stacks, UnitId},
 };
 
 global_asm!(include_str!("register-probe.S"));
 
 static mut STACKS: Stacks = Stacks::new();
-static SECONDARY: Secondary = Secondary::new();
+static MINOR: Minor = Minor::new();
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static mut SCENARIO: MaybeUninit<Scenario> = MaybeUninit::uninit();
 static mut PREVIOUS: MaybeUninit<Occupancy> = MaybeUninit::uninit();
@@ -185,7 +185,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let primary = boot.hart();
     let second_hart = usize::from(primary == 0);
     assert!(primary < 4, "unexpected QEMU Boot Hart");
-    let runtime = Execution::with_secondary(boot, unsafe { &mut *(&raw mut STACKS) }, &SECONDARY)
+    let runtime = Execution::with_minor(boot, unsafe { &mut *(&raw mut STACKS) }, &MINOR)
         .expect("Bare scalar execution");
     // The platform owns the resident objects and initializes them once.
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };

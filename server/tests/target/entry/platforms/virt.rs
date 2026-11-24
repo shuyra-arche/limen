@@ -1,5 +1,4 @@
-use crate::Handoff;
-use core::{arch::asm, fmt::Write, ptr::NonNull};
+use core::{arch::asm, fmt::Write};
 use kernel::entry::boot;
 use uefi::{
     Status,
@@ -8,12 +7,13 @@ use uefi::{
     mem::memory_map::{MemoryMap, MemoryType},
 };
 
-pub(super) struct Input {
-    dtb: NonNull<u8>,
-    size: usize,
+pub(super) fn hart() -> usize {
+    let mpidr: usize;
+    unsafe { asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nomem, nostack)) };
+    mpidr & 0xff00ffffff
 }
 
-pub(super) fn capture() -> Result<Input, Status> {
+pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
     let source = uefi::system::with_config_table(|entries| {
         entries
             .iter()
@@ -38,7 +38,9 @@ pub(super) fn capture() -> Result<Input, Status> {
     )
     .map_err(|e| e.status())?;
     unsafe { source.copy_to_nonoverlapping(dtb.as_ptr(), size) };
-    Ok(Input { dtb, size })
+    Ok(Some(unsafe {
+        core::slice::from_raw_parts(dtb.as_ptr(), size)
+    }))
 }
 
 // The caller supplies a firmware table pointer or its reserved, identity-mapped copy.
@@ -75,8 +77,7 @@ unsafe fn dtb_size(
     Ok(size)
 }
 
-pub(super) extern "C" fn inspect(input: usize) -> ! {
-    let handoff = unsafe { &*(input as *const Handoff) };
+pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
     let (el, daif, sp, vectors, spsel): (usize, usize, usize, usize, usize);
     unsafe {
         asm!("mrs {}, CurrentEL", "mrs {}, DAIF", "mov {}, sp", "mrs {}, VBAR_EL1",
@@ -89,17 +90,12 @@ pub(super) extern "C" fn inspect(input: usize) -> ! {
         static limen_vectors: u8;
     }
     assert!(vectors == (&raw const limen_vectors) as usize && vectors & 2047 == 0);
-    let size = unsafe {
-        dtb_size(
-            handoff.board.dtb.as_ptr(),
-            &handoff.map,
-            &[MemoryType::LOADER_DATA],
-        )
-    };
-    assert_eq!(size, Ok(handoff.board.size));
+    let tree = boot.device_tree().expect("UEFI virt DTB");
+    let size = unsafe { dtb_size(tree.start as *const u8, map, &[MemoryType::LOADER_DATA]) };
+    assert_eq!(size, Ok(tree.len()));
     boot::console()
         .expect("board console")
-        .write_str("PASS virt ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1\n")
+        .write_str("PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1\n")
         .expect("diagnostic output");
     boot::shutdown(true)
 }

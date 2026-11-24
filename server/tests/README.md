@@ -35,7 +35,7 @@ complete serial assertions, one QMP `SHUTDOWN` event with `guest=true` and
 and verdict are preserved with the candidate revision.
 
 The Target workflow runs affected owner-local `suite.json` scenarios on four virtual CPUs and uploads their evidence. Ordinary boots enter on the
-firmware-selected CPU. Only the cross-Hart scenario starts a second participant.
+firmware-selected CPU. The RV64 cross-Hart scenario and both UEFI board fixtures start a second participant.
 
 Target discovery compares the PR against its merge base and selects each board and
 profile from the owner manifests. Changes to a board backend or its fixture select
@@ -98,7 +98,10 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --output /tmp/limen-platforms --profile debug --harts 4
 ```
 
-Both board fixtures emit their assertions and terminate through the shared
+Both board fixtures receive the same `limen_platform_ready(Boot)` call. The
+major requests an inactive minor. The minor checks its own CPU ID and stack
+before reporting back. The major records both observed IDs and verifies that
+a second start request is rejected. Both board fixtures emit their assertions and terminate through the shared
 boot console and shutdown API. The runner boots both boards from the candidate Git archive. Pass `--board q35`
 or `--board virt` to run just one. Use `--profile
 release` with a fresh output directory for optimized images. q35 requires

@@ -1,5 +1,8 @@
-use super::{Continuation, install};
-use crate::metal::stack::{STACK, Stack};
+use super::install;
+use crate::{
+    entry::boot::Loader,
+    metal::stack::{STACK, Stack},
+};
 use core::arch::naked_asm;
 
 /// Transfer to the kernel stack and install fail-stop interrupt gates.
@@ -7,9 +10,9 @@ use core::arch::naked_asm;
 /// # Safety
 /// Call once, after successful ExitBootServices, on the sole boot CPU in
 /// 64-bit ring 0. Keep the loader mappings, GDT, image and input reserved.
-/// The callback uses the System V ABI even when the loader uses EFIAPI.
+/// Keep the Loader and its immutable buffers valid across Boot delivery.
 #[unsafe(naked)]
-pub unsafe extern "sysv64" fn enter(input: usize, next: Continuation) -> ! {
+pub unsafe extern "sysv64" fn major(hart: usize, input: &Loader<'_>) -> ! {
     naked_asm!(
         "mov ax, cs",
         "test al, 3",

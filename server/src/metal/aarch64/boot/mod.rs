@@ -1,24 +1,7 @@
 mod start;
-pub use start::enter;
+pub use start::major;
 
-use crate::metal::console::Services;
-
-pub(crate) type Continuation = extern "C" fn(usize) -> !;
 pub(crate) const REQUIRES_DIAGNOSTICS: bool = false;
-
-pub(crate) fn services() -> Services {
-    #[cfg(feature = "qemu-virt")]
-    {
-        super::board::services()
-    }
-    #[cfg(not(feature = "qemu-virt"))]
-    {
-        Services {
-            output: None,
-            reset: None,
-        }
-    }
-}
 
 use core::arch::asm;
 
@@ -36,3 +19,8 @@ pub(crate) fn park() -> ! {
         unsafe { asm!("wfe", options(nomem, nostack)) };
     }
 }
+
+#[cfg(feature = "qemu-virt")]
+mod minor;
+#[cfg(feature = "qemu-virt")]
+pub(crate) use minor::{MINOR_CONTEXT, MinorContext, current_hart, wake_minor};

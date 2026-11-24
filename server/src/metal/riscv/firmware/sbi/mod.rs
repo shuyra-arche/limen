@@ -9,7 +9,6 @@ use probe::{DEBUG_CONSOLE, SYSTEM_RESET};
 
 const BASE: usize = 0x10;
 const HART_STATE_MANAGEMENT: usize = 0x48534d;
-pub(super) const ALREADY_AVAILABLE: isize = -6;
 
 pub(crate) fn extensions() -> Extensions {
     Extensions::probe(|function, extension| call(BASE, function, extension, 0, 0))
@@ -25,7 +24,11 @@ fn reset(success: bool) {
     let _ = call(SYSTEM_RESET, 0, 0, usize::from(!success), 0);
 }
 
-pub(super) fn start_hart(hart: usize, address: usize, opaque: usize) -> Result<(), isize> {
+pub(in crate::metal::riscv) fn start_hart(
+    hart: usize,
+    address: usize,
+    opaque: usize,
+) -> Result<(), isize> {
     match call(HART_STATE_MANAGEMENT, 0, hart, address, opaque).0 {
         0 => Ok(()),
         error => Err(error),

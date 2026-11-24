@@ -49,13 +49,13 @@ case "$platform" in
         args+=(-machine q35 -m 128M -drive "format=raw,file=fat:rw:$out/esp"
             -debugcon "file:$out/guest.log" -device isa-debug-exit,iobase=0xf4,iosize=4)
         expected_exit=33
-        marker='PASS q35 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1' ;;
+        marker='PASS q35 major=1 minor=1 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1' ;;
     virt)
         args+=(-machine virt,gic-version=3,secure=off,virtualization=off,acpi=off -cpu cortex-a57 -m 256M
             -drive "if=none,id=esp,format=raw,file=fat:rw:$out/esp"
             -device virtio-blk-pci,drive=esp -serial "file:$out/guest.log")
         expected_exit=0
-        marker='PASS virt ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1' ;;
+        marker='PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1' ;;
 esac
 # Start paused. QMP processes capabilities and cont in order, so even a fast
 # guest cannot shut down before the monitor has enabled event delivery.

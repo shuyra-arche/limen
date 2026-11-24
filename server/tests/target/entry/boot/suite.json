@@ -7,11 +7,13 @@
   "sources": [
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
+    "server/src/entry/platform/mod.rs",
     "server/src/metal/mod.rs",
+    "server/src/metal/firmware/**",
     "server/src/entry/boot/**",
     "server/src/metal/riscv/mod.rs",
     "server/src/metal/riscv/boot/**",
-    "server/src/metal/riscv/sbi/**",
+    "server/src/metal/riscv/firmware/**",
     "server/link.x",
     "server/src/metal/console.rs",
     "server/src/metal/stack.rs"

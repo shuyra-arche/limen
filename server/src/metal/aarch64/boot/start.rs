@@ -1,5 +1,7 @@
-use super::Continuation;
-use crate::metal::stack::{STACK, Stack};
+use crate::{
+    entry::boot::Loader,
+    metal::stack::{STACK, Stack},
+};
 use core::arch::naked_asm;
 
 #[unsafe(naked)]
@@ -17,14 +19,13 @@ pub(super) unsafe extern "C" fn vectors() -> ! {
     );
 }
 
-/// Enter the diagnostic callback on the boot stack with masked exceptions
-/// and a fail-stop vector table. Preserve the loader's input word.
+/// Establish the major CPU stack and exception vectors before delivering Boot.
 ///
 /// # Safety
 /// Call once on the boot PE, in non-secure EL1 with the image addressable.
-/// Other PEs must stay parked. The callback and its input must remain valid.
+/// Other PEs must stay parked. The Loader and its immutable buffers must remain valid.
 #[unsafe(naked)]
-pub unsafe extern "C" fn enter(input: usize, next: Continuation) -> ! {
+pub unsafe extern "C" fn major(hart: usize, input: &Loader<'_>) -> ! {
     naked_asm!(
         "mrs x2, CurrentEL",
         "cmp x2, #4",
@@ -42,7 +43,7 @@ pub unsafe extern "C" fn enter(input: usize, next: Continuation) -> ! {
         "2: wfe",
         "b 2b",
         vectors = sym vectors,
-        loaded = sym crate::entry::boot::loaded,
+        loaded = sym crate::entry::boot::start,
         stack = sym STACK,
         size = const size_of::<Stack>(),
     );

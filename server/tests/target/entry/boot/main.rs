@@ -105,7 +105,8 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
     // The production handoff has already checked the firmware header and
     // bounded span. Verify that the witness names the actual virt RAM blob.
-    let device_tree = boot.device_tree();
+    assert!(boot.firmware_map().is_none());
+    let device_tree = boot.device_tree().expect("OpenSBI DTB");
     assert!(
         device_tree.start >= 0x8000_0000 && device_tree.end <= 0x8800_0000,
         "firmware tree is outside QEMU virt RAM",

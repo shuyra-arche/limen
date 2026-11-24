@@ -1,5 +1,5 @@
 //! OpenSBI enters the primary with (hart, DTB) and a secondary with (hart, descriptor).
-use super::{TRAP_STACK, TrapStack, firmware, secondary};
+use super::{TRAP_STACK, TrapStack};
 use crate::metal::stack::{STACK, Stack};
 use core::arch::naked_asm;
 
@@ -20,10 +20,12 @@ macro_rules! establish_supervisor {
     };
 }
 
+pub(super) use establish_supervisor;
+
 #[unsafe(naked)]
 #[unsafe(export_name = "_start")]
 #[unsafe(link_section = ".text._start")]
-unsafe extern "C" fn enter(hart: usize, dtb: usize) -> ! {
+unsafe extern "C" fn major(hart: usize, dtb: usize) -> ! {
     naked_asm!(
         establish_supervisor!(),
         "la sp, {stack}",
@@ -47,42 +49,7 @@ unsafe extern "C" fn enter(hart: usize, dtb: usize) -> ! {
         trap_stack = sym TRAP_STACK,
         trap_size = const size_of::<TrapStack>(),
         vector = sym trap,
-        loaded = sym firmware::limen_boot,
-    );
-}
-
-#[unsafe(naked)]
-#[unsafe(export_name = "_limen_secondary_start")]
-pub(super) unsafe extern "C" fn enter_secondary(hart: usize, descriptor: usize) -> ! {
-    naked_asm!(
-        establish_supervisor!(),
-        "csrw sscratch, zero",
-        "la t0, {vector}",
-        "csrw stvec, t0",
-        // Acquire the published descriptor before reading its stack addresses.
-        "addi t0, a1, {state}",
-        "li t1, {published}",
-        "li t2, {entered}",
-        "2: lr.w.aq t3, (t0)",
-        "bne t3, t1, 3f",
-        "sc.w t3, t2, (t0)",
-        "bnez t3, 2b",
-        "ld t0, {hart}(a1)",
-        "bne a0, t0, 3f",
-        "ld sp, {stack}(a1)",
-        "ld t0, {trap_stack}(a1)",
-        "csrw sscratch, t0",
-        "tail {loaded}",
-        "3: wfi",
-        "j 3b",
-        vector = sym trap,
-        state = const secondary::STATE_OFFSET,
-        published = const secondary::PUBLISHED,
-        entered = const secondary::ENTERED,
-        hart = const secondary::HART_OFFSET,
-        stack = const secondary::STACK_OFFSET,
-        trap_stack = const secondary::TRAP_STACK_OFFSET,
-        loaded = sym secondary::limen_secondary_boot,
+        loaded = sym crate::entry::boot::start,
     );
 }
 
@@ -101,6 +68,12 @@ pub(super) unsafe extern "C" fn trap() -> ! {
         "tail {report}",
         "2: wfi",
         "j 2b",
-        report = sym firmware::limen_boot_trap,
+        report = sym report_trap,
     );
+}
+
+extern "C" fn report_trap(cause: usize, pc: usize, value: usize, stack: usize) -> ! {
+    super::services().reject(format_args!(
+        "FAIL Limen boot trap: cause={cause:#x} pc={pc:#x} value={value:#x} stack={stack:#x}\n"
+    ))
 }

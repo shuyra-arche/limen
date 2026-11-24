@@ -8,7 +8,7 @@ rv64=false
 for path in "${changed[@]}"; do
     case "$path" in
         Cargo.toml|Cargo.lock|.cargo/*|server/Cargo.toml|server/build.rs|tools/tests/checks.sh|tools/tests/changes.sh|.github/workflows/check.yml) full=true ;;
-        server/src/metal/x86_64/*|server/src/metal/aarch64/*) ;;
+        server/src/metal/x86_64/*|server/src/metal/aarch64/*|server/src/entry/platform/q35.rs|server/src/entry/platform/virt.rs) ;;
         server/src/*|server/link.x) rv64=true ;;
         server/tests/runner/*|server/tests/qemu.version|server/tests/target/*/suite.json) runner=true ;;
     esac
@@ -18,7 +18,8 @@ while IFS= read -r -d '' manifest; do
     manifest=${manifest#"$root"/}
     owner=${manifest%/host/Cargo.toml}
     for path in "${changed[@]}"; do
-        if [[ $path == "$owner/"* || $path == "${owner/server\/tests/server\/src}/"* ]]; then
+        if [[ $path == "$owner/"* || $path == "${owner/server\/tests/server\/src}/"* ||
+              ( $owner == server/tests/entry/boot && $path == server/src/metal/firmware/uefi.rs ) ]]; then
             manifests+=("$manifest")
             break
         fi

@@ -28,27 +28,14 @@ impl Services {
         self.shutdown(false)
     }
 
-    fn shutdown(&self, success: bool) -> ! {
+    pub(crate) fn console(&self) -> Option<Console> {
+        self.output.map(Console)
+    }
+
+    pub(crate) fn shutdown(&self, success: bool) -> ! {
         if let Some(reset) = self.reset {
             reset(success);
         }
         boot::park()
     }
-}
-
-/// Obtain a writer only if this platform supplies a diagnostic device.
-pub fn console() -> Option<Console> {
-    boot::services().output.map(Console)
-}
-
-/// Best-effort output for trusted early boot code.
-pub fn write(message: &str) {
-    if let Some(mut console) = console() {
-        let _ = console.write_str(message);
-    }
-}
-
-/// Request platform termination and park if no reset is available or it returns.
-pub fn shutdown(success: bool) -> ! {
-    boot::services().shutdown(success)
 }

@@ -34,6 +34,8 @@ change server/src/metal/x86_64/mod.rs
 bash "$discover" . "$base" | jq -e 'map(.profile) | sort == ["debug","release"]' >/dev/null
 bash "$checks" . "$base" | jq -e '(.full or .runner or .rv64) == false and .manifests == []' >/dev/null
 
+change server/src/entry/platform/q35.rs
+[[ $(boards) == q35 ]]
 change server/tests/target/entry/platforms/virt.rs
 [[ $(boards) == virt ]]
 change server/tests/target/entry/platforms/q35.rs server/src/metal/aarch64/mod.rs
@@ -44,6 +46,15 @@ change server/src/basis/room.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts"]' >/dev/null
 change server/src/entry/boot/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/firmware/uefi.rs
+bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+change server/src/entry/boot/handoff.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/minor.rs
+bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution-harts","platform-boot"]' >/dev/null
+change server/src/metal/riscv/firmware/sbi/probe.rs
+[[ $(boards) == rv64 ]]
+bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/riscv/firmware/sbi/host/Cargo.toml"]' >/dev/null
 change server/src/metal/console.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/stack.rs

@@ -5,17 +5,17 @@ architecture and Treaty contracts. This repository documents the implementation
 it currently provides.
 
 All three boot paths are declared in [`entry::boot`](../server/src/entry/boot/mod.rs).
-The module documents the prerequisites and the facts each continuation receives.
+The module defines the major CPU handoff and the Boot facts delivered to the image.
 Metal first installs the stack and exception entry using the firmware ABI.
 All three paths then call the same `entry::boot::start`. It checks that the
 hardware stack pointer lies in the boot stack and asks Metal to read back the installed
-CPU state. Only then can the platform validate its input and enter its
-continuation. A rejected handoff uses the shared diagnostic and shutdown path.
+CPU state. It admits the firmware facts and calls the one image-defined
+`limen_platform_ready(Boot)` on all three architectures. A rejected handoff uses the shared diagnostic and shutdown path.
 
 One Metal stack definition backs `stack_range()` on all three targets. RV64
 places its 16 KiB ordinary stack and separate 4 KiB trap stack outside BSS.
 The linker still supplies the final ELF image bounds used for DTB overlap
-checks. The UEFI and Arm entries use 32 KiB ordinary stacks.
+checks. The x86 and Arm entries use 32 KiB ordinary stacks.
 
 The shared `boot::console()` returns an optional `core::fmt::Write` device.
 RV64 probes the SBI debug-console and system-reset extensions. The test
@@ -51,14 +51,16 @@ is unavailable or returns. The trap diagnostic includes the cause, program
 counter, trap value and interrupted stack pointer. A trap during that failure
 path parks the Hart.
 
-The platform callback receives the hart ID and the described DTB extent.
+The Boot consumer receives the firmware Hart ID and the admitted DTB extent.
+`Boot::device_tree()` and `Boot::firmware_map()` return optional facts.
+OpenSBI supplies the tree. UEFI supplies its final map and, on virt, the tree.
 
 ## Kernel Unit execution
 
 The trusted image consumes the Boot handoff to establish cooperative execution
 on the Boot Hart. It supplies two resident 16 KiB stacks in the shared Bare
 Kernel Nest. Each Unit reserves one stack and a generational identity.
-`Execution::with_secondary` accepts a resident `Secondary` with its own
+`Execution::with_minor` accepts a resident `Minor` with its own
 dispatcher and emergency stacks. The platform can use `start_hart` to start
 one selected Hart through OpenSBI HSM. Room admits the secondary after its
 trusted supervisor entry establishes its local execution state.
@@ -93,21 +95,22 @@ user traps and calls require separate implementation and verification.
 
 ## Platform boot CPU entries
 
-Each architecture implements CPU startup under `metal/<arch>/boot/`.
+Each architecture implements major and minor CPU startup under `metal/<arch>/boot/`.
 The common gate uses `metal::boot` to check the selected implementation.
-Declare the first CPU entry as a Rust naked function in each backend’s
-`boot/start.rs`, with its firmware or loader ABI. Put the instructions and
+Declare `major` in `boot/start.rs` and `minor` in `boot/minor.rs` as Rust naked functions, with its firmware or loader ABI. Put the instructions and
 operands directly in `naked_asm!`. Export fixed linker or vector symbols
 from their Rust definitions and set hardware-required alignment on the
 function. Use `sym` for Rust-owned
 storage and `const` for sizes or layout offsets. The linker supplies final
-image and section boundaries. Board-specific diagnostics live under
-`metal/<arch>/board/` when selected by a board feature.
+image and section boundaries. The trusted image selects board wiring under
+`entry/platform/`. Metal implements hardware access and firmware interfaces.
+UEFI map and loader types live in `metal/firmware/uefi.rs`. SBI and PSCI
+live under their respective architecture’s `firmware/`.
 
 The q35 and AArch64 virt diagnostic images share a UEFI loader. OVMF loads
 `EFI/BOOT/BOOTX64.EFI` on q35 and AAVMF loads `EFI/BOOT/BOOTAA64.EFI` on
 virt. The loader captures board inputs, obtains the final memory map through
-`ExitBootServices`, then calls `entry::boot::enter`. It keeps the handoff,
+`ExitBootServices`, then calls `entry::boot::major`. It keeps the handoff,
 firmware allocations and loader stack reserved while Metal takes over the CPU.
 
 On q35, the loader calls Metal using the System V ABI. Metal checks CPL0
@@ -119,10 +122,29 @@ On virt, the test selects non-secure EL1, GICv3, PSCI/HVC and device-tree
 firmware configuration. The loader obtains the DTB address from the UEFI
 configuration table, validates its extent, and copies it into loader-owned
 pages before exiting Boot Services. Metal masks DAIF, selects SP_EL1, switches to its 32 KiB
-stack and installs an aligned fail-stop vector table. The callback verifies
+stack and installs an aligned fail-stop vector table. The shared Boot admission gate verifies
 that the DTB header and its declared extent fit within the retained loader-data descriptor
 in the final memory map before reporting success.
 
-Both entries require a single boot CPU and an exclusively reserved image.
-The tests cover the CPU handoff. RAM admission, exception recovery, interrupt
-controller operation, Manifest v1 and first Unit dispatch are later stages.
+## Minor CPU startup
+
+A major CPU receives Boot once. Each minor starts with an exclusive resident
+`Minor` record and its own 16 KiB stack. The major publishes the launch record
+before requesting startup. The target claims it and reads back its hardware
+identity, active stack and exception entry before publishing Ready and calling
+the supplied minor entry. `Minor::ready()` observes that publication. A
+definitive rejection permits retry. Unconfirmed xAPIC delivery keeps the
+record, trampoline, GDT and mappings reserved because the target may still enter.
+
+| Profile | Startup request | State established on the minor |
+| --- | --- | --- |
+| RV64 / OpenSBI | SBI HSM hart start | Supervisor state, private ordinary and trap stacks, direct trap vector |
+| x86_64 / q35 | xAPIC INIT and SIPI to a loader-reserved executable page below 1 MiB | Four-level paging, long mode, retained GDT, kernel IDT and private stack |
+| AArch64 / virt | PSCI CPU_ON over HVC with the launch record as context | Non-secure EL1, identity-mapped translation controls, SP_EL1 and kernel vectors |
+
+The q35 reset stub needs the page-table root, GDT base, entry and launch record
+below 4 GiB. The loader keeps the GDT and identity mappings resident. The
+virt profile uses Cortex-A57 cores and the major’s EL1 translation tables.
+The caller selects a known inactive target. CPU hotplug, topology discovery,
+general interrupt routing and Unit scheduling on x86 and Arm are outside the
+verified boot path.

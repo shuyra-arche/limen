@@ -22,7 +22,7 @@ pub fn stack_range() -> Range<usize> {
 
 /// Read the hardware SP at the admission check. Taking the address of a Rust
 /// local would leave the result dependent on how the compiler places it.
-pub(crate) fn active() -> bool {
+pub(crate) fn pointer() -> usize {
     let sp: usize;
     unsafe {
         #[cfg(target_arch = "riscv64")]
@@ -32,5 +32,9 @@ pub(crate) fn active() -> bool {
         #[cfg(target_arch = "x86_64")]
         core::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags));
     }
-    stack_range().contains(&sp)
+    sp
+}
+
+pub(crate) fn active() -> bool {
+    stack_range().contains(&pointer())
 }

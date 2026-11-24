@@ -14,7 +14,7 @@ pub use crate::basis::{
     room::Occupancy,
     unit::{End, Error, Lifecycle, UnitId},
 };
-pub use crate::metal::riscv::boot::Secondary;
+pub use crate::metal::minor::Minor;
 use crate::{
     basis::{
         nest::{KernelNest, Storage},
@@ -27,6 +27,7 @@ use crate::{
         execution::{Hart, LeaveReceipt, LocalHart},
     },
 };
+pub use Minor as Secondary;
 
 use super::boot::{self, Boot};
 
@@ -58,7 +59,7 @@ pub struct Execution {
     primary_id: usize,
     secondary: Hart,
     secondary_id: AtomicUsize,
-    secondary_boot: Option<&'static Secondary>,
+    secondary_boot: Option<&'static Minor>,
 }
 
 impl Execution {
@@ -68,18 +69,27 @@ impl Execution {
     }
 
     /// Provision the same Kernel Nest with an optional firmware-started Hart.
+    pub fn with_minor(
+        boot: Boot,
+        stacks: &'static mut Stacks,
+        secondary: &'static Minor,
+    ) -> Result<Self, Error> {
+        Self::establish(boot, stacks, Some(secondary))
+    }
+
+    /// Compatibility spelling for `with_minor`.
     pub fn with_secondary(
         boot: Boot,
         stacks: &'static mut Stacks,
-        secondary: &'static Secondary,
+        secondary: &'static Minor,
     ) -> Result<Self, Error> {
-        Self::establish(boot, stacks, Some(secondary))
+        Self::with_minor(boot, stacks, secondary)
     }
 
     fn establish(
         boot: Boot,
         stacks: &'static mut Stacks,
-        secondary: Option<&'static Secondary>,
+        secondary: Option<&'static Minor>,
     ) -> Result<Self, Error> {
         if hardware::current_hart() != boot.hart()
             || !Hart::supported(hardware::primary_trap_stack())
@@ -159,7 +169,10 @@ impl Execution {
         let argument = ptr::from_ref(self).expose_provenance();
         if let Err(error) = unsafe { secondary.start(hart, start_secondary, argument) } {
             self.control.lock().launch = None;
-            return Err(Error::Firmware(error));
+            return Err(match error {
+                boot::StartError::Busy => Error::Busy,
+                boot::StartError::Rejected(code) => Error::Firmware(code),
+            });
         }
         Ok(())
     }

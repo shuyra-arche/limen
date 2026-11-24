@@ -1,24 +1,7 @@
 mod start;
-pub use start::enter;
+pub use start::major;
 
-use crate::metal::console::Services;
-
-pub(crate) type Continuation = extern "sysv64" fn(usize) -> !;
 pub(crate) const REQUIRES_DIAGNOSTICS: bool = false;
-
-pub(crate) fn services() -> Services {
-    #[cfg(feature = "qemu-q35")]
-    {
-        super::board::services()
-    }
-    #[cfg(not(feature = "qemu-q35"))]
-    {
-        Services {
-            output: None,
-            reset: None,
-        }
-    }
-}
 
 use core::arch::{asm, naked_asm};
 
@@ -45,7 +28,7 @@ extern "sysv64" fn stop() -> ! {
     naked_asm!("cli", "2: hlt", "jmp 2b");
 }
 
-unsafe extern "sysv64" fn install(input: usize, next: extern "sysv64" fn(usize) -> !) -> ! {
+unsafe extern "sysv64" fn install(hart: usize, input: *const ()) -> ! {
     let selector: u16;
     unsafe { asm!("mov {:x}, cs", out(reg) selector, options(nomem, nostack, preserves_flags)) };
     let addr = stop as *const () as usize;
@@ -68,7 +51,7 @@ unsafe extern "sysv64" fn install(input: usize, next: extern "sysv64" fn(usize) 
         base: slots as usize,
     };
     unsafe { asm!("lidt [{}]", in(reg) &idtr, options(nostack, preserves_flags)) };
-    crate::entry::boot::loaded(input, next)
+    unsafe { crate::entry::boot::start(hart, input) }
 }
 
 static mut IDT: core::mem::MaybeUninit<[Gate; 256]> = core::mem::MaybeUninit::uninit();
@@ -92,3 +75,8 @@ pub(crate) fn established() -> bool {
 pub(crate) fn park() -> ! {
     stop()
 }
+
+#[cfg(feature = "qemu-q35")]
+mod minor;
+#[cfg(feature = "qemu-q35")]
+pub(crate) use minor::{MINOR_CONTEXT, MinorContext, current_hart, wake_minor};

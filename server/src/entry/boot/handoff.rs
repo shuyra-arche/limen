@@ -1,38 +1,72 @@
-use super::tree;
+use super::FirmwareMap;
+#[cfg(not(target_arch = "riscv64"))]
+use super::Loader;
 use core::ops::Range;
 
-/// Facts from the admitted firmware handoff. These carry no authority over RAM.
-pub struct Boot {
+/// Facts admitted on the major CPU. These carry no allocation authority.
+pub struct Boot<'a> {
     hart: usize,
-    device_tree: Range<usize>,
+    device_tree: Option<Range<usize>>,
+    firmware_map: Option<FirmwareMap<'a>>,
 }
 
-impl Boot {
-    /// The loader must keep the DTB storage readable and stable for validation.
-    pub(crate) unsafe fn from_device_tree(
-        hart: usize,
-        address: usize,
-        image: Range<usize>,
-    ) -> Option<Self> {
-        let header = core::ptr::without_provenance(address);
-        let device_tree = unsafe { tree::extent(header, image) }?;
-        Some(Self { hart, device_tree })
-    }
-
-    pub(crate) fn enter(self) -> ! {
-        unsafe { limen_platform_ready(self) }
-    }
-
+impl<'a> Boot<'a> {
     pub fn hart(&self) -> usize {
         self.hart
     }
 
-    /// Physical address interval occupied by the firmware device tree.
-    pub fn device_tree(&self) -> Range<usize> {
+    pub fn device_tree(&self) -> Option<Range<usize>> {
         self.device_tree.clone()
     }
-}
 
-unsafe extern "Rust" {
-    fn limen_platform_ready(boot: Boot) -> !;
+    pub fn firmware_map(&self) -> Option<FirmwareMap<'a>> {
+        self.firmware_map
+    }
+
+    #[cfg(target_arch = "riscv64")]
+    pub(super) unsafe fn admit(hart: usize, input: *const ()) -> Option<Self> {
+        let tree = unsafe { super::tree::extent(input.cast(), crate::metal::boot::image()) }?;
+        Some(Self {
+            hart,
+            device_tree: Some(tree),
+            firmware_map: None,
+        })
+    }
+
+    #[cfg(not(target_arch = "riscv64"))]
+    pub(super) unsafe fn admit(hart: usize, input: *const ()) -> Option<Self> {
+        // The trusted loader retains this Rust value, its map and its DTB.
+        let loader = unsafe { input.cast::<Loader<'a>>().as_ref() }?;
+        let map = loader.map;
+        // EFI_MEMORY_DESCRIPTOR v1 has a 40-byte prefix and 8-byte alignment.
+        if map.version != 1
+            || map.stride < 40
+            || !map.stride.is_multiple_of(8)
+            || map.descriptors.is_empty()
+            || !map.descriptors.as_ptr().addr().is_multiple_of(8)
+            || !map.descriptors.len().is_multiple_of(map.stride)
+        {
+            return None;
+        }
+        let device_tree = match loader.device_tree {
+            Some(bytes) => {
+                let start = bytes.as_ptr().addr();
+                let end = start.checked_add(bytes.len())?;
+                if bytes.len() < 40 || !map.contains_loader_data(start..end) {
+                    return None;
+                }
+                let extent = unsafe { super::tree::extent(bytes.as_ptr().cast(), 0..0) }?;
+                if extent.end != end {
+                    return None;
+                }
+                Some(extent)
+            }
+            None => None,
+        };
+        Some(Self {
+            hart,
+            device_tree,
+            firmware_map: Some(map),
+        })
+    }
 }

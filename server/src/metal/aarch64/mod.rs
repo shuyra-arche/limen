@@ -1,5 +1,7 @@
 pub(crate) mod boot;
 
 #[cfg(feature = "qemu-virt")]
-#[path = "board/virt.rs"]
-mod board;
+pub(crate) mod pl011;
+
+#[cfg(feature = "qemu-virt")]
+pub(crate) mod firmware;
