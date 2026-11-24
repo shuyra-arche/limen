@@ -1,5 +1,5 @@
 //! Non-secure EL1 minor startup for an identity-mapped image.
-use crate::metal::generic::minor::{self, Minor, StartError};
+use crate::metal::generic::boot::minor::{self, Minor, StartError};
 use core::{
     arch::{asm, naked_asm},
     cell::UnsafeCell,
@@ -32,12 +32,6 @@ pub(crate) const fn minor_context() -> MinorContext {
         cpacr: 0,
         sctlr: 0,
     })
-}
-
-pub(crate) fn current_hart() -> usize {
-    let id: usize;
-    unsafe { asm!("mrs {}, mpidr_el1", out(reg) id, options(nomem,nostack)) };
-    id & 0xff00ffffff
 }
 
 pub(crate) unsafe fn wake_minor(
@@ -78,6 +72,11 @@ unsafe extern "C" fn minor(slot: *const Minor) -> ! {
         "mov x2, #0xffffff",
         "movk x2, #0xff, lsl #32",
         "and x0, x0, x2",
+        // Acquire the publication before using the identity or saved EL1 state.
+        "add x2, x1, #{state}",
+        "ldar w3, [x2]",
+        "cmp w3, #{published}",
+        "b.ne 3f",
         "ldr x2, [x1, #{hart}]",
         "cmp x0, x2",
         "b.ne 3f",
@@ -119,7 +118,7 @@ unsafe extern "C" fn minor(slot: *const Minor) -> ! {
         state = const minor::STATE_OFFSET,
         published = const minor::PUBLISHED,
         entered = const minor::ENTERED,
-        vectors = sym super::major::vectors,
+        vectors = sym super::vectors,
         arrive = sym minor::arrive,
     )
 }

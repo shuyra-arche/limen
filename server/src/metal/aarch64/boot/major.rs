@@ -1,20 +1,6 @@
-use super::STACK;
-use crate::{entry::boot::Loader, metal::generic::stack::Stack};
+use super::{STACK, vectors};
+use crate::entry::boot::Loader;
 use core::arch::naked_asm;
-
-#[unsafe(naked)]
-#[rustc_align(2048)]
-pub(super) unsafe extern "C" fn vectors() -> ! {
-    naked_asm!(
-        ".rept 16",
-        "b 2f",
-        ".balign 128",
-        ".endr",
-        "2: msr daifset, #15",
-        "3: wfe",
-        "b 3b",
-    );
-}
 
 /// Establish the major CPU stack and exception vectors before delivering Boot.
 ///
@@ -42,6 +28,6 @@ pub unsafe extern "C" fn major(hart: usize, input: &Loader<'_>) -> ! {
         vectors = sym vectors,
         loaded = sym crate::entry::boot::start,
         stack = sym STACK,
-        size = const size_of::<Stack>(),
+        size = const super::STACK_BYTES,
     );
 }

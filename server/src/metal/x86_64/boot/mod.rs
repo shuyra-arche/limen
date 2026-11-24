@@ -2,7 +2,7 @@ use crate::metal::generic::stack::Stack;
 mod major;
 pub(crate) use major::major as enter_major;
 
-use core::arch::{asm, naked_asm};
+use core::arch::{asm, naked_asm, x86_64::__cpuid};
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -27,33 +27,19 @@ extern "sysv64" fn stop() -> ! {
     naked_asm!("cli", "2: hlt", "jmp 2b");
 }
 
-unsafe extern "sysv64" fn install(hart: usize, input: *const ()) -> ! {
-    let selector: u16;
-    unsafe { asm!("mov {:x}, cs", out(reg) selector, options(nomem, nostack, preserves_flags)) };
-    let addr = stop as *const () as usize;
-    let gate = Gate {
-        low: addr as u16,
-        selector,
-        ist: 0,
-        attributes: 0x8e,
-        middle: (addr >> 16) as u16,
-        high: (addr >> 32) as u32,
-        reserved: 0,
-    };
-    // The CPU retains this table after LIDT. Its storage belongs to the image.
-    let slots = (&raw mut IDT).cast::<Gate>();
-    for index in 0..256 {
-        unsafe { slots.add(index).write(gate) };
-    }
+fn load_idt() {
     let idtr = Descriptor {
         limit: (size_of::<[Gate; 256]>() - 1) as u16,
-        base: slots as usize,
+        base: (&raw const IDT).addr(),
     };
     unsafe { asm!("lidt [{}]", in(reg) &idtr, options(nostack, preserves_flags)) };
-    unsafe { crate::entry::boot::start(hart, input) }
 }
 
 static mut IDT: core::mem::MaybeUninit<[Gate; 256]> = core::mem::MaybeUninit::uninit();
+
+pub(crate) fn current_hart() -> usize {
+    (__cpuid(1).ebx >> 24) as usize
+}
 
 pub(crate) fn established() -> bool {
     let mut idtr = Descriptor { limit: 0, base: 0 };
@@ -81,10 +67,10 @@ pub(crate) mod interface {
     pub use super::firmware::{Loader, major};
     pub use super::minor::Startup;
 }
-pub(crate) use minor::{MinorContext, current_hart, minor_context, wake_minor};
+pub(crate) use minor::{MinorContext, minor_context, wake_minor};
 
 pub(crate) const STACK_BYTES: usize = 32 * 1024;
-pub(in crate::metal) static mut STACK: Stack = Stack::new();
+pub(in crate::metal) static mut STACK: Stack<STACK_BYTES> = Stack::new();
 
 pub(crate) fn stack_pointer() -> usize {
     let sp: usize;

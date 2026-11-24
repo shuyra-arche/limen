@@ -57,7 +57,11 @@ change server/src/metal/generic/firmware/map.rs
 bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
 change server/src/entry/boot/handoff.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/generic/minor.rs
+change server/src/metal/generic/boot/mod.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/generic/boot/major.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/generic/boot/minor.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution-harts","platform-boot"]' >/dev/null
 change server/src/metal/generic/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]

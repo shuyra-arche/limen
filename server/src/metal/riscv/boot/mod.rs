@@ -1,16 +1,31 @@
 use crate::metal::generic::stack::Stack;
-use core::arch::asm;
+use core::arch::{asm, naked_asm};
+
+// Both entries establish supervisor state before using either stack.
+macro_rules! establish_supervisor {
+    () => {
+        r#"
+        csrci sstatus, 2
+        csrw sie, zero
+        li t0, (3 << 13) | (3 << 9)
+        csrc sstatus, t0
+        .option push
+        .option norelax
+        la gp, __global_pointer$
+        .option pop
+        mv tp, a0
+        "#
+    };
+}
 
 mod major;
-
 mod minor;
 pub(crate) use minor::{MinorContext, minor_context, wake_minor};
 
-#[repr(C, align(16))]
-struct TrapStack([u8; 4096]);
+pub(crate) type TrapStack = Stack<4096>;
 
 #[unsafe(link_section = ".limen.trap.stack")]
-static mut TRAP_STACK: TrapStack = TrapStack([0; 4096]);
+static mut TRAP_STACK: TrapStack = TrapStack::new();
 
 /// Checks the state established by the assembly entry without changing translation.
 pub(crate) fn established() -> bool {
@@ -18,7 +33,7 @@ pub(crate) fn established() -> bool {
 }
 
 pub(crate) fn primary_trap_stack() -> usize {
-    unsafe { (&raw const TRAP_STACK.0).addr() + size_of::<TrapStack>() }
+    (&raw const TRAP_STACK).addr() + size_of::<TrapStack>()
 }
 
 /// Trusted firmware identity retained in the kernel's ABI-reserved register.
@@ -56,7 +71,7 @@ pub(crate) fn established_on(trap_stack: usize) -> bool {
     status & 2 == 0
         && interrupt_enable == 0
         && translation == 0
-        && vector == major::trap as *const () as usize
+        && vector == trap as *const () as usize
         && scratch == trap_stack
 }
 
@@ -82,7 +97,7 @@ pub(crate) mod interface {
 
 pub(crate) const STACK_BYTES: usize = 16 * 1024;
 #[unsafe(link_section = ".limen.boot.stack")]
-pub(in crate::metal) static mut STACK: Stack = Stack::new();
+pub(in crate::metal) static mut STACK: Stack<STACK_BYTES> = Stack::new();
 
 pub(crate) fn stack_pointer() -> usize {
     let sp: usize;
@@ -91,3 +106,27 @@ pub(crate) fn stack_pointer() -> usize {
 }
 
 pub type DeliveryError = core::convert::Infallible;
+
+#[unsafe(naked)]
+#[rustc_align(4)]
+unsafe extern "C" fn trap() -> ! {
+    naked_asm!(
+        "csrrw sp, sscratch, sp",
+        "beqz sp, 2f",
+        "csrr a3, sscratch",
+        "csrw sscratch, zero",
+        "csrr a0, scause",
+        "csrr a1, sepc",
+        "csrr a2, stval",
+        "tail {report}",
+        "2: wfi",
+        "j 2b",
+        report = sym report_trap,
+    );
+}
+
+extern "C" fn report_trap(cause: usize, pc: usize, value: usize, stack: usize) -> ! {
+    crate::metal::generic::firmware::sbi::services().reject(format_args!(
+        "FAIL Limen boot trap: cause={cause:#x} pc={pc:#x} value={value:#x} stack={stack:#x}\n"
+    ))
+}

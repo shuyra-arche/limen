@@ -6,7 +6,7 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use crate::metal::boot;
+use crate::metal::{boot, generic::stack::Stack};
 use core::ops::Range;
 
 #[derive(Debug, Eq, PartialEq)]
@@ -28,19 +28,6 @@ enum State {
     Published,
     Entered,
     Ready,
-}
-
-#[repr(align(16))]
-struct Stack<const SIZE: usize>(UnsafeCell<[MaybeUninit<u8>; SIZE]>);
-
-impl<const SIZE: usize> Stack<SIZE> {
-    const fn new() -> Self {
-        Self(UnsafeCell::new([MaybeUninit::uninit(); SIZE]))
-    }
-
-    fn top(&self) -> usize {
-        self.0.get().cast::<u8>().wrapping_add(SIZE).addr()
-    }
 }
 
 #[repr(C)]

@@ -7,7 +7,8 @@ it currently provides.
 All three boot paths are declared in [`entry::boot`](../server/src/entry/boot/mod.rs).
 The module defines the major CPU handoff and the Boot facts delivered to the image.
 Metal first installs the stack and exception entry using the firmware ABI.
-All three paths then call the same `entry::boot::start`. It checks that the
+All three paths then call `entry::boot::start`. Its shared Metal admission code
+in `metal/generic/boot/major.rs` checks that the
 hardware stack pointer lies in the boot stack and asks Metal to read back the installed
 CPU state. It admits the firmware facts and calls the one image-defined
 `limen_platform_ready(Boot)` on all three architectures. A rejected handoff uses the shared diagnostic and shutdown path.
@@ -92,7 +93,11 @@ user traps and calls require separate implementation and verification.
 
 ## Platform boot CPU entries
 
-Each architecture implements major and minor CPU startup under `metal/<arch>/boot/`.
+Both `metal/generic/boot/` and each `metal/<arch>/boot/` contain `major.rs`
+and `minor.rs`. The generic major admits the CPU and firmware input. The
+generic minor owns the resident launch record, its ordinary stack and the
+transition to Ready. Each architecture supplies the instructions required to
+reach these two Rust paths. Both roles use the same aligned stack storage type.
 The common gate uses `metal::boot` to check the selected implementation.
 Declare `major` in `boot/major.rs` and `minor` in `boot/minor.rs` as Rust naked functions, with its firmware or loader ABI. Put the instructions and
 operands directly in `naked_asm!`. Export a fixed name when the external entry contract requires one, such as
@@ -145,6 +150,12 @@ record, trampoline, GDT and mappings reserved because the target may still enter
 | RV64 / OpenSBI | SBI HSM hart start | Supervisor state, private ordinary and trap stacks, direct trap vector |
 | x86_64 / q35 | xAPIC INIT and SIPI to a loader-reserved executable page below 1 MiB | Four-level paging, long mode, retained GDT, kernel IDT and private stack |
 | AArch64 / virt | PSCI CPU_ON over HVC with the launch record as context | Non-secure EL1, identity-mapped translation controls, SP_EL1 and kernel vectors |
+
+The 16 KiB RV64 and 32 KiB UEFI major stacks are image budgets. RV64
+reserves a separate diagnostic trap stack and clears BSS on ELF entry. The
+UEFI profiles rely on the loader to initialize their images. RV64 prints
+early trap details, while the q35 and Arm tables park the CPU on a fault.
+These are loader and diagnostic choices within the verified profiles.
 
 Before exiting Boot Services, the q35 test image enumerates healthy enabled APs
 with UEFI MP Services, reserves a low executable page and calibrates the major

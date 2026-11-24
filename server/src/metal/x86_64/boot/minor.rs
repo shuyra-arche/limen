@@ -1,9 +1,9 @@
 //! Legacy xAPIC startup. The loader reserves one executable SIPI page
 //! below 1 MiB. Its contents and the BSP's identity mappings stay resident.
 use super::Descriptor;
-use crate::metal::generic::minor::{self, Minor, StartError};
+use crate::metal::generic::boot::minor::{self, Minor, StartError};
 use core::{
-    arch::{asm, naked_asm, x86_64::__cpuid},
+    arch::{asm, naked_asm},
     mem::offset_of,
     ptr,
     sync::atomic::Ordering,
@@ -38,10 +38,6 @@ struct Parameters {
     selector: u16,
 }
 const _: () = assert!(PARAMS + size_of::<Parameters>() <= 4096);
-
-pub(crate) fn current_hart() -> usize {
-    (__cpuid(1).ebx >> 24) as usize
-}
 
 fn rdmsr(index: u32) -> u64 {
     let (lo, hi): (u32, u32);
@@ -173,6 +169,8 @@ unsafe extern "sysv64" fn minor() -> ! {
         "cpuid",
         "shr ebx,24",
         "mov edi,ebx",
+        "cmp dword ptr [rsi+{state}],{published}",
+        "jne 2f",
         "cmp rdi,[rsi+{hart}]",
         "jne 2f",
         "mov eax,{published}",
@@ -194,11 +192,7 @@ unsafe extern "sysv64" fn minor() -> ! {
 }
 unsafe extern "sysv64" fn finish(hart: usize, slot: &Minor) -> ! {
     // The major CPU has already published the complete, immutable fail-stop IDT.
-    let idtr = Descriptor {
-        limit: (size_of::<[super::Gate; 256]>() - 1) as u16,
-        base: (&raw const super::IDT).addr(),
-    };
-    unsafe { asm!("lidt [{}]",in(reg) &idtr,options(nostack,preserves_flags)) };
+    super::load_idt();
     minor::arrive(hart, slot)
 }
 

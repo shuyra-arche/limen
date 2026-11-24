@@ -9,6 +9,8 @@
     "server/src/entry/mod.rs",
     "server/src/metal/mod.rs",
     "server/src/metal/generic/mod.rs",
+    "server/src/metal/generic/boot/mod.rs",
+    "server/src/metal/generic/boot/major.rs",
     "server/src/metal/generic/firmware/mod.rs",
     "server/src/metal/generic/firmware/map.rs",
     "server/src/entry/boot/**",

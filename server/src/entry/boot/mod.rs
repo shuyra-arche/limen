@@ -1,33 +1,19 @@
 //! Major CPU handoff. Metal installs the kernel stack and exception entry before
 //! calling the common admission gate. The trusted image receives Boot exactly once.
 mod handoff;
-use crate::metal::boot;
+use crate::metal::{boot, generic::boot::major};
 use core::fmt::Write;
 
 pub use crate::metal::generic::firmware::map::FirmwareMap;
-pub use crate::metal::generic::stack::stack_range;
 pub use crate::metal::generic::{console::Console, services::Services};
 pub use boot::interface::*;
 pub use handoff::Boot;
+pub use major::stack_range;
 
 /// The firmware adapter supplies a stable DTB (OpenSBI) or Loader (UEFI).
 /// All referenced storage and mappings remain reserved until the consumer is done.
 pub(crate) unsafe extern "C" fn start(hart: usize, input: *const ()) -> ! {
-    let services = boot::firmware::services_on_entry();
-    if !crate::metal::generic::stack::active() || !boot::established() {
-        services.reject(format_args!(
-            "FAIL Limen boot: invalid CPU or firmware handoff\n"
-        ));
-    }
-
-    if hart != boot::current_hart() {
-        services.reject(format_args!(
-            "FAIL Limen boot: major CPU identity mismatch\n"
-        ));
-    }
-    let Some(boot) = (unsafe { boot::firmware::admit(hart, input) }) else {
-        services.reject(format_args!("FAIL Limen boot: invalid firmware input\n"));
-    };
+    let boot = unsafe { major::admit(hart, input) };
     unsafe { limen_platform_ready(boot) }
 }
 
@@ -52,4 +38,4 @@ unsafe extern "Rust" {
     fn limen_platform_ready(boot: Boot<'_>) -> !;
 }
 
-pub use crate::metal::generic::minor::{Minor, StartError};
+pub use crate::metal::generic::boot::minor::{Minor, StartError};
