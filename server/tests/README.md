@@ -31,3 +31,19 @@ image's boot assertions and actual QEMU termination. Serial output and the
 runner verdict are preserved with the candidate revision. The Target workflow
 discovers owner-local `suite.json` declarations and uploads their evidence.
 Hardware execution and later runtime contracts require separate verification.
+
+## RV64 Kernel Unit execution
+
+Run [target/entry/execution/](target/entry/execution/) with the same runner and
+firmware. Use a fresh output path for each profile.
+
+```sh
+server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
+  --suite server/tests/target/entry/execution --kernel "$PWD" \
+  --output /tmp/limen-execution --profile debug --harts 1
+```
+
+The guest verifies separate stacks in the shared Kernel Nest, Yield and resume,
+exact leave receipts, ending and reaping, and reuse with a new identity. It
+also exercises rejected dispatch, Busy and stale identity paths on the same
+production entry and firmware.

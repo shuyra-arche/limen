@@ -4,6 +4,9 @@
 _start:
     csrci sstatus, 2
     csrw sie, zero
+    # Fresh supervisor code has no saved FP or vector context.
+    li t0, (3 << 13) | (3 << 9)
+    csrc sstatus, t0
     .option push
     .option norelax
     la gp, __global_pointer$
