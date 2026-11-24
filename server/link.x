@@ -41,10 +41,10 @@ SECTIONS
 
   .boot_stacks (NOLOAD) : ALIGN(0x1000) {
     _boot_stack_start = .;
-    . += 0x4000;
+    KEEP(*(.bootstk))
     _boot_stack_end = .;
     _trap_stack_start = .;
-    . += 0x1000;
+    KEEP(*(.trapstk))
     _trap_stack_end = .;
   } :writable
 

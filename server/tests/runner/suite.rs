@@ -7,10 +7,10 @@ use std::{
 };
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Suite {
     pub id: String,
     pub profiles: Vec<String>,
-    pub harts: Vec<u8>,
     pub sources: Vec<String>,
     pub run: Run,
 }
@@ -29,12 +29,31 @@ pub enum Run {
         expects: Vec<String>,
         distinct: Option<Distinct>,
     },
+    BoardBoot {
+        boards: Vec<Board>,
+    },
     CargoTest {
         package: Option<String>,
         manifest: Option<String>,
         test: String,
         ignored: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Board {
+    Q35,
+    Virt,
+}
+
+impl Board {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Q35 => "q35",
+            Self::Virt => "virt",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -71,10 +90,6 @@ pub fn read(path: &Path) -> Result<(Suite, PathBuf)> {
                 .iter()
                 .all(|profile| profile == "debug" || profile == "release"),
         "invalid test profiles",
-    )?;
-    require(
-        !suite.harts.is_empty() && suite.harts.iter().all(|hart| matches!(hart, 1 | 4)),
-        "invalid test Hart selection",
     )?;
     require(
         !suite.sources.is_empty(),

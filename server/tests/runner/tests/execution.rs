@@ -63,7 +63,7 @@ fn process_requires_exit_and_full_acceptance() {
         )
         .unwrap();
         let serial = fs::read_to_string(root.join(name).join("serial.log")).unwrap();
-        let details = verify::check(&serial, &["PASS".into()], None, 1).unwrap();
+        let details = verify::check(&serial, &["PASS".into()], None).unwrap();
         let guest = qmp::Shutdown {
             guest: true,
             reason: "guest-shutdown".into(),

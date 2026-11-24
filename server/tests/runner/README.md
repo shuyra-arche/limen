@@ -4,9 +4,10 @@
 executes a project discovered from `suite.json`. Target projects own the
 platform image, input and observable assertions. The runner manages source
 capture, builds, QEMU or Cargo test execution, timeouts, process cleanup and
-evidence.
+evidence. QEMU boots use four virtual CPUs. Each suite checks the number of
+CPUs that participate in its scenario through the guest's observations.
 
-A QEMU suite declares its platform binary and the complete serial lines required
+A QEMU suite declares its platform binary and the complete literal serial lines required
 after its assertions. It can also declare imported test helpers, Cargo features,
 environment and distinct capture evidence. The runner builds the platform from
 the suite's locked dependency graph. It negotiates QMP before starting the

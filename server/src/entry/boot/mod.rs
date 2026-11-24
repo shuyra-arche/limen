@@ -1,93 +1,41 @@
-//! Trusted RV64 firmware handoff before any memory or Unit is admitted.
+//! Major CPU handoff. Metal installs the kernel stack and exception entry before
+//! calling the common admission gate. The trusted image receives Boot exactly once.
+mod handoff;
+use crate::metal::{boot, generic::boot::major};
+use core::fmt::Write;
 
-mod tree;
+pub use crate::metal::generic::firmware::map::FirmwareMap;
+pub use crate::metal::generic::{console::Console, services::Services};
+pub use boot::interface::*;
+pub use handoff::Boot;
+pub use major::stack_range;
 
-use core::fmt::{self, Write};
-use core::ops::Range;
-
-use crate::metal::riscv::{boot, sbi};
-
-/// Facts from the admitted firmware handoff. These carry no authority over RAM.
-pub struct Boot {
-    hart: usize,
-    device_tree: Range<usize>,
+/// The firmware adapter supplies a stable DTB (OpenSBI) or Loader (UEFI).
+/// All referenced storage and mappings remain reserved until the consumer is done.
+pub(crate) unsafe extern "C" fn start(hart: usize, input: *const ()) -> ! {
+    let boot = unsafe { major::admit(hart, input) };
+    unsafe { limen_platform_ready(boot) }
 }
 
-impl Boot {
-    pub fn hart(&self) -> usize {
-        self.hart
-    }
+/// Obtain early output when supplied by the boot environment.
+pub fn console() -> Option<Console> {
+    Services::active().console()
+}
 
-    /// Physical address interval occupied by the firmware device tree.
-    pub fn device_tree(&self) -> Range<usize> {
-        self.device_tree.clone()
+/// Write a best-effort diagnostic.
+pub fn write(message: &str) {
+    if let Some(mut console) = console() {
+        let _ = console.write_str(message);
     }
+}
+
+/// Request platform termination and park if the request returns.
+pub fn shutdown(success: bool) -> ! {
+    Services::active().shutdown(success)
 }
 
 unsafe extern "Rust" {
-    fn limen_platform_ready(boot: Boot) -> !;
+    fn limen_platform_ready(boot: Boot<'_>) -> !;
 }
 
-// OpenSBI transfers control to _start on one boot hart, with placement and
-// readable ownership of the device tree guaranteed by the trusted platform.
-#[unsafe(no_mangle)]
-extern "C" fn limen_boot(hart: usize, device_tree: usize) -> ! {
-    let established = boot::established();
-    let firmware = sbi::extensions();
-    if !established || !firmware.console || !firmware.reset {
-        reject(
-            firmware,
-            format_args!("FAIL Limen boot: invalid supervisor or SBI handoff\n"),
-        );
-    }
-    let header = core::ptr::without_provenance(device_tree);
-    let Some(device_tree) = (unsafe { tree::extent(header, boot::image()) }) else {
-        reject(
-            firmware,
-            format_args!("FAIL Limen boot: invalid device tree header\n"),
-        );
-    };
-    unsafe { limen_platform_ready(Boot { hart, device_tree }) }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn limen_boot_trap(cause: usize, pc: usize, value: usize, stack: usize) -> ! {
-    reject(
-        sbi::extensions(),
-        format_args!(
-            "FAIL Limen boot trap: cause={cause:#x} pc={pc:#x} value={value:#x} stack={stack:#x}\n"
-        ),
-    )
-}
-
-fn reject(firmware: sbi::Extensions, message: fmt::Arguments<'_>) -> ! {
-    if firmware.console {
-        let _ = Console.write_fmt(message);
-    }
-    if firmware.reset {
-        shutdown(false);
-    }
-    boot::park()
-}
-
-/// Write an early diagnostic to the firmware debug console.
-pub fn write(message: &str) {
-    let _ = Console.write_str(message);
-}
-
-/// End the trusted boot path through firmware system reset.
-pub fn shutdown(success: bool) -> ! {
-    sbi::shutdown(success)
-}
-
-struct Console;
-
-impl Write for Console {
-    fn write_str(&mut self, message: &str) -> fmt::Result {
-        if message.bytes().all(sbi::write_byte) {
-            Ok(())
-        } else {
-            Err(fmt::Error)
-        }
-    }
-}
+pub use crate::metal::generic::boot::minor::{Minor, StartError};

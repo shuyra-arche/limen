@@ -1,14 +1,31 @@
 {
   "id": "kernel-execution",
-  "profiles": ["debug", "release"],
-  "harts": [1],
+  "profiles": [
+    "debug",
+    "release"
+  ],
   "sources": [
-    "server/src/**",
-    "server/build.rs",
+    "server/src/lib.rs",
+    "server/src/entry/mod.rs",
+    "server/src/metal/mod.rs",
+    "server/src/metal/generic/mod.rs",
+    "server/src/metal/generic/boot/mod.rs",
+    "server/src/metal/generic/boot/major.rs",
+    "server/src/metal/generic/boot/trap.rs",
+    "server/src/metal/generic/firmware/mod.rs",
+    "server/src/metal/generic/firmware/map.rs",
+    "server/src/entry/boot/**",
+    "server/src/metal/riscv/mod.rs",
+    "server/src/metal/riscv/boot/**",
+    "server/src/metal/generic/firmware/sbi/**",
     "server/link.x",
-    "server/Cargo.toml",
-    "Cargo.toml",
-    ".cargo/config.toml"
+    "server/src/basis/**",
+    "server/src/entry/execution.rs",
+    "server/src/metal/riscv/execution/**",
+    "server/src/metal/generic/console.rs",
+    "server/src/metal/generic/services.rs",
+    "server/src/metal/generic/devicetree.rs",
+    "server/src/metal/generic/stack.rs"
   ],
   "run": {
     "kind": "qemu",

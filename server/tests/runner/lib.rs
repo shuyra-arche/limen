@@ -80,12 +80,14 @@ pub fn fresh(path: &Path) -> Result<()> {
 }
 pub fn tools(qemu: &str, firmware: &Path) -> Result<serde_json::Value> {
     let version = output(Command::new(qemu).arg("--version"))?;
+    let reviewed = include_str!("../qemu.version").trim();
     require(
         version
             .lines()
             .next()
-            .is_some_and(|v| v.contains("version 10.0.")),
-        "only QEMU 10.0.x is reviewed",
+            .and_then(|line| line.split_whitespace().nth(3))
+            == Some(reviewed),
+        format!("expected QEMU {reviewed}"),
     )?;
     Ok(
         serde_json::json!({"rustc":output(Command::new("rustc").arg("-Vv"))?,

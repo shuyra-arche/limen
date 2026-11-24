@@ -13,8 +13,8 @@ use core::{
     },
 };
 use kernel::entry::{
-    boot::{Boot, shutdown, write},
-    execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Secondary, Stacks, UnitId},
+    boot::{Boot, Minor, shutdown, write},
+    execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Stacks, UnitId},
 };
 
 #[path = "lock-probe.rs"]
@@ -23,7 +23,7 @@ mod lock;
 global_asm!(include_str!("register-probe.S"));
 
 static mut STACKS: Stacks = Stacks::new();
-static SECONDARY: Secondary = Secondary::new();
+static MINOR: Minor = Minor::new();
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static mut SCENARIO: MaybeUninit<Scenario> = MaybeUninit::uninit();
 static mut PREVIOUS: MaybeUninit<Occupancy> = MaybeUninit::uninit();
@@ -35,8 +35,8 @@ static limen_register_probe_migrated: AtomicUsize = AtomicUsize::new(0);
 #[derive(Clone, Copy)]
 struct Scenario {
     first: UnitId,
-    primary: usize,
-    secondary: usize,
+    major: usize,
+    minor: usize,
 }
 
 #[repr(u8)]
@@ -80,14 +80,14 @@ fn stack_address(value: &usize) -> usize {
 fn first(current: &mut Current) -> u64 {
     let Scenario {
         first,
-        primary,
-        secondary,
+        major,
+        minor,
     } = scenario();
     let local = black_box(0x1234_5678usize);
     assert_eq!(current.id(), first);
-    assert_eq!(current.hart(), primary);
+    assert_eq!(current.hart(), major);
     FIRST_STACK.store(stack_address(&local), Relaxed);
-    observe(primary);
+    observe(major);
     publish(Phase::FirstRunning);
 
     wait(Phase::BothRunning);
@@ -95,18 +95,18 @@ fn first(current: &mut Current) -> u64 {
         .yield_now()
         .expect("leave with an independent Unit on the other Hart");
     assert_eq!(current.id(), first);
-    assert_eq!(current.hart(), secondary);
+    assert_eq!(current.hart(), minor);
     assert_eq!(stack_address(&local), FIRST_STACK.load(Relaxed));
     assert_eq!(black_box(local), 0x1234_5678);
     local as u64
 }
 
 fn second(current: &mut Current) -> u64 {
-    let secondary = scenario().secondary;
+    let minor = scenario().minor;
     let local = black_box(41usize);
-    assert_eq!(current.hart(), secondary);
+    assert_eq!(current.hart(), minor);
     assert!(stack_address(&local).abs_diff(FIRST_STACK.load(Relaxed)) >= 8 * 1024);
-    observe(secondary);
+    observe(minor);
     publish(Phase::BothRunning);
 
     wait(Phase::FirstStopped);
@@ -114,7 +114,7 @@ fn second(current: &mut Current) -> u64 {
 }
 
 fn pinned(current: &mut Current) -> u64 {
-    assert_eq!(current.hart(), scenario().primary);
+    assert_eq!(current.hart(), scenario().major);
     17
 }
 
@@ -140,26 +140,24 @@ fn finish(execution: &Execution, receipt: Occupancy, value: u64) {
     assert_eq!(execution.reap(unit), Ok(End::Returned { value }));
 }
 
-fn secondary(execution: &'static Execution) -> ! {
+fn run_minor(execution: &'static Execution) -> ! {
     lock::waiter();
     assert_eq!(
         execution.enter(),
         Ok(None),
-        "secondary must reject the Ready Unit pinned to primary"
+        "minor must reject the Ready Unit pinned to major"
     );
     publish(Phase::AffinityChecked);
     wait(Phase::FirstRunning);
-    let Scenario {
-        first, secondary, ..
-    } = scenario();
+    let Scenario { first, minor, .. } = scenario();
     assert_eq!(execution.enter(), Ok(None));
     assert_eq!(execution.lifecycle(first), Ok(Lifecycle::Live));
     assert_eq!(execution.finish_end(first), Err(Error::Busy));
     assert_eq!(execution.submit(first), Err(Error::Busy));
 
-    let other = unsafe { execution.create(second) }.expect("create on secondary");
-    execution.submit(other).expect("admit on secondary");
-    finish(execution, dispatch(execution, other, secondary), 41);
+    let other = unsafe { execution.create(second) }.expect("create on minor");
+    execution.submit(other).expect("admit on minor");
+    finish(execution, dispatch(execution, other, minor), 41);
     // The original Unit left its stack. Its exact receipt remains unconsumed.
     assert_eq!(execution.enter(), Ok(None));
     assert_eq!(execution.pending_leave(), None);
@@ -167,8 +165,8 @@ fn secondary(execution: &'static Execution) -> ! {
     publish(Phase::WithheldChecked);
 
     wait(Phase::OldVacated);
-    let migrated = dispatch(execution, first, secondary);
-    // The primary wrote PREVIOUS once and published it in FirstStopped.
+    let migrated = dispatch(execution, first, minor);
+    // The major wrote PREVIOUS once and published it in FirstStopped.
     let previous = unsafe { (&*(&raw const PREVIOUS)).assume_init_read() };
     assert_ne!(migrated, previous);
     assert_eq!(execution.vacate(previous), Err(Error::Gone));
@@ -186,45 +184,50 @@ fn secondary(execution: &'static Execution) -> ! {
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
-    let primary = boot.hart();
-    let second_hart = usize::from(primary == 0);
-    assert!(primary < 4, "unexpected QEMU Boot Hart");
-    let runtime = Execution::with_secondary(boot, unsafe { &mut *(&raw mut STACKS) }, &SECONDARY)
+    assert_eq!(
+        MINOR.stack_range().len(),
+        kernel::entry::boot::stack_range().len()
+    );
+    assert_eq!(MINOR.stack_range().len(), 32 * 1024);
+    let major = boot.hart();
+    let minor_hart = usize::from(major == 0);
+    assert!(major < 4, "unexpected QEMU Boot Hart");
+    let runtime = Execution::with_minor(boot, unsafe { &mut *(&raw mut STACKS) }, &MINOR)
         .expect("Bare scalar execution");
     // The platform owns the resident objects and initializes them once.
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     // The continuation holds scalar locals, the Unit stack and shared fixture
     // state across Yield. It holds no Hart-local resource.
     let a = unsafe { execution.create_migratable(first) }.expect("migratable Unit");
-    let pinned = unsafe { execution.create(pinned) }.expect("create on primary");
+    let pinned = unsafe { execution.create(pinned) }.expect("create on major");
     execution.submit(pinned).expect("admit pinned Unit");
     assert!(matches!(
-        unsafe { execution.start_hart(8, secondary) },
+        unsafe { execution.start_minor(8, run_minor) },
         Err(Error::Firmware(_))
     ));
     unsafe {
         (&mut *(&raw mut SCENARIO)).write(Scenario {
             first: a,
-            primary,
-            secondary: second_hart,
+            major,
+            minor: minor_hart,
         });
         execution
-            .start_hart(second_hart, secondary)
-            .expect("start actual secondary Hart");
+            .start_minor(minor_hart, run_minor)
+            .expect("start actual minor Hart");
     }
     lock::owner();
     wait(Phase::AffinityChecked);
-    finish(execution, dispatch(execution, pinned, primary), 17);
+    finish(execution, dispatch(execution, pinned, major), 17);
     execution.submit(a).expect("admit migratable Unit");
 
-    let previous = dispatch(execution, a, primary);
+    let previous = dispatch(execution, a, major);
     unsafe { (&mut *(&raw mut PREVIOUS)).write(previous) };
     publish(Phase::FirstStopped);
     wait(Phase::WithheldChecked);
     assert_eq!(execution.pending_leave(), Some(previous));
     execution
         .vacate(previous)
-        .expect("primary settles original Yield");
+        .expect("major settles original Yield");
     publish(Phase::OldVacated);
 
     wait(Phase::MigratedStopped);

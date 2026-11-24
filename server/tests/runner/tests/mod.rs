@@ -89,26 +89,23 @@ fn provider_patches_fail_closed_on_unreviewed_sources() {
 
 #[test]
 fn generic_verdict_rejects_missing_and_duplicate_evidence() {
-    let expected = vec![
-        "task: all tasks exited".to_owned(),
-        "PASS completed harts={harts}".to_owned(),
-    ];
+    let expected = vec!["PASS completed participants=2".to_owned()];
     let distinct = suite::Distinct {
-        pattern: r"PASS writer=(\d+)".to_owned(),
+        pattern: r"OBSERVED hart=(\d+)".to_owned(),
         count: 2,
     };
-    let log = "task: all tasks exited\nPASS completed harts=1\nPASS writer=3\nPASS writer=7\n";
+    let log = "PASS completed participants=2\nOBSERVED hart=1\nOBSERVED hart=3\n";
     assert_eq!(
-        verify::check(log, &expected, Some(&distinct), 1).unwrap()["passed"],
+        verify::check(log, &expected, Some(&distinct)).unwrap()["passed"],
         true
     );
     for invalid in [
-        log.replace("writer=7", "writer=3"),
-        log.replace("harts=1", "harts=4"),
-        log.replace("PASS writer=7", "FAIL writer=7"),
+        log.replace("hart=3", "hart=1"),
+        log.replace("participants=2", "participants=4"),
+        format!("{log}FAIL Limen boot: invalid firmware input\n"),
     ] {
         assert_eq!(
-            verify::check(&invalid, &expected, Some(&distinct), 1).unwrap()["passed"],
+            verify::check(&invalid, &expected, Some(&distinct)).unwrap()["passed"],
             false
         );
     }
@@ -129,11 +126,11 @@ fn symbolizer_preserves_literal_return_addresses() {
     )
     .unwrap();
     std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::write(&serial, b"unrelated pc=0x50\ntrap source=Trap pc=0x102\nFAIL Limen boot trap: cause=0x2 pc=0x80200040 value=0x0 stack=0x80208000\n").unwrap();
+    std::fs::write(&serial, b"unrelated pc=0x50\nFAIL Limen boot trap: cause=0x2 pc=0x80200040 value=0x0 stack=0x80208000 status=0x100\n").unwrap();
     utilities::symbolize(&root.join("kernel.elf"), &serial, tool.to_str().unwrap()).unwrap();
     assert_eq!(
         std::fs::read_to_string(root.join("kernel.elf.addresses")).unwrap(),
-        "0x102\n0x80200040\n"
+        "0x80200040\n"
     );
     assert!(utilities::symbolize(&root.join("kernel.elf"), &serial, "/bin/false").is_err());
     std::fs::remove_dir_all(root).unwrap();

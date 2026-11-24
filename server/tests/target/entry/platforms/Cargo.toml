@@ -1,0 +1,26 @@
+[package]
+name = "platform-boot"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "platform-boot"
+path = "main.rs"
+test = false
+bench = false
+
+[dependencies]
+kernel = { path = "../../../.." }
+uefi = "=0.41.0"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+fdt = "=0.1.5"

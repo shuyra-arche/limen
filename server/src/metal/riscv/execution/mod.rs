@@ -110,11 +110,11 @@ impl Hart {
         }
     }
 
-    pub(crate) fn supported(trap_stack: usize) -> bool {
+    pub(crate) fn supported() -> bool {
         let status: usize;
         unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nomem, nostack)) };
         const EXTENSIONS: usize = (3 << 13) | (3 << 9);
-        boot::established_on(trap_stack) && status & EXTENSIONS == 0
+        boot::established() && status & EXTENSIONS == 0
     }
 
     /// The caller has established that this is the current physical Hart.

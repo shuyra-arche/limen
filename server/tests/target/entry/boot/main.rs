@@ -2,19 +2,23 @@
 #![no_main]
 
 use core::arch::{asm, global_asm};
+use core::fmt::Write;
 use core::panic::PanicInfo;
-use kernel::entry::boot::{Boot, shutdown, write};
+use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 
 unsafe extern "C" {
-    static _boot_stack_start: u8;
-    static _boot_stack_end: u8;
     static _trap_stack_start: u8;
     static _trap_stack_end: u8;
-    static _limen_early_trap: u8;
+    static limen_test_text_start: u8;
+    static limen_test_text_end: u8;
+    static _kernel_base: u8;
+    static _kernel_edge: u8;
     static _bss_start: u8;
     static _bss_end: u8;
 }
 
+// Nonzero initialization places the firmware witness outside the cleared BSS.
+static mut FIRMWARE_HART: usize = usize::MAX;
 static mut ZEROED: usize = 0;
 
 // Firmware-facing test prelude. Preserve a0/a1 and do not assume gp or sp.
@@ -25,18 +29,25 @@ global_asm!(
     "limen_test_entry:",
     ".option push",
     ".option norelax",
+    "lla t0, {hart}",
+    "sd a0, 0(t0)",
     "lla t0, {sentinel}",
     "li t1, -1",
     "sd t1, 0(t0)",
     "tail _start",
     ".option pop",
     ".popsection",
+    hart = sym FIRMWARE_HART,
     sentinel = sym ZEROED,
 );
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
-    assert!(boot.hart() == 0, "unexpected firmware hart ID");
+    let original = unsafe { (&raw const FIRMWARE_HART).read_volatile() };
+    assert!(
+        original < 4 && boot.hart() == original,
+        "firmware hart ID changed"
+    );
 
     let sp: usize;
     let satp: usize;
@@ -64,19 +75,36 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     }
     assert!(satp == 0, "translation enabled before the handoff");
     assert!(sstatus & 2 == 0 && sie == 0, "interrupt delivery enabled");
+    let code = (&raw const limen_test_text_start).addr()..(&raw const limen_test_text_end).addr();
     assert!(
-        stvec == (&raw const _limen_early_trap).addr() && stvec.is_multiple_of(4),
+        code.contains(&stvec) && stvec.is_multiple_of(4),
         "direct early trap vector missing",
     );
+    let image = (&raw const _kernel_base).addr()..(&raw const _kernel_edge).addr();
     assert!(
-        sscratch == (&raw const _trap_stack_end).addr()
-            && sscratch > (&raw const _trap_stack_start).addr()
-            && sscratch.is_multiple_of(16),
+        sscratch.is_multiple_of(8)
+            && image.contains(&sscratch)
+            && sscratch.checked_add(8).is_some_and(|end| end <= image.end)
+    );
+    let top: usize;
+    unsafe { asm!("ld {}, 0({})", out(reg) top, in(reg) sscratch, options(nostack, readonly)) };
+    assert!(
+        top == (&raw const _trap_stack_end).addr()
+            && top > (&raw const _trap_stack_start).addr()
+            && top.is_multiple_of(16),
         "emergency stack not armed",
     );
+    // Linker boundary labels may alias the Rust stack object. Observe the
+    // relocated addresses directly instead of declaring distinct Rust statics.
+    let (start, end): (usize, usize);
+    unsafe {
+        asm!("lla {}, _boot_stack_start", "lla {}, _boot_stack_end",
+             out(reg) start, out(reg) end, options(nostack, nomem));
+    }
+    let reserved = start..end;
+    assert_eq!(stack_range(), reserved, "boot stack reservation mismatch");
     assert!(
-        ((&raw const _boot_stack_start).addr()..(&raw const _boot_stack_end).addr()).contains(&sp)
-            && sp.is_multiple_of(16),
+        reserved.contains(&sp) && sp.is_multiple_of(16),
         "supervisor stack outside the boot stack",
     );
 
@@ -89,7 +117,8 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
     // The production handoff has already checked the firmware header and
     // bounded span. Verify that the witness names the actual virt RAM blob.
-    let device_tree = boot.device_tree();
+    assert!(boot.firmware_map().is_none());
+    let device_tree = boot.device_tree().expect("OpenSBI DTB");
     assert!(
         device_tree.start >= 0x8000_0000 && device_tree.end <= 0x8800_0000,
         "firmware tree is outside QEMU virt RAM",
@@ -104,14 +133,14 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert!(magic == 0xd00d_feed, "invalid firmware tree magic");
     assert!(length == device_tree.len(), "firmware tree length mismatch");
 
-    write("PASS boot-handoff hart=0 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1\n");
+    write("PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1\n");
     shutdown(true)
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
-    write("FAIL boot-handoff: ");
-    write(info.message().as_str().unwrap_or("assertion failed"));
-    write("\n");
+    if let Some(mut console) = kernel::entry::boot::console() {
+        let _ = writeln!(console, "FAIL boot-handoff: {info}");
+    }
     shutdown(false)
 }

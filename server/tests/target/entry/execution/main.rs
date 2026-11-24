@@ -89,7 +89,7 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
-    assert_eq!(boot.hart(), 0);
+    assert!(boot.hart() < 4, "unexpected QEMU boot hart");
     // The fixture owns both static objects and runs on the sole Boot Hart.
     let runtime =
         Execution::new(boot, unsafe { &mut *(&raw mut STACKS) }).expect("Bare scalar execution");
