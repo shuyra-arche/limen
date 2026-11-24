@@ -1,5 +1,4 @@
 //! Host-only execution and evidence shared by repository-owned RV64 scenarios.
-pub mod capsule;
 pub mod process;
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::Path, process::Command};
@@ -77,19 +76,6 @@ pub fn fresh(path: &Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     fs::create_dir(path)?;
-    Ok(())
-}
-pub fn patch_provider(command: &mut Command, provider: &Path) -> Result<()> {
-    for (package, folder) in [
-        ("kernel", "server"),
-        ("kernel-api", "api"),
-        ("kernel-client", "client"),
-    ] {
-        command.arg("--config").arg(format!(
-            "patch.\"https://github.com/shuyra-arche/kernel.git\".{package}.path={}",
-            serde_json::to_string(&provider.join(folder))?
-        ));
-    }
     Ok(())
 }
 pub fn tools(qemu: &str, firmware: &Path) -> Result<serde_json::Value> {

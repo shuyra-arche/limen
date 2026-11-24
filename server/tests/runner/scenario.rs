@@ -31,17 +31,14 @@ pub struct Inputs {
 struct Variant {
     root: PathBuf,
     elf: PathBuf,
-    image: Option<PathBuf>,
 }
 
 fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result<Variant> {
     let Run::Qemu {
         kernel,
-        guest,
         imports,
         features,
         environment,
-        patch_provider: needs_patch,
         ..
     } = &suite.run
     else {
@@ -84,9 +81,6 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         .env("RUSTFLAGS", FLAGS)
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
-    if *needs_patch {
-        patch_provider(&mut command, &provider)?;
-    }
     if !features.is_empty() {
         command.arg("--features").arg(features.join(","));
     }
@@ -96,7 +90,7 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
     command
         .arg("--manifest-path")
         .arg(&manifest)
-        .args(["--target", TARGET]);
+        .args(["--locked", "--target", TARGET]);
     if args.profile == "release" {
         command.arg("--release");
     }
@@ -109,23 +103,11 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         "profile": args.profile,
         "tools": tools(&qemu, &firmware)?,
         "suite_sha256": composition::hashes(&owner.join(relative))?,
-        "builds": []
+        "builds": [format!("{command:?}")],
     });
     let lock = manifest.with_file_name("Cargo.lock");
-    if lock.exists() {
-        fs::copy(&lock, root.join("original.Cargo.lock"))?;
-    }
-    for phase in ["resolve", "locked"] {
-        if phase == "locked" {
-            command.arg("--locked");
-        }
-        inputs["builds"]
-            .as_array_mut()
-            .unwrap()
-            .push(format!("{command:?}").into());
-        json(&root.join("inputs.json"), &inputs)?;
-        process::build(&mut command, &root.join(phase))?;
-    }
+    json(&root.join("inputs.json"), &inputs)?;
+    process::build(&mut command, &root.join("locked"))?;
     fs::copy(&lock, root.join("Cargo.lock"))?;
 
     let binaries = manifest
@@ -136,30 +118,14 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         .join(&args.profile);
     let elf = root.join("platform.elf");
     fs::copy(binaries.join(kernel), &elf)?;
-    let image = if let Some(guest) = guest {
-        fs::copy(binaries.join(&guest.binary), root.join("guest.elf"))?;
-        let path = root.join("initrd.bin");
-        fs::write(
-            &path,
-            capsule::initrd(&fs::read(root.join("guest.elf"))?, guest.capsule)?,
-        )?;
-        Some(path)
-    } else {
-        None
-    };
-    let mut hashes = serde_json::json!({});
-    for name in ["platform.elf", "guest.elf", "initrd.bin", "Cargo.lock"] {
-        let path = root.join(name);
-        if path.exists() {
-            hashes[name] = digest(&path)?.into();
-        }
-    }
-    inputs["sha256"] = hashes;
+    inputs["sha256"] = serde_json::json!({
+        "platform.elf": digest(&elf)?,
+        "Cargo.lock": digest(&root.join("Cargo.lock"))?,
+    });
     json(&root.join("inputs.json"), &inputs)?;
     Ok(Variant {
         root: root.to_owned(),
         elf,
-        image,
     })
 }
 
@@ -199,20 +165,22 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, hart: u8, round: u8) ->
         .arg(firmware)
         .arg("-kernel")
         .arg(&variant.elf);
-    if let Some(image) = &variant.image {
-        command.arg("-initrd").arg(image);
-    }
     let mut result = process::run(&mut command, &evidence, Duration::from_secs(120))?;
-    let log = fs::read_to_string(evidence.join("serial.log"))?;
-    let details = verify::check(&log, expects, distinct.as_ref(), hart)?;
-    result.passed = result.success() && details["passed"] == true;
+    let log = fs::read(evidence.join("serial.log"))?;
+    let details = match std::str::from_utf8(&log) {
+        Ok(log) => verify::check(log, expects, distinct.as_ref(), hart)?,
+        Err(error) => serde_json::json!({"passed": false, "serial_error": error.to_string()}),
+    };
+    let verdict = verify::verdict(&result, &details);
+    result.passed = verdict == "pass";
     let mut value = serde_json::to_value(&result)?;
     value["scenario"] = details;
+    value["verdict"] = verdict.into();
     value["platform_sha256"] = digest(&variant.elf)?.into();
     json(&evidence.join("result.json"), &value)?;
     println!(
         "{} {} {} harts={hart} round={round}: {}",
-        if result.passed { "PASS" } else { "FAIL" },
+        verdict.to_ascii_uppercase(),
         suite.id,
         args.profile,
         evidence.display()

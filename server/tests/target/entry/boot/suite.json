@@ -1,0 +1,21 @@
+{
+  "id": "boot-handoff",
+  "profiles": ["debug", "release"],
+  "harts": [1],
+  "sources": [
+    "server/src/**",
+    "server/build.rs",
+    "server/link.x",
+    "server/Cargo.toml",
+    ".cargo/config.toml",
+    "Cargo.toml",
+    "Cargo.lock"
+  ],
+  "run": {
+    "kind": "qemu",
+    "kernel": "boot-handoff",
+    "expects": [
+      "PASS boot-handoff hart=0 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1"
+    ]
+  }
+}

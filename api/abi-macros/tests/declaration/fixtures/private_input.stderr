@@ -1,5 +1,0 @@
-error: operation inputs must be public
- --> tests/declaration/fixtures/private_input.rs:5:9
-  |
-5 |         value: usize,
-  |         ^^^^^^^^^^^^

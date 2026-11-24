@@ -1,57 +1,33 @@
-# Kernel tests
+# Limen tests
 
-Test source belongs to the responsibility it verifies. Host tests follow the
-production owners under `basis/`, `entry/` and `metal/`; common fixtures only
-exist where there are actual shared consumers.
-
-Host test project ownership is local: each Host suite keeps a `host/Cargo.toml`
-in its own `basis/`, `entry/`, or `metal/` directory, pointing at the
-adjacent Rust test root. Cargo discovers these packages through the recursive
-`**/host` workspace globs; there is no central `[[test]]` registry. Adding
-another Host suite requires its own `host/Cargo.toml` and the normal
-Cargo.lock refresh for a new workspace package; no central test registry,
-workspace member-list edit, or other suite/CI change is needed. `cargo test --workspace`
-executes them all. The Name benchmark is declared beside the Name suite and
-remains opt-in. Each suite can also run with `cargo test --manifest-path
-server/tests/basis/cell/host/Cargo.toml --target x86_64-unknown-linux-gnu`.
-
-Host tests:
+Test source follows its semantic owner. Host suites under `metal/` exercise the
+retained bounded allocation cursor and RV64 page-table entry encoding and
+atomic operations without executing privileged instructions. Each suite keeps
+its own `host/Cargo.toml`. The root workspace discovers these packages.
 
 ```sh
-cargo +nightly test --locked --workspace --target x86_64-unknown-linux-gnu
+RUSTFLAGS=-Dwarnings cargo +nightly test --locked --workspace --target x86_64-unknown-linux-gnu
 cargo +nightly test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
 ```
 
-Each target project owns its `suite.json` alongside its Cargo manifest,
-Guest and any source probe patch. The common `Target` workflow discovers these
-files, selects owners whose source inputs changed, and runs an independent job
-per project/profile. No project name is declared in the workflow or runner.
+## RV64 boot
 
-To discover available jobs locally:
+The Boot owner keeps its platform image and assertions in [target/entry/boot/](target/entry/boot/).
+The target runner archives the candidate Git revision. Commit changes before
+starting verification so the report identifies the source it actually ran.
+Set `QEMU_RISCV64` to QEMU 10.0.x and `QEMU_OPENSBI` to OpenSBI firmware
+with the debug console and system reset extensions.
 
 ```sh
 bash tools/tests/discover.sh "$PWD" "" 1
-```
-
-To run one project:
-
-```sh
 cargo +nightly build --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
-  --suite server/tests/target/basis/nest/completion \
-  --kernel "$PWD" --output /tmp/nest --harts 1
+  --suite server/tests/target/entry/boot --kernel "$PWD" \
+  --output /tmp/limen-boot --profile debug --harts 1
 ```
 
-Set `QEMU_RISCV64` and `QEMU_OPENSBI` for CPU suites (QEMU 10.0.x and
-OpenSBI DBCN). Normal CI uses one Hart. Multi-Hart runs are manually selected
-and only admitted by projects that declare support for them. An IOMMU target
-project may instead own a Cargo test invoking QEMU directly.
-
-To add a project, create its directory and `suite.json` with an ID,
-profile/Hart support, owned source patterns and one execution declaration.
-A project can be deleted by deleting its directory. Neither action requires
-editing CI, a central case enum or another project's tests. No historical
-ABI fixtures or compatibility runners are kept.
-
-Results report actual build/exit/Guest evidence. A green Host test cannot
-prove target CPU, IOMMU or physical hardware effects.
+The scenario follows the production firmware entry and waits for the platform
+image's boot assertions and actual QEMU termination. Serial output and the
+runner verdict are preserved with the candidate revision. The Target workflow
+discovers owner-local `suite.json` declarations and uploads their evidence.
+Hardware execution and later runtime contracts require separate verification.

@@ -1,14 +1,16 @@
 # Target runner
 
 `verify run --suite <project-directory> --kernel <repository> --output <fresh-directory>`
-executes a project discovered from `suite.json`. Target projects own their
-source patch contracts, Guest inputs and observable assertions; Runner owns
-source capture, build invocation, QEMU or Cargo test execution, timeouts,
-process cleanup and evidence.
+executes a project discovered from `suite.json`. Target projects own the
+platform image, input and observable assertions. The runner manages source
+capture, builds, QEMU or Cargo test execution, timeouts, process cleanup and
+evidence.
 
-A QEMU suite can declare an additional Guest/Capsule, imported test helpers,
-Cargo features and environment, required result markers and optional distinct
-capture evidence. Source instrumentation is optional; patches remain project-local when needed.
+A QEMU suite declares its platform binary and the complete serial lines required
+after its assertions. It can also declare imported test helpers, Cargo features,
+environment and distinct capture evidence. The runner builds the platform from
+the suite's locked dependency graph and requires both complete assertions and
+QEMU completion. Results distinguish `pass`, `fail`, `timeout` and `inconclusive`.
 A Cargo test suite names its package or own manifest and test target.
 Adding a new project does not change Runner code.
 

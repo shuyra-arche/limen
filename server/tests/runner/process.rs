@@ -328,11 +328,3 @@ pub fn build(command: &mut Command, directory: &Path) -> Result<()> {
         format!("build failed: {} ({})", directory.display(), result.status),
     )
 }
-
-pub fn accept(result: &mut Outcome, serial: &str, markers: &[String]) -> bool {
-    result.passed = result.success()
-        && !serial.contains("FAIL")
-        && !serial.contains("[kernel] fatal")
-        && markers.iter().all(|marker| serial.contains(marker));
-    result.passed
-}

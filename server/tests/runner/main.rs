@@ -3,7 +3,6 @@ use kernel_verification::Result;
 use std::path::PathBuf;
 
 mod composition;
-mod inventory;
 mod scenario;
 mod suite;
 mod utilities;
@@ -25,10 +24,6 @@ enum Commands {
         #[arg(long, default_value = "llvm-addr2line")]
         addr2line: String,
     },
-    Inventory {
-        #[arg(long)]
-        kernel: PathBuf,
-    },
 }
 
 fn main() {
@@ -39,7 +34,6 @@ fn main() {
             serial,
             addr2line,
         } => utilities::symbolize(&elf, &serial, &addr2line),
-        Commands::Inventory { kernel } => inventory::run(&kernel),
     };
     if let Err(error) = result {
         eprintln!("{error}");

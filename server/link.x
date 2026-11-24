@@ -1,48 +1,52 @@
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
+EXTERN(_start)
+
+PHDRS
+{
+  code PT_LOAD FLAGS(5);
+  read_only PT_LOAD FLAGS(4);
+  writable PT_LOAD FLAGS(6);
+}
 
 SECTIONS
 {
   ASSERT(DEFINED(KERNEL_LOAD_ADDRESS), "image must provide KERNEL_LOAD_ADDRESS")
   . = KERNEL_LOAD_ADDRESS;
-
   _kernel_base = .;
 
   .text : {
-    *(.text._start)
-    *(.text*)
-  }
+    KEEP(*(.text._start))
+    *(.text .text.*)
+  } :code
 
-  .trampoline ALIGN(0x1000) : {
-    KEEP(*(.trampoline))
-  }
-  ASSERT(SIZEOF(.trampoline) <= 0x1000, "trampoline exceeds one page")
-  . = ALIGN(0x1000);
-  _text_end = .;
-
-  .data : {
-    *(.data*)
-    *(.sdata*)
-  }
-  .bss : {
-    *(.bss*)
-    *(.sbss*)
-    *(COMMON)
-  }
-
-  /* 只读段放镜像最后：主栈位于 `_kernel_edge` 之上、向下生长，越界第一脚即踩
-     `.rodata`——其映射为只读（W=0，见 memory::manager），写即写保护缺页，
-     天然充当主栈 guard（省 unmap 帧，且顺带给内核 .rodata 加只读保护）。
-     页对齐独立：不与 .bss 同页，protect 只读时不会误伤可写段。 */
   .rodata ALIGN(0x1000) : {
-    _rodata_start = .;
-    *(.rodata*)
-    *(.srodata*)
-    *(.eh_frame_hdr)
-    *(.eh_frame)
-  }
+    *(.rodata .rodata.* .srodata .srodata.*)
+    *(.eh_frame_hdr .eh_frame)
+  } :read_only
 
-  . = ALIGN(0x1000);
+  .data ALIGN(0x1000) : {
+    PROVIDE(__global_pointer$ = . + 0x800);
+    *(.data .data.* .sdata .sdata.*)
+    *(.got .got.*)
+  } :writable
+
+  .bss (NOLOAD) : ALIGN(8) {
+    _bss_start = .;
+    *(.bss .bss.* .sbss .sbss.*)
+    *(COMMON)
+    . = ALIGN(8);
+    _bss_end = .;
+  } :writable
+
+  .boot_stacks (NOLOAD) : ALIGN(0x1000) {
+    _boot_stack_start = .;
+    . += 0x4000;
+    _boot_stack_end = .;
+    _trap_stack_start = .;
+    . += 0x1000;
+    _trap_stack_end = .;
+  } :writable
+
   _kernel_edge = .;
-
 }

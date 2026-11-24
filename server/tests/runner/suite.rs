@@ -20,15 +20,12 @@ pub struct Suite {
 pub enum Run {
     Qemu {
         kernel: String,
-        guest: Option<Guest>,
         #[serde(default)]
         imports: Vec<String>,
         #[serde(default)]
         features: Vec<String>,
         #[serde(default)]
         environment: BTreeMap<String, String>,
-        #[serde(default)]
-        patch_provider: bool,
         expects: Vec<String>,
         distinct: Option<Distinct>,
     },
@@ -38,12 +35,6 @@ pub enum Run {
         test: String,
         ignored: bool,
     },
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct Guest {
-    pub binary: String,
-    pub capsule: u8,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -93,7 +84,10 @@ pub fn read(path: &Path) -> Result<(Suite, PathBuf)> {
         imports, expects, ..
     } = &suite.run
     {
-        require(!expects.is_empty(), "QEMU suite requires result assertions")?;
+        require(
+            !expects.is_empty() && expects.iter().all(|line| !line.trim().is_empty()),
+            "QEMU suite requires nonempty result assertions",
+        )?;
         for import in imports {
             let path = Path::new(import);
             require(
