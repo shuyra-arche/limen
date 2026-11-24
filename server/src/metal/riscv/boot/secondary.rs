@@ -64,10 +64,6 @@ pub(super) const STACK_OFFSET: usize = offset_of!(Secondary, launch) + offset_of
 pub(super) const TRAP_STACK_OFFSET: usize =
     offset_of!(Secondary, launch) + offset_of!(Launch, trap_stack);
 
-unsafe extern "C" {
-    static _limen_secondary_start: u8;
-}
-
 impl Secondary {
     pub const fn new() -> Self {
         Self {
@@ -114,7 +110,7 @@ impl Secondary {
         }
         self.state.store(PUBLISHED, Ordering::Release);
 
-        let address = (&raw const _limen_secondary_start).addr();
+        let address = super::start::enter_secondary as *const () as usize;
         let opaque = core::ptr::from_ref(self).expose_provenance();
         let result = sbi::start_hart(hart, address, opaque);
         if result.is_err() {
@@ -132,7 +128,7 @@ impl Default for Secondary {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn limen_secondary_boot(hart: usize, opaque: usize) -> ! {
+pub(super) extern "C" fn limen_secondary_boot(hart: usize, opaque: usize) -> ! {
     // The assembly entry acquired the published launch before taking its stacks.
     let secondary = unsafe { &*core::ptr::with_exposed_provenance::<Secondary>(opaque) };
     let launch = unsafe { (&*secondary.launch.get()).assume_init_ref() };

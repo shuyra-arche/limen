@@ -95,9 +95,11 @@ user traps and calls require separate implementation and verification.
 
 Each architecture implements CPU startup under `metal/<arch>/boot/`.
 The common gate uses `metal::boot` to check the selected implementation.
-Keep boot assembly and its Rust operands in the same module. Use
-`global_asm!` for firmware entry symbols or vector tables and `naked_asm!`
-for a Rust-declared entry with an explicit call ABI. Use `sym` for Rust-owned
+Declare the first CPU entry as a Rust naked function in each backend’s
+`boot/start.rs`, with its firmware or loader ABI. Put the instructions and
+operands directly in `naked_asm!`. Export fixed linker or vector symbols
+from their Rust definitions and set hardware-required alignment on the
+function. Use `sym` for Rust-owned
 storage and `const` for sizes or layout offsets. The linker supplies final
 image and section boundaries. Board-specific diagnostics live under
 `metal/<arch>/board/` when selected by a board feature.

@@ -14,10 +14,6 @@ struct TrapStack([u8; 4096]);
 #[unsafe(link_section = ".limen.trap.stack")]
 static mut TRAP_STACK: TrapStack = TrapStack([0; 4096]);
 
-unsafe extern "C" {
-    fn _limen_early_trap();
-}
-
 /// Checks the state established by the assembly entry without changing translation.
 pub(crate) fn established() -> bool {
     established_on(primary_trap_stack())
@@ -62,7 +58,7 @@ pub(crate) fn established_on(trap_stack: usize) -> bool {
     status & 2 == 0
         && interrupt_enable == 0
         && translation == 0
-        && vector == _limen_early_trap as *const () as usize
+        && vector == start::trap as *const () as usize
         && scratch == trap_stack
 }
 

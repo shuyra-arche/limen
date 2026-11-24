@@ -1,4 +1,12 @@
 #![no_std]
+// Hardware fetches the RV64 early trap and Arm vector table at aligned addresses.
+#![cfg_attr(
+    any(
+        target_arch = "riscv64",
+        all(target_arch = "aarch64", any(target_os = "uefi", target_os = "none"))
+    ),
+    feature(fn_align)
+)]
 
 #[cfg(target_arch = "riscv64")]
 mod basis;
