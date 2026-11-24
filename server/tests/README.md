@@ -1,9 +1,9 @@
 # Limen tests
 
-Test source follows its semantic owner. Host suites under `metal/` exercise the
-retained bounded allocation cursor and RV64 page-table entry encoding and
-atomic operations without executing privileged instructions. Each suite keeps
-its own `host/Cargo.toml`. The root workspace discovers these packages.
+Host suites under `entry/boot/` and `metal/` exercise DTB header validation,
+SBI extension discovery, the bounded allocation cursor and RV64 page-table
+entry encoding and atomic operations. Each suite keeps its own
+`host/Cargo.toml`. The root workspace discovers these packages.
 
 ```sh
 RUSTFLAGS=-Dwarnings cargo +nightly test --locked --workspace --target x86_64-unknown-linux-gnu
@@ -27,11 +27,17 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --output /tmp/limen-boot --profile debug --harts 1
 ```
 
-The scenario follows the production firmware entry and waits for the platform
-image's boot assertions and actual QEMU termination. Serial output and the
-runner verdict are preserved with the candidate revision. The Target workflow
-runs affected owner-local `suite.json` scenarios at their declared Hart counts
-and uploads their evidence. Manual workflow runs select one Hart count.
+At the firmware entry address the test image writes a nonzero BSS sentinel
+and jumps to the production `_start` with the original firmware arguments.
+The callback checks that the sentinel was cleared. The runner requires the
+complete serial assertions, one QMP `SHUTDOWN` event with `guest=true` and
+`reason=guest-shutdown`, and a clean QEMU exit. The serial log, QMP transcript
+and verdict are preserved with the candidate revision.
+
+The Target workflow runs affected owner-local `suite.json` scenarios at their
+declared Hart counts and uploads their evidence. Manual runs select one or four
+Harts and fail when the selected count has no matching suite.
+
 Hardware execution and later runtime contracts require separate verification.
 
 ## RV64 Kernel Unit execution

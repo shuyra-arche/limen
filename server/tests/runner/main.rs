@@ -3,6 +3,7 @@ use kernel_verification::Result;
 use std::path::PathBuf;
 
 mod composition;
+mod qmp;
 mod scenario;
 mod suite;
 mod utilities;

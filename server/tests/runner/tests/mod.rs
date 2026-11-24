@@ -2,6 +2,8 @@
 
 #[path = "../composition/mod.rs"]
 mod composition;
+#[path = "../qmp.rs"]
+mod qmp;
 #[path = "../scenario.rs"]
 mod scenario;
 #[path = "../suite.rs"]
@@ -121,10 +123,18 @@ fn symbolizer_preserves_literal_return_addresses() {
     std::fs::create_dir(&root).unwrap();
     let tool = root.join("addr2line");
     let serial = root.join("serial.log");
-    std::fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(
+        &tool,
+        "#!/bin/sh\nprintf '%s\\n' \"$5\" >> \"$4.addresses\"\n",
+    )
+    .unwrap();
     std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::write(&serial, b"trap source=Trap pc=0x102\n").unwrap();
+    std::fs::write(&serial, b"unrelated pc=0x50\ntrap source=Trap pc=0x102\nFAIL Limen boot trap: cause=0x2 pc=0x80200040 value=0x0 stack=0x80208000\n").unwrap();
     utilities::symbolize(&root.join("kernel.elf"), &serial, tool.to_str().unwrap()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join("kernel.elf.addresses")).unwrap(),
+        "0x102\n0x80200040\n"
+    );
     assert!(utilities::symbolize(&root.join("kernel.elf"), &serial, "/bin/false").is_err());
     std::fs::remove_dir_all(root).unwrap();
 }

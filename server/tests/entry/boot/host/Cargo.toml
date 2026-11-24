@@ -1,0 +1,10 @@
+[package]
+name = "kernel-host-boot"
+version.workspace = true
+edition.workspace = true
+publish = false
+autotests = false
+
+[[test]]
+name = "boot"
+path = "../mod.rs"

@@ -62,6 +62,10 @@ jobs:
         run: |
           set -euo pipefail
           matrix="$(bash tools/tests/discover.sh "$GITHUB_WORKSPACE" "$BASE_SHA" "$HARTS")"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$matrix" == '[]' ]]; then
+            echo "::error::No target suite supports the requested Hart count ($HARTS)."
+            exit 1
+          fi
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "$matrix" | jq .
 

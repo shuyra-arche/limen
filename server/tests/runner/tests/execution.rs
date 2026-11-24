@@ -1,4 +1,4 @@
-use crate::verify;
+use crate::{qmp, verify};
 use kernel_verification::process;
 use std::{fs, process::Command, thread, time::Duration};
 fn scratch(name: &str) -> std::path::PathBuf {
@@ -6,6 +6,43 @@ fn scratch(name: &str) -> std::path::PathBuf {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir(&root).unwrap();
     root
+}
+
+#[test]
+fn qmp_records_one_shutdown_after_negotiating_and_starting_the_guest() {
+    let startup = concat!(
+        "{\"QMP\":{}}\r\n",
+        "{\"return\":{},\"id\":\"capabilities\"}\n",
+        "{\"event\":\"RESUME\"}\n",
+        "{\"return\":{},\"id\":\"start\"}\n",
+    );
+    let event = r#"{"event":"SHUTDOWN","data":{"guest":true,"reason":"guest-shutdown"}}"#;
+    let input = format!("{startup}{event}\n");
+    let mut commands = Vec::new();
+    let mut transcript = Vec::new();
+    let receipt = qmp::capture(input.as_bytes(), &mut commands, &mut transcript).unwrap();
+    assert!(receipt.guest);
+    assert_eq!(receipt.reason, "guest-shutdown");
+    assert_eq!(transcript, input.as_bytes());
+    let commands: Vec<serde_json::Value> = String::from_utf8(commands)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[0]["execute"], "qmp_capabilities");
+    assert_eq!(commands[1]["execute"], "cont");
+
+    for incomplete in [
+        startup.to_string(),
+        format!("{startup}{event}"),
+        format!("{input}{event}\n"),
+        format!("{input}invalid\n"),
+        format!("{input}{{}}\n"),
+        input.replace("\"id\":\"start\"", "\"id\":\"other\""),
+    ] {
+        assert!(qmp::capture(incomplete.as_bytes(), Vec::new(), Vec::new()).is_err());
+    }
 }
 #[test]
 fn process_requires_exit_and_full_acceptance() {
@@ -27,7 +64,28 @@ fn process_requires_exit_and_full_acceptance() {
         .unwrap();
         let serial = fs::read_to_string(root.join(name).join("serial.log")).unwrap();
         let details = verify::check(&serial, &["PASS".into()], None, 1).unwrap();
-        assert_eq!(verify::verdict(&result, &details), expected);
+        let guest = qmp::Shutdown {
+            guest: true,
+            reason: "guest-shutdown".into(),
+        };
+        assert_eq!(verify::verdict(&result, &details, Some(&guest)), expected);
+        if expected == "pass" {
+            for (guest, reason) in [
+                (false, "host-signal"),
+                (true, "guest-panic"),
+                (false, "guest-shutdown"),
+            ] {
+                let other = qmp::Shutdown {
+                    guest,
+                    reason: reason.into(),
+                };
+                assert_eq!(
+                    verify::verdict(&result, &details, Some(&other)),
+                    "inconclusive"
+                );
+            }
+            assert_eq!(verify::verdict(&result, &details, None), "inconclusive");
+        }
     }
     fs::remove_dir_all(root).unwrap();
 }
@@ -42,7 +100,7 @@ fn deadline_kills_even_after_success_marker() {
     .unwrap();
     assert_eq!(result.status, "timeout");
     assert_eq!(
-        verify::verdict(&result, &serde_json::Value::Null),
+        verify::verdict(&result, &serde_json::Value::Null, None),
         "timeout"
     );
     assert!(!result.success());

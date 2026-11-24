@@ -17,6 +17,14 @@ name = "kernel-host-allocator"
 version = "0.0.1"
 
 [[package]]
+name = "kernel-host-boot"
+version = "0.0.1"
+
+[[package]]
+name = "kernel-host-sbi"
+version = "0.0.1"
+
+[[package]]
 name = "kernel-host-translation"
 version = "0.0.1"
 dependencies = [

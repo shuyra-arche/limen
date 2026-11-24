@@ -45,6 +45,17 @@ impl Outcome {
 /// leaders that leave processes in the group.
 pub fn run(command: &mut Command, directory: &Path, timeout: Duration) -> Result<Outcome> {
     fs::create_dir_all(directory)?;
+    let stdout = fs::File::create(directory.join("serial.log"))?;
+    run_with_stdio(command, directory, timeout, Stdio::null(), stdout.into())
+}
+
+pub fn run_with_stdio(
+    command: &mut Command,
+    directory: &Path,
+    timeout: Duration,
+    stdin: Stdio,
+    stdout: Stdio,
+) -> Result<Outcome> {
     let mut result = Outcome {
         command: format!("{command:?}"),
         status: "spawn-error".into(),
@@ -56,8 +67,8 @@ pub fn run(command: &mut Command, directory: &Path, timeout: Duration) -> Result
     let cleanup_path = directory.join("cleanup.json");
     json(&result_path, &result)?;
     command
-        .stdin(Stdio::null())
-        .stdout(fs::File::create(directory.join("serial.log"))?)
+        .stdin(stdin)
+        .stdout(stdout)
         .stderr(fs::File::create(directory.join("stderr.log"))?);
 
     #[cfg(unix)]

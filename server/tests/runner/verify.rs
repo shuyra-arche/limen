@@ -1,4 +1,4 @@
-use crate::suite::Distinct;
+use crate::{qmp::Shutdown, suite::Distinct};
 use kernel_verification::{Result, process::Outcome};
 use regex::Regex;
 use serde_json::{Value, json};
@@ -42,12 +42,15 @@ pub fn check(
     }))
 }
 
-pub fn verdict(result: &Outcome, details: &Value) -> &'static str {
+pub fn verdict(result: &Outcome, details: &Value, shutdown: Option<&Shutdown>) -> &'static str {
     if result.status == "timeout" {
         "timeout"
     } else if details["assertion_failed"] == true || (result.exited() && !result.success()) {
         "fail"
-    } else if result.success() && details["passed"] == true {
+    } else if result.success()
+        && details["passed"] == true
+        && shutdown.is_some_and(|s| s.guest && s.reason == "guest-shutdown")
+    {
         "pass"
     } else {
         "inconclusive"
