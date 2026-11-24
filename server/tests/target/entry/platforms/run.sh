@@ -13,8 +13,20 @@ case "$profile" in
     *) exit 2 ;;
 esac
 case "$platform" in
-    q35) target=x86_64-unknown-uefi; qemu=${QEMU_X86_64:-qemu-system-x86_64} ;;
-    virt) target=aarch64-unknown-none-softfloat; qemu=${QEMU_AARCH64:-qemu-system-aarch64} ;;
+    q35)
+        target=x86_64-unknown-uefi
+        qemu=${QEMU_X86_64:-qemu-system-x86_64}
+        firmware=${OVMF_DIR:-/usr/share/OVMF}
+        code=$firmware/OVMF_CODE_4M.fd
+        vars=$firmware/OVMF_VARS_4M.fd
+        image=BOOTX64.EFI ;;
+    virt)
+        target=aarch64-unknown-uefi
+        qemu=${QEMU_AARCH64:-qemu-system-aarch64}
+        firmware=${AAVMF_DIR:-/usr/share/AAVMF}
+        code=$firmware/AAVMF_CODE.fd
+        vars=$firmware/AAVMF_VARS.fd
+        image=BOOTAA64.EFI ;;
     *) exit 2 ;;
 esac
 "$qemu" --version | tee "$out/qemu.txt"
@@ -24,30 +36,26 @@ CARGO_TARGET_DIR=$(mktemp -d)
 export CARGO_TARGET_DIR
 trap 'rm -rf "$CARGO_TARGET_DIR"' EXIT
 RUSTFLAGS=-Dwarnings cargo build --locked --manifest-path "$suite/Cargo.toml" --target "$target" "${flags[@]}"
-bin="$CARGO_TARGET_DIR/$target/$profile/platform-boot"
-args=(-accel tcg -smp "${4:?expected runner CPU count}" -m 128M -nodefaults -display none -nic none -no-reboot)
+mkdir -p "$out/esp/EFI/BOOT"
+cp "$CARGO_TARGET_DIR/$target/$profile/platform-boot.efi" "$out/esp/EFI/BOOT/$image"
+cp --sparse=always "$vars" "$out/vars.fd"
+sha256sum "$out/esp/EFI/BOOT/$image" "$code" "$out/vars.fd" > "$out/images.sha256"
+args=(-accel tcg -smp "${4:?expected runner CPU count}" -nodefaults -display none -nic none -no-reboot
+    -drive "if=pflash,format=raw,readonly=on,file=$code"
+    -drive "if=pflash,format=raw,file=$out/vars.fd")
 if [[ -n ${QEMU_DATA_DIR:-} ]]; then args+=(-L "$QEMU_DATA_DIR"); fi
 case "$platform" in
     q35)
-        firmware=${OVMF_DIR:-/usr/share/OVMF}
-        mkdir -p "$out/esp/EFI/BOOT"
-        cp "$bin.efi" "$out/esp/EFI/BOOT/BOOTX64.EFI"
-        cp "$firmware/OVMF_VARS_4M.fd" "$out/vars.fd"
-        sha256sum "$bin.efi" "$firmware/OVMF_CODE_4M.fd" "$out/vars.fd" > "$out/images.sha256"
-        args+=(-machine q35 -drive "if=pflash,format=raw,readonly=on,file=$firmware/OVMF_CODE_4M.fd"
-            -drive "if=pflash,format=raw,file=$out/vars.fd" -drive "format=raw,file=fat:rw:$out/esp"
+        args+=(-machine q35 -m 128M -drive "format=raw,file=fat:rw:$out/esp"
             -debugcon "file:$out/guest.log" -device isa-debug-exit,iobase=0xf4,iosize=4)
         expected_exit=33
         marker='PASS q35 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1' ;;
     virt)
-        host=$(rustc -vV | awk '/^host:/ {print $2}')
-        objcopy="$(rustc --print sysroot)/lib/rustlib/$host/bin/rust-objcopy"
-        "$objcopy" -O binary "$bin" "$out/Image"
-        sha256sum "$bin" "$out/Image" > "$out/images.sha256"
-        args+=(-machine virt,gic-version=3,secure=off,virtualization=off -cpu cortex-a57
-            -kernel "$out/Image" -serial "file:$out/guest.log")
+        args+=(-machine virt,gic-version=3,secure=off,virtualization=off,acpi=off -cpu cortex-a57 -m 256M
+            -drive "if=none,id=esp,format=raw,file=fat:rw:$out/esp"
+            -device virtio-blk-pci,drive=esp -serial "file:$out/guest.log")
         expected_exit=0
-        marker='PASS virt el1=1 masked=1 stack=1 vectors=1 dtb=1' ;;
+        marker='PASS virt ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1' ;;
 esac
 # Start paused. QMP processes capabilities and cont in order, so even a fast
 # guest cannot shut down before the monitor has enabled event delivery.

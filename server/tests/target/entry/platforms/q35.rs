@@ -1,24 +1,16 @@
+use crate::Handoff;
 use core::arch::asm;
 use kernel::entry::boot;
-use uefi::{
-    mem::memory_map::{MemoryMap, MemoryMapOwned},
-    prelude::*,
-};
+use uefi::{Status, mem::memory_map::MemoryMap};
 
-struct Handoff {
-    map: MemoryMapOwned,
+pub(super) struct Input {
     previous_idt: usize,
 }
 
-#[entry]
-fn main() -> Status {
-    let map = unsafe { uefi::boot::exit_boot_services(None) };
-    let handoff = Handoff {
-        map,
+pub(super) fn capture() -> Result<Input, Status> {
+    Ok(Input {
         previous_idt: Idtr::read().base,
-    };
-    // The old stack and final firmware map remain reserved and readable.
-    unsafe { boot::enter((&raw const handoff) as usize, inspect) }
+    })
 }
 
 #[repr(C, packed)]
@@ -35,7 +27,7 @@ impl Idtr {
     }
 }
 
-extern "sysv64" fn inspect(input: usize) -> ! {
+pub(super) extern "sysv64" fn inspect(input: usize) -> ! {
     let handoff = unsafe { &*(input as *const Handoff) };
     let idtr = Idtr::read();
     let (sp, flags, cr0): (usize, usize, usize);
@@ -50,7 +42,7 @@ extern "sysv64" fn inspect(input: usize) -> ! {
             && cr0 & (1 << 31) != 0
     );
     assert!(flags & (1 << 9) == 0 && boot::stack_range().contains(&sp));
-    assert!(idtr.limit == 4095 && idtr.base != 0 && idtr.base != handoff.previous_idt);
+    assert!(idtr.limit == 4095 && idtr.base != 0 && idtr.base != handoff.board.previous_idt);
     // Confirm the active table consists of the kernel's fail-stop gates.
     for i in 0..256 {
         let gate = (idtr.base + 16 * i) as *const u8;

@@ -86,12 +86,13 @@ including the call that resumes on the other Hart.
 
 All target suites use the exact upstream version in [qemu.version](qemu.version).
 The Target workflow selects the Debian trixie-backports snapshot providing
-11.1.3. Install its x86, Arm and RISC-V system emulators, plus OVMF, OpenSBI
-and jq. Add the two guest targets and the LLVM tools to the nightly toolchain.
+11.1.3. Install its x86, Arm and RISC-V system emulators, plus `ovmf`, `qemu-efi-aarch64`,
+`opensbi` and `jq`. By default the platform suite reads q35 firmware from
+`/usr/share/OVMF` and virt firmware from `/usr/share/AAVMF`. Override these
+directories with `OVMF_DIR` and `AAVMF_DIR` respectively.
 
 ```sh
-rustup target add --toolchain nightly x86_64-unknown-uefi aarch64-unknown-none-softfloat
-rustup component add --toolchain nightly llvm-tools
+rustup target add --toolchain nightly x86_64-unknown-uefi aarch64-unknown-uefi
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --suite server/tests/target/entry/platforms --kernel "$PWD" \
   --output /tmp/limen-platforms --profile debug --harts 4
@@ -104,5 +105,5 @@ release` with a fresh output directory for optimized images. q35 requires
 the exact debug-console assertions and the guest's debug-exit status 33.
 Arm virt requires serial assertions, a QMP guest-shutdown event and exit 0.
 Each board retains its boot image, input hashes, QEMU version, guest log,
-QMP transcript and exit status. The q35 loader uses the locked `uefi` crate
-only in the test image. [Implemented handoffs](../../docs/README.md)
+QMP transcript and exit status. Both test images use the same UEFI entry and
+retain the final memory map after exiting Boot Services. [Implemented handoffs](../../docs/README.md)

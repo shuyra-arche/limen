@@ -23,7 +23,7 @@ use super::stack::{STACK, Stack};
 use core::arch::{asm, global_asm, naked_asm};
 
 global_asm!(
-    ".pushsection .text.limen_vectors, \"ax\"",
+    ".text",
     ".balign 2048",
     ".global limen_vectors",
     "limen_vectors:",
@@ -34,7 +34,6 @@ global_asm!(
     "2: msr daifset, #15",
     "3: wfe",
     "b 3b",
-    ".popsection",
 );
 
 /// Enter the diagnostic callback on the boot stack with masked exceptions

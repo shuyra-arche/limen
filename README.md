@@ -13,7 +13,7 @@ participating Hart.
 Read [document-limen](https://github.com/shuyra-arche/document-limen) for the
 design and [Limen documentation](docs/README.md) for the implemented boundary.
 The `kernel` package lives in [server/](server/). Its [test guide](server/tests/README.md)
-covers the RV64 boot and execution scenarios and the q35 and AArch64 virt boot CPU handoffs.
+covers the RV64 boot and execution scenarios and the UEFI boot CPU handoffs on x86_64 q35 and AArch64 virt.
 
 ## Build and test
 

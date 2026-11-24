@@ -86,12 +86,11 @@ jobs:
           targets=()
           packages=()
           firmware=()
-          components=()
           for platform in $(jq -r 'map(.platform) | unique[]' <<<"$PLAN"); do
             case "$platform" in
               rv64) targets+=(riscv64gc-unknown-none-elf); packages+=(qemu-system-riscv); firmware+=(opensbi) ;;
               q35)  targets+=(x86_64-unknown-uefi); packages+=(qemu-system-x86); firmware+=(ovmf) ;;
-              virt) targets+=(aarch64-unknown-none-softfloat); packages+=(qemu-system-arm); components+=(--component llvm-tools) ;;
+              virt) targets+=(aarch64-unknown-uefi); packages+=(qemu-system-arm); firmware+=(qemu-efi-aarch64) ;;
               host) ;;
               *) exit 2 ;;
             esac
@@ -107,7 +106,7 @@ jobs:
             list=$(IFS=,; echo "${targets[*]}")
             targets=(--target "$list")
           fi
-          sh /tmp/rustup.sh -y --profile minimal --default-toolchain "$RUSTUP_TOOLCHAIN" "${components[@]}" "${targets[@]}"
+          sh /tmp/rustup.sh -y --profile minimal --default-toolchain "$RUSTUP_TOOLCHAIN" "${targets[@]}"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -93,18 +93,24 @@ user traps and calls require separate implementation and verification.
 
 ## Platform boot CPU entries
 
-The q35 diagnostic image starts through OVMF. Its loader exits Boot Services
-with the final memory map, keeps that map and its old stack reserved, and calls
-`entry::boot::enter` using the System V ABI. The x86_64 backend checks CPL0
-and CR0.PG, masks interrupts, switches to its 32 KiB stack, and installs 256
-fail-stop interrupt gates using the current code selector. The loader's GDT
-and page tables stay in use. No DTB is supplied by this test image.
+The q35 and AArch64 virt diagnostic images share a UEFI loader. OVMF loads
+`EFI/BOOT/BOOTX64.EFI` on q35 and AAVMF loads `EFI/BOOT/BOOTAA64.EFI` on
+virt. The loader captures board inputs, obtains the final memory map through
+`ExitBootServices`, then calls `entry::boot::enter`. It keeps the handoff,
+firmware allocations and loader stack reserved while Metal takes over the CPU.
 
-The AArch64 virt image uses QEMU's Linux Image protocol with non-secure EL1,
-GICv3 and PSCI/HVC. The entry preserves x0, checks CurrentEL, masks DAIF,
-selects SP_EL1, switches to its 32 KiB stack, installs an aligned fail-stop
-vector table, and enters the diagnostic callback. The image checks the DTB
-header inside the RAM aperture reserved for this board configuration.
+On q35, the loader calls Metal using the System V ABI. Metal checks CPL0
+and CR0.PG, masks interrupts, switches to its 32 KiB stack and installs 256
+fail-stop interrupt gates using the current code selector. The loader's GDT
+and page tables stay in use.
+
+On virt, the test selects non-secure EL1, GICv3, PSCI/HVC and device-tree
+firmware configuration. The loader obtains the DTB address from the UEFI
+configuration table, validates its extent, and copies it into loader-owned
+pages before exiting Boot Services. Metal masks DAIF, selects SP_EL1, switches to its 32 KiB
+stack and installs an aligned fail-stop vector table. The callback verifies
+that the DTB header and its declared extent fit within the retained loader-data descriptor
+in the final memory map before reporting success.
 
 Both entries require a single boot CPU and an exclusively reserved image.
 The tests cover the CPU handoff. RAM admission, exception recovery, interrupt

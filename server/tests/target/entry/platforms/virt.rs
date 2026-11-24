@@ -1,28 +1,82 @@
-use core::arch::{asm, global_asm};
+use crate::Handoff;
+use core::{arch::asm, fmt::Write, ptr::NonNull};
 use kernel::entry::boot;
+use uefi::{
+    Status,
+    boot::{self as firmware, AllocateType, PAGE_SIZE},
+    guid,
+    mem::memory_map::{MemoryMap, MemoryType},
+};
 
-// QEMU's AArch64 Linux Image protocol passes the DTB physical address in x0.
-// This entry uses no stack before transferring to the production prefix.
-global_asm!(
-    ".pushsection .text.header, \"ax\"",
-    ".global image",
-    "image: b 2f",
-    ".long 0",
-    ".quad 0x80000",
-    ".quad __image_size",
-    ".quad 2", // little endian, 4 KiB pages, legacy placement
-    ".quad 0, 0, 0",
-    ".ascii \"ARM\\x64\"",
-    ".long 0",
-    "2: adrp x1, {inspect}",
-    "add x1, x1, :lo12:{inspect}",
-    "b {enter}",
-    ".popsection",
-    inspect = sym inspect,
-    enter = sym boot::enter,
-);
+pub(super) struct Input {
+    dtb: NonNull<u8>,
+    size: usize,
+}
 
-extern "C" fn inspect(dtb: usize) -> ! {
+pub(super) fn capture() -> Result<Input, Status> {
+    let source = uefi::system::with_config_table(|entries| {
+        entries
+            .iter()
+            .find(|entry| entry.guid == guid!("b1b621d5-f19c-41a5-830b-d9152c69aae0"))
+            .map(|entry| entry.address.cast::<u8>())
+    })
+    .ok_or(Status::NOT_FOUND)?;
+    let map = firmware::memory_map(MemoryType::LOADER_DATA).map_err(|e| e.status())?;
+    // AAVMF can publish the DTB in Boot Services data. Copy it while the
+    // firmware still owns the source and reserve the copy across the handoff.
+    let size = unsafe {
+        dtb_size(
+            source,
+            &map,
+            &[MemoryType::BOOT_SERVICES_DATA, MemoryType::ACPI_RECLAIM],
+        )
+    }?;
+    let dtb = firmware::allocate_pages(
+        AllocateType::AnyPages,
+        MemoryType::LOADER_DATA,
+        size.div_ceil(PAGE_SIZE),
+    )
+    .map_err(|e| e.status())?;
+    unsafe { source.copy_to_nonoverlapping(dtb.as_ptr(), size) };
+    Ok(Input { dtb, size })
+}
+
+// The caller supplies a firmware table pointer or its reserved, identity-mapped copy.
+unsafe fn dtb_size(
+    dtb: *const u8,
+    map: &impl MemoryMap,
+    types: &[MemoryType],
+) -> Result<usize, Status> {
+    let addr = dtb.addr();
+    if dtb.is_null() || !addr.is_multiple_of(8) {
+        return Err(Status::COMPROMISED_DATA);
+    }
+    let available = map
+        .entries()
+        .filter(|d| types.contains(&d.ty))
+        .find_map(|desc| {
+            let end = desc
+                .phys_start
+                .checked_add(desc.page_count.checked_mul(PAGE_SIZE as u64)?)?;
+            (desc.phys_start..end)
+                .contains(&(addr as u64))
+                .then(|| end as usize - addr)
+        })
+        .ok_or(Status::COMPROMISED_DATA)?;
+    if available < 40 {
+        return Err(Status::COMPROMISED_DATA);
+    }
+    let words = dtb.cast::<u32>();
+    let magic = u32::from_be(unsafe { words.read() });
+    let size = u32::from_be(unsafe { words.add(1).read() }) as usize;
+    if magic != 0xd00dfeed || !(40..=available).contains(&size) {
+        return Err(Status::COMPROMISED_DATA);
+    }
+    Ok(size)
+}
+
+pub(super) extern "C" fn inspect(input: usize) -> ! {
+    let handoff = unsafe { &*(input as *const Handoff) };
     let (el, daif, sp, vectors, spsel): (usize, usize, usize, usize, usize);
     unsafe {
         asm!("mrs {}, CurrentEL", "mrs {}, DAIF", "mov {}, sp", "mrs {}, VBAR_EL1",
@@ -35,17 +89,17 @@ extern "C" fn inspect(dtb: usize) -> ! {
         static limen_vectors: u8;
     }
     assert!(vectors == (&raw const limen_vectors) as usize && vectors & 2047 == 0);
-    // Fixture-owned virt RAM aperture (-m 128M); check bounds before reading.
-    let ram = 0x40000000..0x48000000;
-    assert!(dtb & 7 == 0 && ram.contains(&dtb) && dtb <= ram.end - 40);
-    let words = dtb as *const u32;
-    let magic = u32::from_be(unsafe { words.read_volatile() });
-    let size = u32::from_be(unsafe { words.add(1).read_volatile() }) as usize;
-    assert!(magic == 0xd00dfeed && (40..=ram.end - dtb).contains(&size));
-    use core::fmt::Write;
+    let size = unsafe {
+        dtb_size(
+            handoff.board.dtb.as_ptr(),
+            &handoff.map,
+            &[MemoryType::LOADER_DATA],
+        )
+    };
+    assert_eq!(size, Ok(handoff.board.size));
     boot::console()
         .expect("board console")
-        .write_str("PASS virt el1=1 masked=1 stack=1 vectors=1 dtb=1\n")
+        .write_str("PASS virt ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1\n")
         .expect("diagnostic output");
     boot::shutdown(true)
 }

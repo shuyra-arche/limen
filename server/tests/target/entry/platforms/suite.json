@@ -25,8 +25,7 @@
       ],
       "virt": [
         "server/src/metal/aarch64/**",
-        "server/tests/target/entry/platforms/virt.rs",
-        "server/tests/target/entry/platforms/virt.x"
+        "server/tests/target/entry/platforms/virt.rs"
       ]
     }
   }

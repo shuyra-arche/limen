@@ -7,7 +7,8 @@
 //! - x86_64: after ExitBootServices, the loader calls `enter` in 64-bit ring
 //!   0 with paging active. Metal masks interrupts, switches stacks and loads
 //!   a fail-stop IDT before calling the continuation with its input word.
-//! - AArch64: the loader calls `enter` in non-secure EL1. Metal masks DAIF,
+//! - AArch64: the UEFI loader exits Boot Services and calls `enter` in
+//!   non-secure EL1. Metal masks DAIF,
 //!   selects SP_EL1 and installs the fail-stop vectors before forwarding the
 //!   input word to the continuation.
 //!

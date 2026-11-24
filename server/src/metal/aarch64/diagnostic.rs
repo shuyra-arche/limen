@@ -1,4 +1,4 @@
-//! QEMU virt direct boot profile: identity-mapped PL011 and PSCI over HVC.
+//! QEMU virt board profile: identity-mapped PL011 and PSCI over HVC.
 use crate::metal::console::Services;
 use core::arch::asm;
 
