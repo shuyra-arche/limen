@@ -1,0 +1,25 @@
+[package]
+name = "platform-boot"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "platform-boot"
+path = "main.rs"
+test = false
+bench = false
+
+[dependencies]
+kernel = { path = "../../../.." }
+
+[target.'cfg(target_os = "uefi")'.dependencies]
+uefi = "=0.41.0"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

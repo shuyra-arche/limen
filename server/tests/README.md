@@ -15,7 +15,7 @@ cargo +nightly test --locked --manifest-path server/tests/runner/Cargo.toml --ta
 The Boot owner keeps its platform image and assertions in [target/entry/boot/](target/entry/boot/).
 The target runner archives the candidate Git revision. Commit changes before
 starting verification so the report identifies the source it actually ran.
-Set `QEMU_RISCV64` to QEMU 10.0.x and `QEMU_OPENSBI` to OpenSBI firmware
+Set `QEMU_RISCV64` to QEMU 11.1.3 and `QEMU_OPENSBI` to OpenSBI firmware
 with the debug console and system reset extensions. The cross-Hart scenario
 also uses the hart state management extension.
 
@@ -74,3 +74,26 @@ settlement, and rejection of a late original occupancy after re-entry. A
 test-only linker wrapper sets distinct `s0`–`s11` values for each saved
 frame and checks their restoration at the production switch boundary,
 including the call that resumes on the other Hart.
+
+## q35 and AArch64 virt boot
+
+All target suites use the exact upstream version in [qemu.version](qemu.version).
+The Target workflow selects the Debian trixie-backports snapshot providing
+11.1.3. Install its x86, Arm and RISC-V system emulators, plus OVMF, OpenSBI
+and jq. Add the two guest targets and the LLVM tools to the nightly toolchain.
+
+```sh
+rustup target add --toolchain nightly x86_64-unknown-uefi aarch64-unknown-none-softfloat
+rustup component add --toolchain nightly llvm-tools
+server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
+  --suite server/tests/target/entry/platforms --kernel "$PWD" \
+  --output /tmp/limen-platforms --profile debug --harts 1
+```
+
+The runner boots both boards from the candidate Git archive. Use `--profile
+release` with a fresh output directory for optimized images. q35 requires
+the exact debug-console assertions and the guest's debug-exit status 33.
+Arm virt requires serial assertions, a QMP guest-shutdown event and exit 0.
+Each board retains its boot image, input hashes, QEMU version, guest log,
+QMP transcript and exit status. The q35 loader uses the locked `uefi` crate
+only in the test image. [Implemented handoffs](../../docs/README.md)

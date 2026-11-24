@@ -25,7 +25,7 @@ fi
 # the owners that explicitly declare those source paths.
 for change in "${changed[@]}"; do
     case "$change" in
-        server/tests/runner/*|tools/tests/discover.sh|.github/workflows/target.yml)
+        server/tests/runner/*|server/tests/qemu.version|tools/tests/discover.sh|.github/workflows/target.yml)
             filter=false
             ;;
     esac

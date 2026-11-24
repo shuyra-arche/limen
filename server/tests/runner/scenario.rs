@@ -234,6 +234,44 @@ pub fn run(args: Inputs) -> Result<()> {
     fresh(&args.output)?;
     args.output = args.output.canonicalize()?;
     match &suite.run {
+        Run::BoardBoot { boards } => {
+            require(
+                !boards.is_empty() && args.harts == 1,
+                "expected single-CPU board scenarios",
+            )?;
+            let source = revision(&args.kernel)?;
+            let provider = args.output.join("provider");
+            archive(&args.kernel, &source, &provider)?;
+            json(
+                &args.output.join("inputs.json"),
+                &serde_json::json!({
+                    "source": source, "profile": args.profile, "rustc": output(Command::new("rustc").arg("-Vv"))?
+                }),
+            )?;
+            let script = provider.join("server/tests").join(relative).join("run.sh");
+            for board in boards {
+                for round in 0..args.rounds {
+                    let label = format!("{}-{round}", board.name());
+                    let mut command = Command::new("bash");
+                    command
+                        .current_dir(&provider)
+                        .arg(&script)
+                        .arg(board.name())
+                        .arg(&args.profile)
+                        .arg(args.output.join(&label));
+                    let result = process::run(
+                        &mut command,
+                        &args.output.join(format!("{label}-runner")),
+                        Duration::from_secs(600),
+                    )?;
+                    require(
+                        result.success(),
+                        format!("{label} failed; see {}", args.output.display()),
+                    )?;
+                }
+            }
+            Ok(())
+        }
         Run::CargoTest {
             package,
             manifest,

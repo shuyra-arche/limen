@@ -1,0 +1,46 @@
+use crate::entry::boot::{STACK, Stack};
+use core::arch::{global_asm, naked_asm};
+
+global_asm!(
+    ".pushsection .text.limen_vectors, \"ax\"",
+    ".balign 2048",
+    ".global limen_vectors",
+    "limen_vectors:",
+    ".rept 16",
+    "b 2f",
+    ".balign 128",
+    ".endr",
+    "2: msr daifset, #15",
+    "3: wfe",
+    "b 3b",
+    ".popsection",
+);
+
+/// Enter the diagnostic callback on the boot stack with masked exceptions
+/// and a fail-stop vector table. Preserve the loader's input word.
+///
+/// # Safety
+/// Call once on the boot PE, in non-secure EL1 with the image addressable.
+/// Other PEs must stay parked. The callback and its input must remain valid.
+#[unsafe(naked)]
+pub unsafe extern "C" fn enter(input: usize, next: extern "C" fn(usize) -> !) -> ! {
+    naked_asm!(
+        "mrs x2, CurrentEL",
+        "cmp x2, #4",
+        "b.ne 2f",
+        "msr daifset, #15",
+        "msr spsel, #1",
+        "adrp x2, {stack}",
+        "add x2, x2, :lo12:{stack}",
+        "add sp, x2, {size}",
+        "adrp x2, limen_vectors",
+        "add x2, x2, :lo12:limen_vectors",
+        "msr vbar_el1, x2",
+        "isb",
+        "br x1",
+        "2: wfe",
+        "b 2b",
+        stack = sym STACK,
+        size = const size_of::<Stack>(),
+    );
+}

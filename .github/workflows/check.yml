@@ -47,6 +47,7 @@ jobs:
           bash tools/check-layout.sh
           bash tools/check-tooling.sh
           bash -n tools/tests/discover.sh
+          bash -n server/tests/target/entry/platforms/run.sh
       - name: Install host toolchain
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy
       - name: Identify compiler
@@ -66,6 +67,7 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo fmt --manifest-path server/tests/runner/Cargo.toml -- --check
+          cargo fmt --manifest-path server/tests/target/entry/platforms/Cargo.toml -- --check
           cargo clippy --locked --manifest-path server/tests/runner/Cargo.toml --all-targets --target x86_64-unknown-linux-gnu -- -Dwarnings
       - name: Test host contracts
         env:

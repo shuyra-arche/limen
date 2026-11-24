@@ -35,6 +35,10 @@ on:
         default: "1"
         options: ["1", "4"]
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 
@@ -93,9 +97,12 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl git build-essential qemu-system-riscv opensbi
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential jq opensbi ovmf
+          echo "deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] https://snapshot.debian.org/archive/debian/20261124T000000Z/ trixie-backports main" > /etc/apt/sources.list.d/qemu.list
+          apt-get -o Acquire::Retries=3 update
+          apt-get install -y --no-install-recommends -t trixie-backports qemu-system-riscv qemu-system-arm qemu-system-x86
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
-          sh /tmp/rustup.sh -y --profile minimal --default-toolchain "$RUSTUP_TOOLCHAIN" --target riscv64gc-unknown-none-elf
+          sh /tmp/rustup.sh -y --profile minimal --default-toolchain "$RUSTUP_TOOLCHAIN" --component llvm-tools --target riscv64gc-unknown-none-elf,x86_64-unknown-uefi,aarch64-unknown-none-softfloat
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -111,7 +118,7 @@ jobs:
       - name: Expose failed build or execution evidence
         if: failure()
         run: |
-          for file in .integration/evidence/candidate/locked/stderr.log .integration/evidence/candidate/harts-"$HARTS"-round-0/serial.log .integration/evidence/cargo/stderr.log; do
+          for file in .integration/evidence/*-runner/{stderr,serial}.log .integration/evidence/*/{guest,stderr}.log .integration/evidence/candidate/locked/stderr.log .integration/evidence/candidate/harts-"$HARTS"-round-0/serial.log .integration/evidence/cargo/stderr.log; do
             if test -f "$file"; then
               echo "---- $file ----"
               tail -n 100 "$file"

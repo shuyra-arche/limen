@@ -29,12 +29,31 @@ pub enum Run {
         expects: Vec<String>,
         distinct: Option<Distinct>,
     },
+    BoardBoot {
+        boards: Vec<Board>,
+    },
     CargoTest {
         package: Option<String>,
         manifest: Option<String>,
         test: String,
         ignored: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Board {
+    Q35,
+    Virt,
+}
+
+impl Board {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Q35 => "q35",
+            Self::Virt => "virt",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
