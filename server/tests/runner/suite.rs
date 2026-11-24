@@ -7,6 +7,7 @@ use std::{
 };
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Suite {
     pub id: String,
     pub profiles: Vec<String>,

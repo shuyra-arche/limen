@@ -14,7 +14,6 @@ pub use crate::basis::{
     room::Occupancy,
     unit::{End, Error, Lifecycle, UnitId},
 };
-pub use crate::metal::generic::boot::minor::Minor;
 use crate::{
     basis::{
         nest::{KernelNest, Storage},
@@ -22,13 +21,13 @@ use crate::{
         sync::{Guard, Lock},
         unit::Units,
     },
-    metal::arch::{
+    metal::{
         boot as hardware,
         execution::{Hart, LeaveReceipt, LocalHart},
     },
 };
 
-use super::boot::{self, Boot};
+use super::boot::{self, Boot, Minor};
 
 type Entry = fn(&mut Current) -> u64;
 
@@ -115,7 +114,8 @@ impl Execution {
         Err(Error::Unsupported)
     }
 
-    /// Ask OpenSBI to start a Hart. It attaches on its own dispatcher stack with the early trap vector installed before calling the platform entry.
+    /// Start the minor Hart through OpenSBI. It attaches on its dispatcher
+    /// stack with the early trap vector installed before the platform entry.
     ///
     /// # Safety
     ///
@@ -125,7 +125,7 @@ impl Execution {
     /// live Limen startup frames, the entry and all dispatcher-side callees.
     /// The caller must include those startup frames in the total stack
     /// budget when bounding the entry and its callees.
-    pub unsafe fn start_hart(
+    pub unsafe fn start_minor(
         &'static self,
         hart: usize,
         entry: fn(&'static Execution) -> !,
@@ -146,7 +146,7 @@ impl Execution {
             control.launch = Some(Launch { hart, entry });
         }
         let argument = ptr::from_ref(self).expose_provenance();
-        if let Err(error) = unsafe { minor.start(hart, start_minor, argument, boot::Startup::Sbi) }
+        if let Err(error) = unsafe { minor.start(hart, admit_minor, argument, boot::Startup::Sbi) }
         {
             self.control.lock().launch = None;
             return Err(match error {
@@ -364,7 +364,7 @@ extern "C" fn start(argument: *const ()) -> ! {
     boot::shutdown(false)
 }
 
-fn start_minor(hart: usize, argument: usize) -> ! {
+fn admit_minor(hart: usize, argument: usize) -> ! {
     // The firmware launch holds a resident Execution for this callback.
     let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
     assert_eq!(hardware::current_hart(), hart);

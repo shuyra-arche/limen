@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Output one record per selected guest and build profile.
 set -euo pipefail
+if (( $# > 2 )); then
+    echo "usage: discover.sh [repository] [base]" >&2
+    exit 2
+fi
 root=$(cd "${1:-.}" && pwd)
-case "${3:-4}" in 4|declared) ;; *) exit 1 ;; esac
 source "$(dirname "$0")/changes.sh"
 changed_paths "$root" "${2:-}"
 

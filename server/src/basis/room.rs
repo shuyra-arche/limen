@@ -1,7 +1,7 @@
 //! Bounded Hart participation, Unit admission and exact execution occupancy.
 
 use super::unit::{CAPACITY, Error, UnitId};
-use crate::metal::arch::execution::LeaveReceipt;
+use crate::metal::execution::LeaveReceipt;
 
 const HART_CAPACITY: usize = 2;
 

@@ -3,7 +3,7 @@
 use core::{cell::UnsafeCell, mem::MaybeUninit};
 
 use super::unit::CAPACITY;
-use crate::metal::arch::execution::Context;
+use crate::metal::execution::Context;
 
 const STACK_BYTES: usize = 16 * 1024;
 

@@ -12,6 +12,8 @@ use std::{
     time::Duration,
 };
 
+const GUEST_CPUS: u8 = 4;
+
 #[derive(Args)]
 pub struct Inputs {
     #[arg(long)]
@@ -22,8 +24,6 @@ pub struct Inputs {
     output: PathBuf,
     #[arg(long, default_value = "debug", value_parser = ["debug", "release"])]
     profile: String,
-    #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u8).range(4..=4))]
-    harts: u8,
     #[arg(long, value_enum)]
     board: Option<Board>,
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=100))]
@@ -103,6 +103,7 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         "source": source,
         "suite": suite.id,
         "profile": args.profile,
+        "harts": GUEST_CPUS,
         "tools": tools(&qemu, &firmware)?,
         "suite_sha256": composition::hashes(&owner.join(relative))?,
         "builds": [format!("{command:?}")],
@@ -131,14 +132,16 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
     })
 }
 
-fn boot(args: &Inputs, suite: &Suite, variant: &Variant, hart: u8, round: u8) -> Result<bool> {
+fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<bool> {
     let Run::Qemu {
         expects, distinct, ..
     } = &suite.run
     else {
         return Err("non-QEMU suite cannot boot".into());
     };
-    let evidence = variant.root.join(format!("harts-{hart}-round-{round}"));
+    let evidence = variant
+        .root
+        .join(format!("harts-{GUEST_CPUS}-round-{round}"));
     fresh(&evidence)?;
     let firmware = Path::new(&std::env::var("QEMU_OPENSBI")?).canonicalize()?;
     let qemu = std::env::var("QEMU_RISCV64").unwrap_or("qemu-system-riscv64".into());
@@ -153,7 +156,7 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, hart: u8, round: u8) ->
             "rv64",
             "-smp",
         ])
-        .arg(hart.to_string())
+        .arg(GUEST_CPUS.to_string())
         .args(["-m", "128M", "-monitor", "none", "-nic", "none", "-bios"])
         .arg(firmware)
         .arg("-kernel")
@@ -161,7 +164,7 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, hart: u8, round: u8) ->
     let (mut result, shutdown) = qmp::run(command, &evidence, Duration::from_secs(120))?;
     let log = fs::read(evidence.join("serial.log"))?;
     let details = match std::str::from_utf8(&log) {
-        Ok(log) => verify::check(log, expects, distinct.as_ref(), hart)?,
+        Ok(log) => verify::check(log, expects, distinct.as_ref())?,
         Err(error) => serde_json::json!({"passed": false, "serial_error": error.to_string()}),
     };
     let verdict = verify::verdict(&result, &details, shutdown.as_ref().ok());
@@ -176,7 +179,7 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, hart: u8, round: u8) ->
     value["platform_sha256"] = digest(&variant.elf)?.into();
     json(&evidence.join("result.json"), &value)?;
     println!(
-        "{} {} {} harts={hart} round={round}: {}",
+        "{} {} {} harts={GUEST_CPUS} round={round}: {}",
         verdict.to_ascii_uppercase(),
         suite.id,
         args.profile,
@@ -246,7 +249,7 @@ pub fn run(args: Inputs) -> Result<()> {
             json(
                 &args.output.join("inputs.json"),
                 &serde_json::json!({
-                    "source": source, "profile": args.profile, "harts": args.harts, "rustc": output(Command::new("rustc").arg("-Vv"))?
+                    "source": source, "profile": args.profile, "harts": GUEST_CPUS, "rustc": output(Command::new("rustc").arg("-Vv"))?
                 }),
             )?;
             let script = provider.join("server/tests").join(relative).join("run.sh");
@@ -263,7 +266,7 @@ pub fn run(args: Inputs) -> Result<()> {
                         .arg(board.name())
                         .arg(&args.profile)
                         .arg(args.output.join(&label))
-                        .arg(args.harts.to_string());
+                        .arg(GUEST_CPUS.to_string());
                     let result = process::run(
                         &mut command,
                         &args.output.join(format!("{label}-runner")),
@@ -294,7 +297,7 @@ pub fn run(args: Inputs) -> Result<()> {
             let variant = prepare(&args, &suite, &relative, &args.output.join("candidate"))?;
             let mut passed = true;
             for round in 0..args.rounds {
-                passed &= boot(&args, &suite, &variant, args.harts, round)?;
+                passed &= boot(&args, &suite, &variant, round)?;
             }
             require(
                 passed,

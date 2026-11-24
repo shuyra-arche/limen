@@ -5,8 +5,8 @@
 On RV64, the trusted image consumes the Boot handoff to establish cooperative execution
 on the Boot Hart. It supplies two resident 16 KiB stacks in the shared Bare
 Kernel Nest. Each Unit reserves one stack and a generational identity.
-`Execution::with_minor` accepts a resident `Minor` with its own
-dispatcher stack. The platform can use `start_hart` to start
+`Execution::with_minor` accepts a resident `entry::boot::Minor` with its own
+dispatcher stack. The platform can use `start_minor` to start
 one selected Hart through OpenSBI HSM. Room admits the minor after its
 trusted supervisor entry establishes its local execution state.
 The 32 KiB minor dispatcher stack holds the live startup frames, the

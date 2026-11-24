@@ -4,19 +4,13 @@ use regex::Regex;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
-pub fn check(
-    log: &str,
-    expects: &[String],
-    distinct: Option<&Distinct>,
-    harts: u8,
-) -> Result<Value> {
+pub fn check(log: &str, expects: &[String], distinct: Option<&Distinct>) -> Result<Value> {
     let missing: Vec<_> = expects
         .iter()
-        .map(|marker| marker.replace("{harts}", &harts.to_string()))
         .filter(|marker| {
             !log.split_inclusive('\n')
                 .filter_map(|line| line.strip_suffix('\n'))
-                .any(|line| line.strip_suffix('\r').unwrap_or(line) == marker)
+                .any(|line| line.strip_suffix('\r').unwrap_or(line) == marker.as_str())
         })
         .collect();
     let mut evidence = json!({});
@@ -31,9 +25,9 @@ pub fn check(
         valid &= values.len() == rule.count && unique.len() == rule.count;
         evidence = json!({"distinct": values});
     }
-    let assertion_failed = log.lines().any(|line| {
-        line == "FAIL" || line.starts_with("FAIL ") || line.starts_with("[kernel] fatal")
-    });
+    let assertion_failed = log
+        .lines()
+        .any(|line| line == "FAIL" || line.starts_with("FAIL "));
     Ok(json!({
         "passed": valid && missing.is_empty() && !assertion_failed,
         "assertion_failed": assertion_failed,

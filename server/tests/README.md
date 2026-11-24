@@ -24,7 +24,7 @@ bash tools/tests/discover.sh "$PWD" ""
 cargo +nightly build --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --suite server/tests/target/entry/boot --kernel "$PWD" \
-  --output /tmp/limen-boot --profile debug --harts 4
+  --output /tmp/limen-boot --profile debug
 ```
 
 At the firmware entry address the test image writes a nonzero BSS sentinel
@@ -55,7 +55,7 @@ firmware. Use a fresh output path for each profile.
 ```sh
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --suite server/tests/target/entry/execution --kernel "$PWD" \
-  --output /tmp/limen-execution --profile debug --harts 4
+  --output /tmp/limen-execution --profile debug
 ```
 
 The guest verifies separate stacks in the shared Kernel Nest, Yield and resume,
@@ -70,12 +70,12 @@ two participating Harts on a four-Hart QEMU machine.
 ```sh
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --suite server/tests/target/entry/execution-harts --kernel "$PWD" \
-  --output /tmp/limen-execution-harts --profile debug --harts 4
+  --output /tmp/limen-execution-harts --profile debug
 ```
 
-The guest starts the secondary through OpenSBI and coordinates the two Harts
-through a real contention and handoff. It checks that the idle secondary skips
-a Ready Unit pinned to the primary. It then verifies independent occupancies,
+The guest starts the minor through OpenSBI and coordinates the two Harts
+through a real contention and handoff. It checks that the idle minor skips
+a Ready Unit pinned to the major. It then verifies independent occupancies,
 rejection before the original leave is settled, continuation migration after
 settlement, and rejection of a late original occupancy after re-entry. A
 test-only linker wrapper sets distinct `s0`–`s11` values for each saved
@@ -95,7 +95,7 @@ directories with `OVMF_DIR` and `AAVMF_DIR` respectively.
 rustup target add --toolchain nightly x86_64-unknown-uefi aarch64-unknown-uefi
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --suite server/tests/target/entry/platforms --kernel "$PWD" \
-  --output /tmp/limen-platforms --profile debug --harts 4
+  --output /tmp/limen-platforms --profile debug
 ```
 
 Both board fixtures receive the same `limen_platform_ready(Boot)` call. The
