@@ -49,17 +49,21 @@ case "$platform" in
         expected_exit=0
         marker='PASS virt el1=1 masked=1 stack=1 vectors=1 dtb=1' ;;
 esac
-# Keep QMP stdin open until QEMU exits. The guest supplies the exit signal.
+# Start paused. QMP processes capabilities and cont in order, so even a fast
+# guest cannot shut down before the monitor has enabled event delivery.
 mkfifo "$out/monitor"
 exec 3<>"$out/monitor"
 rm "$out/monitor"
-printf '{"execute":"qmp_capabilities"}\n' >&3
+printf '%s\n' '{"execute":"qmp_capabilities","id":"capabilities"}' '{"execute":"cont","id":"start"}' >&3
 status=0
-timeout --foreground --kill-after=3s 45s "$qemu" "${args[@]}" -qmp stdio <&3 3>&- >"$out/qmp.jsonl" 2>"$out/stderr.log" || status=$?
+timeout --foreground --kill-after=3s 45s "$qemu" "${args[@]}" -S -qmp stdio <&3 3>&- >"$out/qmp.jsonl" 2>"$out/stderr.log" || status=$?
 cat "$out/stderr.log" "$out/guest.log"
 printf '%s\n' "$status" >"$out/exit.status"
 [[ "$status" == "$expected_exit" ]]
 grep -Fxq "$marker" "$out/guest.log"
+jq -es 'all(.[]; has("error") | not)
+    and any(.[]; .id == "capabilities" and has("return"))
+    and any(.[]; .id == "start" and has("return"))' "$out/qmp.jsonl" >/dev/null
 if [[ "$platform" == virt ]]; then
     jq -es 'any(.[]; .event == "SHUTDOWN" and .data.guest == true and .data.reason == "guest-shutdown")' "$out/qmp.jsonl" >/dev/null
 fi
