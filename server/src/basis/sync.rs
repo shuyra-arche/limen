@@ -1,53 +1,80 @@
 use core::{
-    cell::UnsafeCell,
+    cell::{Cell, UnsafeCell},
     marker::PhantomData,
     ops::{Deref, DerefMut},
     sync::atomic::{
-        AtomicBool,
+        AtomicU64,
         Ordering::{Acquire, Relaxed, Release},
     },
 };
 
-/// Short protection for execution publication while local interrupts are masked.
+const NEXT: u64 = 1 << u32::BITS;
+
+/// FIFO protection for execution publication while local interrupts are masked.
+/// Each of the two participating Harts can hold or wait for one ticket.
 pub(crate) struct Lock<T> {
-    held: AtomicBool,
+    tickets: AtomicU64,
     value: UnsafeCell<T>,
 }
 
-// Every access to the value requires the single acquired guard.
+// Every access to the value requires the guard for the serving ticket.
 unsafe impl<T: Send> Sync for Lock<T> {}
 
 impl<T> Lock<T> {
     pub(crate) const fn new(value: T) -> Self {
         Self {
-            held: AtomicBool::new(false),
+            tickets: AtomicU64::new(0),
             value: UnsafeCell::new(value),
         }
     }
 
-    pub(crate) fn try_lock(&self) -> Option<Guard<'_, T>> {
-        self.held
-            .compare_exchange(false, true, Acquire, Relaxed)
+    pub(crate) fn try_lock<'a>(&'a self, guards: &'a Cell<usize>) -> Option<Guard<'a, T>> {
+        let word = self.tickets.load(Relaxed);
+        let serving = word as u32;
+        if (word >> u32::BITS) as u32 != serving {
+            return None;
+        }
+        self.tickets
+            .compare_exchange(word, word.wrapping_add(NEXT), Acquire, Relaxed)
             .ok()?;
-        Some(Guard {
-            lock: self,
-            local: PhantomData,
-        })
+        Some(self.guard(serving, guards))
     }
 
-    /// Used by trusted entry and terminal paths with no other guard held.
-    pub(crate) fn lock(&self) -> Guard<'_, T> {
-        loop {
-            if let Some(guard) = self.try_lock() {
-                return guard;
-            }
+    pub(crate) fn lock<'a>(&'a self, guards: &'a Cell<usize>) -> Guard<'a, T> {
+        self.wait(self.enqueue(guards), guards)
+    }
+
+    fn enqueue(&self, guards: &Cell<usize>) -> u32 {
+        assert_eq!(
+            guards.get(),
+            0,
+            "blocking acquisition while holding an ordinary Guard"
+        );
+        (self.tickets.fetch_add(NEXT, Relaxed) >> u32::BITS) as u32
+    }
+
+    fn wait<'a>(&'a self, ticket: u32, guards: &'a Cell<usize>) -> Guard<'a, T> {
+        while self.tickets.load(Acquire) as u32 != ticket {
             core::hint::spin_loop();
+        }
+        self.guard(ticket, guards)
+    }
+
+    fn guard<'a>(&'a self, ticket: u32, guards: &'a Cell<usize>) -> Guard<'a, T> {
+        guards.set(guards.get() + 1);
+        Guard {
+            lock: self,
+            ticket,
+            guards,
+            local: PhantomData,
         }
     }
 }
 
 pub(crate) struct Guard<'a, T> {
     lock: &'a Lock<T>,
+    ticket: u32,
+    guards: &'a Cell<usize>,
     local: PhantomData<*mut ()>,
 }
 
@@ -67,6 +94,13 @@ impl<T> DerefMut for Guard<'_, T> {
 
 impl<T> Drop for Guard<'_, T> {
     fn drop(&mut self) {
-        self.lock.held.store(false, Release);
+        // When serving wraps, suppress the carry into the issuer half.
+        let advance = if self.ticket == u32::MAX {
+            1u64.wrapping_sub(NEXT)
+        } else {
+            1
+        };
+        self.lock.tickets.fetch_add(advance, Release);
+        self.guards.set(self.guards.get() - 1);
     }
 }

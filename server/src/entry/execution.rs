@@ -99,7 +99,8 @@ impl Execution {
     }
 
     fn control(&self) -> Result<Guard<'_, Control>, Error> {
-        self.control.try_lock().ok_or(Error::Busy)
+        let (_, hart) = self.local()?;
+        self.control.try_lock(hart.guards()).ok_or(Error::Busy)
     }
 
     fn local(&self) -> Result<(usize, LocalHart<'_>), Error> {
@@ -148,7 +149,8 @@ impl Execution {
         let argument = ptr::from_ref(self).expose_provenance();
         if let Err(error) = unsafe { minor.start(hart, admit_minor, argument, boot::Startup::Sbi) }
         {
-            self.control.lock().launch = None;
+            let (_, hart) = self.local()?;
+            self.control.lock(hart.guards()).launch = None;
             return Err(match error {
                 boot::StartError::Busy => Error::Busy,
                 boot::StartError::Rejected(code) => Error::Firmware(code),
@@ -294,7 +296,7 @@ impl Execution {
             .ok_or(Error::Gone)?;
         let storage = {
             let mut control = if end.is_some() {
-                self.control.lock()
+                self.control.lock(hart.guards())
             } else {
                 self.control()?
             };
@@ -370,7 +372,8 @@ fn admit_minor(hart: usize, argument: usize) -> ! {
     assert_eq!(hardware::current_hart(), hart);
     assert!(Hart::supported());
     let entry = {
-        let mut control = execution.control.lock();
+        let local = unsafe { execution.minor.local() };
+        let mut control = execution.control.lock(local.guards());
         let launch = control.launch.expect("reserved minor launch");
         assert_eq!(launch.hart, hart);
         control

@@ -24,8 +24,10 @@ Unit's stack and saves its integer continuation at the call boundary on Yield.
 A normal return records the Unit's sole end value. The dispatcher resumes on
 its own stack before Metal issues the leave receipt. Room consumes that
 receipt to make the Unit ready again or release the admission. The shared
-Room and Unit state uses a short try-lock to publish eligibility and
-settle an exact occupancy. A yielded continuation becomes available to the
+Room and Unit state shares a short FIFO lock to publish eligibility and
+settle an exact occupancy. Terminal transitions can wait with zero ordinary
+guards. A try acquisition leaves the turn to any queued waiter.
+A yielded continuation becomes available to the
 other Hart only after settlement. An Ending Unit keeps its binding until the
 admission is released. Reaping the Ended Unit allows the slot and stack to be
 reused with a new generation.
