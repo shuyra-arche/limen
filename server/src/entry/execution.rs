@@ -12,7 +12,7 @@ use core::{
 pub use crate::basis::{
     nest::Stacks,
     room::Occupancy,
-    unit::{Error, Lifecycle, UnitId},
+    unit::{End, Error, Lifecycle, UnitId},
 };
 pub use crate::metal::riscv::boot::Secondary;
 use crate::{
@@ -130,7 +130,10 @@ impl Execution {
     ///
     /// The entry must be trusted supervisor code built for the Bare Nest.
     /// It must preserve gp, tp, masked interrupts, disabled extensions and
-    /// the configured traps.
+    /// the configured traps. The 16 KiB dispatcher stack is shared by the
+    /// live Limen startup frames, the entry and all dispatcher-side callees.
+    /// The caller must include those startup frames in the total stack
+    /// budget when bounding the entry and its callees.
     pub unsafe fn start_hart(
         &'static self,
         hart: usize,
@@ -211,6 +214,17 @@ impl Execution {
         control.room.submit(unit, affinity)
     }
 
+    /// Select cancellation for a Unit that has never been admitted to Room.
+    /// A successful submission wins against this operation. After a
+    /// cancellation, use `finish_end` and `reap` to release the slot.
+    pub fn stop_dormant(&self, unit: UnitId) -> Result<(), Error> {
+        let mut control = self.control()?;
+        if control.room.admitted(unit) {
+            return Err(Error::Busy);
+        }
+        control.units.begin_end(unit, End::Cancelled)
+    }
+
     /// Run one ready Unit until it yields or returns on its own stack.
     /// The original admission remains occupied until `vacate`.
     pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
@@ -272,7 +286,7 @@ impl Execution {
         Ok(())
     }
 
-    pub fn reap(&self, unit: UnitId) -> Result<u64, Error> {
+    pub fn reap(&self, unit: UnitId) -> Result<End, Error> {
         self.control()?.units.reap(unit)
     }
 
@@ -301,7 +315,7 @@ impl Execution {
             if let Some(value) = end {
                 control
                     .units
-                    .begin_end(unit, value)
+                    .begin_end(unit, End::Returned { value })
                     .expect("validated live Unit");
             }
             storage

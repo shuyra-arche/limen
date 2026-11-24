@@ -15,10 +15,16 @@ impl UnitId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum End {
+    Returned { value: u64 },
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Lifecycle {
     Live,
     Ending,
-    Ended { value: u64 },
+    Ended(End),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,8 +40,8 @@ pub enum Error {
 enum State<Binding> {
     Vacant,
     Live(Binding),
-    Ending { value: u64, binding: Binding },
-    Ended(u64),
+    Ending { end: End, binding: Binding },
+    Ended(End),
 }
 
 struct Slot<Binding> {
@@ -91,7 +97,7 @@ impl<Binding> Units<Binding> {
         Ok(match self.record(id)? {
             State::Live(_) => Lifecycle::Live,
             State::Ending { .. } => Lifecycle::Ending,
-            State::Ended(value) => Lifecycle::Ended { value: *value },
+            State::Ended(end) => Lifecycle::Ended(*end),
             State::Vacant => unreachable!(),
         })
     }
@@ -103,38 +109,42 @@ impl<Binding> Units<Binding> {
         }
     }
 
-    pub(crate) fn begin_end(&mut self, id: UnitId, value: u64) -> Result<(), Error> {
+    pub(crate) fn begin_end(&mut self, id: UnitId, end: End) -> Result<(), Error> {
         let state = self.record(id)?;
-        if !matches!(state, State::Live(_)) {
-            return Err(Error::State);
+        match state {
+            State::Live(_) => {}
+            State::Ending { end: accepted, .. } | State::Ended(accepted) if *accepted == end => {
+                return Ok(());
+            }
+            _ => return Err(Error::State),
         }
         let State::Live(binding) = core::mem::replace(state, State::Vacant) else {
             unreachable!()
         };
-        *state = State::Ending { value, binding };
+        *state = State::Ending { end, binding };
         Ok(())
     }
 
     /// The caller holds the protection that proved the Room entry released.
     pub(crate) fn finish_end(&mut self, id: UnitId) -> Result<Option<Binding>, Error> {
         let state = self.record(id)?;
-        let value = match state {
-            State::Ending { value, .. } => *value,
+        let end = match state {
+            State::Ending { end, .. } => *end,
             State::Ended(_) => return Ok(None),
             _ => return Err(Error::State),
         };
-        let State::Ending { binding, .. } = core::mem::replace(state, State::Ended(value)) else {
+        let State::Ending { binding, .. } = core::mem::replace(state, State::Ended(end)) else {
             unreachable!()
         };
         Ok(Some(binding))
     }
 
-    pub(crate) fn reap(&mut self, id: UnitId) -> Result<u64, Error> {
+    pub(crate) fn reap(&mut self, id: UnitId) -> Result<End, Error> {
         let state = self.record(id)?;
-        let State::Ended(value) = *state else {
+        let State::Ended(end) = *state else {
             return Err(Error::State);
         };
         *state = State::Vacant;
-        Ok(value)
+        Ok(end)
     }
 }

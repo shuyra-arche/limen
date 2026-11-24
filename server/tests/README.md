@@ -53,8 +53,9 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
 
 The guest verifies separate stacks in the shared Kernel Nest, Yield and resume,
 exact leave receipts, ending and reaping, and reuse with a new identity. It
-also exercises rejected dispatch, Busy and stale identity paths on the same
-production entry and firmware.
+also exercises rejection before occupancy, Busy, stale identity and dormant
+cancellation. A cancelled Unit releases its slot under a new generation
+without executing its entry.
 
 Run [target/entry/execution-harts/](target/entry/execution-harts/) to exercise
 two participating Harts on a four-Hart QEMU machine.
@@ -66,6 +67,10 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
 ```
 
 The guest starts the secondary through OpenSBI and coordinates the two Harts
-through a real contention and handoff. It verifies independent occupancies,
+through a real contention and handoff. It checks that the idle secondary skips
+a Ready Unit pinned to the primary. It then verifies independent occupancies,
 rejection before the original leave is settled, continuation migration after
-settlement, and rejection of a late original occupancy after re-entry.
+settlement, and rejection of a late original occupancy after re-entry. A
+test-only linker wrapper sets distinct `s0`–`s11` values for each saved
+frame and checks their restoration at the production switch boundary,
+including the call that resumes on the other Hart.

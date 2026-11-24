@@ -39,6 +39,8 @@ Kernel Nest. Each Unit reserves one stack and a generational identity.
 dispatcher and emergency stacks. The platform can use `start_hart` to start
 one selected Hart through OpenSBI HSM. Room admits the secondary after its
 trusted supervisor entry establishes its local execution state.
+The 16 KiB secondary dispatcher stack holds the live startup frames, the
+platform entry and its dispatcher-side callees.
 
 Trusted Unit entries must fit their stack and run in supervisor mode with
 interrupts and extended registers disabled. `create` pins the Unit to its
@@ -55,6 +57,11 @@ settle an exact occupancy. A yielded continuation becomes available to the
 other Hart only after settlement. An Ending Unit keeps its binding until the
 admission is released. Reaping the Ended Unit allows the slot and stack to be
 reused with a new generation.
+
+A trusted platform can stop a dormant Unit before its first submission.
+Room admission and the cancellation decision share one protected scope.
+`finish_end` retires the unused continuation, and `reap` returns the
+cancellation outcome and releases the slot.
 
 This execution path covers cooperative supervisor Units on up to two
 resident Harts. The [verification guide](../server/tests/README.md) describes

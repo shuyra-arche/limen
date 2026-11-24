@@ -3,5 +3,6 @@ fn main() {
         .expect("Kernel provider must export its linker script");
     println!("cargo::rustc-link-arg=--defsym=KERNEL_LOAD_ADDRESS=0x80200000");
     println!("cargo::rustc-link-arg=-T{script}");
+    println!("cargo::rustc-link-arg=--wrap=limen_switch_context");
     println!("cargo::rerun-if-changed={script}");
 }

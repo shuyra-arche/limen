@@ -11,7 +11,7 @@ use core::{
 
 use kernel::entry::{
     boot::{Boot, shutdown, write},
-    execution::{Current, Error, Execution, Lifecycle, Occupancy, Stacks, UnitId},
+    execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Stacks, UnitId},
 };
 
 static mut STACKS: Stacks = Stacks::new();
@@ -58,6 +58,10 @@ fn second(_: &mut Current) -> u64 {
     40 + turn as u64
 }
 
+fn abandoned(_: &mut Current) -> u64 {
+    panic!("stopped dormant Unit entered");
+}
+
 fn dispatch(unit: UnitId) -> Occupancy {
     let execution = execution();
     let occupancy = execution.enter().expect("dispatch").expect("ready unit");
@@ -76,9 +80,10 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
     assert_eq!(execution.pending_leave(), None);
     assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Ending));
     execution.finish_end(unit).expect("released admission");
-    assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Ended { value }));
+    let end = End::Returned { value };
+    assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Ended(end)));
     assert_eq!(execution.finish_end(unit), Ok(()));
-    assert_eq!(execution.reap(unit), Ok(value));
+    assert_eq!(execution.reap(unit), Ok(end));
     assert_eq!(execution.reap(unit), Err(Error::Gone));
 }
 
@@ -91,12 +96,36 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     let execution = execution();
     let a = unsafe { execution.create(first) }.expect("first unit");
-    let b = unsafe { execution.create(second) }.expect("second unit");
+    let dormant = unsafe { execution.create(abandoned) }.expect("dormant unit");
     assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
     assert_eq!(execution.enter(), Ok(None));
+
+    execution
+        .stop_dormant(dormant)
+        .expect("stop before admission");
+    assert_eq!(execution.lifecycle(dormant), Ok(Lifecycle::Ending));
+    assert_eq!(execution.stop_dormant(dormant), Ok(()));
+    assert_eq!(execution.submit(dormant), Err(Error::State));
+    assert_eq!(execution.reap(dormant), Err(Error::State));
+    assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
+    assert_eq!(execution.enter(), Ok(None));
+    execution
+        .finish_end(dormant)
+        .expect("finish without admission");
+    assert_eq!(
+        execution.lifecycle(dormant),
+        Ok(Lifecycle::Ended(End::Cancelled))
+    );
+    assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
+
+    let b = unsafe { execution.create(second) }.expect("reuse dormant slot");
+    assert_ne!(dormant, b);
+    assert_eq!(execution.stop_dormant(dormant), Err(Error::Gone));
+    assert_eq!(execution.submit(dormant), Err(Error::Gone));
     execution.submit(a).expect("submit first");
     execution.submit(b).expect("submit second");
     assert_eq!(execution.submit(a), Err(Error::Busy));
+    assert_eq!(execution.stop_dormant(a), Err(Error::Busy));
 
     // The firmware handoff left every interrupt source masked. Change only
     // SIE to make the trusted entry reject this attempt before Occupy.
@@ -129,9 +158,10 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert_eq!(execution.enter(), Ok(None));
     assert_eq!(SEQUENCE.load(Relaxed), 4);
 
-    write(
-        "PASS kernel-execution stacks=2 resume=1 leave=4 ended=3 reuse=1 stale=1 busy=1 rollback=1\n",
-    );
+    write(concat!(
+        "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1",
+        " rejected_before_occupy=1 dormant_reaped=1\n",
+    ));
     shutdown(true)
 }
 

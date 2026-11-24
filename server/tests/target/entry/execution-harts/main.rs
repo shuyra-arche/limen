@@ -2,6 +2,7 @@
 #![no_main]
 
 use core::{
+    arch::global_asm,
     fmt::{self, Write},
     hint::{black_box, spin_loop},
     mem::{MaybeUninit, size_of},
@@ -13,8 +14,10 @@ use core::{
 };
 use kernel::entry::{
     boot::{Boot, shutdown, write},
-    execution::{Current, Error, Execution, Lifecycle, Occupancy, Secondary, Stacks, UnitId},
+    execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Secondary, Stacks, UnitId},
 };
+
+global_asm!(include_str!("register-probe.S"));
 
 static mut STACKS: Stacks = Stacks::new();
 static SECONDARY: Secondary = Secondary::new();
@@ -22,6 +25,9 @@ static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static mut SCENARIO: MaybeUninit<Scenario> = MaybeUninit::uninit();
 static mut PREVIOUS: MaybeUninit<Occupancy> = MaybeUninit::uninit();
 static FIRST_STACK: AtomicUsize = AtomicUsize::new(0);
+
+#[unsafe(no_mangle)]
+static limen_register_probe_migrated: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy)]
 struct Scenario {
@@ -32,7 +38,7 @@ struct Scenario {
 
 #[repr(u8)]
 enum Phase {
-    SecondaryReady = 1,
+    AffinityChecked = 1,
     FirstRunning,
     BothRunning,
     FirstStopped,
@@ -104,6 +110,11 @@ fn second(current: &mut Current) -> u64 {
     local as u64
 }
 
+fn pinned(current: &mut Current) -> u64 {
+    assert_eq!(current.hart(), scenario().primary);
+    17
+}
+
 fn dispatch(execution: &'static Execution, unit: UnitId, hart: usize) -> Occupancy {
     let occupancy = execution.enter().expect("dispatch").expect("ready unit");
     assert_eq!(occupancy.unit(), unit);
@@ -119,12 +130,20 @@ fn finish(execution: &Execution, receipt: Occupancy, value: u64) {
     assert_eq!(execution.reap(unit), Err(Error::State));
     execution.vacate(receipt).expect("matching leave");
     execution.finish_end(unit).expect("released admission");
-    assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Ended { value }));
-    assert_eq!(execution.reap(unit), Ok(value));
+    assert_eq!(
+        execution.lifecycle(unit),
+        Ok(Lifecycle::Ended(End::Returned { value }))
+    );
+    assert_eq!(execution.reap(unit), Ok(End::Returned { value }));
 }
 
 fn secondary(execution: &'static Execution) -> ! {
-    publish(Phase::SecondaryReady);
+    assert_eq!(
+        execution.enter(),
+        Ok(None),
+        "secondary must reject the Ready Unit pinned to primary"
+    );
+    publish(Phase::AffinityChecked);
     wait(Phase::FirstRunning);
     let Scenario {
         first, secondary, ..
@@ -173,7 +192,8 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     // The continuation holds scalar locals, the Unit stack and shared fixture
     // state across Yield. It holds no Hart-local resource.
     let a = unsafe { execution.create_migratable(first) }.expect("migratable Unit");
-    execution.submit(a).expect("admit migratable Unit");
+    let pinned = unsafe { execution.create(pinned) }.expect("create on primary");
+    execution.submit(pinned).expect("admit pinned Unit");
     assert!(matches!(
         unsafe { execution.start_hart(8, secondary) },
         Err(Error::Firmware(_))
@@ -188,7 +208,9 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
             .start_hart(second_hart, secondary)
             .expect("start actual secondary Hart");
     }
-    wait(Phase::SecondaryReady);
+    wait(Phase::AffinityChecked);
+    finish(execution, dispatch(execution, pinned, primary), 17);
+    execution.submit(a).expect("admit migratable Unit");
 
     let previous = dispatch(execution, a, primary);
     unsafe { (&mut *(&raw mut PREVIOUS)).write(previous) };
@@ -207,8 +229,11 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     publish(Phase::ReplayChecked);
     wait(Phase::MigratedEnded);
     assert_eq!(execution.lifecycle(a), Err(Error::Gone));
+    assert_eq!(limen_register_probe_migrated.load(Relaxed), 1);
 
-    write("PASS kernel-execution-harts active=2 pending=1 migrated=1 stale=1 ended=2 rollback=1\n");
+    write(
+        "PASS kernel-execution-harts active=2 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1\n",
+    );
     shutdown(true)
 }
 
@@ -223,6 +248,15 @@ impl Write for Console {
 
 fn observe(hart: usize) {
     let _ = writeln!(Console, "OBSERVED kernel-execution-harts hart={hart}");
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn limen_register_probe_mismatch(register: usize) -> ! {
+    let _ = writeln!(
+        Console,
+        "FAIL kernel-execution-harts: register s{register} changed"
+    );
+    shutdown(false)
 }
 
 #[panic_handler]
