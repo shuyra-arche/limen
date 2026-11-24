@@ -1,5 +1,5 @@
 use crate::{
-    composition,
+    composition, qmp,
     suite::{self, Run, Suite},
     verify,
 };
@@ -152,29 +152,24 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, hart: u8, round: u8) ->
             "-smp",
         ])
         .arg(hart.to_string())
-        .args([
-            "-m",
-            "128M",
-            "-nographic",
-            "-monitor",
-            "none",
-            "-nic",
-            "none",
-            "-bios",
-        ])
+        .args(["-m", "128M", "-monitor", "none", "-nic", "none", "-bios"])
         .arg(firmware)
         .arg("-kernel")
         .arg(&variant.elf);
-    let mut result = process::run(&mut command, &evidence, Duration::from_secs(120))?;
+    let (mut result, shutdown) = qmp::run(command, &evidence, Duration::from_secs(120))?;
     let log = fs::read(evidence.join("serial.log"))?;
     let details = match std::str::from_utf8(&log) {
         Ok(log) => verify::check(log, expects, distinct.as_ref(), hart)?,
         Err(error) => serde_json::json!({"passed": false, "serial_error": error.to_string()}),
     };
-    let verdict = verify::verdict(&result, &details);
+    let verdict = verify::verdict(&result, &details, shutdown.as_ref().ok());
     result.passed = verdict == "pass";
     let mut value = serde_json::to_value(&result)?;
     value["scenario"] = details;
+    value["qmp_shutdown"] = match shutdown {
+        Ok(receipt) => serde_json::to_value(receipt)?,
+        Err(error) => serde_json::json!({"error": error.to_string()}),
+    };
     value["verdict"] = verdict.into();
     value["platform_sha256"] = digest(&variant.elf)?.into();
     json(&evidence.join("result.json"), &value)?;

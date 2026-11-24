@@ -8,13 +8,17 @@ const MAGIC: u32 = 0xd00d_feed;
 ///
 /// The trusted firmware must supply immutable readable storage for the header
 /// at a nonzero aligned address. This check reads only the fixed-size header.
-pub(super) unsafe fn extent(address: usize, image: Range<usize>) -> Option<Range<usize>> {
+pub(super) unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Option<Range<usize>> {
+    let address = header.addr();
     let header_end = address.checked_add(HEADER_SIZE)?;
-    if address == 0 || !address.is_multiple_of(ALIGNMENT) || overlaps(address..header_end, &image) {
+    if header.is_null()
+        || !address.is_multiple_of(ALIGNMENT)
+        || overlaps(&(address..header_end), &image)
+    {
         return None;
     }
 
-    let header = unsafe { core::ptr::without_provenance::<[u32; 10]>(address).read_volatile() };
+    let header = unsafe { header.read_volatile() };
     let [
         magic,
         size,
@@ -30,22 +34,29 @@ pub(super) unsafe fn extent(address: usize, image: Range<usize>) -> Option<Range
     if magic != MAGIC || version < 17 || compatible > 17 || compatible > version {
         return None;
     }
-    if !block(structure, structure_size, size, 4)
-        || !block(strings, strings_size, size, 1)
-        || !block(reservations, 16, size, ALIGNMENT as u32)
+    // Even an empty root needs BEGIN_NODE, its padded name, END_NODE and END.
+    let structure = block(structure, structure_size, size, 4)?;
+    let strings = block(strings, strings_size, size, 1)?;
+    // Only the first reservation entry is knowable from the header.
+    let reservations = block(reservations, 16, size, ALIGNMENT as u32)?;
+    if structure_size < 16
+        || !structure_size.is_multiple_of(4)
+        || overlaps(&structure, &strings)
+        || overlaps(&structure, &reservations)
+        || overlaps(&strings, &reservations)
     {
         return None;
     }
     let extent = address..address.checked_add(size as usize)?;
-    (!overlaps(extent.clone(), &image)).then_some(extent)
+    (!overlaps(&extent, &image)).then_some(extent)
 }
 
-fn block(offset: u32, length: u32, size: u32, alignment: u32) -> bool {
-    offset >= HEADER_SIZE as u32
-        && offset.is_multiple_of(alignment)
-        && offset.checked_add(length).is_some_and(|end| end <= size)
+fn block(offset: u32, length: u32, size: u32, alignment: u32) -> Option<Range<u32>> {
+    let end = offset.checked_add(length)?;
+    (offset >= HEADER_SIZE as u32 && offset.is_multiple_of(alignment) && end <= size)
+        .then_some(offset..end)
 }
 
-fn overlaps(first: Range<usize>, second: &Range<usize>) -> bool {
-    first.start < second.end && second.start < first.end
+fn overlaps<T: Ord>(first: &Range<T>, second: &Range<T>) -> bool {
+    !first.is_empty() && !second.is_empty() && first.start < second.end && second.start < first.end
 }

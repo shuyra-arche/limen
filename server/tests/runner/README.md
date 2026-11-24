@@ -9,8 +9,11 @@ evidence.
 A QEMU suite declares its platform binary and the complete serial lines required
 after its assertions. It can also declare imported test helpers, Cargo features,
 environment and distinct capture evidence. The runner builds the platform from
-the suite's locked dependency graph and requires both complete assertions and
-QEMU completion. Results distinguish `pass`, `fail`, `timeout` and `inconclusive`.
+the suite's locked dependency graph. It negotiates QMP before starting the
+guest and records the monitor transcript in `qmp.jsonl` alongside the serial
+log. Success requires complete serial assertions, one guest-originated
+`guest-shutdown` receipt and a clean process exit. Results distinguish
+`pass`, `fail`, `timeout` and `inconclusive`.
 A Cargo test suite names its package or own manifest and test target.
 Adding a new project does not change Runner code.
 

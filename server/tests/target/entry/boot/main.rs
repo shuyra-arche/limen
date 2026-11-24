@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use core::arch::asm;
+use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
 use kernel::entry::boot::{Boot, shutdown, write};
 
@@ -16,6 +16,23 @@ unsafe extern "C" {
 }
 
 static mut ZEROED: usize = 0;
+
+// Firmware-facing test prelude. Preserve a0/a1 and do not assume gp or sp.
+global_asm!(
+    ".pushsection .limen_test_entry,\"ax\",@progbits",
+    ".balign 4",
+    ".globl limen_test_entry",
+    "limen_test_entry:",
+    ".option push",
+    ".option norelax",
+    "lla t0, {sentinel}",
+    "li t1, -1",
+    "sd t1, 0(t0)",
+    "tail _start",
+    ".option pop",
+    ".popsection",
+    sentinel = sym ZEROED,
+);
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {

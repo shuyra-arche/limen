@@ -11,12 +11,18 @@ An OpenSBI platform image links the `kernel` library and supplies
 both bounded stacks in the ELF's load ranges. Firmware enters `_start` on the
 sole boot hart in supervisor mode with Bare translation, with the hart ID and
 physical DTB address in `a0` and `a1`. The platform must provide immutable,
-readable DTB storage disjoint from the image. Headers compatible with version
-17 are recognized.
+readable DTB storage disjoint from the image. The fixed version-17-compatible
+header must describe a whole, nonempty structure block and disjoint extents
+for structure, strings and the first reservation entry. The platform owns
+validation of the block contents.
 
 Limen masks supervisor interrupts, establishes a direct trap vector and an
 emergency stack, then clears BSS. The trusted boot entry checks the supervisor
-CSRs and SBI handoff before reading the DTB header. A fault reports its cause,
+CSRs and probes the SBI debug console (DBCN) and system reset (SRST) before
+reading the DTB header. Admission requires both extensions. A rejected handoff
+reports through DBCN when available, requests failure shutdown through SRST
+when available, and parks the Hart if shutdown is unavailable or returns.
+A fault reports its cause,
 program counter, trap value and interrupted stack pointer, then requests SBI
 system failure shutdown. A trap during that failure path parks the hart.
 

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["server", "server/tests/metal/**/host"]
+members = ["server", "server/tests/entry/boot/host", "server/tests/metal/**/host"]
 
 [workspace.package]
 version = "0.0.1"

@@ -1,0 +1,104 @@
+use kernel_verification::{Result, process};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::{
+    fs::File,
+    io::{self, BufRead, BufReader, Write},
+    path::Path,
+    process::Command,
+    thread,
+    time::Duration,
+};
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Shutdown {
+    pub guest: bool,
+    pub reason: String,
+}
+
+pub fn run(
+    mut command: Command,
+    directory: &Path,
+    timeout: Duration,
+) -> Result<(process::Outcome, io::Result<Shutdown>)> {
+    let serial = directory.join("serial.log");
+    File::create(&serial)?;
+    let transcript = File::create(directory.join("qmp.jsonl"))?;
+    command
+        .args(["-display", "none", "-serial"])
+        .arg(format!("file:{}", serial.display()))
+        .args(["-S", "-qmp", "stdio"]);
+    let (stdin, commands) = io::pipe()?;
+    let (messages, stdout) = io::pipe()?;
+    let monitor = thread::spawn(move || capture(BufReader::new(messages), commands, transcript));
+    let outcome = process::run_with_stdio(
+        &mut command,
+        directory,
+        timeout,
+        stdin.into(),
+        stdout.into(),
+    );
+    // Command also owns pipe ends after spawning, including when spawn fails.
+    drop(command);
+    let shutdown = monitor.join().map_err(|_| "QMP reader panicked")?;
+    Ok((outcome?, shutdown))
+}
+
+pub(super) fn capture(
+    mut input: impl BufRead,
+    mut commands: impl Write,
+    mut transcript: impl Write,
+) -> io::Result<Shutdown> {
+    let mut bytes = Vec::new();
+    let mut next = || -> io::Result<Option<Value>> {
+        bytes.clear();
+        if input.read_until(b'\n', &mut bytes)? == 0 {
+            return Ok(None);
+        }
+        transcript.write_all(&bytes)?;
+        if !bytes.ends_with(b"\n") {
+            return Err(io::Error::other("truncated QMP record"));
+        }
+        Ok(Some(serde_json::from_slice(&bytes)?))
+    };
+    if !next()?.is_some_and(|message| message["QMP"].is_object()) {
+        return Err(io::Error::other("missing QMP greeting"));
+    }
+    writeln!(
+        commands,
+        r#"{{"execute":"qmp_capabilities","id":"capabilities"}}"#
+    )?;
+    commands.flush()?;
+    let mut started = false;
+    let mut acknowledged = false;
+    let mut shutdown = None;
+    while let Some(message) = next()? {
+        if message.get("error").is_some() {
+            return Err(io::Error::other(format!("QMP command failed: {message}")));
+        }
+        match (message["id"].as_str(), message["event"].as_str()) {
+            (Some("capabilities"), _) if !started && message["return"].is_object() => {
+                // The VM is paused until its event consumer has negotiated QMP.
+                writeln!(commands, r#"{{"execute":"cont","id":"start"}}"#)?;
+                commands.flush()?;
+                started = true;
+            }
+            (Some("start"), _) if started && !acknowledged && message["return"].is_object() => {
+                acknowledged = true;
+            }
+            (Some(_), _) => return Err(io::Error::other("unexpected QMP reply")),
+            (_, Some("SHUTDOWN")) => {
+                if !started || shutdown.is_some() {
+                    return Err(io::Error::other("unexpected or duplicate QMP shutdown"));
+                }
+                shutdown = Some(serde_json::from_value(message["data"].clone())?);
+            }
+            (None, Some(_)) => {}
+            _ => return Err(io::Error::other("invalid QMP message")),
+        }
+    }
+    if !acknowledged {
+        return Err(io::Error::other("QMP did not acknowledge guest execution"));
+    }
+    shutdown.ok_or_else(|| io::Error::other("missing QMP shutdown"))
+}
