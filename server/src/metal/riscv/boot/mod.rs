@@ -1,5 +1,6 @@
 use core::arch::{asm, global_asm};
 
+mod firmware;
 mod secondary;
 
 pub use secondary::Secondary;

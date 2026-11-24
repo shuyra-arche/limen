@@ -14,12 +14,14 @@
 //! All three expose the boot CPU stack reservation through [`stack_range`].
 
 #[cfg(target_arch = "riscv64")]
-mod opensbi;
+mod handoff;
 #[cfg(target_arch = "riscv64")]
 mod tree;
 
 #[cfg(target_arch = "riscv64")]
-pub use opensbi::{Boot, shutdown, write};
+pub use crate::metal::riscv::sbi::{shutdown, write};
+#[cfg(target_arch = "riscv64")]
+pub use handoff::Boot;
 
 #[cfg(target_arch = "aarch64")]
 pub use crate::metal::aarch64::enter;

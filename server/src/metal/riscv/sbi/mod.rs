@@ -1,6 +1,7 @@
 //! Firmware calls required by the trusted boot prefix.
 
 use core::arch::asm;
+use core::fmt::{self, Write};
 
 mod probe;
 pub(crate) use probe::Extensions;
@@ -14,11 +15,12 @@ pub(crate) fn extensions() -> Extensions {
     Extensions::probe(|function, extension| call(BASE, function, extension, 0, 0))
 }
 
-pub(crate) fn write_byte(byte: u8) -> bool {
+fn write_byte(byte: u8) -> bool {
     call(DEBUG_CONSOLE, 2, usize::from(byte), 0, 0).0 == 0
 }
 
-pub(crate) fn shutdown(success: bool) -> ! {
+/// End the trusted boot path through SBI system reset.
+pub fn shutdown(success: bool) -> ! {
     // Shutdown with no reason (0) or system failure (1).
     let _ = call(SYSTEM_RESET, 0, 0, usize::from(!success), 0);
     super::boot::park()
@@ -51,4 +53,31 @@ fn call(
         );
     }
     (error, value)
+}
+
+pub(super) fn reject(firmware: Extensions, message: fmt::Arguments<'_>) -> ! {
+    if firmware.console {
+        let _ = Console.write_fmt(message);
+    }
+    if firmware.reset {
+        shutdown(false);
+    }
+    super::boot::park()
+}
+
+/// Write an early diagnostic to the firmware debug console.
+pub fn write(message: &str) {
+    let _ = Console.write_str(message);
+}
+
+struct Console;
+
+impl Write for Console {
+    fn write_str(&mut self, message: &str) -> fmt::Result {
+        if message.bytes().all(write_byte) {
+            Ok(())
+        } else {
+            Err(fmt::Error)
+        }
+    }
 }
