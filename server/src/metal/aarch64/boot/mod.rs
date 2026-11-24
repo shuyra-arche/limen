@@ -1,7 +1,5 @@
-mod start;
-pub use start::major;
-
-pub(crate) const REQUIRES_DIAGNOSTICS: bool = false;
+mod major;
+pub use major::major;
 
 use core::arch::asm;
 
@@ -12,7 +10,7 @@ pub(crate) fn established() -> bool {
              out(reg) el, out(reg) daif, out(reg) spsel, out(reg) vector,
              options(nostack, nomem, preserves_flags));
     }
-    el == 4 && daif & 0x3c0 == 0x3c0 && spsel == 1 && vector == start::vectors as *const () as usize
+    el == 4 && daif & 0x3c0 == 0x3c0 && spsel == 1 && vector == major::vectors as *const () as usize
 }
 pub(crate) fn park() -> ! {
     loop {

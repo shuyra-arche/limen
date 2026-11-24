@@ -8,14 +8,18 @@
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
     "server/src/metal/mod.rs",
-    "server/src/metal/firmware/**",
+    "server/src/metal/generic/mod.rs",
+    "server/src/metal/generic/firmware/mod.rs",
+    "server/src/metal/generic/firmware/uefi.rs",
     "server/src/entry/boot/**",
     "server/src/metal/riscv/mod.rs",
     "server/src/metal/riscv/boot/**",
-    "server/src/metal/riscv/firmware/**",
+    "server/src/metal/generic/firmware/sbi/**",
     "server/link.x",
-    "server/src/metal/console.rs",
-    "server/src/metal/stack.rs"
+    "server/src/metal/generic/console.rs",
+    "server/src/metal/generic/services.rs",
+    "server/src/metal/generic/devicetree.rs",
+    "server/src/metal/generic/stack.rs"
   ],
   "run": {
     "kind": "qemu",

@@ -1,7 +1,7 @@
 //! Legacy xAPIC startup. The loader reserves one executable SIPI page
 //! below 1 MiB. Its contents and the BSP's identity mappings stay resident.
 use super::Descriptor;
-use crate::metal::minor::{self, Minor, StartError};
+use crate::metal::generic::minor::{self, Minor, StartError};
 use core::{
     arch::{asm, naked_asm, x86_64::__cpuid},
     mem::offset_of,

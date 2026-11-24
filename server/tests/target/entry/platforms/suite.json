@@ -9,10 +9,14 @@
     "server/src/entry/mod.rs",
     "server/src/entry/boot/**",
     "server/src/metal/mod.rs",
-    "server/src/metal/minor.rs",
-    "server/src/metal/firmware/**",
-    "server/src/metal/stack.rs",
-    "server/src/metal/console.rs"
+    "server/src/metal/generic/minor.rs",
+    "server/src/metal/generic/mod.rs",
+    "server/src/metal/generic/firmware/mod.rs",
+    "server/src/metal/generic/firmware/uefi.rs",
+    "server/src/metal/generic/stack.rs",
+    "server/src/metal/generic/console.rs",
+    "server/src/metal/generic/services.rs",
+    "server/src/metal/generic/devicetree.rs"
   ],
   "run": {
     "kind": "board-boot",
@@ -29,7 +33,8 @@
       "virt": [
         "server/src/metal/aarch64/**",
         "server/tests/target/entry/platforms/virt.rs",
-        "server/tests/target/entry/platforms/pl011.rs"
+        "server/tests/target/entry/platforms/pl011.rs",
+        "server/src/metal/generic/firmware/psci.rs"
       ]
     }
   }

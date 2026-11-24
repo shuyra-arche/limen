@@ -1,4 +1,4 @@
-#[path = "../../../../../src/metal/riscv/firmware/sbi/probe.rs"]
+#[path = "../../../../../src/metal/generic/firmware/sbi/probe.rs"]
 mod probe;
 
 #[test]

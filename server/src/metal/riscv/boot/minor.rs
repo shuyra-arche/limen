@@ -1,5 +1,5 @@
-use super::start::establish_supervisor;
-use crate::metal::minor;
+use super::major::establish_supervisor;
+use crate::metal::generic::minor;
 use core::arch::naked_asm;
 
 pub enum Startup {
@@ -11,16 +11,16 @@ pub(crate) const fn minor_context() -> MinorContext {
 }
 
 pub(crate) unsafe fn wake_minor(
-    slot: &crate::metal::minor::Minor,
+    slot: &crate::metal::generic::minor::Minor,
     hart: usize,
     Startup::Sbi: Startup,
-) -> Result<(), crate::metal::minor::StartError> {
-    super::super::firmware::sbi::start_hart(
+) -> Result<(), crate::metal::generic::minor::StartError> {
+    crate::metal::generic::firmware::sbi::start_hart(
         hart,
         minor as *const () as usize,
         core::ptr::from_ref(slot).expose_provenance(),
     )
-    .map_err(crate::metal::minor::StartError::Rejected)
+    .map_err(crate::metal::generic::minor::StartError::Rejected)
 }
 
 #[unsafe(naked)]
@@ -47,7 +47,7 @@ unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
         "tail {loaded}",
         "3: wfi",
         "j 3b",
-        vector = sym super::start::trap,
+        vector = sym super::major::trap,
         state = const minor::STATE_OFFSET,
         published = const minor::PUBLISHED,
         entered = const minor::ENTERED,

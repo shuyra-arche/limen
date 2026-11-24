@@ -7,12 +7,12 @@ const BYTES: usize = 16 * 1024;
 const BYTES: usize = 32 * 1024;
 
 #[repr(C, align(16))]
-pub(super) struct Stack([u8; BYTES]);
+pub(in crate::metal) struct Stack([u8; BYTES]);
 
 // RV64 clears BSS after selecting this stack. Its linker places the reservation
 // outside the cleared interval and preserves the firmware image's linker symbols.
 #[cfg_attr(target_arch = "riscv64", unsafe(link_section = ".limen.boot.stack"))]
-pub(super) static mut STACK: Stack = Stack([0; BYTES]);
+pub(in crate::metal) static mut STACK: Stack = Stack([0; BYTES]);
 
 /// Ordinary stack reservation of the primary boot CPU.
 pub fn stack_range() -> Range<usize> {

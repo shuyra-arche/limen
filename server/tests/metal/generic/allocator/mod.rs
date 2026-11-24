@@ -2,7 +2,7 @@
 
 use core::alloc::Layout;
 
-#[path = "../../../src/metal/allocator/bump.rs"]
+#[path = "../../../../src/metal/generic/allocator/bump.rs"]
 mod bump;
 
 use bump::Bump;

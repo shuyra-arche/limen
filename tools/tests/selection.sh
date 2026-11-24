@@ -46,24 +46,35 @@ change server/src/basis/room.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts"]' >/dev/null
 change server/src/entry/boot/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/firmware/uefi.rs
+change server/src/metal/generic/firmware/uefi.rs
 bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
 change server/src/entry/boot/handoff.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/minor.rs
+change server/src/metal/generic/minor.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution-harts","platform-boot"]' >/dev/null
-change server/src/metal/riscv/firmware/sbi/probe.rs
-[[ $(boards) == rv64 ]]
-bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/riscv/firmware/sbi/host/Cargo.toml"]' >/dev/null
-change server/src/metal/console.rs
+change server/src/metal/generic/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/stack.rs
+change server/src/metal/generic/firmware/psci.rs
+[[ $(boards) == virt ]]
+bash "$checks" . "$base" | jq -e '(.full or .runner or .rv64) == false' >/dev/null
+change server/src/metal/generic/firmware/sbi/probe.rs
+[[ $(boards) == rv64 ]]
+bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/generic/firmware/sbi/host/Cargo.toml"]' >/dev/null
+change server/src/metal/generic/console.rs
+bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+[[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/generic/services.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/generic/devicetree.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+change server/src/metal/generic/stack.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/qemu.version
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/allocator/bump.rs
+change server/src/metal/generic/allocator/bump.rs
 [[ $(boards) == "" ]]
-bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/generic/allocator/host/Cargo.toml"]' >/dev/null
 change server/src/metal/x86_64/example.rs
 previous=$(git rev-parse HEAD)
 mkdir -p server/src/metal/aarch64

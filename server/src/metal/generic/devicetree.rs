@@ -8,7 +8,7 @@ const MAGIC: u32 = 0xd00d_feed;
 ///
 /// The trusted firmware must supply immutable readable storage for the header
 /// at a nonzero aligned address. This check reads only the fixed-size header.
-pub(super) unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Option<Range<usize>> {
+pub(crate) unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Option<Range<usize>> {
     let address = header.addr();
     let header_end = address.checked_add(HEADER_SIZE)?;
     if header.is_null()

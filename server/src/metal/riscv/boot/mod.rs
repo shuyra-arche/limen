@@ -1,11 +1,9 @@
 use core::arch::asm;
 
-mod start;
+mod major;
 
-pub(crate) use super::firmware::sbi::services;
 mod minor;
 pub(crate) use minor::{MinorContext, minor_context, wake_minor};
-pub(crate) const REQUIRES_DIAGNOSTICS: bool = true;
 
 #[repr(C, align(16))]
 struct TrapStack([u8; 4096]);
@@ -57,7 +55,7 @@ pub(crate) fn established_on(trap_stack: usize) -> bool {
     status & 2 == 0
         && interrupt_enable == 0
         && translation == 0
-        && vector == start::trap as *const () as usize
+        && vector == major::trap as *const () as usize
         && scratch == trap_stack
 }
 

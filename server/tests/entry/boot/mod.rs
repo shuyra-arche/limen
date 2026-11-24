@@ -1,5 +1,5 @@
-#[path = "../../../src/entry/boot/tree.rs"]
-mod tree;
+#[path = "../../../src/metal/generic/devicetree.rs"]
+mod devicetree;
 
 #[repr(align(8))]
 struct Header([u32; 10]);
@@ -19,7 +19,7 @@ fn admitted(structure_size: u32, strings: u32, strings_size: u32, reservations: 
     ];
     let header = Header(words.map(u32::to_be));
     // The parser reads only this aligned, initialized header.
-    unsafe { tree::extent(&raw const header.0, 0..0).is_some() }
+    unsafe { devicetree::extent(&raw const header.0, 0..0).is_some() }
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn rejects_impossible_structure_lengths_and_overlapping_blocks() {
     assert!(!admitted(16, 48, 8, 40));
 }
 
-#[path = "../../../src/metal/firmware/uefi.rs"]
+#[path = "../../../src/metal/generic/firmware/uefi.rs"]
 mod uefi;
 use uefi::{FirmwareMap, Loader};
 #[path = "../../../src/entry/boot/handoff.rs"]
@@ -83,4 +83,24 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
     assert!(admit(&descriptors.0, 48, 2, None).is_none());
     descriptors.0[48] = 4;
     assert!(admit(&descriptors.0, 48, 1, Some(&dtb.0)).is_none());
+}
+
+#[path = "../../../src/metal/generic/console.rs"]
+mod console;
+
+#[test]
+fn console_stops_at_the_first_byte_the_output_cannot_accept() {
+    use core::fmt::Write;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static WRITES: AtomicUsize = AtomicUsize::new(0);
+    let mut writer = console::Console {
+        write_byte: |byte| {
+            let index = WRITES.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(byte, "圜".as_bytes()[index]);
+            index == 0
+        },
+    };
+    assert!(writer.write_str("圜").is_err());
+    assert_eq!(WRITES.load(Ordering::Relaxed), 2);
 }

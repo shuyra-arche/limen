@@ -24,7 +24,7 @@ impl Conduit {
         result
     }
 
-    pub(in crate::metal::aarch64) unsafe fn cpu_on(
+    pub(in crate::metal) unsafe fn cpu_on(
         self,
         hart: usize,
         entry: *const (),

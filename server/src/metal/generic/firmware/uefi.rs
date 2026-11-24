@@ -19,6 +19,16 @@ pub struct Loader<'a> {
 
 #[cfg(not(target_arch = "riscv64"))]
 impl FirmwareMap<'_> {
+    pub(crate) fn valid(&self) -> bool {
+        // EFI_MEMORY_DESCRIPTOR v1 has a 40-byte prefix and 8-byte alignment.
+        self.version == 1
+            && self.stride >= 40
+            && self.stride.is_multiple_of(8)
+            && !self.descriptors.is_empty()
+            && self.descriptors.as_ptr().addr().is_multiple_of(8)
+            && self.descriptors.len().is_multiple_of(self.stride)
+    }
+
     pub(crate) fn contains_loader_data(&self, tree: Range<usize>) -> bool {
         // Read the little-endian v1 fields at the firmware-reported stride.
         self.descriptors.chunks_exact(self.stride).any(|d| {

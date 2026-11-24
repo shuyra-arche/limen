@@ -14,7 +14,7 @@ pub use crate::basis::{
     room::Occupancy,
     unit::{End, Error, Lifecycle, UnitId},
 };
-pub use crate::metal::minor::Minor;
+pub use crate::metal::generic::minor::Minor;
 use crate::{
     basis::{
         nest::{KernelNest, Storage},

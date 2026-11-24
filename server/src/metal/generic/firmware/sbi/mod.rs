@@ -1,16 +1,16 @@
 //! Firmware calls required by the trusted boot prefix.
 
-use crate::metal::console::Services;
+use crate::metal::generic::services::Services;
 use core::arch::asm;
 
 mod probe;
-pub(crate) use probe::Extensions;
+use probe::Extensions;
 use probe::{DEBUG_CONSOLE, SYSTEM_RESET};
 
 const BASE: usize = 0x10;
 const HART_STATE_MANAGEMENT: usize = 0x48534d;
 
-pub(crate) fn extensions() -> Extensions {
+fn extensions() -> Extensions {
     Extensions::probe(|function, extension| call(BASE, function, extension, 0, 0))
 }
 
@@ -24,7 +24,7 @@ fn reset(success: bool) {
     let _ = call(SYSTEM_RESET, 0, 0, usize::from(!success), 0);
 }
 
-pub(in crate::metal::riscv) fn start_hart(
+pub(in crate::metal) fn start_hart(
     hart: usize,
     address: usize,
     opaque: usize,
@@ -57,10 +57,27 @@ fn call(
     (error, value)
 }
 
+static SERVICES: Services = Services {
+    output: Some(write_byte),
+    reset: Some(reset),
+};
+
+/// The trap vector is live before BSS has been cleared. Its failure path
+/// probes firmware directly and never depends on a published service table.
 pub(crate) fn services() -> Services {
     let available = extensions();
     Services {
-        output: available.console.then_some(write_byte),
-        reset: available.reset.then_some(reset),
+        output: SERVICES.output.filter(|_| available.console),
+        reset: SERVICES.reset.filter(|_| available.reset),
     }
+}
+
+pub(crate) fn install() {
+    let available = services();
+    if available.output.is_none() || available.reset.is_none() {
+        available.reject(format_args!(
+            "FAIL Limen boot: required SBI debug console or system reset unavailable\n"
+        ));
+    }
+    SERVICES.install();
 }

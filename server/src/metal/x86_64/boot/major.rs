@@ -1,7 +1,7 @@
 use super::install;
 use crate::{
     entry::boot::Loader,
-    metal::stack::{STACK, Stack},
+    metal::generic::stack::{STACK, Stack},
 };
 use core::arch::naked_asm;
 

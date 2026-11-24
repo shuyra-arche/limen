@@ -71,13 +71,15 @@ pub struct Minor {
 // exactly one entering hart. The hardware entry is the sole stack user.
 unsafe impl Sync for Minor {}
 
-pub(super) const PUBLISHED: u32 = State::Published as u32;
-pub(super) const ENTERED: u32 = State::Entered as u32;
-pub(super) const STATE_OFFSET: usize = offset_of!(Minor, state);
-pub(super) const HART_OFFSET: usize = offset_of!(Minor, launch) + offset_of!(Launch, hart);
-pub(super) const STACK_OFFSET: usize = offset_of!(Minor, launch) + offset_of!(Launch, stack);
+pub(in crate::metal) const PUBLISHED: u32 = State::Published as u32;
+pub(in crate::metal) const ENTERED: u32 = State::Entered as u32;
+pub(in crate::metal) const STATE_OFFSET: usize = offset_of!(Minor, state);
+pub(in crate::metal) const HART_OFFSET: usize =
+    offset_of!(Minor, launch) + offset_of!(Launch, hart);
+pub(in crate::metal) const STACK_OFFSET: usize =
+    offset_of!(Minor, launch) + offset_of!(Launch, stack);
 #[cfg(target_arch = "riscv64")]
-pub(super) const TRAP_STACK_OFFSET: usize =
+pub(in crate::metal) const TRAP_STACK_OFFSET: usize =
     offset_of!(Minor, launch) + offset_of!(Launch, trap_stack);
 
 impl Minor {
@@ -162,7 +164,7 @@ impl Default for Minor {
 
 pub(crate) extern "C" fn arrive(hart: usize, minor: &Minor) -> ! {
     let launch = unsafe { (&*minor.launch.get()).assume_init_ref() };
-    let sp = crate::metal::stack::pointer();
+    let sp = crate::metal::generic::stack::pointer();
     assert!(
         hart == launch.hart && hart == boot::current_hart() && minor.stack_range().contains(&sp)
     );

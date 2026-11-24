@@ -25,7 +25,7 @@ impl<'a> Boot<'a> {
 
     #[cfg(target_arch = "riscv64")]
     pub(super) unsafe fn admit(hart: usize, input: *const ()) -> Option<Self> {
-        let tree = unsafe { super::tree::extent(input.cast(), crate::metal::boot::image()) }?;
+        let tree = unsafe { super::devicetree::extent(input.cast(), crate::metal::boot::image()) }?;
         Some(Self {
             hart,
             device_tree: Some(tree),
@@ -38,14 +38,7 @@ impl<'a> Boot<'a> {
         // The trusted loader retains this Rust value, its map and its DTB.
         let loader = unsafe { input.cast::<Loader<'a>>().as_ref() }?;
         let map = loader.map;
-        // EFI_MEMORY_DESCRIPTOR v1 has a 40-byte prefix and 8-byte alignment.
-        if map.version != 1
-            || map.stride < 40
-            || !map.stride.is_multiple_of(8)
-            || map.descriptors.is_empty()
-            || !map.descriptors.as_ptr().addr().is_multiple_of(8)
-            || !map.descriptors.len().is_multiple_of(map.stride)
-        {
+        if !map.valid() {
             return None;
         }
         let device_tree = match loader.device_tree {
@@ -55,7 +48,7 @@ impl<'a> Boot<'a> {
                 if bytes.len() < 40 || !map.contains_loader_data(start..end) {
                     return None;
                 }
-                let extent = unsafe { super::tree::extent(bytes.as_ptr().cast(), 0..0) }?;
+                let extent = unsafe { super::devicetree::extent(bytes.as_ptr().cast(), 0..0) }?;
                 if extent.end != end {
                     return None;
                 }

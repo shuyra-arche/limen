@@ -1,12 +1,12 @@
 //! Non-secure EL1 minor startup for an identity-mapped image.
-use crate::metal::minor::{self, Minor, StartError};
+use crate::metal::generic::minor::{self, Minor, StartError};
 use core::{
     arch::{asm, naked_asm},
     cell::UnsafeCell,
     mem::offset_of,
 };
 
-use super::super::firmware::psci::Conduit;
+use crate::metal::generic::firmware::psci::Conduit;
 #[derive(Clone, Copy)]
 pub enum Startup {
     Psci(Conduit),
@@ -119,7 +119,7 @@ unsafe extern "C" fn minor(slot: *const Minor) -> ! {
         state = const minor::STATE_OFFSET,
         published = const minor::PUBLISHED,
         entered = const minor::ENTERED,
-        vectors = sym super::start::vectors,
+        vectors = sym super::major::vectors,
         arrive = sym minor::arrive,
     )
 }

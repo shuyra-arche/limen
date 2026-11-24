@@ -17,8 +17,9 @@ places its 16 KiB ordinary stack and separate 4 KiB trap stack outside BSS.
 The linker still supplies the final ELF image bounds used for DTB overlap
 checks. The x86 and Arm entries use 32 KiB ordinary stacks.
 
-The active boot protocol supplies early services. OpenSBI images probe SBI
-debug console and system reset support. UEFI images pass a static table of
+The active boot protocol supplies early services. OpenSBI images probe SBI debug console and system reset once during
+admission and publish their callbacks for subsequent use. An early RV64 trap
+probes directly because the vector is live before BSS initialization. UEFI images pass a static table of
 post-exit output and shutdown operations to `boot::major`. Either operation
 can be absent. The kernel stores the selected operations for use on the major
 and minor CPUs. Boot Services calls must finish before ExitBootServices.
@@ -93,7 +94,7 @@ user traps and calls require separate implementation and verification.
 
 Each architecture implements major and minor CPU startup under `metal/<arch>/boot/`.
 The common gate uses `metal::boot` to check the selected implementation.
-Declare `major` in `boot/start.rs` and `minor` in `boot/minor.rs` as Rust naked functions, with its firmware or loader ABI. Put the instructions and
+Declare `major` in `boot/major.rs` and `minor` in `boot/minor.rs` as Rust naked functions, with its firmware or loader ABI. Put the instructions and
 operands directly in `naked_asm!`. Export fixed linker or vector symbols
 from their Rust definitions and set hardware-required alignment on the
 function. Use `sym` for Rust-owned
@@ -102,8 +103,11 @@ image and section boundaries. The platform image supplies any board-specific dia
 resources. The QEMU platform images live under `server/tests/target/entry/platforms/`.
 The kernel builds once per target architecture. Metal implements CPU mechanisms
 and firmware interfaces.
-UEFI map and loader types live in `metal/firmware/uefi.rs`. SBI and PSCI
-live under their respective architecture’s `firmware/`.
+Shared stacks, minor launch state, device-tree header validation, diagnostic
+formatting, boot service publication and allocator code live under
+`metal/generic/`. Its `firmware/` directory owns UEFI handoff types, RV64 SBI
+services and the AArch64 PSCI conduit. Target selection enables the applicable
+firmware instructions.
 
 The q35 and AArch64 virt diagnostic images share a UEFI loader. OVMF loads
 `EFI/BOOT/BOOTX64.EFI` on q35 and AAVMF loads `EFI/BOOT/BOOTAA64.EFI` on

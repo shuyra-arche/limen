@@ -1,7 +1,5 @@
-mod start;
-pub use start::major;
-
-pub(crate) const REQUIRES_DIAGNOSTICS: bool = false;
+mod major;
+pub use major::major;
 
 use core::arch::{asm, naked_asm};
 

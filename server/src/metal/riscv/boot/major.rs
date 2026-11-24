@@ -1,6 +1,6 @@
 //! OpenSBI enters the primary with (hart, DTB) and a secondary with (hart, descriptor).
 use super::{TRAP_STACK, TrapStack};
-use crate::metal::stack::{STACK, Stack};
+use crate::metal::generic::stack::{STACK, Stack};
 use core::arch::naked_asm;
 
 // Both entries establish supervisor state before using either stack.
@@ -73,7 +73,7 @@ pub(super) unsafe extern "C" fn trap() -> ! {
 }
 
 extern "C" fn report_trap(cause: usize, pc: usize, value: usize, stack: usize) -> ! {
-    super::services().reject(format_args!(
+    crate::metal::generic::firmware::sbi::services().reject(format_args!(
         "FAIL Limen boot trap: cause={cause:#x} pc={pc:#x} value={value:#x} stack={stack:#x}\n"
     ))
 }
