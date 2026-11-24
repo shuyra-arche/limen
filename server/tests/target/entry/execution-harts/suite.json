@@ -1,0 +1,25 @@
+{
+  "id": "kernel-execution-harts",
+  "profiles": ["debug", "release"],
+  "harts": [4],
+  "sources": [
+    "server/src/**",
+    "server/build.rs",
+    "server/link.x",
+    "server/Cargo.toml",
+    "Cargo.toml",
+    "Cargo.lock",
+    ".cargo/config.toml"
+  ],
+  "run": {
+    "kind": "qemu",
+    "kernel": "kernel-execution-harts",
+    "expects": [
+      "PASS kernel-execution-harts active=2 fifo=1 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1"
+    ],
+    "distinct": {
+      "pattern": "(?m)^OBSERVED kernel-execution-harts hart=([0-9]+)\\r?$",
+      "count": 2
+    }
+  }
+}

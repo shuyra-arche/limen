@@ -1,6 +1,18 @@
 use core::arch::{asm, global_asm};
 
-global_asm!(include_str!("start.S"));
+mod secondary;
+
+pub use secondary::Secondary;
+
+global_asm!(
+    include_str!("start.S"),
+    secondary_state = const secondary::STATE_OFFSET,
+    secondary_published = const secondary::PUBLISHED,
+    secondary_entered = const secondary::ENTERED,
+    secondary_hart = const secondary::HART_OFFSET,
+    secondary_stack = const secondary::STACK_OFFSET,
+    secondary_trap_stack = const secondary::TRAP_STACK_OFFSET,
+);
 
 unsafe extern "C" {
     static _kernel_base: u8;
@@ -11,6 +23,23 @@ unsafe extern "C" {
 
 /// Checks the state established by the assembly entry without changing translation.
 pub(crate) fn established() -> bool {
+    established_on(primary_trap_stack())
+}
+
+pub(crate) fn primary_trap_stack() -> usize {
+    (&raw const _trap_stack_end).addr()
+}
+
+/// Trusted firmware identity retained in the kernel's ABI-reserved register.
+pub(crate) fn current_hart() -> usize {
+    let hart;
+    // A resumed continuation may run on another hart, so keep this read
+    // ordered with calls that transfer its context.
+    unsafe { asm!("mv {}, tp", out(reg) hart, options(nostack)) };
+    hart
+}
+
+pub(crate) fn established_on(trap_stack: usize) -> bool {
     let (status, interrupt_enable, translation, vector, scratch): (
         usize,
         usize,
@@ -37,7 +66,7 @@ pub(crate) fn established() -> bool {
         && interrupt_enable == 0
         && translation == 0
         && vector == (&raw const _limen_early_trap).addr()
-        && scratch == (&raw const _trap_stack_end).addr()
+        && scratch == trap_stack
 }
 
 pub(crate) fn image() -> core::ops::Range<usize> {

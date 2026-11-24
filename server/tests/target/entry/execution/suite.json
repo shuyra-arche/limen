@@ -1,0 +1,20 @@
+{
+  "id": "kernel-execution",
+  "profiles": ["debug", "release"],
+  "harts": [1],
+  "sources": [
+    "server/src/**",
+    "server/build.rs",
+    "server/link.x",
+    "server/Cargo.toml",
+    "Cargo.toml",
+    ".cargo/config.toml"
+  ],
+  "run": {
+    "kind": "qemu",
+    "kernel": "kernel-execution",
+    "expects": [
+      "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1 rejected_before_occupy=1 dormant_reaped=1"
+    ]
+  }
+}

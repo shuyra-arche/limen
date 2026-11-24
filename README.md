@@ -4,12 +4,16 @@ Limen is the Shuyra kernel. This development revision exposes the trusted RV64
 boot prefix for OpenSBI. It establishes a boot stack and an emergency trap
 stack, clears BSS, checks the supervisor handoff and device-tree header, and
 passes the firmware facts to the trusted platform image. The image owns board
-discovery and the next step after this handoff.
+discovery and supplies resident stacks for cooperative Kernel Unit execution.
+A Unit can yield, resume its continuation and return an end value. Room
+releases the execution occupancy after Metal confirms the leave. The trusted
+image can start one secondary Hart and opt a Unit into resuming on either
+participating Hart.
 
 Read [document-limen](https://github.com/shuyra-arche/document-limen) for the
 design and [Limen documentation](docs/README.md) for the implemented boundary.
 The `kernel` package lives in [server/](server/). Its [test guide](server/tests/README.md)
-contains the QEMU boot scenario.
+contains the QEMU boot and execution scenarios.
 
 ## Build and test
 
