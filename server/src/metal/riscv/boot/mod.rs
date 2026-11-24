@@ -1,3 +1,4 @@
+use crate::metal::generic::stack::Stack;
 use core::arch::asm;
 
 mod major;
@@ -74,4 +75,19 @@ pub(crate) fn park() -> ! {
         unsafe { asm!("wfi", options(nomem, nostack)) };
     }
 }
-pub use minor::Startup;
+pub(crate) use crate::metal::generic::firmware::sbi as firmware;
+pub(crate) mod interface {
+    pub use super::minor::Startup;
+}
+
+pub(crate) const STACK_BYTES: usize = 16 * 1024;
+#[unsafe(link_section = ".limen.boot.stack")]
+pub(in crate::metal) static mut STACK: Stack = Stack::new();
+
+pub(crate) fn stack_pointer() -> usize {
+    let sp: usize;
+    unsafe { asm!("mv {}, sp", out(reg) sp, options(nomem, nostack)) };
+    sp
+}
+
+pub type DeliveryError = core::convert::Infallible;

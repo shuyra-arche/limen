@@ -1,6 +1,6 @@
 //! OpenSBI enters the primary with (hart, DTB) and a secondary with (hart, descriptor).
-use super::{TRAP_STACK, TrapStack};
-use crate::metal::generic::stack::{STACK, Stack};
+use super::{STACK, TRAP_STACK, TrapStack};
+use crate::metal::generic::stack::Stack;
 use core::arch::naked_asm;
 
 // Both entries establish supervisor state before using either stack.

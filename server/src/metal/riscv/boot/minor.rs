@@ -5,9 +5,14 @@ use core::arch::naked_asm;
 pub enum Startup {
     Sbi,
 }
-pub(crate) struct MinorContext;
+// The exception stack is private to this CPU and lives inside its resident record.
+const TRAP_BYTES: usize = 4096;
+#[repr(C, align(16))]
+pub(crate) struct MinorContext(core::cell::UnsafeCell<[core::mem::MaybeUninit<u8>; TRAP_BYTES]>);
 pub(crate) const fn minor_context() -> MinorContext {
-    MinorContext
+    MinorContext(core::cell::UnsafeCell::new(
+        [core::mem::MaybeUninit::uninit(); TRAP_BYTES],
+    ))
 }
 
 pub(crate) unsafe fn wake_minor(
@@ -42,7 +47,8 @@ unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
         "ld t0, {hart}(a1)",
         "bne a0, t0, 3f",
         "ld sp, {stack}(a1)",
-        "ld t0, {trap_stack}(a1)",
+        "li t0, {trap_top}",
+        "add t0, a1, t0",
         "csrw sscratch, t0",
         "tail {loaded}",
         "3: wfi",
@@ -53,7 +59,21 @@ unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
         entered = const minor::ENTERED,
         hart = const minor::HART_OFFSET,
         stack = const minor::STACK_OFFSET,
-        trap_stack = const minor::TRAP_STACK_OFFSET,
+        trap_top = const core::mem::offset_of!(minor::Minor, context) + TRAP_BYTES,
         loaded = sym minor::arrive,
     );
+}
+
+impl minor::Minor {
+    pub(crate) fn trap_stack(&self) -> usize {
+        self.context
+            .0
+            .get()
+            .cast::<u8>()
+            .wrapping_add(TRAP_BYTES)
+            .addr()
+    }
+    pub(in crate::metal) fn established(&self) -> bool {
+        super::established_on(self.trap_stack())
+    }
 }

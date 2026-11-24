@@ -1,6 +1,4 @@
 use super::FirmwareMap;
-#[cfg(not(target_arch = "riscv64"))]
-use super::Loader;
 use core::ops::Range;
 
 /// Facts admitted on the major CPU. These carry no allocation authority.
@@ -23,43 +21,15 @@ impl<'a> Boot<'a> {
         self.firmware_map
     }
 
-    #[cfg(target_arch = "riscv64")]
-    pub(super) unsafe fn admit(hart: usize, input: *const ()) -> Option<Self> {
-        let tree = unsafe { super::devicetree::extent(input.cast(), crate::metal::boot::image()) }?;
-        Some(Self {
-            hart,
-            device_tree: Some(tree),
-            firmware_map: None,
-        })
-    }
-
-    #[cfg(not(target_arch = "riscv64"))]
-    pub(super) unsafe fn admit(hart: usize, input: *const ()) -> Option<Self> {
-        // The trusted loader retains this Rust value, its map and its DTB.
-        let loader = unsafe { input.cast::<Loader<'a>>().as_ref() }?;
-        let map = loader.map;
-        if !map.valid() {
-            return None;
-        }
-        let device_tree = match loader.device_tree {
-            Some(bytes) => {
-                let start = bytes.as_ptr().addr();
-                let end = start.checked_add(bytes.len())?;
-                if bytes.len() < 40 || !map.contains_loader_data(start..end) {
-                    return None;
-                }
-                let extent = unsafe { super::devicetree::extent(bytes.as_ptr().cast(), 0..0) }?;
-                if extent.end != end {
-                    return None;
-                }
-                Some(extent)
-            }
-            None => None,
-        };
-        Some(Self {
+    pub(crate) fn new(
+        hart: usize,
+        device_tree: Option<Range<usize>>,
+        firmware_map: Option<FirmwareMap<'a>>,
+    ) -> Self {
+        Self {
             hart,
             device_tree,
-            firmware_map: Some(map),
-        })
+            firmware_map,
+        }
     }
 }

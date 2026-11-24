@@ -1,16 +1,13 @@
-#[cfg(target_arch = "aarch64")]
-pub(crate) mod aarch64;
 pub(crate) mod generic;
-#[cfg(target_arch = "riscv64")]
-pub(crate) mod riscv;
-#[cfg(target_arch = "x86_64")]
-pub(crate) mod x86_64;
 
-#[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64 as arch;
-#[cfg(target_arch = "riscv64")]
-pub(crate) use riscv as arch;
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64 as arch;
+#[path = "x86_64/mod.rs"]
+pub(crate) mod arch;
+#[cfg(target_arch = "aarch64")]
+#[path = "aarch64/mod.rs"]
+pub(crate) mod arch;
+#[cfg(target_arch = "riscv64")]
+#[path = "riscv/mod.rs"]
+pub(crate) mod arch;
 
 pub(crate) use arch::boot;

@@ -201,3 +201,9 @@ unsafe extern "sysv64" fn finish(hart: usize, slot: &Minor) -> ! {
     unsafe { asm!("lidt [{}]",in(reg) &idtr,options(nostack,preserves_flags)) };
     minor::arrive(hart, slot)
 }
+
+impl Minor {
+    pub(in crate::metal) fn established(&self) -> bool {
+        super::established()
+    }
+}

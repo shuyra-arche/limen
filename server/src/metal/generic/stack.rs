@@ -1,18 +1,16 @@
 //! Image-owned, exclusively reserved storage for the primary boot CPU.
 use core::ops::Range;
 
-#[cfg(target_arch = "riscv64")]
-const BYTES: usize = 16 * 1024;
-#[cfg(not(target_arch = "riscv64"))]
-const BYTES: usize = 32 * 1024;
+use crate::metal::boot::{STACK, STACK_BYTES, stack_pointer};
 
 #[repr(C, align(16))]
-pub(in crate::metal) struct Stack([u8; BYTES]);
+pub(in crate::metal) struct Stack([u8; STACK_BYTES]);
 
-// RV64 clears BSS after selecting this stack. Its linker places the reservation
-// outside the cleared interval and preserves the firmware image's linker symbols.
-#[cfg_attr(target_arch = "riscv64", unsafe(link_section = ".limen.boot.stack"))]
-pub(in crate::metal) static mut STACK: Stack = Stack([0; BYTES]);
+impl Stack {
+    pub(in crate::metal) const fn new() -> Self {
+        Self([0; STACK_BYTES])
+    }
+}
 
 /// Ordinary stack reservation of the primary boot CPU.
 pub fn stack_range() -> Range<usize> {
@@ -20,21 +18,6 @@ pub fn stack_range() -> Range<usize> {
     start..start + size_of::<Stack>()
 }
 
-/// Read the hardware SP at the admission check. Taking the address of a Rust
-/// local would leave the result dependent on how the compiler places it.
-pub(crate) fn pointer() -> usize {
-    let sp: usize;
-    unsafe {
-        #[cfg(target_arch = "riscv64")]
-        core::arch::asm!("mv {}, sp", out(reg) sp, options(nomem, nostack));
-        #[cfg(target_arch = "aarch64")]
-        core::arch::asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags));
-        #[cfg(target_arch = "x86_64")]
-        core::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags));
-    }
-    sp
-}
-
 pub(crate) fn active() -> bool {
-    stack_range().contains(&pointer())
+    stack_range().contains(&stack_pointer())
 }

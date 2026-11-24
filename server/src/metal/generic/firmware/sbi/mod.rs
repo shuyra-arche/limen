@@ -72,7 +72,7 @@ pub(crate) fn services() -> Services {
     }
 }
 
-pub(crate) fn install() {
+pub(crate) fn services_on_entry() -> &'static Services {
     let available = services();
     if available.output.is_none() || available.reset.is_none() {
         available.reject(format_args!(
@@ -80,4 +80,15 @@ pub(crate) fn install() {
         ));
     }
     SERVICES.install();
+    &SERVICES
+}
+
+pub(crate) unsafe fn admit(
+    hart: usize,
+    input: *const (),
+) -> Option<crate::entry::boot::Boot<'static>> {
+    let tree = unsafe {
+        crate::metal::generic::devicetree::extent(input.cast(), crate::metal::boot::image())
+    }?;
+    Some(crate::entry::boot::Boot::new(hart, Some(tree), None))
 }

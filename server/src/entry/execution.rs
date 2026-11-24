@@ -22,7 +22,7 @@ use crate::{
         sync::{Guard, Lock},
         unit::Units,
     },
-    metal::riscv::{
+    metal::arch::{
         boot as hardware,
         execution::{Hart, LeaveReceipt, LocalHart},
     },

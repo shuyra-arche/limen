@@ -1,8 +1,6 @@
+use super::STACK;
 use super::install;
-use crate::{
-    entry::boot::Loader,
-    metal::generic::stack::{STACK, Stack},
-};
+use crate::{entry::boot::Loader, metal::generic::stack::Stack};
 use core::arch::naked_asm;
 
 /// Transfer to the kernel stack and install fail-stop interrupt gates.

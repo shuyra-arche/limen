@@ -123,3 +123,9 @@ unsafe extern "C" fn minor(slot: *const Minor) -> ! {
         arrive = sym minor::arrive,
     )
 }
+
+impl Minor {
+    pub(in crate::metal) fn established(&self) -> bool {
+        super::established()
+    }
+}

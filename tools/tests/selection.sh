@@ -46,7 +46,14 @@ change server/src/basis/room.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts"]' >/dev/null
 change server/src/entry/boot/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/generic/firmware/uefi.rs
+change server/src/metal/generic/firmware/uefi/mod.rs
+[[ $(boards) == 'q35 virt' ]]
+bash "$checks" . "$base" | jq -e '.rv64 == false and .manifests == []' >/dev/null
+change server/src/metal/generic/firmware/uefi/loader.rs
+[[ $(boards) == 'q35 virt' ]]
+bash "$checks" . "$base" | jq -e '.rv64 == false and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+change server/src/metal/generic/firmware/map.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
 change server/src/entry/boot/handoff.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]

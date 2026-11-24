@@ -1,5 +1,6 @@
+use crate::metal::generic::stack::Stack;
 mod major;
-pub use major::major;
+pub(crate) use major::major as enter_major;
 
 use core::arch::{asm, naked_asm};
 
@@ -75,5 +76,20 @@ pub(crate) fn park() -> ! {
 }
 
 mod minor;
-pub use minor::Startup;
+pub(crate) use crate::metal::generic::firmware::uefi as firmware;
+pub(crate) mod interface {
+    pub use super::firmware::{Loader, major};
+    pub use super::minor::Startup;
+}
 pub(crate) use minor::{MinorContext, current_hart, minor_context, wake_minor};
+
+pub(crate) const STACK_BYTES: usize = 32 * 1024;
+pub(in crate::metal) static mut STACK: Stack = Stack::new();
+
+pub(crate) fn stack_pointer() -> usize {
+    let sp: usize;
+    unsafe { asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack)) };
+    sp
+}
+
+pub type DeliveryError = isize;

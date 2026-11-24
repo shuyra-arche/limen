@@ -15,14 +15,11 @@ pub enum StartError {
     Busy,
     /// No CPU owns this request. The slot may be retried.
     Rejected(isize),
-    #[cfg(target_arch = "x86_64")]
     /// A command reached hardware. The slot and trampoline remain reserved.
-    Unconfirmed(isize),
+    Unconfirmed(boot::DeliveryError),
 }
 
 const DISPATCH_BYTES: usize = 16 * 1024;
-#[cfg(target_arch = "riscv64")]
-const TRAP_BYTES: usize = 4 * 1024;
 
 #[repr(u32)]
 enum State {
@@ -50,8 +47,6 @@ impl<const SIZE: usize> Stack<SIZE> {
 struct Launch {
     hart: usize,
     stack: usize,
-    #[cfg(target_arch = "riscv64")]
-    trap_stack: usize,
     entry: fn(usize, usize) -> !,
     argument: usize,
 }
@@ -62,8 +57,6 @@ pub struct Minor {
     state: AtomicU32,
     launch: UnsafeCell<MaybeUninit<Launch>>,
     stack: Stack<DISPATCH_BYTES>,
-    #[cfg(target_arch = "riscv64")]
-    trap_stack: Stack<TRAP_BYTES>,
     pub(crate) context: boot::MinorContext,
 }
 
@@ -78,25 +71,14 @@ pub(in crate::metal) const HART_OFFSET: usize =
     offset_of!(Minor, launch) + offset_of!(Launch, hart);
 pub(in crate::metal) const STACK_OFFSET: usize =
     offset_of!(Minor, launch) + offset_of!(Launch, stack);
-#[cfg(target_arch = "riscv64")]
-pub(in crate::metal) const TRAP_STACK_OFFSET: usize =
-    offset_of!(Minor, launch) + offset_of!(Launch, trap_stack);
-
 impl Minor {
     pub const fn new() -> Self {
         Self {
             state: AtomicU32::new(State::Idle as u32),
             launch: UnsafeCell::new(MaybeUninit::uninit()),
             stack: Stack::new(),
-            #[cfg(target_arch = "riscv64")]
-            trap_stack: Stack::new(),
             context: boot::minor_context(),
         }
-    }
-
-    #[cfg(target_arch = "riscv64")]
-    pub(crate) fn trap_stack(&self) -> usize {
-        self.trap_stack.top()
     }
 
     /// Returns whether the target CPU has installed and verified its startup state.
@@ -123,7 +105,7 @@ impl Minor {
         hart: usize,
         entry: fn(usize, usize) -> !,
         argument: usize,
-        method: boot::Startup,
+        method: boot::interface::Startup,
     ) -> Result<(), StartError> {
         if hart == boot::current_hart() {
             return Err(StartError::Busy);
@@ -140,8 +122,6 @@ impl Minor {
             self.launch.get().write(MaybeUninit::new(Launch {
                 hart,
                 stack: self.stack.top(),
-                #[cfg(target_arch = "riscv64")]
-                trap_stack: self.trap_stack(),
                 entry,
                 argument,
             }));
@@ -164,14 +144,11 @@ impl Default for Minor {
 
 pub(crate) extern "C" fn arrive(hart: usize, minor: &Minor) -> ! {
     let launch = unsafe { (&*minor.launch.get()).assume_init_ref() };
-    let sp = crate::metal::generic::stack::pointer();
+    let sp = boot::stack_pointer();
     assert!(
         hart == launch.hart && hart == boot::current_hart() && minor.stack_range().contains(&sp)
     );
-    #[cfg(target_arch = "riscv64")]
-    assert!(boot::established_on(launch.trap_stack));
-    #[cfg(not(target_arch = "riscv64"))]
-    assert!(boot::established());
+    assert!(minor.established());
     minor.state.store(State::Ready as u32, Ordering::Release);
     (launch.entry)(hart, launch.argument)
 }

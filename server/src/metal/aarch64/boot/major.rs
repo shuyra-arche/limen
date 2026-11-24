@@ -1,7 +1,5 @@
-use crate::{
-    entry::boot::Loader,
-    metal::generic::stack::{STACK, Stack},
-};
+use super::STACK;
+use crate::{entry::boot::Loader, metal::generic::stack::Stack};
 use core::arch::naked_asm;
 
 #[unsafe(naked)]

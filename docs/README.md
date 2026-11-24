@@ -106,8 +106,10 @@ and firmware interfaces.
 Shared stacks, minor launch state, device-tree header validation, diagnostic
 formatting, boot service publication and allocator code live under
 `metal/generic/`. Its `firmware/` directory owns UEFI handoff types, RV64 SBI
-services and the AArch64 PSCI conduit. Target selection enables the applicable
-firmware instructions.
+services and the AArch64 PSCI conduit. Each CPU backend explicitly selects its firmware adapter. The adapter supplies
+early services and admits its input at the common gate. Keep architecture
+selection on module declarations. Put register reads, exception-stack storage
+and verification of installed CPU state in the selected backend.
 
 The q35 and AArch64 virt diagnostic images share a UEFI loader. OVMF loads
 `EFI/BOOT/BOOTX64.EFI` on q35 and AAVMF loads `EFI/BOOT/BOOTAA64.EFI` on

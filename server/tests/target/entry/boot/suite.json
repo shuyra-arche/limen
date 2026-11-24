@@ -10,7 +10,7 @@
     "server/src/metal/mod.rs",
     "server/src/metal/generic/mod.rs",
     "server/src/metal/generic/firmware/mod.rs",
-    "server/src/metal/generic/firmware/uefi.rs",
+    "server/src/metal/generic/firmware/map.rs",
     "server/src/entry/boot/**",
     "server/src/metal/riscv/mod.rs",
     "server/src/metal/riscv/boot/**",

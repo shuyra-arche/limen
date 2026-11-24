@@ -38,9 +38,13 @@ fn rejects_impossible_structure_lengths_and_overlapping_blocks() {
     assert!(!admitted(16, 48, 8, 40));
 }
 
-#[path = "../../../src/metal/generic/firmware/uefi.rs"]
-mod uefi;
-use uefi::{FirmwareMap, Loader};
+#[path = "../../../src/metal/generic/firmware/uefi/loader.rs"]
+mod loader;
+use handoff::Boot;
+#[path = "../../../src/metal/generic/firmware/map.rs"]
+mod map;
+use loader::Loader;
+use map::FirmwareMap;
 #[path = "../../../src/entry/boot/handoff.rs"]
 mod handoff;
 
@@ -67,7 +71,7 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
             },
             device_tree: tree,
         };
-        unsafe { handoff::Boot::admit(7, (&raw const loader).cast()) }.map(|b| {
+        loader.admit(7).map(|b| {
             assert_eq!(b.hart(), 7);
             assert_eq!(b.firmware_map().unwrap().stride, stride);
             b.device_tree()
