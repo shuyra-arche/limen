@@ -15,6 +15,10 @@ pub(crate) struct Storage {
     context: Context,
 }
 
+// Stack and saved registers are accessed only for a reserved Unit slot.
+// Room publishes exactly one active Hart per slot and releases it on leave.
+unsafe impl Sync for Storage {}
+
 impl Storage {
     const fn new() -> Self {
         Self {

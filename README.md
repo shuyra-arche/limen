@@ -5,8 +5,10 @@ boot prefix for OpenSBI. It establishes a boot stack and an emergency trap
 stack, clears BSS, checks the supervisor handoff and device-tree header, and
 passes the firmware facts to the trusted platform image. The image owns board
 discovery and supplies resident stacks for cooperative Kernel Unit execution.
-On the Boot Hart, a Unit can yield, resume its continuation and return an end
-value. Room releases the execution occupancy after Metal confirms the leave.
+A Unit can yield, resume its continuation and return an end value. Room
+releases the execution occupancy after Metal confirms the leave. The trusted
+image can start one secondary Hart and opt a Unit into resuming on either
+participating Hart.
 
 Read [document-limen](https://github.com/shuyra-arche/document-limen) for the
 design and [Limen documentation](docs/README.md) for the implemented boundary.

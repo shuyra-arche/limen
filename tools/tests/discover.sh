@@ -5,7 +5,10 @@ set -euo pipefail
 root="$(cd "${1:-.}" && pwd)"
 base="${2:-}"
 harts="${3:-1}"
-[[ "$harts" == 1 || "$harts" == 4 ]] || { echo "invalid Hart count" >&2; exit 1; }
+case "$harts" in
+    1|4|declared) ;;
+    *) echo "invalid Hart selection" >&2; exit 1 ;;
+esac
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 
 changed=()
@@ -36,9 +39,9 @@ while IFS= read -r -d '' file; do
     id="$(jq -er '.id | select(test("^[a-z0-9-]+$"))' "$file")"
     [[ ! -v "ids[$id]" ]] || { echo "duplicate suite id: $id" >&2; exit 1; }
     ids["$id"]=1
-    jq -e '.profiles | type == "array" and length > 0' "$file" >/dev/null
+    jq -e '.profiles | type == "array" and length > 0 and all(.[]; . == "debug" or . == "release")' "$file" >/dev/null
     jq -e '.sources | type == "array" and length > 0' "$file" >/dev/null
-    jq -e --argjson hart "$harts" '.harts | index($hart) != null' "$file" >/dev/null || continue
+    jq -e '.harts | type == "array" and length > 0 and all(.[]; . == 1 or . == 4)' "$file" >/dev/null
 
     selected=true
     if [[ "$filter" == true ]]; then
@@ -59,14 +62,13 @@ while IFS= read -r -d '' file; do
     fi
     [[ "$selected" == true ]] || continue
 
-    while IFS= read -r profile; do
-        [[ "$profile" == debug || "$profile" == release ]] || {
-            echo "invalid profile in $file" >&2
-            exit 1
-        }
-        jobs+=("$(jq -cn --arg suite "$relative" --arg id "$id" \
-            --arg profile "$profile" '{suite:$suite,id:$id,profile:$profile}')")
-    done < <(jq -r '.profiles[]' "$file")
+    suite_jobs="$(jq -c --arg suite "$relative" --arg id "$id" --arg selection "$harts" '
+        (.harts | unique[]) as $hart
+        | select($selection == "declared" or ($hart | tostring) == $selection)
+        | .profiles[] as $profile
+        | {suite: $suite, id: $id, profile: $profile, harts: $hart}
+    ' "$file")"
+    [[ -z "$suite_jobs" ]] || jobs+=("$suite_jobs")
 done < <(find "$root/server/tests/target" -name suite.json -type f -print0 | sort -z)
 
 if (( ${#jobs[@]} == 0 )); then

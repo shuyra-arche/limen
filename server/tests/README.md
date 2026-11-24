@@ -16,7 +16,8 @@ The Boot owner keeps its platform image and assertions in [target/entry/boot/](t
 The target runner archives the candidate Git revision. Commit changes before
 starting verification so the report identifies the source it actually ran.
 Set `QEMU_RISCV64` to QEMU 10.0.x and `QEMU_OPENSBI` to OpenSBI firmware
-with the debug console and system reset extensions.
+with the debug console and system reset extensions. The cross-Hart scenario
+also uses the hart state management extension.
 
 ```sh
 bash tools/tests/discover.sh "$PWD" "" 1
@@ -29,7 +30,8 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
 The scenario follows the production firmware entry and waits for the platform
 image's boot assertions and actual QEMU termination. Serial output and the
 runner verdict are preserved with the candidate revision. The Target workflow
-discovers owner-local `suite.json` declarations and uploads their evidence.
+runs affected owner-local `suite.json` scenarios at their declared Hart counts
+and uploads their evidence. Manual workflow runs select one Hart count.
 Hardware execution and later runtime contracts require separate verification.
 
 ## RV64 Kernel Unit execution
@@ -47,3 +49,17 @@ The guest verifies separate stacks in the shared Kernel Nest, Yield and resume,
 exact leave receipts, ending and reaping, and reuse with a new identity. It
 also exercises rejected dispatch, Busy and stale identity paths on the same
 production entry and firmware.
+
+Run [target/entry/execution-harts/](target/entry/execution-harts/) to exercise
+two participating Harts on a four-Hart QEMU machine.
+
+```sh
+server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
+  --suite server/tests/target/entry/execution-harts --kernel "$PWD" \
+  --output /tmp/limen-execution-harts --profile debug --harts 4
+```
+
+The guest starts the secondary through OpenSBI and coordinates the two Harts
+through a real contention and handoff. It verifies independent occupancies,
+rejection before the original leave is settled, continuation migration after
+settlement, and rejection of a late original occupancy after re-entry.

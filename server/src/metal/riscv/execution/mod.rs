@@ -3,6 +3,7 @@
 use core::{
     arch::{asm, global_asm},
     cell::{Cell, UnsafeCell},
+    marker::PhantomData,
     mem::offset_of,
 };
 
@@ -90,6 +91,15 @@ pub(crate) struct Hart {
     state: Cell<State>,
 }
 
+// Only the LocalHart for the corresponding physical Hart accesses the
+// dispatcher and state. A suspended Unit never uses its old LocalHart again.
+unsafe impl Sync for Hart {}
+
+pub(crate) struct LocalHart<'a> {
+    hart: &'a Hart,
+    local: PhantomData<*mut ()>,
+}
+
 impl Hart {
     pub(crate) const fn new() -> Self {
         Self {
@@ -98,15 +108,25 @@ impl Hart {
         }
     }
 
-    pub(crate) fn supported() -> bool {
+    pub(crate) fn supported(trap_stack: usize) -> bool {
         let status: usize;
         unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nomem, nostack)) };
         const EXTENSIONS: usize = (3 << 13) | (3 << 9);
-        boot::established() && status & EXTENSIONS == 0
+        boot::established_on(trap_stack) && status & EXTENSIONS == 0
     }
 
+    /// The caller has established that this is the current physical Hart.
+    pub(crate) unsafe fn local(&self) -> LocalHart<'_> {
+        LocalHart {
+            hart: self,
+            local: PhantomData,
+        }
+    }
+}
+
+impl LocalHart<'_> {
     pub(crate) fn running(&self) -> Option<Occupancy> {
-        match self.state.get() {
+        match self.hart.state.get() {
             State::Running(occupancy) => Some(occupancy),
             _ => None,
         }
@@ -120,23 +140,23 @@ impl Hart {
         context: &Context,
         argument: *const (),
     ) {
-        assert!(matches!(self.state.get(), State::Idle));
-        self.state.set(State::Running(occupancy));
-        unsafe { self.dispatcher.switch(context, argument) };
+        assert!(matches!(self.hart.state.get(), State::Idle));
+        self.hart.state.set(State::Running(occupancy));
+        unsafe { self.hart.dispatcher.switch(context, argument) };
         // The dispatcher is executing on its original stack again. The old
         // instruction and stack are saved but cannot execute without a new
         // Room occupancy.
-        self.state.set(State::Stopped(LeaveReceipt(occupancy)));
+        self.hart.state.set(State::Stopped(LeaveReceipt(occupancy)));
     }
 
     /// Requires invocation on the stack of this exact running occupancy.
     pub(crate) unsafe fn leave(&self, occupancy: Occupancy, context: &Context) {
         assert!(self.running() == Some(occupancy));
-        unsafe { context.switch(&self.dispatcher, core::ptr::null()) };
+        unsafe { context.switch(&self.hart.dispatcher, core::ptr::null()) };
     }
 
     pub(crate) fn stopped(&self) -> Option<LeaveReceipt> {
-        match self.state.get() {
+        match self.hart.state.get() {
             State::Stopped(receipt) => Some(receipt),
             _ => None,
         }
@@ -144,6 +164,6 @@ impl Hart {
 
     pub(crate) fn settle(&self, receipt: LeaveReceipt) {
         assert!(self.stopped().map(LeaveReceipt::occupancy) == Some(receipt.occupancy()));
-        self.state.set(State::Idle);
+        self.hart.state.set(State::Idle);
     }
 }

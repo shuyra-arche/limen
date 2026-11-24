@@ -1,19 +1,31 @@
-//! Trusted entry and handoff for the first Kernel Units on the Boot Hart.
+//! Trusted entry and handoff for cooperative Kernel Units in the Bare Nest.
 
-use core::cell::{RefCell, RefMut};
+use core::{
+    marker::PhantomData,
+    ptr,
+    sync::atomic::{
+        AtomicUsize,
+        Ordering::{Acquire, Release},
+    },
+};
 
 pub use crate::basis::{
     nest::Stacks,
     room::Occupancy,
     unit::{Error, Lifecycle, UnitId},
 };
+pub use crate::metal::riscv::boot::Secondary;
 use crate::{
     basis::{
         nest::{KernelNest, Storage},
         room::{Destination, Room},
+        sync::{Guard, Lock},
         unit::Units,
     },
-    metal::riscv::execution::{Hart, LeaveReceipt},
+    metal::riscv::{
+        boot as hardware,
+        execution::{Hart, LeaveReceipt, LocalHart},
+    },
 };
 
 use super::boot::{self, Boot};
@@ -23,41 +35,130 @@ type Entry = fn(&mut Current) -> u64;
 struct Binding {
     storage: &'static Storage,
     entry: Entry,
+    affinity: Option<usize>,
 }
 
-// This protection covers only the joint Unit/Room facts on the Boot Hart.
-// It cannot be held across a switch, and the scope never calls into a Unit.
 struct Control {
     units: Units<Binding>,
     room: Room,
+    launch: Option<Launch>,
 }
 
-/// Cooperative Kernel Unit execution in the Bare Kernel Nest. This owner
-/// and its continuations belong to the single Boot Hart.
+#[derive(Clone, Copy)]
+struct Launch {
+    hart: usize,
+    entry: fn(&'static Execution) -> !,
+}
+
+/// Cooperative execution on the Boot Hart and one optional secondary Hart.
 pub struct Execution {
-    control: RefCell<Control>,
+    control: Lock<Control>,
     nest: KernelNest,
-    hart: Hart,
+    primary: Hart,
+    primary_id: usize,
+    secondary: Hart,
+    secondary_id: AtomicUsize,
+    secondary_boot: Option<&'static Secondary>,
 }
 
 impl Execution {
     /// Consume the trusted handoff and provision the resident stack supply.
     pub fn new(boot: Boot, stacks: &'static mut Stacks) -> Result<Self, Error> {
-        if !Hart::supported() {
+        Self::establish(boot, stacks, None)
+    }
+
+    /// Provision the same Kernel Nest with an optional firmware-started Hart.
+    pub fn with_secondary(
+        boot: Boot,
+        stacks: &'static mut Stacks,
+        secondary: &'static Secondary,
+    ) -> Result<Self, Error> {
+        Self::establish(boot, stacks, Some(secondary))
+    }
+
+    fn establish(
+        boot: Boot,
+        stacks: &'static mut Stacks,
+        secondary: Option<&'static Secondary>,
+    ) -> Result<Self, Error> {
+        if hardware::current_hart() != boot.hart()
+            || !Hart::supported(hardware::primary_trap_stack())
+        {
             return Err(Error::Unsupported);
         }
         Ok(Self {
-            control: RefCell::new(Control {
+            control: Lock::new(Control {
                 units: Units::new(),
                 room: Room::new(boot.hart()),
+                launch: None,
             }),
             nest: KernelNest::bare(stacks),
-            hart: Hart::new(),
+            primary: Hart::new(),
+            primary_id: boot.hart(),
+            secondary: Hart::new(),
+            secondary_id: AtomicUsize::new(0),
+            secondary_boot: secondary,
         })
     }
 
-    fn control(&self) -> Result<RefMut<'_, Control>, Error> {
-        self.control.try_borrow_mut().map_err(|_| Error::Busy)
+    fn control(&self) -> Result<Guard<'_, Control>, Error> {
+        self.control.try_lock().ok_or(Error::Busy)
+    }
+
+    fn local(&self) -> Result<(usize, usize, LocalHart<'_>), Error> {
+        let id = hardware::current_hart();
+        if id == self.primary_id {
+            return Ok((id, hardware::primary_trap_stack(), unsafe {
+                self.primary.local()
+            }));
+        }
+        let secondary = self.secondary_id.load(Acquire);
+        if secondary != 0 && id == secondary - 1 {
+            let trap = self
+                .secondary_boot
+                .expect("resident secondary boot storage")
+                .trap_stack();
+            return Ok((id, trap, unsafe { self.secondary.local() }));
+        }
+        Err(Error::Unsupported)
+    }
+
+    /// Ask OpenSBI to start a Hart. It attaches on its own dispatcher and
+    /// trap stacks before calling the platform entry.
+    ///
+    /// # Safety
+    ///
+    /// The entry must be trusted supervisor code built for the Bare Nest.
+    /// It must preserve gp, tp, masked interrupts, disabled extensions and
+    /// the configured traps.
+    pub unsafe fn start_hart(
+        &'static self,
+        hart: usize,
+        entry: fn(&'static Execution) -> !,
+    ) -> Result<(), Error> {
+        let secondary = self.secondary_boot.ok_or(Error::Unsupported)?;
+        if hardware::current_hart() != self.primary_id
+            || !Hart::supported(hardware::primary_trap_stack())
+        {
+            return Err(Error::Unsupported);
+        }
+        if hart == self.primary_id {
+            return Err(Error::Busy);
+        }
+        hart.checked_add(1).ok_or(Error::Unsupported)?;
+        {
+            let mut control = self.control()?;
+            if control.launch.is_some() {
+                return Err(Error::Busy);
+            }
+            control.launch = Some(Launch { hart, entry });
+        }
+        let argument = ptr::from_ref(self).expose_provenance();
+        if let Err(error) = unsafe { secondary.start(hart, start_secondary, argument) } {
+            self.control.lock().launch = None;
+            return Err(Error::Firmware(error));
+        }
+        Ok(())
     }
 
     /// Construct a dormant Kernel Unit. Its entry's return value is its End.
@@ -66,66 +167,90 @@ impl Execution {
     ///
     /// The caller supplies a trusted supervisor entry whose compiler and
     /// callees fit the 16 KiB stack, preserve the established Bare and trap
-    /// configuration, and run with interrupts and FP/vector state disabled.
-    /// Any execution-local borrow must allow suspension at `yield_now`.
+    /// configuration and Hart-local registers, and run with interrupts and
+    /// FP/vector state disabled. Any local borrow must allow suspension at
+    /// `yield_now`. The Unit stays on the constructing Hart.
     pub unsafe fn create(&self, entry: Entry) -> Result<UnitId, Error> {
+        let (hart, _, _) = self.local()?;
+        self.create_unit(entry, Some(hart))
+    }
+
+    /// Construct a Unit eligible to resume on either attached Hart.
+    ///
+    /// # Safety
+    ///
+    /// The entry must satisfy `create` except for affinity. Every live value
+    /// at Yield must allow transfer to another Hart. The entry must release
+    /// Hart-local borrows and guards before Yield and reacquire local state
+    /// on the destination Hart.
+    pub unsafe fn create_migratable(&self, entry: Entry) -> Result<UnitId, Error> {
+        self.local()?;
+        self.create_unit(entry, None)
+    }
+
+    fn create_unit(&self, entry: Entry, affinity: Option<usize>) -> Result<UnitId, Error> {
         let mut control = self.control()?;
         let unit = control.units.vacant()?;
         let storage = self.nest.bind(unit.slot());
         // The vacant generation excludes every prior stack user.
         unsafe { storage.context().prepare(storage.stack_top(), start) };
-        control.units.publish(unit, Binding { storage, entry });
+        control.units.publish(
+            unit,
+            Binding {
+                storage,
+                entry,
+                affinity,
+            },
+        );
         Ok(unit)
     }
 
     pub fn submit(&self, unit: UnitId) -> Result<(), Error> {
         let mut control = self.control()?;
-        control.units.live(unit)?;
-        control.room.submit(unit)
+        let affinity = control.units.live(unit)?.affinity;
+        control.room.submit(unit, affinity)
     }
 
     /// Run one ready Unit until it yields or returns on its own stack.
     /// The original admission remains occupied until `vacate`.
     pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
-        if !Hart::supported() {
+        let (id, trap, hart) = self.local()?;
+        if !Hart::supported(trap) {
             return Err(Error::Unsupported);
         }
         let (occupancy, storage, entry) = {
             let mut control = self.control()?;
-            let Some(unit) = control.room.candidate()? else {
+            let Some(unit) = control.room.candidate(id)? else {
                 return Ok(None);
             };
             let binding = control.units.live(unit)?;
             let (storage, entry) = (binding.storage, binding.entry);
-            (control.room.occupy(unit)?, storage, entry)
+            (control.room.occupy(id, unit)?, storage, entry)
         };
         let start = Start {
             execution: self,
             entry,
         };
-        // No other Hart or interrupt can intervene between Occupy and entry.
-        // The first continuation copies Start before it can suspend.
-        unsafe {
-            self.hart
-                .enter(occupancy, storage.context(), (&raw const start).cast())
-        };
+        // Room retains this exact occupancy until this Hart completes the
+        // leave. The initial continuation copies Start before it can suspend.
+        unsafe { hart.enter(occupancy, storage.context(), (&raw const start).cast()) };
         Ok(Some(occupancy))
     }
 
     pub fn pending_leave(&self) -> Option<Occupancy> {
-        self.hart.stopped().map(LeaveReceipt::occupancy)
+        self.local().ok()?.2.stopped().map(LeaveReceipt::occupancy)
     }
 
     pub fn vacate(&self, occupancy: Occupancy) -> Result<(), Error> {
+        let (_, _, hart) = self.local()?;
         let mut control = self.control()?;
         control.room.on_hart(occupancy)?;
-        let receipt = self
-            .hart
+        let receipt = hart
             .stopped()
             .filter(|receipt| receipt.occupancy() == occupancy)
             .ok_or(Error::Busy)?;
         control.room.vacate(receipt)?;
-        self.hart.settle(receipt);
+        hart.settle(receipt);
         Ok(())
     }
 
@@ -134,16 +259,14 @@ impl Execution {
     }
 
     pub fn finish_end(&self, unit: UnitId) -> Result<(), Error> {
-        let binding = {
-            let mut control = self.control()?;
-            control.units.lifecycle(unit)?;
-            if control.room.admitted(unit) {
-                return Err(Error::Busy);
-            }
-            control.units.finish_end(unit)?
-        };
-        if let Some(binding) = binding {
-            // Room released the admission, including its last actual leave.
+        let mut control = self.control()?;
+        control.units.lifecycle(unit)?;
+        if control.room.admitted(unit) {
+            return Err(Error::Busy);
+        }
+        if let Some(binding) = control.units.finish_end(unit)? {
+            // Clear the old frame before another Hart can observe Ended
+            // and initialize the slot for a different generation.
             unsafe { binding.storage.context().retire() };
         }
         Ok(())
@@ -154,16 +277,20 @@ impl Execution {
     }
 
     fn leave(&self, unit: UnitId, end: Option<u64>) -> Result<(), Error> {
-        if !Hart::supported() {
+        let (_, trap, hart) = self.local()?;
+        if !Hart::supported(trap) {
             return Err(Error::Unsupported);
         }
-        let occupancy = self
-            .hart
+        let occupancy = hart
             .running()
             .filter(|active| active.unit() == unit)
             .ok_or(Error::Gone)?;
         let storage = {
-            let mut control = self.control()?;
+            let mut control = if end.is_some() {
+                self.control.lock()
+            } else {
+                self.control()?
+            };
             let storage = control.units.live(unit)?.storage;
             let destination = if end.is_some() {
                 Destination::Release
@@ -179,8 +306,9 @@ impl Execution {
             }
             storage
         };
-        // The caller owns this stack and published the exact leave request.
-        unsafe { self.hart.leave(occupancy, storage.context()) };
+        // No guard survives the transfer. On migration the returning call
+        // finishes without accessing the original Hart's local state.
+        unsafe { hart.leave(occupancy, storage.context()) };
         Ok(())
     }
 }
@@ -189,11 +317,17 @@ impl Execution {
 pub struct Current {
     execution: &'static Execution,
     unit: UnitId,
+    local: PhantomData<*mut ()>,
 }
 
 impl Current {
     pub fn id(&self) -> UnitId {
         self.unit
+    }
+
+    /// The physical Hart executing this continuation when called.
+    pub fn hart(&self) -> usize {
+        hardware::current_hart()
     }
 
     /// Yield the Hart. Success is returned after a new dispatch resumes this
@@ -211,13 +345,36 @@ struct Start {
 extern "C" fn start(argument: *const ()) -> ! {
     // On first entry this points to the suspended dispatcher's live Start.
     let Start { execution, entry } = unsafe { argument.cast::<Start>().read() };
-    let unit = execution
-        .hart
-        .running()
-        .expect("authorized Kernel Unit")
-        .unit();
-    let value = entry(&mut Current { execution, unit });
+    let (_, _, hart) = execution.local().expect("attached Hart");
+    let unit = hart.running().expect("authorized Kernel Unit").unit();
+    let value = entry(&mut Current {
+        execution,
+        unit,
+        local: PhantomData,
+    });
     let _ = execution.leave(unit, Some(value));
     boot::write("FAIL Limen execution: terminal continuation did not leave\n");
     boot::shutdown(false)
+}
+
+fn start_secondary(hart: usize, argument: usize) -> ! {
+    // The firmware launch holds a resident Execution for this callback.
+    let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
+    let secondary = execution
+        .secondary_boot
+        .expect("resident secondary boot storage");
+    assert_eq!(hardware::current_hart(), hart);
+    assert!(Hart::supported(secondary.trap_stack()));
+    let entry = {
+        let mut control = execution.control.lock();
+        let launch = control.launch.expect("reserved secondary launch");
+        assert_eq!(launch.hart, hart);
+        control
+            .room
+            .attach(hart)
+            .expect("reserved Room participation");
+        launch.entry
+    };
+    execution.secondary_id.store(hart + 1, Release);
+    entry(execution)
 }

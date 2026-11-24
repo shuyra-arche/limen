@@ -1,7 +1,4 @@
-.section .text._start,"ax"
-.balign 4
-.globl _start
-_start:
+.macro establish_supervisor
     csrci sstatus, 2
     csrw sie, zero
     # Fresh supervisor code has no saved FP or vector context.
@@ -11,6 +8,14 @@ _start:
     .option norelax
     la gp, __global_pointer$
     .option pop
+    mv tp, a0
+.endm
+
+.section .text._start,"ax"
+.balign 4
+.globl _start
+_start:
+    establish_supervisor
     la sp, _boot_stack_end
     la t0, _trap_stack_end
     csrw sscratch, t0
@@ -26,6 +31,35 @@ _start:
     j 1b
 2:
     tail limen_boot
+
+.section .text.secondary_boot,"ax"
+.balign 4
+.globl _limen_secondary_start
+_limen_secondary_start:
+    establish_supervisor
+    csrw sscratch, zero
+    la t0, _limen_early_trap
+    csrw stvec, t0
+
+    # Acquire the launch descriptor before reading its stack addresses.
+    addi t0, a1, {secondary_state}
+    li t1, {secondary_published}
+    li t2, {secondary_entered}
+4:
+    lr.w.aq t3, (t0)
+    bne t3, t1, 5f
+    sc.w t3, t2, (t0)
+    bnez t3, 4b
+
+    ld t0, {secondary_hart}(a1)
+    bne a0, t0, 5f
+    ld sp, {secondary_stack}(a1)
+    ld t0, {secondary_trap_stack}(a1)
+    csrw sscratch, t0
+    tail limen_secondary_boot
+5:
+    wfi
+    j 5b
 
 .section .text.boot,"ax"
 .balign 4

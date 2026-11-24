@@ -28,6 +28,7 @@ pub enum Error {
     Gone,
     State,
     Unsupported,
+    Firmware(isize),
 }
 
 enum State<Binding> {
