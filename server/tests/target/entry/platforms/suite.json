@@ -9,7 +9,8 @@
     "server/src/entry/mod.rs",
     "server/src/entry/boot/mod.rs",
     "server/src/metal/mod.rs",
-    "server/src/metal/stack.rs"
+    "server/src/metal/stack.rs",
+    "server/src/metal/console.rs"
   ],
   "run": {
     "kind": "board-boot",

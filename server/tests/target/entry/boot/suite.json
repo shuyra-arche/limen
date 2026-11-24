@@ -12,7 +12,9 @@
     "server/src/metal/riscv/mod.rs",
     "server/src/metal/riscv/boot/**",
     "server/src/metal/riscv/sbi/**",
-    "server/link.x"
+    "server/link.x",
+    "server/src/metal/console.rs",
+    "server/src/metal/stack.rs"
   ],
   "run": {
     "kind": "qemu",

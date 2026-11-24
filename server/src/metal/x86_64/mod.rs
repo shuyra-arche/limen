@@ -1,3 +1,24 @@
+use crate::metal::console::Services;
+#[cfg(feature = "qemu-q35")]
+mod diagnostic;
+
+pub(crate) type Continuation = extern "sysv64" fn(usize) -> !;
+pub(crate) const REQUIRES_DIAGNOSTICS: bool = false;
+
+pub(crate) fn services() -> Services {
+    #[cfg(feature = "qemu-q35")]
+    {
+        diagnostic::services()
+    }
+    #[cfg(not(feature = "qemu-q35"))]
+    {
+        Services {
+            output: None,
+            reset: None,
+        }
+    }
+}
+
 use super::stack::{STACK, Stack};
 use core::arch::{asm, naked_asm};
 
@@ -47,7 +68,7 @@ unsafe extern "sysv64" fn install(input: usize, next: extern "sysv64" fn(usize) 
         base: slots as usize,
     };
     unsafe { asm!("lidt [{}]", in(reg) &idtr, options(nostack, preserves_flags)) };
-    next(input)
+    crate::entry::boot::loaded(input, next)
 }
 
 static mut IDT: core::mem::MaybeUninit<[Gate; 256]> = core::mem::MaybeUninit::uninit();
@@ -79,4 +100,24 @@ pub unsafe extern "sysv64" fn enter(input: usize, next: extern "sysv64" fn(usize
         size = const size_of::<Stack>(),
         install = sym install,
     );
+}
+
+pub(crate) fn established() -> bool {
+    let mut idtr = Descriptor { limit: 0, base: 0 };
+    let (flags, cr0): (usize, usize);
+    let cs: u16;
+    unsafe {
+        asm!("sidt [{}]", in(reg) &mut idtr, options(nostack, preserves_flags));
+        asm!("pushfq", "pop {}", "mov {}, cr0", "mov {:x}, cs",
+             out(reg) flags, out(reg) cr0, out(reg) cs);
+    }
+    cs & 3 == 0
+        && cr0 & (1 << 31) != 0
+        && flags & (1 << 9) == 0
+        && idtr.limit as usize + 1 == size_of::<[Gate; 256]>()
+        && idtr.base == (&raw const IDT).addr()
+}
+
+pub(crate) fn park() -> ! {
+    stop()
 }

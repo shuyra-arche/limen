@@ -1,7 +1,7 @@
 //! Firmware calls required by the trusted boot prefix.
 
+use crate::metal::console::Services;
 use core::arch::asm;
-use core::fmt::{self, Write};
 
 mod probe;
 pub(crate) use probe::Extensions;
@@ -20,10 +20,9 @@ fn write_byte(byte: u8) -> bool {
 }
 
 /// End the trusted boot path through SBI system reset.
-pub fn shutdown(success: bool) -> ! {
+fn reset(success: bool) {
     // Shutdown with no reason (0) or system failure (1).
     let _ = call(SYSTEM_RESET, 0, 0, usize::from(!success), 0);
-    super::boot::park()
 }
 
 pub(super) fn start_hart(hart: usize, address: usize, opaque: usize) -> Result<(), isize> {
@@ -55,29 +54,10 @@ fn call(
     (error, value)
 }
 
-pub(super) fn reject(firmware: Extensions, message: fmt::Arguments<'_>) -> ! {
-    if firmware.console {
-        let _ = Console.write_fmt(message);
-    }
-    if firmware.reset {
-        shutdown(false);
-    }
-    super::boot::park()
-}
-
-/// Write an early diagnostic to the firmware debug console.
-pub fn write(message: &str) {
-    let _ = Console.write_str(message);
-}
-
-struct Console;
-
-impl Write for Console {
-    fn write_str(&mut self, message: &str) -> fmt::Result {
-        if message.bytes().all(write_byte) {
-            Ok(())
-        } else {
-            Err(fmt::Error)
-        }
+pub(crate) fn services() -> Services {
+    let available = extensions();
+    Services {
+        output: available.console.then_some(write_byte),
+        reset: available.reset.then_some(reset),
     }
 }

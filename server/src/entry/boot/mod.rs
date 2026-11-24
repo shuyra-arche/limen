@@ -18,17 +18,37 @@ mod handoff;
 #[cfg(target_arch = "riscv64")]
 mod tree;
 
-#[cfg(target_arch = "riscv64")]
-pub use crate::metal::riscv::sbi::{shutdown, write};
+pub use crate::metal::console::{Console, console, shutdown, write};
+pub use crate::metal::stack::stack_range;
+
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+pub use crate::metal::platform::enter;
 #[cfg(target_arch = "riscv64")]
 pub use handoff::Boot;
 
-#[cfg(target_arch = "aarch64")]
-pub use crate::metal::aarch64::enter;
-#[cfg(target_arch = "x86_64")]
-pub use crate::metal::x86_64::enter;
+use crate::metal::platform;
+use core::convert::Infallible;
 
-#[cfg(target_arch = "riscv64")]
-pub use crate::metal::riscv::boot::stack_range;
+/// Every firmware entry reaches this gate after Metal installs the boot stack
+/// and exception entry. A platform continuation may reject its loader input.
+pub(crate) fn start(deliver: impl FnOnce() -> Result<Infallible, &'static str>) -> ! {
+    let services = platform::services();
+    if !crate::metal::stack::active()
+        || !platform::established()
+        || (platform::REQUIRES_DIAGNOSTICS
+            && (services.output.is_none() || services.reset.is_none()))
+    {
+        services.reject(format_args!(
+            "FAIL Limen boot: invalid CPU or firmware handoff\n"
+        ));
+    }
+    let Err(reason) = deliver();
+    services.reject(format_args!("FAIL Limen boot: {reason}\n"))
+}
+
+// The loader ABI has already been translated by the time this function runs.
+// x86 calls it from Rust; AArch64 branches here without using the loader stack.
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-pub use crate::metal::stack::stack_range;
+pub(crate) extern "C" fn loaded(input: usize, next: platform::Continuation) -> ! {
+    start(|| next(input))
+}

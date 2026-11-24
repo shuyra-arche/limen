@@ -57,11 +57,10 @@ extern "sysv64" fn inspect(input: usize) -> ! {
         assert!(unsafe { gate.add(5).read_volatile() } == 0x8e);
         assert!(unsafe { gate.add(2).cast::<u16>().read_unaligned() } == cs);
     }
-    for &byte in b"PASS q35 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1\n" {
-        unsafe { asm!("out dx, al", in("dx") 0xe9u16, in("al") byte) };
-    }
-    unsafe { asm!("out dx, eax", in("dx") 0xf4u16, in("eax") 0x10u32) };
-    loop {
-        core::hint::spin_loop();
-    }
+    use core::fmt::Write;
+    boot::console()
+        .expect("board console")
+        .write_str("PASS q35 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1\n")
+        .expect("diagnostic output");
+    boot::shutdown(true)
 }

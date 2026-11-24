@@ -15,7 +15,9 @@
     "server/link.x",
     "server/src/basis/**",
     "server/src/entry/execution.rs",
-    "server/src/metal/riscv/execution/**"
+    "server/src/metal/riscv/execution/**",
+    "server/src/metal/console.rs",
+    "server/src/metal/stack.rs"
   ],
   "run": {
     "kind": "qemu",

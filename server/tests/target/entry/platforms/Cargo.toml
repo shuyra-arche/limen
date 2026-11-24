@@ -12,10 +12,11 @@ path = "main.rs"
 test = false
 bench = false
 
-[dependencies]
-kernel = { path = "../../../.." }
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+kernel = { path = "../../../..", features = ["qemu-virt"] }
 
 [target.'cfg(target_os = "uefi")'.dependencies]
+kernel = { path = "../../../..", features = ["qemu-q35"] }
 uefi = "=0.41.0"
 
 [profile.dev]

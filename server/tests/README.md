@@ -97,7 +97,8 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --output /tmp/limen-platforms --profile debug --harts 4
 ```
 
-The runner boots both boards from the candidate Git archive. Pass `--board q35`
+Both board fixtures emit their assertions and terminate through the shared
+boot console and shutdown API. The runner boots both boards from the candidate Git archive. Pass `--board q35`
 or `--board virt` to run just one. Use `--profile
 release` with a fresh output directory for optimized images. q35 requires
 the exact debug-console assertions and the guest's debug-exit status 33.

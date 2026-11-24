@@ -2,12 +2,11 @@
 #![no_main]
 
 use core::arch::{asm, global_asm};
+use core::fmt::Write;
 use core::panic::PanicInfo;
 use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 
 unsafe extern "C" {
-    static _boot_stack_start: u8;
-    static _boot_stack_end: u8;
     static _trap_stack_start: u8;
     static _trap_stack_end: u8;
     static _limen_early_trap: u8;
@@ -83,7 +82,14 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
             && sscratch.is_multiple_of(16),
         "emergency stack not armed",
     );
-    let reserved = (&raw const _boot_stack_start).addr()..(&raw const _boot_stack_end).addr();
+    // Linker boundary labels may alias the Rust stack object. Observe the
+    // relocated addresses directly instead of declaring distinct Rust statics.
+    let (start, end): (usize, usize);
+    unsafe {
+        asm!("lla {}, _boot_stack_start", "lla {}, _boot_stack_end",
+             out(reg) start, out(reg) end, options(nostack, nomem));
+    }
+    let reserved = start..end;
     assert_eq!(stack_range(), reserved, "boot stack reservation mismatch");
     assert!(
         reserved.contains(&sp) && sp.is_multiple_of(16),
@@ -120,8 +126,8 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
-    write("FAIL boot-handoff: ");
-    write(info.message().as_str().unwrap_or("assertion failed"));
-    write("\n");
+    if let Some(mut console) = kernel::entry::boot::console() {
+        let _ = writeln!(console, "FAIL boot-handoff: {info}");
+    }
     shutdown(false)
 }

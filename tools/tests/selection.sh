@@ -44,6 +44,10 @@ change server/src/basis/room.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts"]' >/dev/null
 change server/src/entry/boot/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/console.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/stack.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/qemu.version
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/allocator/bump.rs

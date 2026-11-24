@@ -16,8 +16,12 @@
 .globl _start
 _start:
     establish_supervisor
-    la sp, _boot_stack_end
-    la t0, _trap_stack_end
+    la sp, {boot_stack}
+    li t0, {boot_bytes}
+    add sp, sp, t0
+    la t0, {trap_stack}
+    li t1, {trap_bytes}
+    add t0, t0, t1
     csrw sscratch, t0
     la t0, _limen_early_trap
     csrw stvec, t0

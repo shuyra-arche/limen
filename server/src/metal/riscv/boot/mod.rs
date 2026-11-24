@@ -3,10 +3,22 @@ use core::arch::{asm, global_asm};
 mod firmware;
 mod secondary;
 
+pub(crate) use super::sbi::services;
 pub use secondary::Secondary;
+pub(crate) const REQUIRES_DIAGNOSTICS: bool = true;
+
+#[repr(C, align(16))]
+struct TrapStack([u8; 4096]);
+
+#[unsafe(link_section = ".limen.trap.stack")]
+static mut TRAP_STACK: TrapStack = TrapStack([0; 4096]);
 
 global_asm!(
     include_str!("start.S"),
+    boot_stack = sym crate::metal::stack::STACK,
+    boot_bytes = const size_of::<crate::metal::stack::Stack>(),
+    trap_stack = sym TRAP_STACK,
+    trap_bytes = const size_of::<TrapStack>(),
     secondary_state = const secondary::STATE_OFFSET,
     secondary_published = const secondary::PUBLISHED,
     secondary_entered = const secondary::ENTERED,
@@ -16,17 +28,7 @@ global_asm!(
 );
 
 unsafe extern "C" {
-    static _boot_stack_start: u8;
-    static _boot_stack_end: u8;
-    static _kernel_base: u8;
-    static _kernel_edge: u8;
-    static _limen_early_trap: u8;
-    static _trap_stack_end: u8;
-}
-
-/// Memory reserved by the linker for the bootstrap CPU's ordinary stack.
-pub fn stack_range() -> core::ops::Range<usize> {
-    (&raw const _boot_stack_start).addr()..(&raw const _boot_stack_end).addr()
+    fn _limen_early_trap();
 }
 
 /// Checks the state established by the assembly entry without changing translation.
@@ -35,7 +37,7 @@ pub(crate) fn established() -> bool {
 }
 
 pub(crate) fn primary_trap_stack() -> usize {
-    (&raw const _trap_stack_end).addr()
+    unsafe { (&raw const TRAP_STACK.0).addr() + size_of::<TrapStack>() }
 }
 
 /// Trusted firmware identity retained in the kernel's ABI-reserved register.
@@ -73,11 +75,17 @@ pub(crate) fn established_on(trap_stack: usize) -> bool {
     status & 2 == 0
         && interrupt_enable == 0
         && translation == 0
-        && vector == (&raw const _limen_early_trap).addr()
+        && vector == _limen_early_trap as *const () as usize
         && scratch == trap_stack
 }
 
 pub(crate) fn image() -> core::ops::Range<usize> {
+    // These boundaries describe the final linked image, including the platform
+    // sections supplied by its consumer. No Rust object spans that interval.
+    unsafe extern "C" {
+        static _kernel_base: u8;
+        static _kernel_edge: u8;
+    }
     (&raw const _kernel_base).addr()..(&raw const _kernel_edge).addr()
 }
 

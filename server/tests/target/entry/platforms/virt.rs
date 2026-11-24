@@ -42,11 +42,10 @@ extern "C" fn inspect(dtb: usize) -> ! {
     let magic = u32::from_be(unsafe { words.read_volatile() });
     let size = u32::from_be(unsafe { words.add(1).read_volatile() }) as usize;
     assert!(magic == 0xd00dfeed && (40..=ram.end - dtb).contains(&size));
-    let uart = 0x09000000 as *mut u32;
-    for &byte in b"PASS virt el1=1 masked=1 stack=1 vectors=1 dtb=1\n" {
-        while unsafe { uart.add(6).read_volatile() } & (1 << 5) != 0 {}
-        unsafe { uart.write_volatile(u32::from(byte)) };
-    }
-    // This virt configuration supplies PSCI over HVC.
-    unsafe { asm!("hvc #0", in("x0") 0x84000008usize, options(noreturn)) };
+    use core::fmt::Write;
+    boot::console()
+        .expect("board console")
+        .write_str("PASS virt el1=1 masked=1 stack=1 vectors=1 dtb=1\n")
+        .expect("diagnostic output");
+    boot::shutdown(true)
 }

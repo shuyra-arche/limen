@@ -6,8 +6,26 @@ it currently provides.
 
 All three boot paths are declared in [`entry::boot`](../server/src/entry/boot/mod.rs).
 The module documents the prerequisites and the facts each continuation receives.
-Its `stack_range()` identifies the boot CPU's ordinary stack on every target.
-Metal owns the stack storage or linker bounds and installs the CPU state.
+Metal first installs the stack and exception entry using the firmware ABI.
+All three paths then call the same `entry::boot::start`. It checks that the
+hardware stack pointer lies in the boot stack and asks Metal to read back the installed
+CPU state. Only then can the platform validate its input and enter its
+continuation. A rejected handoff uses the shared diagnostic and shutdown path.
+
+One Metal stack definition backs `stack_range()` on all three targets. RV64
+places its 16 KiB ordinary stack and separate 4 KiB trap stack outside BSS.
+The linker still supplies the final ELF image bounds used for DTB overlap
+checks. The UEFI and Arm entries use 32 KiB ordinary stacks.
+
+The shared `boot::console()` returns an optional `core::fmt::Write` device.
+RV64 probes the SBI debug-console and system-reset extensions. The test
+images select explicit Cargo board profiles: `qemu-q35` requires debugcon at
+0xe9 and isa-debug-exit at 0xf4; `qemu-virt` requires the identity-mapped
+PL011 at 0x09000000 and PSCI/HVC. These devices and mappings must remain
+available whenever early services are used. Without those profiles x86_64
+and AArch64 provide no early console, and shutdown parks the CPU. PSCI
+SYSTEM_OFF cannot encode an exit reason; the Arm verifier checks the guest
+message and the shutdown receipt together.
 
 ## RV64 boot
 

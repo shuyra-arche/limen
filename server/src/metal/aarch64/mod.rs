@@ -1,5 +1,26 @@
+use crate::metal::console::Services;
+#[cfg(feature = "qemu-virt")]
+mod diagnostic;
+
+pub(crate) type Continuation = extern "C" fn(usize) -> !;
+pub(crate) const REQUIRES_DIAGNOSTICS: bool = false;
+
+pub(crate) fn services() -> Services {
+    #[cfg(feature = "qemu-virt")]
+    {
+        diagnostic::services()
+    }
+    #[cfg(not(feature = "qemu-virt"))]
+    {
+        Services {
+            output: None,
+            reset: None,
+        }
+    }
+}
+
 use super::stack::{STACK, Stack};
-use core::arch::{global_asm, naked_asm};
+use core::arch::{asm, global_asm, naked_asm};
 
 global_asm!(
     ".pushsection .text.limen_vectors, \"ax\"",
@@ -37,10 +58,29 @@ pub unsafe extern "C" fn enter(input: usize, next: extern "C" fn(usize) -> !) ->
         "add x2, x2, :lo12:limen_vectors",
         "msr vbar_el1, x2",
         "isb",
-        "br x1",
+        "b {loaded}",
         "2: wfe",
         "b 2b",
+        loaded = sym crate::entry::boot::loaded,
         stack = sym STACK,
         size = const size_of::<Stack>(),
     );
+}
+
+pub(crate) fn established() -> bool {
+    unsafe extern "C" {
+        fn limen_vectors();
+    }
+    let (el, daif, spsel, vector): (usize, usize, usize, usize);
+    unsafe {
+        asm!("mrs {}, CurrentEL", "mrs {}, DAIF", "mrs {}, SPSel", "mrs {}, VBAR_EL1",
+             out(reg) el, out(reg) daif, out(reg) spsel, out(reg) vector,
+             options(nostack, nomem, preserves_flags));
+    }
+    el == 4 && daif & 0x3c0 == 0x3c0 && spsel == 1 && vector == limen_vectors as *const () as usize
+}
+pub(crate) fn park() -> ! {
+    loop {
+        unsafe { asm!("wfe", options(nomem, nostack)) };
+    }
 }
