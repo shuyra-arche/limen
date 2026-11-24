@@ -1,0 +1,22 @@
+[package]
+name = "boot-handoff"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "boot-handoff"
+path = "main.rs"
+test = false
+bench = false
+
+[dependencies]
+kernel = { path = "../../../.." }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

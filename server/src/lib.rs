@@ -1,8 +1,6 @@
 #![no_std]
-#![feature(allocator_ext)]
 
-extern crate alloc;
-
-mod basis;
+#[cfg(target_arch = "riscv64")]
 pub mod entry;
+#[cfg(target_arch = "riscv64")]
 mod metal;

@@ -1,303 +1,93 @@
-pub(crate) mod devices;
-pub(crate) mod error;
-pub(crate) mod facts;
-mod finalization;
-mod init;
-pub(crate) mod resources;
-mod space;
+//! Trusted RV64 firmware handoff before any memory or Unit is admitted.
 
-pub use crate::metal::generic::mmu::external::{
-    HardwareError, Quiescence, Retirement, RetirementScope,
-};
-// Next-memory proof interface; exposing its types installs no backend.
-pub use crate::metal::generic::memory;
-pub use crate::metal::mmu::internal::activity::qualify as qualify_activity;
-pub use devices::{ExternalRoute, MapMmio};
-pub use error::BootError;
-pub use error::MapOperation;
-pub use error::ResourceOperation;
-pub use error::fail;
-pub use init::{
-    bind_external, configure, grant_interrupt, grant_mmio, init, map_entry_mmio, map_mmio,
-    qualify_memory,
-};
+mod tree;
 
-use alloc::sync::Arc;
+use core::fmt::{self, Write};
+use core::ops::Range;
 
-use crate::basis::flat::BorrowedRegion;
-use crate::basis::flat::Flat;
-use crate::basis::nest::Access;
-use crate::basis::nest::Nest;
-use crate::basis::nest::NestError;
-use crate::basis::nest::Placement;
-use crate::basis::nest::RegionKind;
-use crate::basis::room::scheduler;
-use crate::basis::unit::team::kernel;
-use crate::metal::hart;
-use crate::metal::hart::HartId;
-use crate::metal::image::ROOT_STACK_CANARY;
-use crate::metal::image::root_stack_base;
-use crate::metal::mmu::internal::identity;
-use crate::metal::switcher::context::TrapContext;
-use crate::metal::switcher::stack::arm_hart;
-use crate::metal::switcher::stack::boot_stack;
-use crate::metal::switcher::trampoline::restore;
-use kernel_api::address::PAGE_SIZE;
-use kernel_api::address::PhysAddr;
-use kernel_api::address::VirtAddr;
+use crate::metal::riscv::{boot, sbi};
 
-/// Executing image and ROOT stack reservation, independent of board layout.
-pub fn image_region() -> kernel_api::boot::platform::Region {
-    unsafe extern "C" {
-        static _kernel_base: u8;
-    }
-    let base = (&raw const _kernel_base).addr();
-    kernel_api::boot::platform::Region::new(base, crate::metal::image::root_stack_edge() - base)
+/// Facts from the admitted firmware handoff. These carry no authority over RAM.
+pub struct Boot {
+    hart: usize,
+    device_tree: Range<usize>,
 }
 
-pub fn start() -> Result<(), BootError> {
-    if !devices::ready() {
-        return Err(BootError::Description("devices not configured"));
-    }
-    scheduler::init().map_err(BootError::Scheduler)?;
-    #[cfg(feature = "latency")]
-    crate::metal::measure::init().map_err(BootError::Scheduler)?;
-
-    if let Some(entry) = spawn_entry()? {
-        crate::basis::room::shutdown::watch(&entry);
-        crate::entry::work::observe::start()?;
-        crate::entry::work::lifecycle::start()?;
-        crate::entry::work::retirement::start()?;
+impl Boot {
+    pub fn hart(&self) -> usize {
+        self.hart
     }
 
-    crate::basis::unit::lifecycle::tally::rooted();
-
-    boot_harts()?;
-
-    let boot_guard = unsafe { (root_stack_base() as *const usize).read() };
-    assert!(
-        boot_guard == ROOT_STACK_CANARY,
-        "ROOT stack overflow during boot: canary corrupted {boot_guard:#x}",
-    );
-    Ok(())
+    /// Physical address interval occupied by the firmware device tree.
+    pub fn device_tree(&self) -> Range<usize> {
+        self.device_tree.clone()
+    }
 }
 
-pub fn run() -> ! {
-    // Secondary harts enter with a one-page physical bootstrap stack. Idle
-    // scheduling can retire I/O before that hart ever runs a Task, so it must
-    // already use the full guarded stack rather than waiting for its first trap.
-    let top = crate::metal::switcher::stack::trap_stack_edge(hart::hart_id()).get();
-    unsafe { crate::metal::boot::enter_idle(top, run_on_stack) }
+unsafe extern "Rust" {
+    fn limen_platform_ready(boot: Boot) -> !;
 }
 
-extern "C" fn run_on_stack() -> ! {
-    #[cfg(feature = "latency")]
-    crate::metal::measure::running();
-    restore(scheduler::run())
-}
-
-pub(super) fn bind_runtime() -> Result<(), BootError> {
-    crate::metal::interrupt::window::bind(crate::entry::trap::service)
-        .map_err(|_| BootError::Description("interrupt service already bound"))?;
-    crate::basis::room::shutdown::bind_finalization(crate::basis::room::shutdown::Finalization {
-        prepare: finalization::prepare,
-        finish: finalization::finish,
-    })
-    .map_err(BootError::Description)?;
-    crate::basis::room::shutdown::observe_with(crate::basis::room::shutdown::Observers {
-        waiting: crate::entry::report::shutdown::waiting,
-        stalled: crate::entry::report::shutdown::stalled,
-        finished: finalization::report,
-        unsettled: finalization::unsettled,
-    })
-    .map_err(BootError::Description)?;
-    Ok(())
-}
-
-fn spawn_entry() -> Result<Option<alloc::sync::Arc<crate::basis::unit::task::Task>>, BootError> {
-    let Some(region) = facts::info().initrd() else {
-        return Ok(None);
+// OpenSBI transfers control to _start on one boot hart, with placement and
+// readable ownership of the device tree guaranteed by the trusted platform.
+#[unsafe(no_mangle)]
+extern "C" fn limen_boot(hart: usize, device_tree: usize) -> ! {
+    let established = boot::established();
+    let firmware = sbi::extensions();
+    if !established || !firmware.console || !firmware.reset {
+        reject(
+            firmware,
+            format_args!("FAIL Limen boot: invalid supervisor or SBI handoff\n"),
+        );
+    }
+    let header = core::ptr::without_provenance(device_tree);
+    let Some(device_tree) = (unsafe { tree::extent(header, boot::image()) }) else {
+        reject(
+            firmware,
+            format_args!("FAIL Limen boot: invalid device tree header\n"),
+        );
     };
-    let blob: &'static [u8] =
-        unsafe { ::core::slice::from_raw_parts(region.base as *const u8, region.size) };
-    let capsule =
-        kernel_api::boot::initrd::entry_image(blob).ok_or(BootError::InvalidEntryImage {
-            base: region.base,
-            size: region.size,
-        })?;
-    let team = crate::basis::unit::team::capsule::assemble(capsule).map_err(|source| {
-        BootError::Mapping {
-            operation: MapOperation::AssembleCapsule,
-            source,
-        }
-    })?;
-
-    devices::entry_mmio::install(&team.nest).map_err(BootError::Bootstrap)?;
-
-    let mapping_size = region.size.next_multiple_of(PAGE_SIZE);
-    let mapping = map_borrowed(&team.nest, PhysAddr::from_raw(region.base), mapping_size).map_err(
-        |source| BootError::Mapping {
-            operation: MapOperation::ImageView,
-            source,
-        },
-    )?;
-
-    let mut registry = crate::entry::boot::resources::Registry::default();
-    resources::register_space(&mut registry, team.nest.clone()).map_err(|source| {
-        BootError::Resources {
-            operation: ResourceOperation::Pend,
-            source,
-        }
-    })?;
-    crate::entry::boot::devices::register(&mut registry).map_err(|source| {
-        BootError::Resources {
-            operation: ResourceOperation::Devices,
-            source,
-        }
-    })?;
-    crate::entry::trap::resources::register(&mut registry).map_err(|source| {
-        BootError::Resources {
-            operation: ResourceOperation::Traps,
-            source,
-        }
-    })?;
-    crate::entry::work::observe::register(&mut registry).map_err(|source| {
-        BootError::Resources {
-            operation: ResourceOperation::Traps,
-            source,
-        }
-    })?;
-    let resources = registry.freeze().map_err(|e| BootError::Resources {
-        operation: ResourceOperation::Freeze,
-        source: e.into_parts().0,
-    })?;
-    let ledger_len = crate::entry::boot::resources::ledger::size(
-        resources.len()
-            + crate::entry::boot::resources::CONTROL_ENTRIES
-            + crate::entry::boot::resources::CALL_ENTRIES,
-    )
-    .map_err(|source| BootError::Resources {
-        operation: ResourceOperation::LedgerSize,
-        source,
-    })?;
-    let (ledger_pa, ledger_bytes) = crate::entry::boot::resources::ledger::block();
-    let ledger = map_borrowed(&team.nest, PhysAddr::from_raw(ledger_pa), ledger_bytes).map_err(
-        |source| BootError::Mapping {
-            operation: MapOperation::LedgerView,
-            source,
-        },
-    )?;
-
-    let mut args = [0usize; kernel_api::boot::args::LEN];
-    args[kernel_api::boot::args::VIEW] = mapping.as_usize();
-    args[kernel_api::boot::args::VIEW_LEN] = region.size;
-    args[kernel_api::boot::args::LEDGER] = ledger.as_usize();
-    args[kernel_api::boot::args::LEDGER_LEN] = ledger_len;
-    let mut words = alloc::vec::Vec::new();
-    words
-        .try_reserve_exact(args.len())
-        .map_err(|_| BootError::Bootstrap(NestError::OutOfMemory))?;
-    words.extend_from_slice(&args);
-    let bootstrap = team
-        .task()
-        .args(words)
-        .hold()
-        .map_err(BootError::Bootstrap)?;
-    let entries = resources
-        .authority(&bootstrap)
-        .map_err(|e| BootError::Resources {
-            operation: ResourceOperation::Pend,
-            source: e.into_parts().0,
-        })?;
-    // 可信控制者那一枚独立保留授权：只在这里铸、只发给这一个任务，
-    // 与上面那批具名资源同走账本一条路。
-    let mut entries = entries;
-    entries
-        .try_reserve(
-            crate::entry::boot::resources::CONTROL_ENTRIES
-                + crate::entry::boot::resources::CALL_ENTRIES,
-        )
-        .map_err(|_| BootError::Bootstrap(NestError::OutOfMemory))?;
-    entries.extend(
-        crate::entry::boot::resources::grant_controls(&bootstrap).map_err(|source| {
-            BootError::Resources {
-                operation: ResourceOperation::Pend,
-                source,
-            }
-        })?,
-    );
-    entries.push(
-        crate::entry::boot::resources::grant_calls(&bootstrap).map_err(|source| {
-            BootError::Resources {
-                operation: ResourceOperation::Pend,
-                source,
-            }
-        })?,
-    );
-    crate::entry::boot::resources::ledger::write(&entries).map_err(|source| {
-        BootError::Resources {
-            operation: ResourceOperation::WriteLedger,
-            source,
-        }
-    })?;
-    crate::basis::unit::task::Task::release(&bootstrap).map_err(|source| {
-        BootError::BootstrapRelease {
-            task: bootstrap.ident.id,
-            source,
-        }
-    })?;
-
-    #[cfg(debug_assertions)]
-    team.nest.audit();
-
-    #[cfg(debug_assertions)]
-    kernel().expect("kernel team not initialized").nest.audit();
-
-    Ok(Some(bootstrap))
-}
-
-/// 把一段调用方仍保留的物理区间挂进 `Normal` 窗口的最低空档（只读）。
-///
-/// 借用凭证与来源在登记占用之前就已备齐：来源失败不留下无人持有的地址。
-fn map_borrowed(nest: &Arc<Nest>, physical: PhysAddr, size: usize) -> Result<VirtAddr, NestError> {
-    let borrowed = unsafe { BorrowedRegion::new(physical, size)? };
-    let source = Flat::from_region(borrowed)?.whole();
-    let span = nest.reserve(
-        Placement::lowest(RegionKind::Normal, size, PAGE_SIZE)?,
-        source.level(),
-    )?;
-    let mapping = nest.attach(span, source, Access::READ, Access::READ)?;
-    Ok(mapping.initial_start())
-}
-
-pub(crate) fn boot_harts() -> Result<(), BootError> {
-    let me = hart::hart_id();
-    let count = hart::hart_count();
-    for hart in 0..count {
-        if HartId::new(hart) == me {
-            continue;
-        }
-        let slot = HartId::new(hart);
-        let opaque = hart::prepare_boot(slot, boot_stack(hart));
-        let r = crate::metal::boot::start_hart(slot, opaque);
-        r.map_err(|source| BootError::HartStart {
-            hart: HartId::new(hart),
-            source,
-        })?;
-    }
-    Ok(())
+    unsafe { limen_platform_ready(Boot { hart, device_tree }) }
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn boot_main() -> ! {
-    let ktc = kernel()
-        .expect("kernel team not initialized")
-        .nest
-        .physical_at(hart::hart_frame())
-        .expect("kernel frame not mapped");
-    let frame = unsafe { &*(ktc.as_usize() as *const TrapContext) };
-    unsafe { crate::metal::boot::activate_secondary(frame) };
-    arm_hart();
-    identity::occupy(crate::basis::nest::Asid::kernel());
-    run()
+extern "C" fn limen_boot_trap(cause: usize, pc: usize, value: usize, stack: usize) -> ! {
+    reject(
+        sbi::extensions(),
+        format_args!(
+            "FAIL Limen boot trap: cause={cause:#x} pc={pc:#x} value={value:#x} stack={stack:#x}\n"
+        ),
+    )
+}
+
+fn reject(firmware: sbi::Extensions, message: fmt::Arguments<'_>) -> ! {
+    if firmware.console {
+        let _ = Console.write_fmt(message);
+    }
+    if firmware.reset {
+        shutdown(false);
+    }
+    boot::park()
+}
+
+/// Write an early diagnostic to the firmware debug console.
+pub fn write(message: &str) {
+    let _ = Console.write_str(message);
+}
+
+/// End the trusted boot path through firmware system reset.
+pub fn shutdown(success: bool) -> ! {
+    sbi::shutdown(success)
+}
+
+struct Console;
+
+impl Write for Console {
+    fn write_str(&mut self, message: &str) -> fmt::Result {
+        if message.bytes().all(sbi::write_byte) {
+            Ok(())
+        } else {
+            Err(fmt::Error)
+        }
+    }
 }

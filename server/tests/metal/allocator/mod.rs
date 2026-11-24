@@ -1,169 +1,48 @@
-extern crate alloc;
-#[path = "../../../src/metal/allocator/pages.rs"]
-pub(crate) mod pages;
+#![no_std]
 
-use kernel_api::boot::platform::{Memory, Region};
-#[allow(dead_code)]
-#[path = "../../../src/metal/allocator/error.rs"]
-mod error;
-#[path = "../../../src/metal/allocator/frame/inner.rs"]
-mod frame;
-#[path = "../../../src/metal/allocator/link.rs"]
-mod link;
-mod metal {
-    pub mod physical {
-        pub unsafe fn write<T>(pa: kernel_api::address::PhysAddr) -> *mut T {
-            assert!(
-                super::board::info()
-                    .memory
-                    .contains_identity(crate::Region::new(pa.as_usize(), size_of::<T>()))
-            );
-            pa.as_usize() as *mut T
-        }
-    }
-    pub mod board {
-        pub struct Machine {
-            pub memory: crate::Memory,
-        }
-        pub static FACTS: std::sync::OnceLock<Machine> = std::sync::OnceLock::new();
-        pub fn info() -> &'static Machine {
-            FACTS.get().unwrap()
-        }
-    }
-    pub mod allocator {
-        pub(crate) use crate::pages;
-        pub(crate) use crate::{error::InitError, link::Link};
-        pub mod bump {
-            pub fn frontier() -> usize {
-                super::super::board::info().memory.bootstrap().base + 8192
-            }
-        }
-        pub mod statistics {
-            pub fn install_frame_kinds(_: usize) -> Result<(), super::InitError> {
-                Ok(())
-            }
-        }
-    }
-    pub mod console {
-        pub fn _write(args: core::fmt::Arguments) {
-            eprintln!("{args}")
-        }
-    }
+use core::alloc::Layout;
+
+#[path = "../../../src/metal/allocator/bump.rs"]
+mod bump;
+
+use bump::Bump;
+
+#[test]
+fn reserves_aligned_disjoint_ranges_inside_the_owned_interval() {
+    let mut allocator = Bump::new(0x1008..0x3100).unwrap();
+    let small = Layout::from_size_align(0x40, 0x40).unwrap();
+    let page = Layout::from_size_align(0x1000, 0x1000).unwrap();
+    let tail = Layout::from_size_align(0x100, 1).unwrap();
+
+    assert_eq!(allocator.reserve(small), Some(0x1040..0x1080));
+    assert_eq!(allocator.reserve(page), Some(0x2000..0x3000));
+    assert_eq!(allocator.reserve(tail), Some(0x3000..0x3100));
+    assert_eq!(allocator.reserve(small), None);
 }
 
 #[test]
-fn frame_split_and_merge_never_publish_reserved_pages_or_bank_holes() {
-    // Real writable backing, with a canary across every byte the allocator must
-    // not touch. Only platform/diagnostic hooks are replaced in this host test.
-    let layout = std::alloc::Layout::from_size_align(0x200000, 0x10000).unwrap();
-    let ptr = unsafe { std::alloc::alloc(layout) };
-    assert!(!ptr.is_null());
-    let base = ptr as usize;
-    unsafe {
-        ptr.write_bytes(0xa5, layout.size());
-    }
-    let memory = Memory::new(
-        &[
-            Region::new(base, 0x80000),
-            Region::new(base + 0x100000, 0x80000),
-        ],
-        &[Region::new(base + 0x40000, 0x10000)],
-        &[],
-        Region::new(base + 0x20000, 4096),
-        Region::new(base, 0x10000),
-        None,
-    )
-    .unwrap();
-    metal::board::FACTS
-        .set(metal::board::Machine { memory })
-        .unwrap_or_else(|_| panic!("once"));
-    let m = &metal::board::info().memory;
-    let usable = |addr: usize| {
-        m.free()
-            .iter()
-            .any(|r| r.base <= addr && addr + 4096 <= r.range().end)
-            && !(m.bootstrap().base <= addr && addr < metal::allocator::bump::frontier())
-    };
-    let expected = (0..layout.size())
-        .step_by(4096)
-        .filter(|offset| usable(base + offset))
-        .count();
-    let mut allocator = frame::FrameInner::new();
-    allocator.init().unwrap();
-    assert_eq!(
-        allocator.allocated, 0,
-        "initialization must not charge client frames"
-    );
-    let mut indices = Vec::new();
-    while let Some(index) = unsafe { allocator.split_block(0) } {
-        assert!(usable(allocator.frame_addr(index)));
-        assert_eq!(allocator.frame_index(allocator.frame_addr(index)), index);
-        indices.push(index);
-        assert!(indices.len() <= expected);
-    }
-    assert_eq!(indices.len(), expected);
-    indices.sort_unstable();
-    assert!(indices.windows(2).all(|p| p[0] != p[1]));
-    // Free in two passes to force both directions of buddy coalescing.
-    for parity in 0..2 {
-        for index in indices.iter().skip(parity).step_by(2) {
-            unsafe {
-                allocator.merge_block(*index, 0);
-            }
-        }
-    }
-    let mut large = Vec::new();
-    while let Some(index) = unsafe { allocator.split_block(4) } {
-        let addr = allocator.frame_addr(index);
-        assert_eq!(addr % 0x10000, 0);
-        for offset in (0..0x10000).step_by(4096) {
-            assert!(usable(addr + offset));
-        }
-        large.push(index);
-    }
-    assert!(!large.is_empty());
-    for index in large {
-        unsafe {
-            allocator.merge_block(index, 4);
-        }
-    }
-    for offset in (0..layout.size())
-        .step_by(4096)
-        .filter(|offset| !usable(base + offset))
-    {
-        let bytes = unsafe { std::slice::from_raw_parts(ptr.add(offset), 4096) };
-        assert!(
-            bytes.iter().all(|byte| *byte == 0xa5),
-            "protected page {offset:#x} changed"
-        );
-    }
-    drop(allocator);
-    unsafe {
-        std::alloc::dealloc(ptr, layout);
-    }
-}
+fn a_request_that_exceeds_the_edge_leaves_all_remaining_bytes_available() {
+    let base = 0x1010;
+    let edge = 0x1030;
+    let mut allocator = Bump::new(base..edge).unwrap();
+    let too_large_after_alignment = Layout::from_size_align(0x20, 0x20).unwrap();
+    let exact = Layout::from_size_align(edge - base, 1).unwrap();
 
-mod entry {
-    pub(crate) mod boot {
-        pub(crate) use crate::metal::board as facts;
-    }
+    assert_eq!(allocator.reserve(too_large_after_alignment), None);
+    assert_eq!(allocator.reserve(exact), Some(base..edge));
 }
 
 #[test]
-fn compact_metadata_ignores_a_terabyte_hole() {
-    let regions = [
-        Region::new(0x100000, 8192),
-        Region::new(1usize << 40, 12288),
-    ];
-    let map = pages::Pages::new(&regions);
-    assert_eq!(map.len(), 5);
-    for index in 0..5 {
-        let address = map.address(index).unwrap();
-        assert_eq!(map.index(address), Some(index));
-        assert_eq!(map.index(address + 4095), Some(index));
-    }
-    for address in [0, 0x102000, 0x8000000000, (1usize << 40) + 12288] {
-        assert_eq!(map.index(address), None);
-    }
-    assert_eq!(map.address(5), None);
+fn rejects_address_overflow_and_empty_input() {
+    let edge = usize::MAX;
+    let base = edge - 15;
+    let mut allocator = Bump::new(base..edge).unwrap();
+    let bad_alignment = Layout::from_size_align(1, 32).unwrap();
+    let bad_size = Layout::from_size_align(16, 1).unwrap();
+    let exact = Layout::from_size_align(15, 1).unwrap();
+
+    assert_eq!(allocator.reserve(bad_alignment), None);
+    assert_eq!(allocator.reserve(bad_size), None);
+    assert_eq!(allocator.reserve(exact), Some(base..edge));
+    assert!(Bump::new(edge..edge).is_none());
 }

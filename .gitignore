@@ -1,1 +1,3 @@
 /target/
+/server/tests/runner/target/
+/server/tests/target/**/target/

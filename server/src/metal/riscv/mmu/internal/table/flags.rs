@@ -13,13 +13,3 @@ bitflags! {
         const D = 1 << 7;
     }
 }
-
-impl PteFlags {
-    pub(super) fn from_attributes(attrs: crate::metal::generic::mmu::internal::Attributes) -> Self {
-        Self::from_bits_truncate(attrs.bits() << 1)
-    }
-
-    pub(super) fn attributes(self) -> crate::metal::generic::mmu::internal::Attributes {
-        crate::metal::generic::mmu::internal::Attributes::from_bits_truncate(self.bits() >> 1)
-    }
-}

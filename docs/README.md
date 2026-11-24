@@ -1,34 +1,33 @@
 # Limen documentation
 
-| Reader's question | Source |
-| --- | --- |
-| How do execution, data delivery and authorization fit together? | [Unit, Room and Kernel Work](architecture/unit-room-work.md) |
-| How do Cell, Flat and Nest compose and retire access? | [Target memory architecture](design/memory.typ) |
-| What API or ABI exists today? | [Kernel API](../api/README.md) and [API source](../api/src/) |
-| What does the selected Flat/Nest memory ABI provide? | [Current memory contract](../api/memory.md) |
-| How is per-page activity authorized? | [CPU activity](../api/memory.md#authorized-cpu-activity) |
-| How are calls performed? | [Client](../client/README.md) |
-| How do I reproduce verification? | [Kernel verification](../server/tests/README.md) |
-| How do I build or contribute? | [Repository README](../README.md) and [Contributing](../CONTRIBUTING.md) |
+[Document Limen](https://github.com/shuyra-arche/document-limen) owns the
+architecture and Treaty contracts. This repository documents the implementation
+it currently provides.
 
-## Design
+## RV64 boot
 
-The [memory chapter](design/memory.typ) derives the target Cell, Flat and Nest
-contracts from ownership, logical position and address access. It describes the
-CPU and I/O translation backends, safe table-page retirement, and a worked DMA
-example. The [current memory contract](../api/memory.md) describes ABI 14.
+An OpenSBI platform image links the `kernel` library and supplies
+`KERNEL_LOAD_ADDRESS` and `limen_platform_ready`. The linker places the image and
+both bounded stacks in the ELF's load ranges. Firmware enters `_start` on the
+sole boot hart in supervisor mode with Bare translation, with the hart ID and
+physical DTB address in `a0` and `a1`. The platform must provide immutable,
+readable DTB storage disjoint from the image. The fixed version-17-compatible
+header must describe a whole, nonempty structure block and disjoint extents
+for structure, strings and the first reservation entry. The platform owns
+validation of the block contents.
 
-The design explains enduring constraints and identifies current mechanisms
-where they make an argument concrete. The API owns precise call permissions,
-failure results, and encodings. Issues track open questions and proposals.
-PRs record the reasons for changes and their verification.
+Limen masks supervisor interrupts, establishes a direct trap vector and an
+emergency stack, then clears BSS. The trusted boot entry checks the supervisor
+CSRs and probes the SBI debug console (DBCN) and system reset (SRST) before
+reading the DTB header. Admission requires both extensions. A rejected handoff
+reports through DBCN when available, requests failure shutdown through SRST
+when available, and parks the Hart if shutdown is unavailable or returns.
+A fault reports its cause,
+program counter, trap value and interrupted stack pointer, then requests SBI
+system failure shutdown. A trap during that failure path parks the hart.
 
-Compile the design locally with Typst:
-
-```sh
-typst compile docs/design/main.typ /tmp/shuyra-kernel.pdf
-```
-
-Keep Typst source in Git. Use the generated PDF for reading or publication.
-Documentation-only changes skip Kernel builds and QEMU tests. The repository
-path filters are tracked in [PR #126](https://github.com/shuyra-arche/limen/pull/126).
+The platform callback receives the hart ID and the described DTB extent. Board
+topology, physical RAM admission, page-table activation, Unit scheduling and
+user calls are later integration work. The
+[boot verification guide](../server/tests/README.md) describes the exercised
+end-to-end path and its evidence.

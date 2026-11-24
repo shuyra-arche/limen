@@ -1,4 +1,5 @@
-use kernel_verification::{capsule, process};
+use crate::{qmp, verify};
+use kernel_verification::process;
 use std::{fs, process::Command, thread, time::Duration};
 fn scratch(name: &str) -> std::path::PathBuf {
     let root = std::env::temp_dir().join(format!("kernel-{name}-{}", std::process::id()));
@@ -6,30 +7,85 @@ fn scratch(name: &str) -> std::path::PathBuf {
     fs::create_dir(&root).unwrap();
     root
 }
+
+#[test]
+fn qmp_records_one_shutdown_after_negotiating_and_starting_the_guest() {
+    let startup = concat!(
+        "{\"QMP\":{}}\r\n",
+        "{\"return\":{},\"id\":\"capabilities\"}\n",
+        "{\"event\":\"RESUME\"}\n",
+        "{\"return\":{},\"id\":\"start\"}\n",
+    );
+    let event = r#"{"event":"SHUTDOWN","data":{"guest":true,"reason":"guest-shutdown"}}"#;
+    let input = format!("{startup}{event}\n");
+    let mut commands = Vec::new();
+    let mut transcript = Vec::new();
+    let receipt = qmp::capture(input.as_bytes(), &mut commands, &mut transcript).unwrap();
+    assert!(receipt.guest);
+    assert_eq!(receipt.reason, "guest-shutdown");
+    assert_eq!(transcript, input.as_bytes());
+    let commands: Vec<serde_json::Value> = String::from_utf8(commands)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[0]["execute"], "qmp_capabilities");
+    assert_eq!(commands[1]["execute"], "cont");
+
+    for incomplete in [
+        startup.to_string(),
+        format!("{startup}{event}"),
+        format!("{input}{event}\n"),
+        format!("{input}invalid\n"),
+        format!("{input}{{}}\n"),
+        input.replace("\"id\":\"start\"", "\"id\":\"other\""),
+    ] {
+        assert!(qmp::capture(incomplete.as_bytes(), Vec::new(), Vec::new()).is_err());
+    }
+}
 #[test]
 fn process_requires_exit_and_full_acceptance() {
     let root = scratch("exit");
     for (name, script, expected) in [
-        ("good", "echo PASS", true),
-        ("incomplete", "echo START", false),
-        ("failed", "echo PASS; exit 3", false),
-        ("fatal", "echo PASS; echo FAIL", false),
-        ("signal", "echo PASS; kill -TERM $$", false),
+        ("good", "echo PASS", "pass"),
+        ("incomplete", "echo START", "inconclusive"),
+        ("partial-line", "echo PASS.EXTRA", "inconclusive"),
+        ("unclosed-line", "printf PASS", "inconclusive"),
+        ("failed", "echo PASS; exit 3", "fail"),
+        ("fatal", "echo PASS; echo FAIL", "fail"),
+        ("signal", "echo PASS; kill -TERM $$", "inconclusive"),
     ] {
-        let mut result = process::run(
+        let result = process::run(
             Command::new("sh").args(["-c", script]),
             &root.join(name),
             Duration::from_secs(2),
         )
         .unwrap();
-        assert_eq!(
-            process::accept(
-                &mut result,
-                &fs::read_to_string(root.join(name).join("serial.log")).unwrap(),
-                &["PASS".into()]
-            ),
-            expected
-        );
+        let serial = fs::read_to_string(root.join(name).join("serial.log")).unwrap();
+        let details = verify::check(&serial, &["PASS".into()], None, 1).unwrap();
+        let guest = qmp::Shutdown {
+            guest: true,
+            reason: "guest-shutdown".into(),
+        };
+        assert_eq!(verify::verdict(&result, &details, Some(&guest)), expected);
+        if expected == "pass" {
+            for (guest, reason) in [
+                (false, "host-signal"),
+                (true, "guest-panic"),
+                (false, "guest-shutdown"),
+            ] {
+                let other = qmp::Shutdown {
+                    guest,
+                    reason: reason.into(),
+                };
+                assert_eq!(
+                    verify::verdict(&result, &details, Some(&other)),
+                    "inconclusive"
+                );
+            }
+            assert_eq!(verify::verdict(&result, &details, None), "inconclusive");
+        }
     }
     fs::remove_dir_all(root).unwrap();
 }
@@ -43,6 +99,10 @@ fn deadline_kills_even_after_success_marker() {
     )
     .unwrap();
     assert_eq!(result.status, "timeout");
+    assert_eq!(
+        verify::verdict(&result, &serde_json::Value::Null, None),
+        "timeout"
+    );
     assert!(!result.success());
     assert!(result.elapsed_seconds < 5.0);
     let cleanup: serde_json::Value =
@@ -117,43 +177,6 @@ fn large_output_cannot_deadlock_pipes() {
         1048576
     );
     fs::remove_dir_all(root).unwrap();
-}
-#[test]
-fn malformed_elf_never_panics_or_builds_an_image() {
-    for size in 0..128 {
-        assert!(capsule::initrd(&vec![0; size], 13).is_err());
-    }
-    let mut elf = vec![0; 120];
-    elf[..6].copy_from_slice(b"\x7fELF\x02\x01");
-    elf[18..20].copy_from_slice(&243u16.to_le_bytes());
-    elf[32..40].copy_from_slice(&64u64.to_le_bytes());
-    elf[54..56].copy_from_slice(&56u16.to_le_bytes());
-    elf[56..58].copy_from_slice(&1u16.to_le_bytes());
-    elf[64..68].copy_from_slice(&1u32.to_le_bytes());
-    elf[104..112].copy_from_slice(&4096u64.to_le_bytes());
-    let image = capsule::initrd(&elf, 13).unwrap();
-    assert_eq!(&image[4096..4104], b"SQBOOT01");
-    assert_eq!(image[4107], 13);
-    let rejected = capsule::initrd(&elf, 10).unwrap();
-    assert_eq!(rejected[4107], 10);
-    elf[68..72].copy_from_slice(&6u32.to_le_bytes());
-    let dense13 = capsule::system_initrd(&elf, 13).unwrap();
-    assert_eq!(
-        u64::from_le_bytes(dense13[4096 + 48..4096 + 56].try_into().unwrap()),
-        1
-    );
-    assert_eq!(dense13[4107], 13);
-    assert_eq!(dense13.len(), 12288);
-    let dense14 = capsule::system_initrd(&elf, 14).unwrap();
-    assert_eq!(dense14[4107], 14);
-    assert_eq!(dense14.len(), dense13.len());
-    assert_eq!(&dense14[..4107], &dense13[..4107]);
-    assert_eq!(&dense14[4108..], &dense13[4108..]);
-    assert!(capsule::system_initrd(&elf, 15).is_err());
-    elf[96..104].copy_from_slice(&4097u64.to_le_bytes());
-    assert!(capsule::initrd(&elf, 13).is_err());
-    elf[32..40].copy_from_slice(&u64::MAX.to_le_bytes());
-    assert!(capsule::initrd(&elf, 13).is_err());
 }
 #[test]
 fn failed_launch_preserves_a_failed_result() {

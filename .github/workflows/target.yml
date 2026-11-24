@@ -5,8 +5,11 @@ on:
     paths:
       - "server/src/**"
       - "server/tests/**"
-      - "api/**"
-      - "client/**"
+      - "server/Cargo.toml"
+      - "server/build.rs"
+      - "server/link.x"
+      - "Cargo.toml"
+      - ".cargo/config.toml"
       - "tools/tests/discover.sh"
       - "Cargo.lock"
       - ".github/workflows/target.yml"
@@ -15,8 +18,11 @@ on:
     paths:
       - "server/src/**"
       - "server/tests/**"
-      - "api/**"
-      - "client/**"
+      - "server/Cargo.toml"
+      - "server/build.rs"
+      - "server/link.x"
+      - "Cargo.toml"
+      - ".cargo/config.toml"
       - "tools/tests/discover.sh"
       - "Cargo.lock"
       - ".github/workflows/target.yml"
@@ -26,8 +32,8 @@ on:
         description: Explicit emulated Hart count
         type: choice
         required: true
-        default: "4"
-        options: ["1", "4"]
+        default: "1"
+        options: ["1"]
 
 permissions:
   contents: read
@@ -56,6 +62,10 @@ jobs:
         run: |
           set -euo pipefail
           matrix="$(bash tools/tests/discover.sh "$GITHUB_WORKSPACE" "$BASE_SHA" "$HARTS")"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$matrix" == '[]' ]]; then
+            echo "::error::No target suite supports the requested Hart count ($HARTS)."
+            exit 1
+          fi
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "$matrix" | jq .
 
@@ -101,7 +111,7 @@ jobs:
       - name: Expose failed build or execution evidence
         if: failure()
         run: |
-          for file in .integration/evidence/candidate/resolve/stderr.log .integration/evidence/candidate/locked/stderr.log .integration/evidence/candidate/harts-"$HARTS"-round-0/serial.log .integration/evidence/cargo/stderr.log; do
+          for file in .integration/evidence/candidate/locked/stderr.log .integration/evidence/candidate/harts-"$HARTS"-round-0/serial.log .integration/evidence/cargo/stderr.log; do
             if test -f "$file"; then
               echo "---- $file ----"
               tail -n 100 "$file"
