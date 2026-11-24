@@ -102,7 +102,8 @@ impl Execution {
     }
 
     fn control(&self) -> Result<Guard<'_, Control>, Error> {
-        self.control.try_lock().ok_or(Error::Busy)
+        let (_, _, hart) = self.local()?;
+        self.control.try_lock(hart.guards()).ok_or(Error::Busy)
     }
 
     fn local(&self) -> Result<(usize, usize, LocalHart<'_>), Error> {
@@ -158,7 +159,8 @@ impl Execution {
         }
         let argument = ptr::from_ref(self).expose_provenance();
         if let Err(error) = unsafe { secondary.start(hart, start_secondary, argument) } {
-            self.control.lock().launch = None;
+            let (_, _, hart) = self.local()?;
+            self.control.lock(hart.guards()).launch = None;
             return Err(Error::Firmware(error));
         }
         Ok(())
@@ -301,7 +303,7 @@ impl Execution {
             .ok_or(Error::Gone)?;
         let storage = {
             let mut control = if end.is_some() {
-                self.control.lock()
+                self.control.lock(hart.guards())
             } else {
                 self.control()?
             };
@@ -380,7 +382,8 @@ fn start_secondary(hart: usize, argument: usize) -> ! {
     assert_eq!(hardware::current_hart(), hart);
     assert!(Hart::supported(secondary.trap_stack()));
     let entry = {
-        let mut control = execution.control.lock();
+        let local = unsafe { execution.secondary.local() };
+        let mut control = execution.control.lock(local.guards());
         let launch = control.launch.expect("reserved secondary launch");
         assert_eq!(launch.hart, hart);
         control

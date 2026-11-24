@@ -17,6 +17,9 @@ use kernel::entry::{
     execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Secondary, Stacks, UnitId},
 };
 
+#[path = "lock-probe.rs"]
+mod lock;
+
 global_asm!(include_str!("register-probe.S"));
 
 static mut STACKS: Stacks = Stacks::new();
@@ -138,6 +141,7 @@ fn finish(execution: &Execution, receipt: Occupancy, value: u64) {
 }
 
 fn secondary(execution: &'static Execution) -> ! {
+    lock::waiter();
     assert_eq!(
         execution.enter(),
         Ok(None),
@@ -208,6 +212,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
             .start_hart(second_hart, secondary)
             .expect("start actual secondary Hart");
     }
+    lock::owner();
     wait(Phase::AffinityChecked);
     finish(execution, dispatch(execution, pinned, primary), 17);
     execution.submit(a).expect("admit migratable Unit");
@@ -232,7 +237,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert_eq!(limen_register_probe_migrated.load(Relaxed), 1);
 
     write(
-        "PASS kernel-execution-harts active=2 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1\n",
+        "PASS kernel-execution-harts active=2 fifo=1 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1\n",
     );
     shutdown(true)
 }
