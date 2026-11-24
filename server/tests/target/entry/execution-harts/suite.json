@@ -1,7 +1,6 @@
 {
   "id": "kernel-execution-harts",
   "profiles": ["debug", "release"],
-  "harts": [4],
   "sources": [
     "server/src/**",
     "server/build.rs",

@@ -20,11 +20,11 @@ with the debug console and system reset extensions. The cross-Hart scenario
 also uses the hart state management extension.
 
 ```sh
-bash tools/tests/discover.sh "$PWD" "" 1
+bash tools/tests/discover.sh "$PWD" ""
 cargo +nightly build --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --suite server/tests/target/entry/boot --kernel "$PWD" \
-  --output /tmp/limen-boot --profile debug --harts 1
+  --output /tmp/limen-boot --profile debug --harts 4
 ```
 
 At the firmware entry address the test image writes a nonzero BSS sentinel
@@ -34,9 +34,8 @@ complete serial assertions, one QMP `SHUTDOWN` event with `guest=true` and
 `reason=guest-shutdown`, and a clean QEMU exit. The serial log, QMP transcript
 and verdict are preserved with the candidate revision.
 
-The Target workflow runs affected owner-local `suite.json` scenarios at their
-declared Hart counts and uploads their evidence. Manual runs select one or four
-Harts and fail when the selected count has no matching suite.
+The Target workflow runs affected owner-local `suite.json` scenarios on four virtual CPUs and uploads their evidence. Ordinary boots enter on the
+firmware-selected CPU. Only the cross-Hart scenario starts a second participant.
 
 Hardware execution and later runtime contracts require separate verification.
 
@@ -48,7 +47,7 @@ firmware. Use a fresh output path for each profile.
 ```sh
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --suite server/tests/target/entry/execution --kernel "$PWD" \
-  --output /tmp/limen-execution --profile debug --harts 1
+  --output /tmp/limen-execution --profile debug --harts 4
 ```
 
 The guest verifies separate stacks in the shared Kernel Nest, Yield and resume,
@@ -87,7 +86,7 @@ rustup target add --toolchain nightly x86_64-unknown-uefi aarch64-unknown-none-s
 rustup component add --toolchain nightly llvm-tools
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --suite server/tests/target/entry/platforms --kernel "$PWD" \
-  --output /tmp/limen-platforms --profile debug --harts 1
+  --output /tmp/limen-platforms --profile debug --harts 4
 ```
 
 The runner boots both boards from the candidate Git archive. Use `--profile

@@ -1,7 +1,6 @@
 {
   "id": "platform-boot",
   "profiles": ["debug", "release"],
-  "harts": [1],
   "sources": [
     "server/src/lib.rs", "server/src/entry/mod.rs", "server/src/entry/boot/early.rs",
     "server/src/metal/mod.rs", "server/src/metal/x86_64/**", "server/src/metal/aarch64/**",

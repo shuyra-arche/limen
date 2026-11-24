@@ -15,6 +15,8 @@ unsafe extern "C" {
     static _bss_end: u8;
 }
 
+// Nonzero initialization places the firmware witness outside the cleared BSS.
+static mut FIRMWARE_HART: usize = usize::MAX;
 static mut ZEROED: usize = 0;
 
 // Firmware-facing test prelude. Preserve a0/a1 and do not assume gp or sp.
@@ -25,18 +27,25 @@ global_asm!(
     "limen_test_entry:",
     ".option push",
     ".option norelax",
+    "lla t0, {hart}",
+    "sd a0, 0(t0)",
     "lla t0, {sentinel}",
     "li t1, -1",
     "sd t1, 0(t0)",
     "tail _start",
     ".option pop",
     ".popsection",
+    hart = sym FIRMWARE_HART,
     sentinel = sym ZEROED,
 );
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
-    assert!(boot.hart() == 0, "unexpected firmware hart ID");
+    let original = unsafe { (&raw const FIRMWARE_HART).read_volatile() };
+    assert!(
+        original < 4 && boot.hart() == original,
+        "firmware hart ID changed"
+    );
 
     let sp: usize;
     let satp: usize;
@@ -104,7 +113,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert!(magic == 0xd00d_feed, "invalid firmware tree magic");
     assert!(length == device_tree.len(), "firmware tree length mismatch");
 
-    write("PASS boot-handoff hart=0 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1\n");
+    write("PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1\n");
     shutdown(true)
 }
 

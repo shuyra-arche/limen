@@ -10,7 +10,6 @@ use std::{
 pub struct Suite {
     pub id: String,
     pub profiles: Vec<String>,
-    pub harts: Vec<u8>,
     pub sources: Vec<String>,
     pub run: Run,
 }
@@ -90,10 +89,6 @@ pub fn read(path: &Path) -> Result<(Suite, PathBuf)> {
                 .iter()
                 .all(|profile| profile == "debug" || profile == "release"),
         "invalid test profiles",
-    )?;
-    require(
-        !suite.harts.is_empty() && suite.harts.iter().all(|hart| matches!(hart, 1 | 4)),
-        "invalid test Hart selection",
     )?;
     require(
         !suite.sources.is_empty(),

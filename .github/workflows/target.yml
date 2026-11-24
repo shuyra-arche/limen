@@ -27,13 +27,6 @@ on:
       - "Cargo.lock"
       - ".github/workflows/target.yml"
   workflow_dispatch:
-    inputs:
-      harts:
-        description: Explicit emulated Hart count
-        type: choice
-        required: true
-        default: "1"
-        options: ["1", "4"]
 
 defaults:
   run:
@@ -62,19 +55,18 @@ jobs:
         name: Select affected owners
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
-          HARTS: ${{ inputs.harts || 'declared' }}
         run: |
           set -euo pipefail
-          matrix="$(bash tools/tests/discover.sh "$GITHUB_WORKSPACE" "$BASE_SHA" "$HARTS")"
+          matrix="$(bash tools/tests/discover.sh "$GITHUB_WORKSPACE" "$BASE_SHA")"
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$matrix" == '[]' ]]; then
-            echo "::error::No target suite supports the requested Hart count ($HARTS)."
+            echo "::error::No target suites discovered."
             exit 1
           fi
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "$matrix" | jq .
 
   target:
-    name: ${{ matrix.id }} / ${{ matrix.profile }} / h${{ matrix.harts }}
+    name: ${{ matrix.id }} / ${{ matrix.profile }} / H4
     needs: discover
     if: needs.discover.outputs.matrix != '[]'
     runs-on: ubuntu-latest
@@ -89,7 +81,6 @@ jobs:
       RUSTUP_TOOLCHAIN: nightly
       QEMU_RISCV64: qemu-system-riscv64
       QEMU_OPENSBI: /usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin
-      HARTS: ${{ matrix.harts }}
       PROFILE: ${{ matrix.profile }}
       SUITE: ${{ matrix.suite }}
     steps:
@@ -114,11 +105,11 @@ jobs:
           cargo build --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
           runner="$GITHUB_WORKSPACE/server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify"
           "$runner" run --suite "$SUITE" --kernel "$GITHUB_WORKSPACE" \
-            --output "$GITHUB_WORKSPACE/.integration/evidence" --profile "$PROFILE" --harts "$HARTS"
+            --output "$GITHUB_WORKSPACE/.integration/evidence" --profile "$PROFILE"
       - name: Expose failed build or execution evidence
         if: failure()
         run: |
-          for file in .integration/evidence/*-runner/{stderr,serial}.log .integration/evidence/*/{guest,stderr}.log .integration/evidence/candidate/locked/stderr.log .integration/evidence/candidate/harts-"$HARTS"-round-0/serial.log .integration/evidence/cargo/stderr.log; do
+          for file in .integration/evidence/*-runner/{stderr,serial}.log .integration/evidence/*/{guest,stderr}.log .integration/evidence/candidate/locked/stderr.log .integration/evidence/candidate/harts-4-round-0/serial.log .integration/evidence/cargo/stderr.log; do
             if test -f "$file"; then
               echo "---- $file ----"
               tail -n 100 "$file"
@@ -128,7 +119,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: target-${{ matrix.id }}-${{ matrix.profile }}-h${{ matrix.harts }}
+          name: target-${{ matrix.id }}-${{ matrix.profile }}-h4
           include-hidden-files: true
           path: |
             .integration/evidence/

@@ -25,7 +25,7 @@ export CARGO_TARGET_DIR
 trap 'rm -rf "$CARGO_TARGET_DIR"' EXIT
 RUSTFLAGS=-Dwarnings cargo build --locked --manifest-path "$suite/Cargo.toml" --target "$target" "${flags[@]}"
 bin="$CARGO_TARGET_DIR/$target/$profile/platform-boot"
-args=(-accel tcg -smp 1 -m 128M -nodefaults -display none -nic none -no-reboot)
+args=(-accel tcg -smp "${4:?expected runner CPU count}" -m 128M -nodefaults -display none -nic none -no-reboot)
 if [[ -n ${QEMU_DATA_DIR:-} ]]; then args+=(-L "$QEMU_DATA_DIR"); fi
 case "$platform" in
     q35)

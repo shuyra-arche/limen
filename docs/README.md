@@ -68,7 +68,7 @@ resident Harts. The [verification guide](../server/tests/README.md) describes
 the RV64 target scenarios. Hart detachment, preemption, hardware translation,
 user traps and calls require separate implementation and verification.
 
-## Single-CPU platform entries
+## Platform boot CPU entries
 
 The q35 diagnostic image starts through OVMF. Its loader exits Boot Services
 with the final memory map, keeps that map and its old stack reserved, and calls

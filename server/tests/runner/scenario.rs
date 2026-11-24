@@ -22,7 +22,7 @@ pub struct Inputs {
     output: PathBuf,
     #[arg(long, default_value = "debug", value_parser = ["debug", "release"])]
     profile: String,
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u8).range(4..=4))]
     harts: u8,
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=100))]
     rounds: u8,
@@ -225,27 +225,20 @@ pub fn run(args: Inputs) -> Result<()> {
         suite.profiles.contains(&args.profile),
         "profile not supported by this test project",
     )?;
-    require(
-        suite.harts.contains(&args.harts),
-        "Hart count not supported by this test project",
-    )?;
     let mut args = args;
     args.kernel = args.kernel.canonicalize()?;
     fresh(&args.output)?;
     args.output = args.output.canonicalize()?;
     match &suite.run {
         Run::BoardBoot { boards } => {
-            require(
-                !boards.is_empty() && args.harts == 1,
-                "expected single-CPU board scenarios",
-            )?;
+            require(!boards.is_empty(), "expected boot boards")?;
             let source = revision(&args.kernel)?;
             let provider = args.output.join("provider");
             archive(&args.kernel, &source, &provider)?;
             json(
                 &args.output.join("inputs.json"),
                 &serde_json::json!({
-                    "source": source, "profile": args.profile, "rustc": output(Command::new("rustc").arg("-Vv"))?
+                    "source": source, "profile": args.profile, "harts": args.harts, "rustc": output(Command::new("rustc").arg("-Vv"))?
                 }),
             )?;
             let script = provider.join("server/tests").join(relative).join("run.sh");
@@ -258,7 +251,8 @@ pub fn run(args: Inputs) -> Result<()> {
                         .arg(&script)
                         .arg(board.name())
                         .arg(&args.profile)
-                        .arg(args.output.join(&label));
+                        .arg(args.output.join(&label))
+                        .arg(args.harts.to_string());
                     let result = process::run(
                         &mut command,
                         &args.output.join(format!("{label}-runner")),

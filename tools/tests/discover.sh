@@ -4,10 +4,9 @@ set -euo pipefail
 
 root="$(cd "${1:-.}" && pwd)"
 base="${2:-}"
-harts="${3:-1}"
-case "$harts" in
-    1|4|declared) ;;
-    *) echo "invalid Hart selection" >&2; exit 1 ;;
+case "${3:-4}" in
+    4|declared) ;;
+    *) echo "target scenarios use four virtual CPUs" >&2; exit 1 ;;
 esac
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 
@@ -41,7 +40,6 @@ while IFS= read -r -d '' file; do
     ids["$id"]=1
     jq -e '.profiles | type == "array" and length > 0 and all(.[]; . == "debug" or . == "release")' "$file" >/dev/null
     jq -e '.sources | type == "array" and length > 0' "$file" >/dev/null
-    jq -e '.harts | type == "array" and length > 0 and all(.[]; . == 1 or . == 4)' "$file" >/dev/null
 
     selected=true
     if [[ "$filter" == true ]]; then
@@ -62,11 +60,8 @@ while IFS= read -r -d '' file; do
     fi
     [[ "$selected" == true ]] || continue
 
-    suite_jobs="$(jq -c --arg suite "$relative" --arg id "$id" --arg selection "$harts" '
-        (.harts | unique[]) as $hart
-        | select($selection == "declared" or ($hart | tostring) == $selection)
-        | .profiles[] as $profile
-        | {suite: $suite, id: $id, profile: $profile, harts: $hart}
+    suite_jobs="$(jq -c --arg suite "$relative" --arg id "$id" '
+        .profiles[] as $profile | {suite: $suite, id: $id, profile: $profile}
     ' "$file")"
     [[ -z "$suite_jobs" ]] || jobs+=("$suite_jobs")
 done < <(find "$root/server/tests/target" -name suite.json -type f -print0 | sort -z)
