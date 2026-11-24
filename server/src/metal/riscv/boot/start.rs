@@ -1,3 +1,10 @@
+//! OpenSBI entry points and the early supervisor trap vector.
+use super::{TRAP_STACK, TrapStack, secondary};
+use crate::metal::stack::{STACK, Stack};
+use core::arch::global_asm;
+
+global_asm!(
+    r#"
 .macro establish_supervisor
     csrci sstatus, 2
     csrw sie, zero
@@ -80,3 +87,15 @@ _limen_early_trap:
 3:
     wfi
     j 3b
+"#,
+    boot_stack = sym STACK,
+    boot_bytes = const size_of::<Stack>(),
+    trap_stack = sym TRAP_STACK,
+    trap_bytes = const size_of::<TrapStack>(),
+    secondary_state = const secondary::STATE_OFFSET,
+    secondary_published = const secondary::PUBLISHED,
+    secondary_entered = const secondary::ENTERED,
+    secondary_hart = const secondary::HART_OFFSET,
+    secondary_stack = const secondary::STACK_OFFSET,
+    secondary_trap_stack = const secondary::TRAP_STACK_OFFSET,
+);

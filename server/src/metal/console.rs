@@ -1,5 +1,5 @@
 //! Early output and termination available under the selected platform contract.
-use super::platform;
+use super::boot;
 use core::fmt::{self, Write};
 
 /// A writer backed by the early console supplied by this platform.
@@ -32,13 +32,13 @@ impl Services {
         if let Some(reset) = self.reset {
             reset(success);
         }
-        platform::park()
+        boot::park()
     }
 }
 
 /// Obtain a writer only if this platform supplies a diagnostic device.
 pub fn console() -> Option<Console> {
-    platform::services().output.map(Console)
+    boot::services().output.map(Console)
 }
 
 /// Best-effort output for trusted early boot code.
@@ -50,5 +50,5 @@ pub fn write(message: &str) {
 
 /// Request platform termination and park if no reset is available or it returns.
 pub fn shutdown(success: bool) -> ! {
-    platform::services().shutdown(success)
+    boot::services().shutdown(success)
 }

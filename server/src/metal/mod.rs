@@ -8,8 +8,10 @@ pub(crate) mod stack;
 pub(crate) mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64 as platform;
+pub(crate) use aarch64 as arch;
 #[cfg(target_arch = "riscv64")]
-pub(crate) use riscv::boot as platform;
+pub(crate) use riscv as arch;
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64 as platform;
+pub(crate) use x86_64 as arch;
+
+pub(crate) use arch::boot;

@@ -1,7 +1,8 @@
-use core::arch::{asm, global_asm};
+use core::arch::asm;
 
 mod firmware;
 mod secondary;
+mod start;
 
 pub(crate) use super::sbi::services;
 pub use secondary::Secondary;
@@ -12,20 +13,6 @@ struct TrapStack([u8; 4096]);
 
 #[unsafe(link_section = ".limen.trap.stack")]
 static mut TRAP_STACK: TrapStack = TrapStack([0; 4096]);
-
-global_asm!(
-    include_str!("start.S"),
-    boot_stack = sym crate::metal::stack::STACK,
-    boot_bytes = const size_of::<crate::metal::stack::Stack>(),
-    trap_stack = sym TRAP_STACK,
-    trap_bytes = const size_of::<TrapStack>(),
-    secondary_state = const secondary::STATE_OFFSET,
-    secondary_published = const secondary::PUBLISHED,
-    secondary_entered = const secondary::ENTERED,
-    secondary_hart = const secondary::HART_OFFSET,
-    secondary_stack = const secondary::STACK_OFFSET,
-    secondary_trap_stack = const secondary::TRAP_STACK_OFFSET,
-);
 
 unsafe extern "C" {
     fn _limen_early_trap();

@@ -93,6 +93,15 @@ user traps and calls require separate implementation and verification.
 
 ## Platform boot CPU entries
 
+Each architecture implements CPU startup under `metal/<arch>/boot/`.
+The common gate uses `metal::boot` to check the selected implementation.
+Keep boot assembly and its Rust operands in the same module. Use
+`global_asm!` for firmware entry symbols or vector tables and `naked_asm!`
+for a Rust-declared entry with an explicit call ABI. Use `sym` for Rust-owned
+storage and `const` for sizes or layout offsets. The linker supplies final
+image and section boundaries. Board-specific diagnostics live under
+`metal/<arch>/board/` when selected by a board feature.
+
 The q35 and AArch64 virt diagnostic images share a UEFI loader. OVMF loads
 `EFI/BOOT/BOOTX64.EFI` on q35 and AAVMF loads `EFI/BOOT/BOOTAA64.EFI` on
 virt. The loader captures board inputs, obtains the final memory map through
