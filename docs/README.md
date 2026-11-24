@@ -1,4 +1,4 @@
-# Kernel documentation
+# Limen documentation
 
 | Reader's question | Source |
 | --- | --- |
@@ -31,4 +31,4 @@ typst compile docs/design/main.typ /tmp/shuyra-kernel.pdf
 
 Keep Typst source in Git. Use the generated PDF for reading or publication.
 Documentation-only changes skip Kernel builds and QEMU tests. The repository
-path filters are tracked in [PR #126](https://github.com/shuyra-arche/kernel/pull/126).
+path filters are tracked in [PR #126](https://github.com/shuyra-arche/limen/pull/126).

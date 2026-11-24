@@ -107,8 +107,8 @@ replacement feature is required. Rebuild the complete image, including Capsule
 and Ledger. Old Cell and Share Open/Shut calls are rejected.
 
 ABI 10 consumers must stay on their existing immutable source revision or the
-[Preview Alpha](https://github.com/shuyra-arche/kernel/releases/tag/26.11.14-preview-Alpha).
-The [Preview Beta](https://github.com/shuyra-arche/kernel/releases/tag/26.11.14-preview-Beta)
+[Preview Alpha](https://github.com/shuyra-arche/limen/releases/tag/26.11.14-preview-Alpha).
+The [Preview Beta](https://github.com/shuyra-arche/limen/releases/tag/26.11.14-preview-Beta)
 is also fixed: its source still requires the old opt-in feature. Neither tag
 contains this removal of ABI selection.
 

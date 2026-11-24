@@ -13,7 +13,7 @@ return obligation, its logical holding, and the translation that grants
 access through an address.
 
 Cell, Flat and Nest give each of these facts its own authority. The
-#link("https://github.com/shuyra-arche/kernel/blob/main/api/memory.md")[current memory contract]
+#link("https://github.com/shuyra-arche/limen/blob/main/api/memory.md")[current memory contract]
 documents ABI 14's Page, Slot, Memo and Publication. The target changes
 their organization and behavior, including the admission rules for
 mapping and Transfer. The API, Client and consumers migrate together
@@ -214,15 +214,15 @@ configuration. Physical device proofs require the relevant hardware
 and platform contract.
 
 Implementation and acceptance are tracked in
-#link("https://github.com/shuyra-arche/kernel/issues/326")[the migration index]
+#link("https://github.com/shuyra-arche/limen/issues/326")[the migration index]
 and the related
-#link("https://github.com/shuyra-arche/kernel/issues/330")[Cell],
-#link("https://github.com/shuyra-arche/kernel/issues/331")[Flat] and
-#link("https://github.com/shuyra-arche/kernel/issues/332")[Nest] issues.
+#link("https://github.com/shuyra-arche/limen/issues/330")[Cell],
+#link("https://github.com/shuyra-arche/limen/issues/331")[Flat] and
+#link("https://github.com/shuyra-arche/limen/issues/332")[Nest] issues.
 Their boundaries with
-#link("https://github.com/shuyra-arche/kernel/issues/327")[Sync],
-#link("https://github.com/shuyra-arche/kernel/issues/328")[Execution],
-#link("https://github.com/shuyra-arche/kernel/issues/329")[Pend],
-#link("https://github.com/shuyra-arche/kernel/issues/333")[Copy] and
-#link("https://github.com/shuyra-arche/kernel/issues/334")[Share and Activity]
+#link("https://github.com/shuyra-arche/limen/issues/327")[Sync],
+#link("https://github.com/shuyra-arche/limen/issues/328")[Execution],
+#link("https://github.com/shuyra-arche/limen/issues/329")[Pend],
+#link("https://github.com/shuyra-arche/limen/issues/333")[Copy] and
+#link("https://github.com/shuyra-arche/limen/issues/334")[Share and Activity]
 remain part of that migration.

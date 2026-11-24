@@ -1,6 +1,6 @@
-# Kernel
+# Limen
 
-Shuyra Kernel is the RV64 microkernel used by Vanllia. It runs isolated
+Limen is the Shuyra RV64 microkernel used by Vanllia. It runs isolated
 programs and lets them exchange data, delegate access, and signal events
 across protection boundaries.
 
@@ -40,7 +40,7 @@ the bootable system image through the
 
 ## Releases and source
 
-Pin API and Client to the same [release tag](https://github.com/shuyra-arche/kernel/releases)
+Pin API and Client to the same [release tag](https://github.com/shuyra-arche/limen/releases)
 or exact Git revision. Review the
 [API contracts and version selection](api/README.md#abi-version)
 before updating a pin. GitHub releases identify source revisions. The
