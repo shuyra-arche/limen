@@ -518,7 +518,9 @@ fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles()
         let reclaimed = plan
             .execute(Fast, |held| held.access(&recovery).unwrap().take().unwrap())
             .unwrap();
-        scope.spawn(move || reclaimed.destroy().ok().unwrap());
+        scope.spawn(move || {
+            let _receipt = reclaimed.destroy().ok().unwrap();
+        });
     });
 
     assert_eq!(drops.load(Relaxed), 1);
@@ -548,13 +550,127 @@ fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles()
     drop(reference);
     let mut reclaim = None;
     owner.detach().claim(&mut reclaim).ok().unwrap();
-    reclaim.unwrap().destroy().ok().unwrap();
+    reclaim
+        .unwrap()
+        .destroy()
+        .ok()
+        .unwrap()
+        .release()
+        .ok()
+        .unwrap();
+    assert_eq!(drops.load(Relaxed), 2);
+    assert_eq!(pool.capacity().unwrap().free, slots);
+}
+
+#[test]
+fn recovery_releases_an_ordinary_object_after_its_destroyer_exits() {
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+    struct Record<'a>(&'a AtomicUsize);
+
+    impl Drop for Record<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Relaxed);
+        }
+    }
+
+    let [mut material, _] = supplies();
+    let mut directory = [GroupSlot::<Record<'_>>::EMPTY];
+    let mut page = Page([MaybeUninit::uninit(); PAGE]);
+    let drops = AtomicUsize::new(0);
+    let mut pool = Pool::new(&mut directory).unwrap();
+    let group = unsafe { pool.install(&mut material, &mut Some(&mut page.0)) }.unwrap();
+    let slots = pool.capacity().unwrap().slots;
+    let mut reserved = None;
+    let mut occupied = None;
+    pool.reserve(&mut reserved).unwrap();
+    reserved
+        .unwrap()
+        .initialize(Record(&drops))
+        .publish(&mut occupied)
+        .ok()
+        .unwrap();
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                let _receipt = occupied.unwrap().destroy().ok().unwrap();
+            })
+            .join()
+            .unwrap();
+    });
+
+    assert_eq!(pool.shut(group), Err(Error::Busy));
+    assert_eq!(pool.capacity().unwrap().free, slots - 1);
     assert_eq!(
         pool.release_destroyed(&mut ReleaseCursor::default(), 1),
         Ok(ReleaseProgress::Released)
     );
-    assert_eq!(drops.load(Relaxed), 2);
     assert_eq!(pool.capacity().unwrap().free, slots);
+    assert_eq!(drops.load(Relaxed), 1);
+}
+
+#[test]
+fn a_direct_completion_beyond_the_scan_budget_cannot_release_a_later_object() {
+    let [mut material, _] = supplies();
+    let mut directory = [GroupSlot::<Stable<u64>>::EMPTY];
+    let mut page = Page([MaybeUninit::uninit(); PAGE]);
+    let mut pool = Pool::new(&mut directory).unwrap();
+    let group = unsafe { pool.install(&mut material, &mut Some(&mut page.0)) }.unwrap();
+    let slots = pool.capacity().unwrap().slots;
+    assert!(slots > 64);
+    let mut prefix = [const { None }; 64];
+    for place in &mut prefix {
+        pool.reserve(place).unwrap();
+    }
+    let destroy = || {
+        let mut reserved = None;
+        let mut occupied = None;
+        let mut reclamation = None;
+        pool.reserve(&mut reserved).unwrap();
+        reserved
+            .unwrap()
+            .initialize(Stable::new(37))
+            .publish(&mut occupied)
+            .ok()
+            .unwrap();
+        let owner = occupied.unwrap().stabilize();
+        let reference = retain(|| owner.reference());
+        let address = ptr::from_ref(reference.get()).addr();
+        drop(reference);
+        owner.detach().claim(&mut reclamation).ok().unwrap();
+        (address, reclamation.unwrap().destroy().ok().unwrap())
+    };
+    let (address, direct) = destroy();
+    assert_eq!(
+        pool.release_destroyed(&mut ReleaseCursor::default(), 64),
+        Ok(ReleaseProgress::More)
+    );
+    assert_eq!(pool.capacity().unwrap().free, slots - 65);
+    direct.release().ok().unwrap();
+    assert_eq!(pool.capacity().unwrap().free, slots - 64);
+
+    let (original, old) = destroy();
+    assert_eq!(original, address);
+    let mut cursor = ReleaseCursor::default();
+    assert_eq!(
+        pool.release_destroyed(&mut cursor, 64),
+        Ok(ReleaseProgress::More)
+    );
+    assert_eq!(
+        pool.release_destroyed(&mut cursor, 1),
+        Ok(ReleaseProgress::Released)
+    );
+    let (reused, current) = destroy();
+    assert_eq!(reused, address);
+    let (old, error) = old.release().err().unwrap();
+    assert_eq!(error, Error::Stale);
+    assert_eq!(pool.capacity().unwrap().free, slots - 65);
+    current.release().ok().unwrap();
+    for place in prefix {
+        place.unwrap().cancel().ok().unwrap();
+    }
+    pool.shut(group).unwrap();
+    assert_eq!(old.release().err().unwrap().1, Error::Stale);
 }
 
 #[test]
@@ -568,31 +684,25 @@ fn a_destructor_with_unknown_outcome_does_not_make_the_slot_reusable() {
     }
 
     let [mut material, _] = supplies();
-    let mut directory = [GroupSlot::<Stable<Fault>>::EMPTY];
+    let mut directory = [GroupSlot::<Fault>::EMPTY];
     let mut page = Page([MaybeUninit::uninit(); PAGE]);
     let mut pool = Pool::new(&mut directory).unwrap();
     let group = unsafe { pool.install(&mut material, &mut Some(&mut page.0)) }.unwrap();
     let slots = pool.capacity().unwrap().slots;
     let mut reserved = None;
     let mut occupied = None;
-    let mut recovery = None;
     pool.reserve(&mut reserved).unwrap();
     reserved
         .unwrap()
-        .initialize(Stable::new(Fault))
+        .initialize(Fault)
         .publish(&mut occupied)
-        .ok()
-        .unwrap();
-    occupied
-        .unwrap()
-        .stabilize()
-        .detach()
-        .claim(&mut recovery)
         .ok()
         .unwrap();
     assert!(std::thread::scope(|scope| {
         scope
-            .spawn(move || recovery.unwrap().destroy().ok().unwrap())
+            .spawn(move || {
+                let _receipt = occupied.unwrap().destroy().ok().unwrap();
+            })
             .join()
             .is_err()
     }));

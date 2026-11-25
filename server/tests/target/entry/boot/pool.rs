@@ -99,11 +99,16 @@ pub(super) fn check(boot: &Boot<'_>) {
         assert_eq!(error, Error::References);
         drop(reference);
         detached.claim(&mut reclaim).ok().unwrap();
-        reclaim.unwrap().destroy().ok().unwrap();
-        assert_eq!(
-            pool.release_destroyed(&mut ReleaseCursor::default(), 1),
-            Ok(ReleaseProgress::Released)
-        );
+        let vacant = reclaim.unwrap().destroy().ok().unwrap();
+        if value == 37 {
+            vacant.release().ok().unwrap();
+        } else {
+            assert_eq!(
+                pool.release_destroyed(&mut ReleaseCursor::default(), 1),
+                Ok(ReleaseProgress::Released)
+            );
+            assert_eq!(vacant.release().err().unwrap().1, Error::Stale);
+        }
     }
     assert_eq!(pool.capacity().unwrap().free, geometry.slots);
     assert_eq!(source.budget(Fast), Ok((PAGE as u64, 0)));

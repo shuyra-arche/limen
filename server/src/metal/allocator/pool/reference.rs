@@ -6,9 +6,7 @@ use core::{
 
 use crate::sync::{HeldLockSet, TurnLock};
 
-use super::{
-    Error, GroupId, GroupRecord, Occupied, Pool, SourceError, group::State, place::Claim, with_turn,
-};
+use super::{Error, Occupied, SourceError, Vacant, group::State, place::Claim, with_turn};
 
 /// Maximum simultaneous owners of a stable object, including its base owner.
 pub const REFERENCE_LIMIT: usize = 64;
@@ -174,73 +172,13 @@ impl<'pool, 'storage, T> Detached<'pool, 'storage, T> {
     }
 }
 
-impl<T> Reclaim<'_, '_, T> {
+impl<'pool, 'storage, T> Reclaim<'pool, 'storage, T> {
     /// Finish the unique destructor outside the Turn and publish completion
     /// in the original slot before returning. An interrupted or panicking
     /// destructor retains the slot; it cannot be run again from the Pool.
-    pub fn destroy(self) -> Result<(), (Self, Error)> {
-        if let Err(error) = self
-            .0
-            .pool
-            .transition(&self.0, State::Reclaiming, State::Reclaiming)
-        {
-            return Err((self, error));
-        }
-        // This right excludes all old references and a second destructor.
-        unsafe { self.0.value().drop_in_place() };
-        // No fallible acquisition or access to the old slot follows this store.
-        self.0.state().complete_destruction();
-        Ok(())
-    }
-}
-
-/// A recovery pass needs only the Pool root and a fresh cursor.
-#[derive(Default)]
-pub struct ReleaseCursor {
-    group: usize,
-    slot: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReleaseProgress {
-    Released,
-    More,
-    End,
-}
-
-impl<T> Pool<'_, Stable<T>> {
-    /// Settle at most one destroyed slot. Inspect at most `budget` directory
-    /// steps or slots (capped at 64). End resets the cursor for another pass.
-    /// A failed acquisition leaves the cursor intact.
-    pub fn release_destroyed(
-        &self,
-        cursor: &mut ReleaseCursor,
-        budget: usize,
-    ) -> Result<ReleaseProgress, Error> {
-        Ok(with_turn(&self.state, |state| {
-            for _ in 0..budget.min(64) {
-                if cursor.group >= state.count {
-                    *cursor = ReleaseCursor::default();
-                    return ReleaseProgress::End;
-                }
-                if let Some(GroupRecord::Open(group)) = &state.groups[cursor.group].0
-                    && cursor.slot < group.geometry.slots
-                {
-                    let index = cursor.slot;
-                    cursor.slot += 1;
-                    // The Turn keeps this mapping live. Acquire observes the
-                    // unique destructor's normal completion before reuse.
-                    if unsafe { group.slot(index).as_ref().state.get() } == State::Destroyed {
-                        let id = GroupId(cursor.group, group.material.allocation.id());
-                        state.release(id, index, State::Destroyed);
-                        return ReleaseProgress::Released;
-                    }
-                } else {
-                    cursor.group += 1;
-                    cursor.slot = 0;
-                }
-            }
-            ReleaseProgress::More
-        })?)
+    pub fn destroy(self) -> Result<Vacant<'pool, 'storage, Stable<T>>, (Self, Error)> {
+        self.0
+            .destroy(State::Reclaiming)
+            .map_err(|(claim, error)| (Self(claim), error))
     }
 }

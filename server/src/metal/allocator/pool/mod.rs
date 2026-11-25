@@ -10,15 +10,12 @@ use core::mem::MaybeUninit;
 use crate::sync::{HeldLockSet, LockPlan, PlanError, TurnLock};
 
 use super::{Allocation, AllocationId, Error as SourceError, with_turn};
-use group::{Chain, Group, Links, State};
+use group::{Chain, Completion, Group, Links, State};
 
 pub use group::{Geometry, Supply};
 use place::Claim;
-pub use place::{Occupied, Prepared, Reservation, Vacant};
-pub use reference::{
-    Detached, REFERENCE_LIMIT, Reclaim, Reference, ReleaseCursor, ReleaseProgress, Stable,
-    StableOwner,
-};
+pub use place::{Occupied, Prepared, ReleaseCursor, ReleaseProgress, Reservation, Vacant};
+pub use reference::{Detached, REFERENCE_LIMIT, Reclaim, Reference, Stable, StableOwner};
 use retirement::GroupRecord;
 pub use retirement::Retirement;
 
@@ -69,6 +66,7 @@ struct Directory<'storage, T> {
     bytes: usize,
     capacity: usize,
     free: usize,
+    next_completion: Completion,
     empty: Option<GroupId>,
     partial: Option<GroupId>,
 }
@@ -98,6 +96,7 @@ impl<'storage, T> Pool<'storage, T> {
                 bytes: 0,
                 capacity: 0,
                 free: 0,
+                next_completion: Completion::FIRST,
                 empty: None,
                 partial: None,
             }),
@@ -239,41 +238,25 @@ impl<'storage, T> Pool<'storage, T> {
         *receiver = Some(Reservation(Claim::new(self, id, index, slot)));
         Ok(())
     }
-
-    fn transition(
-        &self,
-        claim: &Claim<'_, 'storage, T>,
-        from: State,
-        to: State,
-    ) -> Result<(), Error> {
-        with_turn(&self.state, |_| {
-            let state = claim.state();
-            assert_eq!(state.get(), from);
-            state.set(to);
-        })?;
-        Ok(())
-    }
-
-    fn release(&self, claim: &Claim<'_, 'storage, T>, expected: State) -> Result<(), Error> {
-        with_turn(&self.state, |state| {
-            state.release(claim.group, claim.index, expected)
-        })?;
-        Ok(())
-    }
 }
 
 impl<'storage, T> Directory<'storage, T> {
-    fn release(&mut self, id: GroupId, index: usize, expected: State) {
-        let group = self.group(id);
+    fn release(&mut self, id: GroupId, index: usize, expected: State) -> Result<(), Error> {
+        let GroupRecord::Open(group) = self.entry(id)? else {
+            return Err(Error::Stale);
+        };
         let before = group.chain();
         // The Pool Turn keeps the open group and its slot mapped.
         let slot = unsafe { &group.slot(index).as_ref().state };
-        assert_eq!(slot.get(), expected);
+        if slot.get() != expected {
+            return Err(Error::Stale);
+        }
         slot.set(State::Free(group.head));
         group.head = Some(index);
         group.free += 1;
         self.free += 1;
         self.reclassify(id, before);
+        Ok(())
     }
 
     fn entry(&mut self, id: GroupId) -> Result<&mut GroupRecord<'storage, T>, Error> {
