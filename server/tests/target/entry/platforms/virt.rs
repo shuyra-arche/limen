@@ -175,9 +175,38 @@ pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
     let tree = boot.device_tree().expect("UEFI virt DTB");
     let size = unsafe { dtb_size(tree.start as *const u8, map, &[MemoryType::LOADER_DATA]) };
     assert_eq!(size, Ok(tree.len()));
+
+    let memory = boot.dtb_memory().expect("decoded DTB memory");
+    assert_eq!(
+        memory.ram(),
+        &[boot::Physical {
+            start: 0x4000_0000,
+            end: 0x5000_0000
+        }]
+    );
+    let bank = memory.ram()[0];
+    let mut compared = boot
+        .conventional_ram()
+        .expect("DTB and final UEFI map")
+        .peekable();
+    assert!(compared.peek().is_some());
+    for region in compared {
+        let range = region.physical;
+        assert!(bank.start <= range.start && range.start < range.end && range.end <= bank.end);
+        assert!(range.end <= tree.start as u64 || tree.end as u64 <= range.start);
+        assert!(memory.reservations().iter().all(|reserved| {
+            range.end <= reserved.physical.start || reserved.physical.end <= range.start
+        }));
+        assert!(map.entries().any(|d| {
+            d.ty == MemoryType::CONVENTIONAL
+                && d.att.bits() == region.attributes
+                && d.phys_start <= range.start
+                && range.end <= d.phys_start + d.page_count * PAGE_SIZE as u64
+        }));
+    }
     boot::console()
         .expect("board console")
-        .write_str("PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1\n")
+        .write_str("PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1 ram=1 reconciled=1\n")
         .expect("diagnostic output");
     boot::shutdown(true)
 }

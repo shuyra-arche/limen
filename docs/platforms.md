@@ -22,12 +22,14 @@ that window. Keep that storage immutable and disjoint from the image. The
 prefix. Limen checks the header read and the complete declared extent against
 the configured window before reading the rest of the tree.
 
-`Boot::dtb_memory` exposes RAM from enabled root memory nodes and reservations
+`Boot::dtb_memory` returns the parsed memory description on this path. It
+exposes RAM from enabled root memory nodes and reservations
 from both the FDT reservation block and static `/reserved-memory` children.
 It preserves `no-map` and `reusable` and rejects an enabled reservation whose
 address must still be allocated. The parser accepts one- or two-cell addresses
-and sizes, at most 256 KiB of DTB bytes, 32 levels, 16 RAM ranges and 64
-reservations. Capacity, malformed geometry and unsupported memory descriptions
+and sizes, at most 32 levels, 16 RAM ranges and 64 reservations. OpenSBI
+admits at most 256 KiB of DTB bytes from its readable window.
+Capacity, malformed geometry and unsupported memory descriptions
 fail before the handoff. Later startup stages compare the descriptions with
 live image and hardware exclusions before admitting any range to Allocator.
 
@@ -52,11 +54,22 @@ bounded pairwise comparisons without ordinary allocation. The selected test
 profiles use a limit of 512 descriptors; other images set their own validated
 configuration bound.
 
-This step establishes descriptor geometry only. Initial RAM admission still
-requires the full platform reservations, active image/stack/translation
-storage, verified access and old device isolation. AArch64 still needs the
-DTB and UEFI map cross-check.
-Do not interpret missing information as an empty reservation set.
+Use `DeviceTree::Memory(bytes)` when the platform supplies the DTB as a
+memory description. The adapter checks the retained copy and runs the same
+bounded parser as OpenSBI. A retained memory description can occupy up to
+2 MiB including firmware padding. The parser limits the combined structure
+and strings blocks to 256 KiB. Use `DeviceTree::Description(bytes)` for a DTB
+whose extent alone needs checking at this handoff, or `None` when the loader
+has no DTB.
+
+`Boot::conventional_ram` is present when both memory descriptions were supplied.
+It walks their intersection without allocating, returning whole UEFI pages
+that are conventional memory, are outside both kinds of DTB reservation
+and have no UEFI runtime obligation. It preserves the UEFI descriptor kind
+and attributes. The original DTB and UEFI descriptions remain available
+through `Boot`. Initial RAM admission still requires the remaining platform
+reservations, active image/stack/translation storage, verified access and old
+device isolation.
 [UEFI adapter](../server/src/metal/firmware/uefi/) ·
 [Formal boot contract](https://github.com/shuyra-arche/document-limen/blob/246170c626ee2b5e316753e95f50f1669e8f47dd/server/entry/boot/platforms.md)
 
@@ -84,11 +97,13 @@ PL011 address and PSCI conduit from the tree.
 
 Metal masks DAIF, selects `SP_EL1`, switches stacks and installs the aligned
 EL1 vector table. Admission verifies that the DTB matches its declared extent
-and fits in retained loader data in the final map. The minor starts through
+and fits in retained loader data in the final map. The platform supplies it
+as `DeviceTree::Memory` to enable cross-checking. The minor starts through
 PSCI `CPU_ON` with a launch record as context, restores the major's EL1
 translation controls and installs its stack and vectors. QEMU verifies the
 HVC conduit. [AArch64 entry](../server/src/metal/boot/aarch64/) · [PSCI](../server/src/metal/firmware/psci.rs)
 
-The verified scope on x86 and Arm covers major and minor boot. CPU hotplug,
+The verified scope on x86 and Arm covers major and minor boot, and on Arm
+also the DTB and UEFI memory cross-check. CPU hotplug,
 general topology admission, interrupt routing and Unit scheduling on these
 targets require separate implementation and verification.

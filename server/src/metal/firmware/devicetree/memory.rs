@@ -1,7 +1,12 @@
-use super::{HEADER_SIZE, extent, layout};
+#[cfg(any(target_arch = "riscv64", test))]
+use super::extent;
+use super::{HEADER_SIZE, layout};
+#[cfg(any(target_arch = "riscv64", test))]
 use core::{ops::Range, slice};
 
-const MAX_BYTES: usize = 256 * 1024;
+const MAX_BLOCK_BYTES: usize = 256 * 1024;
+// AAVMF retains the QEMU tree with free space and an extra EFI page.
+const MAX_EXTENT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DEPTH: usize = 32;
 const RAM_LIMIT: usize = 16;
 const RESERVATION_LIMIT: usize = 64;
@@ -93,6 +98,7 @@ impl DtbMemory {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Error {
+    #[cfg(any(target_arch = "riscv64", test))]
     Window,
     Format,
     Range,
@@ -105,6 +111,7 @@ pub(crate) enum Error {
 /// The trusted platform provides a readable, identity-mapped window and
 /// guarantees that the firmware's DTB storage is initialized and immutable
 /// for the reads below. The DTB cannot supply any part of that window bound.
+#[cfg(any(target_arch = "riscv64", test))]
 pub(crate) unsafe fn read(
     input: *const (),
     window: Range<usize>,
@@ -119,7 +126,7 @@ pub(crate) unsafe fn read(
     if range.end > window.end {
         return Err(Error::Window);
     }
-    if range.len() > MAX_BYTES {
+    if range.len() > MAX_BLOCK_BYTES {
         return Err(Error::Capacity);
     }
     // Only the exact DTB is borrowed. The enclosing window can contain
@@ -141,7 +148,7 @@ pub(crate) fn describe(blob: &[u8], output: &mut Option<DtbMemory>) -> Result<()
 }
 
 fn parse(blob: &[u8], memory: &mut DtbMemory) -> Result<(), Error> {
-    if blob.len() > MAX_BYTES {
+    if blob.len() > MAX_EXTENT_BYTES {
         return Err(Error::Capacity);
     }
     let header = blob.first_chunk::<HEADER_SIZE>().ok_or(Error::Format)?;
@@ -152,6 +159,11 @@ fn parse(blob: &[u8], memory: &mut DtbMemory) -> Result<(), Error> {
     let layout = layout(words).ok_or(Error::Format)?;
     if layout.size as usize != blob.len() {
         return Err(Error::Format);
+    }
+    // Free space in the retained extent never enters the structure or string
+    // scan. The reservation walk has its own fixed entry limit.
+    if layout.structure.len() + layout.strings.len() > MAX_BLOCK_BYTES {
+        return Err(Error::Capacity);
     }
 
     let start = layout.reservations;

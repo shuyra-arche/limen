@@ -1,11 +1,14 @@
 //! Checked physical descriptions from the final UEFI memory map.
 //! A descriptor is a firmware fact, not permission to allocate or access RAM.
 
-use core::ops::Range;
+use super::devicetree::memory::{DtbMemory, Reservation};
+use core::{iter, ops::Range};
 
 const PREFIX: usize = 40;
 const ALIGNMENT: usize = 8;
 const PAGE_BYTES: u64 = 4096;
+const CONVENTIONAL_MEMORY: u32 = 7;
+const RUNTIME: u64 = 1 << 63;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MapError {
@@ -94,6 +97,68 @@ impl<'a> FirmwareMap<'a> {
             .chunks_exact(self.stride)
             .map(|entry| decode(entry).expect("validated firmware descriptor"))
     }
+
+    pub(crate) fn conventional_ram<'b>(
+        &'b self,
+        memory: &'b DtbMemory,
+    ) -> impl Iterator<Item = FirmwareRegion> + 'b {
+        self.regions()
+            .filter(|region| region.kind == CONVENTIONAL_MEMORY && region.attributes & RUNTIME == 0)
+            .flat_map(move |region| {
+                memory.ram().iter().flat_map(move |bank| {
+                    // Keep only complete UEFI pages supported by the DTB.
+                    let start = region.physical.start.max(bank.start);
+                    let end = page_floor(region.physical.end.min(bank.end));
+                    let start = start.checked_next_multiple_of(PAGE_BYTES).unwrap_or(end);
+                    unreserved(start..end, memory.reservations()).map(move |physical| {
+                        FirmwareRegion {
+                            kind: region.kind,
+                            physical,
+                            attributes: region.attributes,
+                        }
+                    })
+                })
+            })
+    }
+}
+
+fn page_floor(address: u64) -> u64 {
+    address - address % PAGE_BYTES
+}
+
+/// Walk one intersection using a cursor over a bounded reservation list.
+/// All reservations, including overlapping ones, cover any page they touch.
+fn unreserved(
+    range: Range<u64>,
+    reservations: &[Reservation],
+) -> impl Iterator<Item = Range<u64>> + '_ {
+    let mut start = range.start;
+    iter::from_fn(move || {
+        while start < range.end {
+            let mut next = range.end;
+            let mut blocked = start;
+            for reservation in reservations {
+                let base = page_floor(reservation.physical.start);
+                if base > start {
+                    next = next.min(base);
+                } else {
+                    let end = reservation
+                        .physical
+                        .end
+                        .checked_next_multiple_of(PAGE_BYTES);
+                    blocked = blocked.max(end.unwrap_or(range.end).min(range.end));
+                }
+            }
+            if blocked > start {
+                start = blocked;
+            } else {
+                let segment = start..next;
+                start = next;
+                return Some(segment);
+            }
+        }
+        None
+    })
 }
 
 fn decode(entry: &[u8]) -> Option<FirmwareRegion> {

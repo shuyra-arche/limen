@@ -40,6 +40,7 @@
         "server/tests/target/entry/platforms/virt.rs",
         "server/tests/target/entry/platforms/pl011.rs",
         "server/src/metal/firmware/psci.rs",
+        "server/src/metal/firmware/devicetree/memory.rs",
         "server/src/metal/hart/aarch64.rs"
       ]
     }

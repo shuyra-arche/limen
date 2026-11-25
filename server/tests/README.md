@@ -143,4 +143,10 @@ the exact debug-console assertions and the guest's debug-exit status 33.
 Arm virt requires serial assertions, a QMP guest-shutdown event and exit 0.
 Each board retains its boot image, input hashes, QEMU version, guest log,
 QMP transcript and exit status. Both test images use the same UEFI entry and
-retain the final memory map after exiting Boot Services. [Platform contracts](../../docs/platforms.md)
+retain the final memory map after exiting Boot Services. Arm checks the
+configured 256 MiB RAM bank and verifies that the DTB and the UEFI map
+corroborate the reported whole-page spans, excluding the retained DTB and
+firmware reservations. q35 checks the handoff without a DTB. The Boot Host
+suite covers overlapping reservations, partial pages, absent coverage and
+conflicting UEFI types and runtime attributes.
+[Platform contracts](../../docs/platforms.md)

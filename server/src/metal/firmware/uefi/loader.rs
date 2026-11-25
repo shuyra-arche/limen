@@ -1,5 +1,15 @@
 use super::{Boot, FirmwareMap, devicetree};
 
+/// How the trusted platform uses its retained DTB.
+pub enum DeviceTree<'a> {
+    /// A hardware description whose extent is checked at handoff.
+    Description(&'a [u8]),
+    /// A memory description to check against the final UEFI map.
+    Memory(&'a [u8]),
+}
+
+const LOADER_DATA: u32 = 2;
+
 /// Loader-owned storage retained across the stack switch and Boot delivery.
 /// The optional DTB is the exact, immutable copy in loader-data pages.
 pub struct Loader<'a> {
@@ -7,7 +17,7 @@ pub struct Loader<'a> {
     pub stride: usize,
     pub version: u32,
     pub descriptor_limit: usize,
-    pub device_tree: Option<&'a [u8]>,
+    pub device_tree: Option<DeviceTree<'a>>,
 }
 
 impl<'a> Loader<'a> {
@@ -19,17 +29,21 @@ impl<'a> Loader<'a> {
             self.descriptor_limit,
         )
         .ok()?;
-        let device_tree = match self.device_tree {
-            Some(bytes) => {
+        let mut memory = None;
+        let device_tree = match self.device_tree.as_ref() {
+            Some(tree) => {
+                let bytes = match tree {
+                    DeviceTree::Description(bytes) | DeviceTree::Memory(bytes) => *bytes,
+                };
                 let start = bytes.as_ptr().addr();
                 let end = start.checked_add(bytes.len())?;
                 let physical_start = u64::try_from(start).ok()?;
                 let physical_end = u64::try_from(end).ok()?;
                 // The loader retains the identity mapping and owns the DTB
                 // copy. A valid map must cover its entire extent as loader data.
-                if bytes.len() < 40
+                if bytes.len() < devicetree::HEADER_SIZE
                     || !map.regions().any(|region| {
-                        region.kind == 2
+                        region.kind == LOADER_DATA
                             && region.physical.start <= physical_start
                             && physical_end <= region.physical.end
                     })
@@ -40,10 +54,13 @@ impl<'a> Loader<'a> {
                 if extent.end != end {
                     return None;
                 }
+                if let DeviceTree::Memory(_) = tree {
+                    devicetree::memory::describe(bytes, &mut memory).ok()?;
+                }
                 Some(extent)
             }
             None => None,
         };
-        Some(Boot::new(hart, device_tree, Some(map)))
+        Some(Boot::from_uefi(hart, device_tree, map, memory))
     }
 }
