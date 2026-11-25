@@ -98,27 +98,28 @@ impl<'a> FirmwareMap<'a> {
             .map(|entry| decode(entry).expect("validated firmware descriptor"))
     }
 
+    pub(crate) fn conventional(&self) -> impl Iterator<Item = FirmwareRegion> + '_ {
+        self.regions()
+            .filter(|region| region.kind == CONVENTIONAL_MEMORY && region.attributes & RUNTIME == 0)
+    }
+
     pub(crate) fn conventional_ram<'b>(
         &'b self,
         memory: &'b DtbMemory,
     ) -> impl Iterator<Item = FirmwareRegion> + 'b {
-        self.regions()
-            .filter(|region| region.kind == CONVENTIONAL_MEMORY && region.attributes & RUNTIME == 0)
-            .flat_map(move |region| {
-                memory.ram().iter().flat_map(move |bank| {
-                    // Keep only complete UEFI pages supported by the DTB.
-                    let start = region.physical.start.max(bank.start);
-                    let end = page_floor(region.physical.end.min(bank.end));
-                    let start = start.checked_next_multiple_of(PAGE_BYTES).unwrap_or(end);
-                    unreserved(start..end, memory.reservations()).map(move |physical| {
-                        FirmwareRegion {
-                            kind: region.kind,
-                            physical,
-                            attributes: region.attributes,
-                        }
-                    })
+        self.conventional().flat_map(move |region| {
+            memory.ram().iter().flat_map(move |bank| {
+                // Keep only complete UEFI pages supported by the DTB.
+                let start = region.physical.start.max(bank.start);
+                let end = page_floor(region.physical.end.min(bank.end));
+                let start = start.checked_next_multiple_of(PAGE_BYTES).unwrap_or(end);
+                unreserved(start..end, memory.reservations()).map(move |physical| FirmwareRegion {
+                    kind: region.kind,
+                    physical,
+                    attributes: region.attributes,
                 })
             })
+        })
     }
 }
 

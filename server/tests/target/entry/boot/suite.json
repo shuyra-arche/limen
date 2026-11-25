@@ -14,6 +14,8 @@
     "server/src/metal/firmware/mod.rs",
     "server/src/metal/firmware/map.rs",
     "server/src/entry/boot/**",
+    "server/src/metal/allocator/mod.rs",
+    "server/src/metal/allocator/bump.rs",
     "server/src/metal/boot/riscv/**",
     "server/src/metal/firmware/sbi/**",
     "server/link.x",
@@ -28,7 +30,7 @@
     "kind": "qemu",
     "kernel": "boot-handoff",
     "expects": [
-      "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1"
+      "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1 regions=0 roots=0"
     ]
   }
 }

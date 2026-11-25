@@ -47,11 +47,17 @@ mod map;
 use devicetree::memory::{DtbMemory, Physical, Source};
 use loader::{DeviceTree, Loader};
 use map::{FirmwareMap, FirmwareRegion, MapError};
+use physical::{Exclusions, Retirement};
+#[path = "../../../src/metal/allocator/bump.rs"]
+mod bump;
 mod exclusions;
 #[path = "../../../src/entry/boot/handoff.rs"]
 mod handoff;
+mod organization;
 #[path = "../../../src/entry/boot/physical.rs"]
 mod physical;
+#[path = "../../../src/entry/boot/regions.rs"]
+mod regions;
 
 const IMAGE: Physical = Physical {
     start: 0x1000,

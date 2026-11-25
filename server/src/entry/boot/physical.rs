@@ -81,12 +81,17 @@ impl Retirement {
         self.observed |= condition as u8;
     }
 
-    fn covers(&self, physical: Physical) -> bool {
+    pub(super) fn completed(&self) -> Option<Physical> {
         const COMPLETE: u8 = Condition::RuntimeStack as u8
             | Condition::ReadersGone as u8
             | Condition::TranslationRetired as u8
             | Condition::DevicesIsolated as u8;
-        self.observed == COMPLETE && contains(self.physical, physical)
+        (self.observed == COMPLETE).then_some(self.physical)
+    }
+
+    fn covers(&self, physical: Physical) -> bool {
+        self.completed()
+            .is_some_and(|scope| contains(scope, physical))
     }
 }
 

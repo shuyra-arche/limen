@@ -136,3 +136,22 @@ ACPI reclaimable memory stays reserved until ACPI has been enabled.
 Reclaimable firmware claims become eligible for later admission when all
 their conditions hold. The caller still establishes RAM provenance,
 granularity and actual access before handing a span to Allocator.
+
+## Organizing early physical regions
+
+`Boot::regions` writes a sorted table into fixed, caller-supplied storage.
+It uses DTB RAM on OpenSBI, conventional UEFI memory when only that memory
+description is supplied, and their checked intersection when both are
+available. The table clips each input to the completed retirement scope,
+excludes granules touched by fixed claims and keeps each surviving interval's
+source and attributes. Invalid geometry or insufficient table space clears
+the output. The table describes physical ranges for later handoff.
+
+To reserve a local root, its owner supplies an exclusive `MappedRange` whose
+writable byte slice corresponds to the indicated physical range. An existing
+Bump cursor reserves the requested Rust `Layout` within that mapping. The
+handoff verifies both address alignments, subtracts all granules touched by
+the reservation and returns the exact uninitialized root bytes and their
+physical provenance. A failed request retains the mapping and geometry.
+Missing evidence leaves ranges held. The current QEMU boot paths produce
+an empty table and deliver no root.

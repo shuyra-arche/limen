@@ -1,3 +1,5 @@
+use super::organization::retired;
+use super::regions::{RegionSource, Regions};
 use super::{
     DeviceTree, DtbMemory, FirmwareRegion, IMAGE, Loader,
     devicetree::memory::{Error, Physical, Source, describe as describe_into, read},
@@ -174,6 +176,17 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
                 }
             }))
     );
+    let evidence = retired(Physical {
+        start: 0x1000,
+        end: 0x10000,
+    });
+    let mut space = [None; 3];
+    let ready = Regions::organize(&boot, &early, 4096, Some(&evidence), &mut space).unwrap();
+    assert!(ready.entries().map(|r| (r.physical.start, r.source)).eq([
+        (0x2000, RegionSource::DeviceTreeAndUefi { attributes: 8 }),
+        (0x7000, RegionSource::DeviceTreeAndUefi { attributes: 8 }),
+        (0xc000, RegionSource::DeviceTreeAndUefi { attributes: 0x0f }),
+    ]));
 }
 
 #[test]
@@ -263,6 +276,29 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
         }))
     );
     assert!(early.entries().all(|entry| entry.fixed()));
+    let boot = super::Boot::from_opensbi(0, 0x1000..0x2000, 0x3000..0x4000, map);
+    let early = boot.exclusions_for(IMAGE, IMAGE);
+    let evidence = retired(Physical {
+        start: 0x8000_0000,
+        end: 0x1_0040_0000,
+    });
+    let mut space = [None; 3];
+    let ready = Regions::organize(&boot, &early, 4096, Some(&evidence), &mut space).unwrap();
+    assert!(
+        ready
+            .entries()
+            .all(|entry| entry.source == RegionSource::DeviceTree)
+    );
+    assert!(
+        ready
+            .entries()
+            .map(|entry| (entry.physical.start, entry.physical.end))
+            .eq([
+                (0x8000_3000, 0x8080_0000),
+                (0x1_0000_0000, 0x1_0000_1000),
+                (0x1_0000_2000, 0x1_0040_0000),
+            ])
+    );
 }
 
 #[test]

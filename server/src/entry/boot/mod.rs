@@ -2,6 +2,8 @@
 //! calling the common admission gate. The trusted image receives Boot exactly once.
 mod handoff;
 mod physical;
+mod regions;
+use crate::metal::allocator::bump;
 use crate::metal::boot::major;
 use core::fmt::Write;
 
@@ -15,6 +17,7 @@ pub use crate::metal::firmware::uefi::{DeviceTree, Loader, major};
 pub use handoff::Boot;
 pub use major::stack_range;
 pub use physical::{Condition, Exclusion, Exclusions, Occupant, RangeError, Retirement};
+pub use regions::{MappedRange, Region, RegionError, RegionSource, Regions, RootStorage};
 
 /// The firmware adapter supplies a stable DTB (OpenSBI) or Loader (UEFI).
 /// All referenced storage and mappings remain reserved until the consumer is done.
@@ -29,6 +32,16 @@ pub(crate) unsafe extern "C" fn start(hart: usize, input: *const ()) -> ! {
 }
 
 impl Boot<'_> {
+    /// Organize the part of the firmware RAM backed by retirement evidence.
+    pub fn regions<'a>(
+        &'a self,
+        granule: u64,
+        retirement: Option<&'a Retirement>,
+        storage: &'a mut [Option<Region>],
+    ) -> Result<Regions<'a>, RegionError> {
+        Regions::organize(self, &self.exclusions(), granule, retirement, storage)
+    }
+
     pub fn exclusions(&self) -> Exclusions<'_> {
         self.exclusions_for(
             physical::extent(stack_range()),
