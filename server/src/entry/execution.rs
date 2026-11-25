@@ -1,6 +1,7 @@
 //! Trusted entry and handoff for cooperative Kernel Units in the Bare Nest.
 
 use core::{
+    fmt::Write,
     marker::PhantomData,
     ptr,
     sync::atomic::{
@@ -12,14 +13,14 @@ use core::{
 pub use crate::basis::{
     nest::Stacks,
     room::Occupancy,
-    unit::{End, Error, Lifecycle, UnitId},
+    unit::{End, Lifecycle, UnitId},
 };
 use crate::{
     basis::{
         nest::{KernelNest, Storage},
-        room::{Destination, Room},
+        room::{self, Destination, Room},
         sync::{Guard, Lock},
-        unit::Units,
+        unit::{self, Units},
     },
     metal::{
         boot as hardware,
@@ -30,6 +31,51 @@ use crate::{
 use super::boot::{self, Boot, Minor};
 
 type Entry = fn(&mut Current) -> u64;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Error {
+    Busy,
+    Capacity,
+    Gone,
+    State,
+    Unsupported,
+    Firmware(isize),
+}
+
+impl From<unit::Error> for Error {
+    fn from(error: unit::Error) -> Self {
+        match error {
+            unit::Error::Capacity => Self::Capacity,
+            unit::Error::Gone => Self::Gone,
+            unit::Error::State => Self::State,
+        }
+    }
+}
+
+impl From<room::Error> for Error {
+    fn from(error: room::Error) -> Self {
+        match error {
+            room::Error::Busy => Self::Busy,
+            room::Error::Capacity => Self::Capacity,
+            room::Error::Gone => Self::Gone,
+            room::Error::State => Self::State,
+            room::Error::Unsupported => Self::Unsupported,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EstablishError {
+    WrongHart,
+    Unsupported,
+}
+
+/// The original handoff and stack supply, returned before execution takes ownership.
+pub struct EstablishFailure<'a> {
+    pub boot: Boot<'a>,
+    pub stacks: &'static mut Stacks,
+    pub reason: EstablishError,
+}
 
 struct Binding {
     storage: &'static Storage,
@@ -62,26 +108,40 @@ pub struct Execution {
 
 impl Execution {
     /// Consume the trusted handoff and provision the resident stack supply.
-    pub fn new(boot: Boot, stacks: &'static mut Stacks) -> Result<Self, Error> {
+    pub fn new<'a>(
+        boot: Boot<'a>,
+        stacks: &'static mut Stacks,
+    ) -> Result<Self, EstablishFailure<'a>> {
         Self::establish(boot, stacks, None)
     }
 
     /// Provision the same Kernel Nest with an optional firmware-started Hart.
-    pub fn with_minor(
-        boot: Boot,
+    pub fn with_minor<'a>(
+        boot: Boot<'a>,
         stacks: &'static mut Stacks,
         minor: &'static Minor,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, EstablishFailure<'a>> {
         Self::establish(boot, stacks, Some(minor))
     }
 
-    fn establish(
-        boot: Boot,
+    fn establish<'a>(
+        boot: Boot<'a>,
         stacks: &'static mut Stacks,
         minor: Option<&'static Minor>,
-    ) -> Result<Self, Error> {
-        if hardware::current_hart() != boot.hart() || !Hart::supported() {
-            return Err(Error::Unsupported);
+    ) -> Result<Self, EstablishFailure<'a>> {
+        if hardware::current_hart() != boot.hart() {
+            return Err(EstablishFailure {
+                boot,
+                stacks,
+                reason: EstablishError::WrongHart,
+            });
+        }
+        if !Hart::supported() {
+            return Err(EstablishFailure {
+                boot,
+                stacks,
+                reason: EstablishError::Unsupported,
+            });
         }
         Ok(Self {
             control: Lock::new(Control {
@@ -206,7 +266,7 @@ impl Execution {
     pub fn submit(&self, unit: UnitId) -> Result<(), Error> {
         let mut control = self.control()?;
         let affinity = control.units.live(unit)?.affinity;
-        control.room.submit(unit, affinity)
+        control.room.submit(unit, affinity).map_err(Error::from)
     }
 
     /// Select cancellation for a Unit that has never been admitted to Room.
@@ -217,7 +277,10 @@ impl Execution {
         if control.room.admitted(unit) {
             return Err(Error::Busy);
         }
-        control.units.begin_end(unit, End::Cancelled)
+        control
+            .units
+            .begin_end(unit, End::Cancelled)
+            .map_err(Error::from)
     }
 
     /// Run one ready Unit until it yields or returns on its own stack.
@@ -246,8 +309,8 @@ impl Execution {
         Ok(Some(occupancy))
     }
 
-    pub fn pending_leave(&self) -> Option<Occupancy> {
-        self.local().ok()?.1.stopped().map(LeaveReceipt::occupancy)
+    pub fn pending_leave(&self) -> Result<Option<Occupancy>, Error> {
+        Ok(self.local()?.1.stopped().map(LeaveReceipt::occupancy))
     }
 
     pub fn vacate(&self, occupancy: Occupancy) -> Result<(), Error> {
@@ -264,7 +327,7 @@ impl Execution {
     }
 
     pub fn lifecycle(&self, unit: UnitId) -> Result<Lifecycle, Error> {
-        self.control()?.units.lifecycle(unit)
+        self.control()?.units.lifecycle(unit).map_err(Error::from)
     }
 
     pub fn finish_end(&self, unit: UnitId) -> Result<(), Error> {
@@ -282,7 +345,7 @@ impl Execution {
     }
 
     pub fn reap(&self, unit: UnitId) -> Result<End, Error> {
-        self.control()?.units.reap(unit)
+        self.control()?.units.reap(unit).map_err(Error::from)
     }
 
     fn leave(&self, unit: UnitId, end: Option<u64>) -> Result<(), Error> {
@@ -319,6 +382,12 @@ impl Execution {
         // finishes without accessing the original Hart's local state.
         unsafe { hart.leave(occupancy, storage.context()) };
         Ok(())
+    }
+
+    fn end(&self, unit: UnitId, value: u64) -> Result<!, Error> {
+        self.leave(unit, Some(value))?;
+        boot::write("FAIL Limen execution: terminal continuation resumed\n");
+        boot::shutdown(false)
     }
 }
 
@@ -361,8 +430,10 @@ extern "C" fn start(argument: *const ()) -> ! {
         unit,
         local: PhantomData,
     });
-    let _ = execution.leave(unit, Some(value));
-    boot::write("FAIL Limen execution: terminal continuation did not leave\n");
+    let Err(error) = execution.end(unit, value);
+    if let Some(mut console) = boot::console() {
+        let _ = writeln!(console, "FAIL Limen execution: terminal leave {error:?}");
+    }
     boot::shutdown(false)
 }
 

@@ -104,7 +104,7 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         "suite": suite.id,
         "profile": args.profile,
         "harts": GUEST_CPUS,
-        "tools": tools(&qemu, &firmware)?,
+        "tools": tools(&provider, &qemu, &firmware)?,
         "suite_sha256": composition::hashes(&owner.join(relative))?,
         "builds": [format!("{command:?}")],
     });
@@ -218,7 +218,7 @@ fn cargo_test(
     ignored: bool,
 ) -> Result<()> {
     let mut command = Command::new("cargo");
-    command.args(["+nightly", "test", "--locked"]);
+    command.args(["test", "--locked"]);
     if let Some(package) = package {
         command.args(["-p", package]);
     }
@@ -270,7 +270,11 @@ pub fn run(args: Inputs) -> Result<()> {
             json(
                 &args.output.join("inputs.json"),
                 &serde_json::json!({
-                    "source": source, "profile": args.profile, "harts": GUEST_CPUS, "rustc": output(Command::new("rustc").arg("-Vv"))?
+                    "source": source,
+                    "profile": args.profile,
+                    "harts": GUEST_CPUS,
+                    "rustc": output(Command::new("rustc").current_dir(&provider).arg("-Vv"))?,
+                    "cargo": output(Command::new("cargo").current_dir(&provider).arg("-V"))?,
                 }),
             )?;
             let script = provider.join("server/tests").join(relative).join("run.sh");

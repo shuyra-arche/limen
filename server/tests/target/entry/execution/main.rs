@@ -11,7 +11,9 @@ use core::{
 
 use kernel::entry::{
     boot::{Boot, shutdown, write},
-    execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Stacks, UnitId},
+    execution::{
+        Current, End, Error, EstablishError, Execution, Lifecycle, Occupancy, Stacks, UnitId,
+    },
 };
 
 static mut STACKS: Stacks = Stacks::new();
@@ -36,7 +38,7 @@ fn first(current: &mut Current) -> u64 {
     let local = black_box(0x1234_5678usize);
     assert_eq!(SEQUENCE.fetch_add(1, Relaxed), 0);
     FIRST_STACK.store(stack_address(&local), Relaxed);
-    assert_eq!(execution().pending_leave(), None);
+    assert_eq!(execution().pending_leave(), Ok(None));
     assert_eq!(execution().enter(), Err(Error::Busy));
     assert_eq!(execution().finish_end(current.id()), Err(Error::Busy));
     current.yield_now().expect("cooperative leave and reentry");
@@ -66,7 +68,7 @@ fn dispatch(unit: UnitId) -> Occupancy {
     let execution = execution();
     let occupancy = execution.enter().expect("dispatch").expect("ready unit");
     assert_eq!(occupancy.unit(), unit);
-    assert_eq!(execution.pending_leave(), Some(occupancy));
+    assert_eq!(execution.pending_leave(), Ok(Some(occupancy)));
     occupancy
 }
 
@@ -77,7 +79,7 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
     assert_eq!(execution.reap(unit), Err(Error::State));
     assert_eq!(execution.enter(), Err(Error::Busy));
     execution.vacate(occupancy).expect("matching actual leave");
-    assert_eq!(execution.pending_leave(), None);
+    assert_eq!(execution.pending_leave(), Ok(None));
     assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Ending));
     execution.finish_end(unit).expect("released admission");
     let end = End::Returned { value };
@@ -89,10 +91,26 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
-    assert!(boot.hart() < 4, "unexpected QEMU boot hart");
+    let major = boot.hart();
+    let device_tree = boot.device_tree();
+    assert!(major < 4, "unexpected QEMU boot hart");
     // The fixture owns both static objects and runs on the sole Boot Hart.
-    let runtime =
-        Execution::new(boot, unsafe { &mut *(&raw mut STACKS) }).expect("Bare scalar execution");
+    let stacks = &raw mut STACKS;
+    // Individual interrupt sources remain masked. SIE makes the execution
+    // environment unsupported before the constructor binds the stack supply.
+    unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
+    let rejected = Execution::new(boot, unsafe { &mut *stacks });
+    unsafe { asm!("csrci sstatus, 2", options(nostack)) };
+    let Err(failure) = rejected else {
+        panic!("execution admitted with interrupts enabled");
+    };
+    assert_eq!(failure.reason, EstablishError::Unsupported);
+    assert_eq!(failure.boot.hart(), major);
+    assert_eq!(failure.boot.device_tree(), device_tree);
+    assert!(core::ptr::eq(failure.stacks, stacks));
+    let runtime = Execution::new(failure.boot, failure.stacks)
+        .map_err(|failure| failure.reason)
+        .expect("original handoff and stack supply can be retried");
     unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     let execution = execution();
     let a = unsafe { execution.create(first) }.expect("first unit");
@@ -133,7 +151,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let rejected = execution.enter();
     unsafe { asm!("csrci sstatus, 2", options(nostack)) };
     assert_eq!(rejected, Err(Error::Unsupported));
-    assert_eq!(execution.pending_leave(), None);
+    assert_eq!(execution.pending_leave(), Ok(None));
 
     let initial = dispatch(a);
     assert_eq!(execution.lifecycle(a), Ok(Lifecycle::Live));
@@ -141,7 +159,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
     let leaving = dispatch(b);
     assert_eq!(execution.vacate(initial), Err(Error::Gone));
-    assert_eq!(execution.pending_leave(), Some(leaving));
+    assert_eq!(execution.pending_leave(), Ok(Some(leaving)));
     finish(b, leaving, 41);
 
     let replacement = unsafe { execution.create(second) }.expect("retired stack reused");

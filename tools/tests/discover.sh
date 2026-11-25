@@ -11,6 +11,7 @@ changed_paths "$root" "${2:-}"
 
 for path in "${changed[@]}"; do
     case "$path" in
+        rust-toolchain.toml) full=true ;;
         Cargo.toml|Cargo.lock|.cargo/*|server/Cargo.toml|server/build.rs|server/tests/qemu.version|server/tests/runner/*|tools/tests/discover.sh|tools/tests/changes.sh|tools/tests/batch.sh|.github/workflows/target.yml)
             full=true ;;
     esac

@@ -78,7 +78,7 @@ pub fn fresh(path: &Path) -> Result<()> {
     fs::create_dir(path)?;
     Ok(())
 }
-pub fn tools(qemu: &str, firmware: &Path) -> Result<serde_json::Value> {
+pub fn tools(provider: &Path, qemu: &str, firmware: &Path) -> Result<serde_json::Value> {
     let version = output(Command::new(qemu).arg("--version"))?;
     let reviewed = include_str!("../qemu.version").trim();
     require(
@@ -90,8 +90,8 @@ pub fn tools(qemu: &str, firmware: &Path) -> Result<serde_json::Value> {
         format!("expected QEMU {reviewed}"),
     )?;
     Ok(
-        serde_json::json!({"rustc":output(Command::new("rustc").arg("-Vv"))?,
-        "cargo":output(Command::new("cargo").arg("-V"))?, "qemu":version,
+        serde_json::json!({"rustc":output(Command::new("rustc").current_dir(provider).arg("-Vv"))?,
+        "cargo":output(Command::new("cargo").current_dir(provider).arg("-V"))?, "qemu":version,
         "firmware":firmware, "firmware_sha256":digest(firmware)?, "flags":FLAGS,
         "runner_sha256":digest(&std::env::current_exe()?)?,
         "cpu_max":fs::read_to_string("/sys/fs/cgroup/cpu.max").ok(),

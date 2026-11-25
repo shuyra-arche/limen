@@ -122,7 +122,7 @@ fn dispatch(execution: &'static Execution, unit: UnitId, hart: usize) -> Occupan
     let occupancy = execution.enter().expect("dispatch").expect("ready unit");
     assert_eq!(occupancy.unit(), unit);
     assert_eq!(occupancy.hart(), hart);
-    assert_eq!(execution.pending_leave(), Some(occupancy));
+    assert_eq!(execution.pending_leave(), Ok(Some(occupancy)));
     occupancy
 }
 
@@ -160,7 +160,7 @@ fn run_minor(execution: &'static Execution) -> ! {
     finish(execution, dispatch(execution, other, minor), 41);
     // The original Unit left its stack. Its exact receipt remains unconsumed.
     assert_eq!(execution.enter(), Ok(None));
-    assert_eq!(execution.pending_leave(), None);
+    assert_eq!(execution.pending_leave(), Ok(None));
     assert_eq!(execution.finish_end(first), Err(Error::Busy));
     publish(Phase::WithheldChecked);
 
@@ -170,11 +170,11 @@ fn run_minor(execution: &'static Execution) -> ! {
     let previous = unsafe { (&*(&raw const PREVIOUS)).assume_init_read() };
     assert_ne!(migrated, previous);
     assert_eq!(execution.vacate(previous), Err(Error::Gone));
-    assert_eq!(execution.pending_leave(), Some(migrated));
+    assert_eq!(execution.pending_leave(), Ok(Some(migrated)));
     publish(Phase::MigratedStopped);
 
     wait(Phase::ReplayChecked);
-    assert_eq!(execution.pending_leave(), Some(migrated));
+    assert_eq!(execution.pending_leave(), Ok(Some(migrated)));
     finish(execution, migrated, 0x1234_5678);
     publish(Phase::MigratedEnded);
     loop {
@@ -193,6 +193,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let minor_hart = usize::from(major == 0);
     assert!(major < 4, "unexpected QEMU Boot Hart");
     let runtime = Execution::with_minor(boot, unsafe { &mut *(&raw mut STACKS) }, &MINOR)
+        .map_err(|failure| failure.reason)
         .expect("Bare scalar execution");
     // The platform owns the resident objects and initializes them once.
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
@@ -224,7 +225,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     unsafe { (&mut *(&raw mut PREVIOUS)).write(previous) };
     publish(Phase::FirstStopped);
     wait(Phase::WithheldChecked);
-    assert_eq!(execution.pending_leave(), Some(previous));
+    assert_eq!(execution.pending_leave(), Ok(Some(previous)));
     execution
         .vacate(previous)
         .expect("major settles original Yield");

@@ -5,6 +5,10 @@
 On RV64, the trusted image consumes the Boot handoff to establish cooperative execution
 on the Boot Hart. It supplies two resident 16 KiB stacks in the shared Bare
 Kernel Nest. Each Unit reserves one stack and a generational identity.
+If `Execution::new` or `Execution::with_minor` rejects the environment before
+establishment, `EstablishFailure` returns the original `Boot`, the exclusive
+stack supply and the reason. The trusted image can correct the environment and
+retry with those same inputs.
 `Execution::with_minor` accepts a resident `entry::boot::Minor` with its own
 dispatcher stack. The platform can use `start_minor` to start
 one selected Hart through OpenSBI HSM. Room admits the minor after its
@@ -21,9 +25,13 @@ on either Hart and yields without retaining Hart-local resources.
 
 Room admits a Unit and reserves an exact occupancy. Metal enters through the
 Unit's stack and saves its integer continuation at the call boundary on Yield.
-A normal return records the Unit's sole end value. The dispatcher resumes on
-its own stack before Metal issues the leave receipt. Room consumes that
-receipt to make the Unit ready again or release the admission. The shared
+A normal return from the Unit's entry records its sole end value. The terminal
+handoff returns to the dispatcher and the Unit's continuation is no longer
+eligible to run. A successful Yield returns `Ok(())` when a later dispatch
+resumes the Unit. Metal issues the leave receipt after the dispatcher resumes
+on its own stack. `pending_leave` reports absence for a participating Hart
+without a stopped occupancy, and an error for an unattached Hart. Room
+consumes the receipt to make the Unit ready again or release the admission. The shared
 Room and Unit state shares a short FIFO lock to publish eligibility and
 settle an exact occupancy. Terminal transitions can wait with zero ordinary
 guards. A try acquisition leaves the turn to any queued waiter.

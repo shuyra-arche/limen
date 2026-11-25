@@ -10,3 +10,23 @@ from [SBI](https://github.com/shuyra-arche/sbi) at
 Git history preserves original authorship and migration records. These
 checkpoints and this repository provide no license grant. Preserve
 third-party notices with their code.
+
+## Migration reuse
+
+The foundation audit compares the [migration baseline][migration] with the
+[Metal and Results contracts][specification], using the [previous implementation][previous]
+for source and regression references. Review both the mechanism and its caller
+before reusing code. A source routine that passes Host tests still needs the
+evidence required at its eventual hardware or ownership boundary.
+
+| Area | Reuse boundary |
+| --- | --- |
+| Boot and Firmware | Keep the current boot handoff, checked DTB extent, early stack and diagnostic mechanisms. The admitted firmware facts still require RAM classification, reservation exclusions and proof of retirement before they can supply the Allocator. |
+| Identity | Reuse the checked generation increment pattern with the new table and its actual scope. The previous `basis/name` registry grows a hash index, its recycler allocates a bitmap on first use, and its serial has separate nonreusing semantics. The new table owns fixed slots, reservation, publication and exact reclamation. |
+| Hart and Sync | Keep the real architecture localization and stack operations. The previous `PerHart` also embeds scheduler and MMU state. Keep its register and layout references where applicable. The current two-Hart ticket algorithm is a candidate for reuse with actual Hart-local accounting and explicit joint protection. That algorithm needs separate tests for the new acquisition and handoff rules. |
+| Allocator | Keep checked alignment and endpoint arithmetic from the current bootstrap cursor. The previous Buddy's absolute page geometry is a reference for root decomposition. Its growable metadata, in-frame free links and enclosing Frame lock do not fit the fixed Region-local tree, source accounting and return contract. |
+| Execution and MMU | Keep the verified RV64 cooperative switch and the existing PTE encoding and atomic update primitives. `Stacks` is the trusted platform's two-Unit supply for the Bare Nest. The PTE fixtures exercise software operations and A/D races on the Host. Full Unit storage, execution publication, translation retirement and reuse require their own evidence. |
+
+[migration]: https://github.com/shuyra-arche/limen/tree/ad39080b618951cbca2e407c655456699a2e727e
+[previous]: https://github.com/shuyra-arche/limen/tree/4640d13ed35b3166093cfadd1ac3634f2e7a3bc7
+[specification]: https://github.com/shuyra-arche/document-limen/tree/246170c626ee2b5e316753e95f50f1669e8f47dd

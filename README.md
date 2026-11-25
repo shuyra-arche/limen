@@ -21,22 +21,25 @@ release tag or full revision. [Releases](https://github.com/shuyra-arche/limen/r
 
 ## Build and test
 
-From the repository root on x86-64 Linux, install Rust nightly and the targets.
-The host tests also require a C linker.
+Use Rustup from the repository root on x86-64 Linux. The toolchain is fixed in
+[`rust-toolchain.toml`](rust-toolchain.toml). The RV64 and AArch64 early exception
+entry points currently need nightly function alignment. The host tests also
+require a C linker.
 
 ```sh
-rustup toolchain install nightly --profile minimal --component rustfmt,clippy
-rustup target add --toolchain nightly riscv64gc-unknown-none-elf x86_64-unknown-uefi aarch64-unknown-uefi
-cargo +nightly build --locked --workspace --target riscv64gc-unknown-none-elf
-cargo +nightly build --locked --workspace --release --target riscv64gc-unknown-none-elf
-cargo +nightly build --locked -p kernel --target x86_64-unknown-uefi
-cargo +nightly build --locked -p kernel --target aarch64-unknown-uefi
+rustc -Vv
+rustup component add rustfmt clippy
+rustup target add riscv64gc-unknown-none-elf x86_64-unknown-uefi aarch64-unknown-uefi
+cargo build --locked --workspace --target riscv64gc-unknown-none-elf
+cargo build --locked --workspace --release --target riscv64gc-unknown-none-elf
+RUSTFLAGS=-Dwarnings cargo build --locked -p kernel --target x86_64-unknown-uefi
+RUSTFLAGS=-Dwarnings cargo build --locked -p kernel --target aarch64-unknown-uefi
 ```
 
 ```sh
-cargo +nightly fmt --all -- --check
-RUSTFLAGS=-Dwarnings cargo +nightly test --locked --workspace --target x86_64-unknown-linux-gnu
-cargo +nightly test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
+cargo fmt --all -- --check
+RUSTFLAGS=-Dwarnings cargo test --locked --workspace --target x86_64-unknown-linux-gnu
+cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
 bash tools/check-layout.sh
 bash tools/check-tooling.sh
 ```

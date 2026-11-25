@@ -28,13 +28,10 @@ pub enum Lifecycle {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Error {
-    Busy,
+pub(crate) enum Error {
     Capacity,
     Gone,
     State,
-    Unsupported,
-    Firmware(isize),
 }
 
 enum State<Binding> {

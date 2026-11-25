@@ -85,6 +85,9 @@ change server/src/metal/generic/stack.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/qemu.version
 [[ $(bash "$discover" . "$base") == "$full" ]]
+change rust-toolchain.toml
+[[ $(bash "$discover" . "$base") == "$full" ]]
+bash "$checks" . "$base" | jq -e '.full and .runner and .rv64' >/dev/null
 change server/src/metal/generic/allocator/bump.rs
 [[ $(boards) == "" ]]
 bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/generic/allocator/host/Cargo.toml"]' >/dev/null
