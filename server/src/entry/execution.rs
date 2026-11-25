@@ -19,7 +19,7 @@ use crate::{
     basis::{
         nest::{KernelNest, Storage},
         room::{self, Destination, Room},
-        sync::{Guard, Lock},
+        sync::{Acquisition, AcquisitionError, TurnLock, Work},
         unit::{self, Units},
     },
     metal::{
@@ -64,6 +64,16 @@ impl From<room::Error> for Error {
     }
 }
 
+impl From<AcquisitionError> for Error {
+    fn from(error: AcquisitionError) -> Self {
+        match error {
+            AcquisitionError::Busy => Self::Busy,
+            AcquisitionError::Capacity => Self::Capacity,
+            AcquisitionError::Context | AcquisitionError::Empty => Self::State,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EstablishError {
     WrongHart,
@@ -97,7 +107,7 @@ struct Launch {
 
 /// Cooperative execution on the Boot Hart and one optional minor Hart.
 pub struct Execution {
-    control: Lock<Control>,
+    control: TurnLock<Control>,
     nest: KernelNest,
     major: Hart,
     major_id: usize,
@@ -144,7 +154,7 @@ impl Execution {
             });
         }
         Ok(Self {
-            control: Lock::new(Control {
+            control: TurnLock::new(Control {
                 units: Units::new(),
                 room: Room::new(boot.hart()),
                 launch: None,
@@ -158,9 +168,16 @@ impl Execution {
         })
     }
 
-    fn control(&self) -> Result<Guard<'_, Control>, Error> {
-        let (_, hart) = self.local()?;
-        self.control.try_lock(hart.guards()).ok_or(Error::Busy)
+    fn control<R>(
+        &self,
+        operation: impl FnOnce(&mut Control) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        let mut work = Work::<1>::new();
+        let mut plan = work.plan();
+        plan.insert(&self.control).expect("one control lock");
+        plan.execute(Acquisition::Fast, |held| {
+            operation(held.access(&self.control).expect("held control lock"))
+        })?
     }
 
     fn local(&self) -> Result<(usize, LocalHart<'_>), Error> {
@@ -199,18 +216,20 @@ impl Execution {
             return Err(Error::Busy);
         }
         hart.checked_add(1).ok_or(Error::Unsupported)?;
-        {
-            let mut control = self.control()?;
+        self.control(|control| {
             if control.launch.is_some() {
                 return Err(Error::Busy);
             }
             control.launch = Some(Launch { hart, entry });
-        }
+            Ok(())
+        })?;
         let argument = ptr::from_ref(self).expose_provenance();
         if let Err(error) = unsafe { minor.start(hart, admit_minor, argument, boot::Startup::Sbi) }
         {
-            let (_, hart) = self.local()?;
-            self.control.lock(hart.guards()).launch = None;
+            self.control(|control| {
+                control.launch = None;
+                Ok(())
+            })?;
             return Err(match error {
                 boot::StartError::Busy => Error::Busy,
                 boot::StartError::Rejected(code) => Error::Firmware(code),
@@ -239,7 +258,7 @@ impl Execution {
     ///
     /// The entry must satisfy `create` except for affinity. Every live value
     /// at Yield must allow transfer to another Hart. The entry must release
-    /// Hart-local borrows and guards before Yield and reacquire local state
+    /// Hart-local borrows and protection before Yield and reacquire local state
     /// on the destination Hart.
     pub unsafe fn create_migratable(&self, entry: Entry) -> Result<UnitId, Error> {
         self.local()?;
@@ -247,40 +266,45 @@ impl Execution {
     }
 
     fn create_unit(&self, entry: Entry, affinity: Option<usize>) -> Result<UnitId, Error> {
-        let mut control = self.control()?;
-        let unit = control.units.vacant()?;
-        let storage = self.nest.bind(unit.slot());
-        // The vacant generation excludes every prior stack user.
-        unsafe { storage.context().prepare(storage.stack_top(), start) };
-        control.units.publish(
-            unit,
-            Binding {
-                storage,
-                entry,
-                affinity,
-            },
-        );
-        Ok(unit)
+        self.control(|control| {
+            let unit = control.units.vacant()?;
+            let storage = self.nest.bind(unit.slot());
+            // The vacant generation excludes every prior stack user.
+            unsafe { storage.context().prepare(storage.stack_top(), start) };
+            control.units.publish(
+                unit,
+                Binding {
+                    storage,
+                    entry,
+                    affinity,
+                },
+            );
+            Ok(unit)
+        })
     }
 
     pub fn submit(&self, unit: UnitId) -> Result<(), Error> {
-        let mut control = self.control()?;
-        let affinity = control.units.live(unit)?.affinity;
-        control.room.submit(unit, affinity).map_err(Error::from)
+        self.local()?;
+        self.control(|control| {
+            let affinity = control.units.live(unit)?.affinity;
+            control.room.submit(unit, affinity).map_err(Error::from)
+        })
     }
 
     /// Select cancellation for a Unit that has never been admitted to Room.
     /// A successful submission wins against this operation. After a
     /// cancellation, use `finish_end` and `reap` to release the slot.
     pub fn stop_dormant(&self, unit: UnitId) -> Result<(), Error> {
-        let mut control = self.control()?;
-        if control.room.admitted(unit) {
-            return Err(Error::Busy);
-        }
-        control
-            .units
-            .begin_end(unit, End::Cancelled)
-            .map_err(Error::from)
+        self.local()?;
+        self.control(|control| {
+            if control.room.admitted(unit) {
+                return Err(Error::Busy);
+            }
+            control
+                .units
+                .begin_end(unit, End::Cancelled)
+                .map_err(Error::from)
+        })
     }
 
     /// Run one ready Unit until it yields or returns on its own stack.
@@ -290,14 +314,19 @@ impl Execution {
         if !Hart::supported() {
             return Err(Error::Unsupported);
         }
-        let (occupancy, storage, entry) = {
-            let mut control = self.control()?;
+        if !hart::can_switch() {
+            return Err(Error::State);
+        }
+        let Some((occupancy, storage, entry)) = self.control(|control| {
             let Some(unit) = control.room.candidate(id)? else {
                 return Ok(None);
             };
             let binding = control.units.live(unit)?;
             let (storage, entry) = (binding.storage, binding.entry);
-            (control.room.occupy(id, unit)?, storage, entry)
+            Ok(Some((control.room.occupy(id, unit)?, storage, entry)))
+        })?
+        else {
+            return Ok(None);
         };
         let start = Start {
             execution: self,
@@ -315,37 +344,42 @@ impl Execution {
 
     pub fn vacate(&self, occupancy: Occupancy) -> Result<(), Error> {
         let (_, hart) = self.local()?;
-        let mut control = self.control()?;
-        control.room.on_hart(occupancy)?;
-        let receipt = hart
-            .stopped()
-            .filter(|receipt| receipt.occupancy() == occupancy)
-            .ok_or(Error::Busy)?;
-        control.room.vacate(receipt)?;
-        hart.settle(receipt);
-        Ok(())
+        self.control(|control| {
+            control.room.on_hart(occupancy)?;
+            let receipt = hart
+                .stopped()
+                .filter(|receipt| receipt.occupancy() == occupancy)
+                .ok_or(Error::Busy)?;
+            control.room.vacate(receipt)?;
+            hart.settle(receipt);
+            Ok(())
+        })
     }
 
     pub fn lifecycle(&self, unit: UnitId) -> Result<Lifecycle, Error> {
-        self.control()?.units.lifecycle(unit).map_err(Error::from)
+        self.local()?;
+        self.control(|control| control.units.lifecycle(unit).map_err(Error::from))
     }
 
     pub fn finish_end(&self, unit: UnitId) -> Result<(), Error> {
-        let mut control = self.control()?;
-        control.units.lifecycle(unit)?;
-        if control.room.admitted(unit) {
-            return Err(Error::Busy);
-        }
-        if let Some(binding) = control.units.finish_end(unit)? {
-            // Clear the old frame before another Hart can observe Ended
-            // and initialize the slot for a different generation.
-            unsafe { binding.storage.context().retire() };
-        }
-        Ok(())
+        self.local()?;
+        self.control(|control| {
+            control.units.lifecycle(unit)?;
+            if control.room.admitted(unit) {
+                return Err(Error::Busy);
+            }
+            if let Some(binding) = control.units.finish_end(unit)? {
+                // Clear the old frame before another Hart can observe Ended
+                // and initialize the slot for a different generation.
+                unsafe { binding.storage.context().retire() };
+            }
+            Ok(())
+        })
     }
 
     pub fn reap(&self, unit: UnitId) -> Result<End, Error> {
-        self.control()?.units.reap(unit).map_err(Error::from)
+        self.local()?;
+        self.control(|control| control.units.reap(unit).map_err(Error::from))
     }
 
     fn leave(&self, unit: UnitId, end: Option<u64>) -> Result<(), Error> {
@@ -353,16 +387,14 @@ impl Execution {
         if !Hart::supported() {
             return Err(Error::Unsupported);
         }
+        if !hart::can_switch() {
+            return Err(Error::State);
+        }
         let occupancy = hart
             .running()
             .filter(|active| active.unit() == unit)
             .ok_or(Error::Gone)?;
-        let storage = {
-            let mut control = if end.is_some() {
-                self.control.lock(hart.guards())
-            } else {
-                self.control()?
-            };
+        let storage = self.control(|control| {
             let storage = control.units.live(unit)?.storage;
             let destination = if end.is_some() {
                 Destination::Release
@@ -376,9 +408,9 @@ impl Execution {
                     .begin_end(unit, End::Returned { value })
                     .expect("validated live Unit");
             }
-            storage
-        };
-        // No guard survives the transfer. On migration the returning call
+            Ok(storage)
+        })?;
+        // Local protection is settled before transfer. On migration the returning call
         // finishes without accessing the original Hart's local state.
         unsafe { hart.leave(occupancy, storage.context()) };
         Ok(())
@@ -442,17 +474,14 @@ fn admit_minor(hart: usize, argument: usize) -> ! {
     let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
     assert_eq!(hart::current_hart(), hart);
     assert!(Hart::supported());
-    let entry = {
-        let local = unsafe { execution.minor.local() };
-        let mut control = execution.control.lock(local.guards());
-        let launch = control.launch.expect("reserved minor launch");
-        assert_eq!(launch.hart, hart);
-        control
-            .room
-            .attach(hart)
-            .expect("reserved Room participation");
-        launch.entry
-    };
+    let entry = execution
+        .control(|control| {
+            let launch = control.launch.expect("reserved minor launch");
+            assert_eq!(launch.hart, hart);
+            control.room.attach(hart)?;
+            Ok(launch.entry)
+        })
+        .expect("reserved Room participation");
     execution.minor_id.store(hart + 1, Release);
     entry(execution)
 }

@@ -31,10 +31,13 @@ eligible to run. A successful Yield returns `Ok(())` when a later dispatch
 resumes the Unit. Metal issues the leave receipt after the dispatcher resumes
 on its own stack. `pending_leave` reports absence for a participating Hart
 without a stopped occupancy, and an error for an unattached Hart. Room
-consumes the receipt to make the Unit ready again or release the admission. The shared
-Room and Unit state shares a short FIFO lock to publish eligibility and
-settle an exact occupancy. Terminal transitions can wait with zero ordinary
-guards. A try acquisition leaves the turn to any queued waiter.
+consumes the receipt to make the Unit ready again or release the admission.
+One MCS Turn protects the shared Room and Unit state at publication and
+settlement. Execution uses a one-member plan, which queues in FIFO order
+under the current Hart's local protection. Metal rejects a switch while
+the Hart has active synchronization participation. The plan ends its
+borrows, settles all queue nodes and restores the original interrupt state
+before a continuation can be entered or handed off.
 A yielded continuation becomes available to the
 other Hart only after settlement. An Ending Unit keeps its binding until the
 admission is released. Reaping the Ended Unit allows the slot and stack to be

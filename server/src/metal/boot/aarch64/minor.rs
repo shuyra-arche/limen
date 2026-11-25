@@ -67,6 +67,7 @@ unsafe extern "C" fn minor(slot: *const Minor) -> ! {
         "cmp x2, #4",
         "b.ne 3f",
         "msr spsel, #1",
+        "msr tpidr_el1, xzr",
         "mov x1, x0",
         "mrs x0, mpidr_el1",
         "mov x2, #0xffffff",

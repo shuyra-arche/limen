@@ -16,6 +16,7 @@ pub unsafe extern "C" fn major(hart: usize, input: &Loader<'_>) -> ! {
         "b.ne 2f",
         "msr daifset, #15",
         "msr spsel, #1",
+        "msr tpidr_el1, xzr",
         "adrp x2, {stack}",
         "add x2, x2, :lo12:{stack}",
         "add sp, x2, {size}",

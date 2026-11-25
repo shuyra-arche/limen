@@ -33,6 +33,7 @@ pub unsafe extern "sysv64" fn major(hart: usize, input: &Loader<'_>) -> ! {
 }
 
 unsafe extern "sysv64" fn install(hart: usize, input: *const ()) -> ! {
+    unsafe { crate::metal::hart::clear_local() };
     let selector: u16;
     unsafe { asm!("mov {:x}, cs", out(reg) selector, options(nomem, nostack, preserves_flags)) };
     let slots = (&raw mut IDT).cast::<Gate>();

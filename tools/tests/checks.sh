@@ -11,6 +11,7 @@ for path in "${changed[@]}"; do
         Cargo.toml|Cargo.lock|.cargo/*|server/Cargo.toml|server/build.rs|tools/tests/checks.sh|tools/tests/changes.sh|.github/workflows/check.yml) full=true ;;
         server/src/metal/boot/x86_64/*|server/src/metal/boot/aarch64/*|server/src/metal/hart/x86_64.rs|server/src/metal/hart/aarch64.rs|server/src/metal/firmware/psci.rs|server/src/metal/firmware/uefi/*) ;;
         server/src/*|server/link.x) rv64=true ;;
+        server/tests/basis/sync/*) rv64=true ;;
         server/tests/runner/*|server/tests/qemu.version|server/tests/target/*/suite.json) runner=true ;;
     esac
 done
@@ -20,7 +21,8 @@ while IFS= read -r -d '' manifest; do
     owner=${manifest%/host/Cargo.toml}
     for path in "${changed[@]}"; do
         if [[ $path == "$owner/"* || $path == "${owner/server\/tests/server\/src}/"* ||
-              ( $owner == server/tests/entry/boot && ( $path == server/src/metal/firmware/map.rs || $path == server/src/metal/firmware/uefi/loader.rs || $path == server/src/metal/firmware/devicetree/* || $path == server/src/metal/boot/console.rs || $path == server/src/metal/allocator/bump.rs ) ) ]]; then
+              ( $owner == server/tests/entry/boot && ( $path == server/src/metal/firmware/map.rs || $path == server/src/metal/firmware/uefi/loader.rs || $path == server/src/metal/firmware/devicetree/* || $path == server/src/metal/boot/console.rs || $path == server/src/metal/allocator/bump.rs ) ) ||
+              ( $owner == server/tests/basis/sync && $path == server/src/metal/hart/node.rs ) ]]; then
             manifests+=("$manifest")
             break
         fi

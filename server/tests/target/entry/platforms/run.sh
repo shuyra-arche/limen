@@ -70,6 +70,7 @@ printf '%s\n' "$status" >"$out/exit.status"
 [[ "$status" == "$expected_exit" ]]
 grep -Fxq "$marker" "$out/guest.log"
 grep -Fxq 'PASS early physical exclusions regions=0 roots=0' "$out/guest.log"
+grep -Fxq 'PASS synchronization' "$out/guest.log"
 jq -es 'all(.[]; has("error") | not)
     and any(.[]; .id == "capabilities" and has("return"))
     and any(.[]; .id == "start" and has("return"))' "$out/qmp.jsonl" >/dev/null

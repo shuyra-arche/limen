@@ -29,6 +29,10 @@ name = "kernel-host-sbi"
 version = "0.0.1"
 
 [[package]]
+name = "kernel-host-sync"
+version = "0.0.1"
+
+[[package]]
 name = "kernel-host-translation"
 version = "0.0.1"
 dependencies = [

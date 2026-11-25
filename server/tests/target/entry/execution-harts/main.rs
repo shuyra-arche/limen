@@ -17,8 +17,8 @@ use kernel::entry::{
     execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Stacks, UnitId},
 };
 
-#[path = "lock-probe.rs"]
-mod lock;
+mod snapshot;
+mod turn;
 
 global_asm!(include_str!("register-probe.S"));
 
@@ -91,6 +91,7 @@ fn first(current: &mut Current) -> u64 {
     publish(Phase::FirstRunning);
 
     wait(Phase::BothRunning);
+    turn::check_leave(current);
     current
         .yield_now()
         .expect("leave with an independent Unit on the other Hart");
@@ -141,7 +142,8 @@ fn finish(execution: &Execution, receipt: Occupancy, value: u64) {
 }
 
 fn run_minor(execution: &'static Execution) -> ! {
-    lock::waiter();
+    turn::minor();
+    snapshot::observe();
     assert_eq!(
         execution.enter(),
         Ok(None),
@@ -216,7 +218,8 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
             .start_minor(minor_hart, run_minor)
             .expect("start actual minor Hart");
     }
-    lock::owner();
+    turn::major();
+    snapshot::publish();
     wait(Phase::AffinityChecked);
     finish(execution, dispatch(execution, pinned, major), 17);
     execution.submit(a).expect("admit migratable Unit");
@@ -241,7 +244,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert_eq!(limen_register_probe_migrated.load(Relaxed), 1);
 
     write(
-        "PASS kernel-execution-harts active=2 fifo=1 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1\n",
+        "PASS kernel-execution-harts active=2 turn=1 snap=1 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1\n",
     );
     shutdown(true)
 }

@@ -8,8 +8,22 @@
     feature(fn_align)
 )]
 
-#[cfg(target_arch = "riscv64")]
+#[cfg(any(
+    target_arch = "riscv64",
+    all(
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        any(target_os = "none", target_os = "uefi")
+    ),
+))]
 mod basis;
+#[cfg(any(
+    target_arch = "riscv64",
+    all(
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        any(target_os = "none", target_os = "uefi")
+    ),
+))]
+pub use basis::sync;
 #[cfg(any(
     target_arch = "riscv64",
     all(

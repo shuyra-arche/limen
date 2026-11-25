@@ -22,7 +22,11 @@
     "server/src/metal/boot/console.rs",
     "server/src/metal/boot/services.rs",
     "server/src/metal/firmware/devicetree/mod.rs",
-    "server/src/metal/hart/mod.rs"
+    "server/src/metal/hart/mod.rs",
+    "server/src/metal/hart/node.rs",
+    "server/src/metal/hart/protection.rs",
+    "server/src/basis/sync/**",
+    "server/tests/target/entry/synchronization.rs"
   ],
   "run": {
     "kind": "board-boot",
