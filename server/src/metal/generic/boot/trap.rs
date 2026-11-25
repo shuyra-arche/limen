@@ -3,7 +3,6 @@ use crate::metal::{boot::firmware, generic::stack::Stack};
 use core::sync::atomic::AtomicPtr;
 
 const BYTES: usize = 16 * 1024;
-#[unsafe(link_section = ".trapstk")]
 static mut STACK: Stack<BYTES> = Stack::new();
 
 // The image relocation arms the stack before any CPU can enter a vector,

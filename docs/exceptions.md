@@ -5,7 +5,11 @@
 Generic Metal reserves one 16 KiB stack for terminal diagnostics. Its atomic
 pointer initially holds the first address past the stack, relocated with the
 image. The stack is armed before RV64 clears BSS and before either UEFI image
-installs its vectors.
+installs its vectors. The aligned Rust stack object uses ordinary writable
+image storage. On RV64 the initialized claim pointer lies outside BSS. An
+exception during the clear abandons that clear on the sole major hart, while
+other harts remain under firmware control. The reporter uses stack storage
+without relying on its previous contents.
 
 Each entry exchanges the pointer for null using registers. Only the CPU that
 obtains a non-null top switches to it and enters Rust. A nested or concurrent

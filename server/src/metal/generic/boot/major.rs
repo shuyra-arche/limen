@@ -6,8 +6,6 @@ use crate::{
 };
 use core::ops::Range;
 
-// The RV64 linker reserves this section outside the BSS cleared by the entry.
-#[unsafe(link_section = ".bootstk")]
 pub(in crate::metal) static mut STACK: Stack<STACK_BYTES> = Stack::new();
 
 /// Image-owned stack reservation for the major CPU.
