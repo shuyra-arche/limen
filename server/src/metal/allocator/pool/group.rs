@@ -7,7 +7,7 @@ use core::{
 };
 
 use super::super::{Allocation, AllocationId, ReturnId};
-use super::{Error, GroupId, VALUE_ALIGNMENT, VALUE_BYTES};
+use super::{Error, GroupId, VALUE_ALIGNMENT, VALUE_BYTES, retirement::Material};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum State {
@@ -81,8 +81,7 @@ pub(super) struct Links {
 pub(super) struct Group<'storage, T> {
     // Neither the linear Allocation nor its pre-paid Return position lives
     // in the mapped group. The source can survive loss of those mapped bytes.
-    allocation: Allocation,
-    retirement: ReturnId,
+    pub(super) material: Material,
     pub(super) geometry: Geometry,
     slots: NonNull<Slot<T>>,
     pub(super) head: Option<usize>,
@@ -118,8 +117,10 @@ impl<'storage, T> Group<'storage, T> {
     ) -> Self {
         let slots = NonNull::from(mapping).cast::<Slot<T>>();
         Self {
-            allocation,
-            retirement,
+            material: Material {
+                allocation,
+                retirement,
+            },
             geometry,
             slots,
             head: Some(0),
@@ -134,8 +135,8 @@ impl<'storage, T> Group<'storage, T> {
 
     pub(super) fn supply(&self) -> Supply {
         Supply {
-            allocation: self.allocation.id(),
-            retirement: self.retirement,
+            allocation: self.material.allocation.id(),
+            retirement: self.material.retirement,
             geometry: self.geometry,
             free: self.free,
         }

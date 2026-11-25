@@ -3,7 +3,7 @@ use core::{mem::MaybeUninit, ptr};
 use kernel::{
     allocator::{
         Allocation, Allowance,
-        pool::{GroupSlot, Pool},
+        pool::{Error, GroupSlot, Pool, Stable},
     },
     entry::boot::{self, Boot},
     sync::{Acquisition::Fast, TurnLock, Work},
@@ -11,7 +11,7 @@ use kernel::{
 
 use super::pool_material::{GROUP, PAGE, install};
 
-type Entry = TurnLock<usize>;
+type Entry = Stable<TurnLock<usize>>;
 
 static mut GROUPS: [GroupSlot<'static, Entry>; 1] = [GroupSlot::EMPTY];
 static mut TYPED: MaybeUninit<Pool<'static, Entry>> = MaybeUninit::uninit();
@@ -50,7 +50,7 @@ pub(super) fn check(boot: &Boot<'_>) {
                 held.access(&receiver).unwrap().0.take().unwrap()
             })
             .unwrap();
-        let prepared = reserved.initialize(TurnLock::new(value));
+        let prepared = reserved.initialize(Stable::new(TurnLock::new(value)));
         let mut plan = work.plan();
         plan.insert(&receiver).unwrap();
         pool.plan(&mut plan).unwrap();
@@ -69,7 +69,9 @@ pub(super) fn check(boot: &Boot<'_>) {
                 held.access(&receiver).unwrap().1.take().unwrap()
             })
             .unwrap();
-        let entry = object.get();
+        let original = object.stabilize();
+        let reference = original.reference().unwrap();
+        let entry = reference.get();
         let current = ptr::from_ref(entry).addr();
         assert!((GROUP.start as usize..GROUP.end as usize).contains(&current));
         assert_eq!(*address.get_or_insert(current), current);
@@ -80,11 +82,35 @@ pub(super) fn check(boot: &Boot<'_>) {
             plan.execute(Fast, |held| *held.access(entry).unwrap()),
             Ok(value)
         );
-        object.destroy().ok().unwrap().release().ok().unwrap();
+        let detached = original.detach();
+        let mut reclaim = None;
+        let (detached, error) = detached.claim(&mut reclaim).err().unwrap();
+        assert_eq!(error, Error::References);
+        drop(reference);
+        detached.claim(&mut reclaim).ok().unwrap();
+        reclaim
+            .unwrap()
+            .destroy()
+            .ok()
+            .unwrap()
+            .release()
+            .ok()
+            .unwrap();
     }
     assert_eq!(pool.capacity().unwrap().free, geometry.slots);
     assert_eq!(source.budget(Fast), Ok((PAGE as u64, 0)));
     let owner = allowance.as_ref().unwrap();
     assert_eq!(owner.balance().unwrap().occupied, PAGE as u64);
-    boot::write("PASS typed-pool mapped=1 slots=1 reuse=1 joint=1\n");
+    assert_eq!(pool.shut(group), Ok(GROUP));
+    assert_eq!(pool.capacity().unwrap().bytes, PAGE);
+    // Bare RV64 has no active translation for the group, and the original
+    // consumer has released every software reference. No device used it.
+    unsafe { pool.begin_return(group, Fast) }.unwrap();
+    let result = pool.finish_return(group, Fast).unwrap();
+    assert_eq!(result.allocation, supply.allocation);
+    assert_eq!(result.physical, GROUP);
+    assert_eq!(pool.finish_return(group, Fast), Ok(result));
+    assert_eq!(owner.balance().unwrap().occupied, 0);
+    assert_eq!(pool.capacity().unwrap().bytes, 0);
+    boot::write("PASS typed-pool mapped=1 slots=1 reuse=1 joint=1 stable=1 refund=1\n");
 }

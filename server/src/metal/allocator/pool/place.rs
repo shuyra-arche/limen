@@ -9,7 +9,7 @@ use super::{
 };
 
 pub(super) struct Claim<'pool, 'storage, T> {
-    pool: &'pool Pool<'storage, T>,
+    pub(super) pool: &'pool Pool<'storage, T>,
     pub(super) group: GroupId,
     pub(super) index: usize,
     slot: NonNull<Slot<T>>,
@@ -41,7 +41,7 @@ impl<'pool, 'storage, T> Claim<'pool, 'storage, T> {
         unsafe { &self.slot.as_ref().state }
     }
 
-    fn value(&self) -> *mut T {
+    pub(super) fn value(&self) -> *mut T {
         // The linear token gives exclusive value access. Inactive slots are
         // never exposed as &T and the state field is disjoint.
         unsafe { self.slot.as_ref().value.get().cast::<T>() }
@@ -58,11 +58,11 @@ pub struct Prepared<'pool, 'storage, T>(Claim<'pool, 'storage, T>);
 
 /// The consumer's unique typed object. Borrowing does not leave this owner.
 #[must_use = "the original owner must destroy and settle this object"]
-pub struct Occupied<'pool, 'storage, T>(Claim<'pool, 'storage, T>);
+pub struct Occupied<'pool, 'storage, T>(pub(super) Claim<'pool, 'storage, T>);
 
 /// The original object has been destroyed. Its slot stays claimed until settled.
 #[must_use = "the original owner must release this destroyed slot"]
-pub struct Vacant<'pool, 'storage, T>(Claim<'pool, 'storage, T>);
+pub struct Vacant<'pool, 'storage, T>(pub(super) Claim<'pool, 'storage, T>);
 
 impl<'pool, 'storage, T> Reservation<'pool, 'storage, T> {
     /// Write a supported value into the final slot. The Pool layout bounds
