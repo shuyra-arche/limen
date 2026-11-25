@@ -87,8 +87,17 @@ pub(crate) unsafe fn admit(
     hart: usize,
     input: *const (),
 ) -> Option<crate::entry::boot::Boot<'static>> {
-    let tree = unsafe {
-        crate::metal::firmware::devicetree::extent(input.cast(), crate::metal::boot::image())
-    }?;
-    Some(crate::entry::boot::Boot::new(hart, Some(tree), None))
+    // The image provides the readable physical window independently of the
+    // a1 pointer or the bytes of the DTB. These symbols are addresses, not objects.
+    unsafe extern "C" {
+        static DTB_WINDOW_START: u8;
+        static DTB_WINDOW_END: u8;
+    }
+    let window = (&raw const DTB_WINDOW_START).addr()..(&raw const DTB_WINDOW_END).addr();
+    let parsed =
+        unsafe { super::devicetree::memory::read(input, window, crate::metal::boot::image()) };
+    match parsed {
+        Ok((tree, memory)) => Some(crate::entry::boot::Boot::from_opensbi(hart, tree, memory)),
+        Err(error) => Services::active().reject(format_args!("FAIL Limen boot: DTB {error:?}\n")),
+    }
 }

@@ -23,7 +23,7 @@
     "server/src/metal/execution/riscv/**",
     "server/src/metal/boot/console.rs",
     "server/src/metal/boot/services.rs",
-    "server/src/metal/firmware/devicetree.rs",
+    "server/src/metal/firmware/devicetree/**",
     "server/src/metal/hart/stack.rs",
     "server/src/metal/hart/mod.rs",
     "server/src/metal/hart/riscv.rs",

@@ -6,19 +6,33 @@ board resources and retains the storage needed for the common handoff.
 
 ## RV64 virt with OpenSBI
 
-An OpenSBI image supplies `KERNEL_LOAD_ADDRESS` and `limen_platform_ready`.
+An OpenSBI image supplies `KERNEL_LOAD_ADDRESS`, `DTB_WINDOW_START`,
+`DTB_WINDOW_END` and `limen_platform_ready`.
 The ELF linker provides the final image and BSS bounds. The Rust-owned stacks
 live in ordinary writable image storage. Firmware enters `_start` on the sole
 boot hart in supervisor mode with Bare translation, the hart ID in `a0` and the
 physical DTB address in `a1`. Metal masks supervisor interrupts, disables
 floating-point and vector state, installs the direct trap vector and clears BSS.
 
-The DTB must remain readable, immutable and disjoint from the image. Limen
-checks its version-17-compatible header, the nonempty structure block, and the
-extents of the structure, strings and first reservation entry. The platform
-validates block contents. Admission also requires the SBI debug console and
-system reset extensions. The image receives the hart ID and admitted tree
-extent. A minor starts through SBI HSM with its resident record in `a1`.
+The image defines `DTB_WINDOW_START..DTB_WINDOW_END` as a half-open identity
+window whose storage is readable in supervisor mode. Supply it from the trusted
+board configuration. The OpenSBI pointer names a stable, initialized DTB in
+that window. Keep that storage immutable and disjoint from the image. The
+128 MiB QEMU fixtures use `0x80200000..0x88000000`, excluding the firmware
+prefix. Limen checks the header read and the complete declared extent against
+the configured window before reading the rest of the tree.
+
+`Boot::dtb_memory` exposes RAM from enabled root memory nodes and reservations
+from both the FDT reservation block and static `/reserved-memory` children.
+It preserves `no-map` and `reusable` and rejects an enabled reservation whose
+address must still be allocated. The parser accepts one- or two-cell addresses
+and sizes, at most 256 KiB of DTB bytes, 32 levels, 16 RAM ranges and 64
+reservations. Capacity, malformed geometry and unsupported memory descriptions
+fail before the handoff. Later startup stages compare the descriptions with
+live image and hardware exclusions before admitting any range to Allocator.
+
+Admission also requires the SBI debug console and system reset extensions.
+A minor starts through SBI HSM with its resident record in `a1`.
 [RV64 entry](../server/src/metal/boot/riscv/) · [SBI](../server/src/metal/firmware/sbi/)
 
 ## UEFI loader
@@ -40,8 +54,8 @@ configuration bound.
 
 This step establishes descriptor geometry only. Initial RAM admission still
 requires the full platform reservations, active image/stack/translation
-storage, verified access and old device isolation. RV64 still needs bounded
-DTB memory and reservation decoding; Arm also needs the DTB cross-check.
+storage, verified access and old device isolation. AArch64 still needs the
+DTB and UEFI map cross-check.
 Do not interpret missing information as an empty reservation set.
 [UEFI adapter](../server/src/metal/firmware/uefi/) ·
 [Formal boot contract](https://github.com/shuyra-arche/document-limen/blob/246170c626ee2b5e316753e95f50f1669e8f47dd/server/entry/boot/platforms.md)

@@ -1,5 +1,6 @@
-#[path = "../../../src/metal/firmware/devicetree.rs"]
+#[path = "../../../src/metal/firmware/devicetree/mod.rs"]
 mod devicetree;
+mod memory;
 
 #[repr(align(8))]
 struct Header([u32; 10]);

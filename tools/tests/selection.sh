@@ -90,7 +90,7 @@ bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/C
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/boot/services.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/firmware/devicetree.rs
+change server/src/metal/firmware/devicetree/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
 change server/src/metal/hart/stack.rs

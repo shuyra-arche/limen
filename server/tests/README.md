@@ -39,6 +39,12 @@ complete serial assertions, one QMP `SHUTDOWN` event with `guest=true` and
 `reason=guest-shutdown`, and a clean QEMU exit. The serial log, QMP transcript
 and verdict are preserved with the candidate revision.
 
+The callback also checks that the production parser names the configured 128 MiB
+RAM bank and retains the OpenSBI firmware reservation from the actual DTB.
+The Boot Host suite exercises both DTB reservation representations and rejects
+truncation, inaccessible extents, overflow, excess ranges and unresolved
+dynamic reservations.
+
 The Boot owner also exercises a terminal trap during the BSS clear. After a
 normal boot-handoff run, `target/entry/boot/fault.sh` verifies the recorded ELF
 hash and copies that ELF. It checks the actual instruction sequence and replaces

@@ -19,7 +19,7 @@
     "server/src/metal/hart/stack.rs",
     "server/src/metal/boot/console.rs",
     "server/src/metal/boot/services.rs",
-    "server/src/metal/firmware/devicetree.rs",
+    "server/src/metal/firmware/devicetree/mod.rs",
     "server/src/metal/hart/mod.rs"
   ],
   "run": {
