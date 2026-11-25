@@ -4,7 +4,7 @@
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
-use kernel::entry::boot::{Boot, shutdown, stack_range, write};
+use kernel::entry::boot::{Boot, Physical, Source, shutdown, stack_range, write};
 
 unsafe extern "C" {
     static limen_test_text_start: u8;
@@ -134,7 +134,27 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert!(magic == 0xd00d_feed, "invalid firmware tree magic");
     assert!(length == device_tree.len(), "firmware tree length mismatch");
 
-    write("PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1\n");
+    let memory = boot.dtb_memory();
+    assert_eq!(
+        memory.ram(),
+        &[Physical {
+            start: 0x8000_0000,
+            end: 0x8800_0000
+        }]
+    );
+    assert!(
+        memory.reservations().iter().any(|entry| {
+            entry.physical.start == 0x8000_0000
+                && entry.physical.end > entry.physical.start
+                && entry.physical.end <= 0x8020_0000
+                && matches!(entry.source, Source::ReservedMemory { .. })
+        }),
+        "OpenSBI firmware reservation is missing"
+    );
+
+    write(
+        "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1\n",
+    );
     shutdown(true)
 }
 

@@ -1,5 +1,8 @@
 use core::ops::Range;
 
+#[cfg(any(target_arch = "riscv64", test))]
+pub(crate) mod memory;
+
 const ALIGNMENT: usize = 8;
 const HEADER_SIZE: usize = 40;
 const MAGIC: u32 = 0xd00d_feed;
@@ -18,7 +21,22 @@ pub(crate) unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Op
         return None;
     }
 
-    let header = unsafe { header.read_volatile() };
+    let header = layout(unsafe { header.read_volatile() }.map(u32::from_be))?;
+    let extent = address..address.checked_add(header.size as usize)?;
+    (!overlaps(&extent, &image)).then_some(extent)
+}
+
+struct Layout {
+    size: u32,
+    #[cfg(any(target_arch = "riscv64", test))]
+    structure: Range<u32>,
+    #[cfg(any(target_arch = "riscv64", test))]
+    strings: Range<u32>,
+    #[cfg(any(target_arch = "riscv64", test))]
+    reservations: u32,
+}
+
+fn layout(header: [u32; 10]) -> Option<Layout> {
     let [
         magic,
         size,
@@ -30,7 +48,7 @@ pub(crate) unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Op
         _,
         strings_size,
         structure_size,
-    ] = header.map(u32::from_be);
+    ] = header;
     if magic != MAGIC || version < 17 || compatible > 17 || compatible > version {
         return None;
     }
@@ -47,8 +65,15 @@ pub(crate) unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Op
     {
         return None;
     }
-    let extent = address..address.checked_add(size as usize)?;
-    (!overlaps(&extent, &image)).then_some(extent)
+    Some(Layout {
+        size,
+        #[cfg(any(target_arch = "riscv64", test))]
+        structure,
+        #[cfg(any(target_arch = "riscv64", test))]
+        strings,
+        #[cfg(any(target_arch = "riscv64", test))]
+        reservations: reservations.start,
+    })
 }
 
 fn block(offset: u32, length: u32, size: u32, alignment: u32) -> Option<Range<u32>> {

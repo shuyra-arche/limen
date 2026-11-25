@@ -12,6 +12,8 @@ PHDRS
 SECTIONS
 {
   ASSERT(DEFINED(KERNEL_LOAD_ADDRESS), "image must provide KERNEL_LOAD_ADDRESS")
+  ASSERT(DEFINED(DTB_WINDOW_START) && DEFINED(DTB_WINDOW_END), "image must provide the readable DTB window")
+  ASSERT(DTB_WINDOW_START > 0 && DTB_WINDOW_END > DTB_WINDOW_START, "invalid readable DTB window")
   . = KERNEL_LOAD_ADDRESS;
   _kernel_base = .;
 

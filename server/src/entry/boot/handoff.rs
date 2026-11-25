@@ -1,3 +1,5 @@
+#[cfg(target_arch = "riscv64")]
+use super::DtbMemory;
 use super::FirmwareMap;
 use core::ops::Range;
 
@@ -6,6 +8,8 @@ pub struct Boot<'a> {
     hart: usize,
     device_tree: Option<Range<usize>>,
     firmware_map: Option<FirmwareMap<'a>>,
+    #[cfg(target_arch = "riscv64")]
+    memory: DtbMemory,
 }
 
 impl<'a> Boot<'a> {
@@ -21,6 +25,12 @@ impl<'a> Boot<'a> {
         self.firmware_map
     }
 
+    #[cfg(target_arch = "riscv64")]
+    pub fn dtb_memory(&self) -> &DtbMemory {
+        &self.memory
+    }
+
+    #[cfg(not(target_arch = "riscv64"))]
     pub(crate) fn new(
         hart: usize,
         device_tree: Option<Range<usize>>,
@@ -30,6 +40,18 @@ impl<'a> Boot<'a> {
             hart,
             device_tree,
             firmware_map,
+        }
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+impl Boot<'static> {
+    pub(crate) fn from_opensbi(hart: usize, device_tree: Range<usize>, memory: DtbMemory) -> Self {
+        Self {
+            hart,
+            device_tree: Some(device_tree),
+            firmware_map: None,
+            memory,
         }
     }
 }
