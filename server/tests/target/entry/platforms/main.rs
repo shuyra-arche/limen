@@ -157,7 +157,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         edits: 2,
     };
     assert!(
-        unsafe { regions.allocator(&mut None, configuration, 0, &mut []) }
+        unsafe { regions.allocator(&mut None, configuration, 0, &mut None, &mut []) }
             .unwrap()
             .is_none()
     );

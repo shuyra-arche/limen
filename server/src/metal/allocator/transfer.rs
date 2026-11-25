@@ -441,11 +441,20 @@ impl Allocator {
         Ok(())
     }
 
-    /// Move the exact retired input to its prepaid Return slot. The input and
-    /// its retirement evidence stay with the caller on any rejected attempt.
-    pub fn begin_return(&self, retired: Retired) -> Result<ReturnId, (Retired, Error)> {
+    /// Move the exact retired input to its prepaid Return slot and record that
+    /// identity in the original owner's durable receipt position before releasing
+    /// the Region. Pending discovery can then finish even if the caller loses
+    /// the success response. Rejection retains both the input and the receipt.
+    pub fn begin_return(
+        &self,
+        retired: Retired,
+        receipt: &mut Option<ReturnId>,
+    ) -> Result<(), (Retired, Error)> {
         let allocation = &retired.0;
         let result = (|| {
+            if receipt.is_some() {
+                return Err(Error::Receiver);
+            }
             if !ptr::eq(self, allocation.source) {
                 return Err(Error::Stale);
             }
@@ -465,7 +474,8 @@ impl Allocator {
                     .get_mut(allocation.id.key)
                     .expect("active")
                     .phase = Phase::Returning;
-                Ok(record.retirement)
+                *receipt = Some(record.retirement);
+                Ok(())
             })?
         })();
         result.map_err(|error| (retired, error))

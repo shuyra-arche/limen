@@ -1,4 +1,4 @@
-use core::{ptr, sync::atomic::Ordering::Acquire};
+use core::sync::atomic::Ordering::Acquire;
 
 use crate::{
     entry::boot::{Physical, RegionSource},
@@ -104,6 +104,7 @@ pub enum Search {
 
 enum Pass {
     Observe,
+    Candidate(Physical),
     Verify,
     Directory,
     Finished,
@@ -167,6 +168,7 @@ impl Lookup {
                 }
             }
             Pass::Observe => self.observe(),
+            Pass::Candidate(physical) => Ok(self.candidate(physical)),
             Pass::Verify if self.visited == self.count => {
                 self.pass = Pass::Directory;
                 Ok(Search::Pending)
@@ -190,21 +192,26 @@ impl Lookup {
         result
     }
 
-    /// Continue searching other Regions after a candidate failed acceptance
-    /// for local metadata, or lost a race. A rejected hit cannot contribute
-    /// to NoRange. The reason remains local to the original commit attempt.
-    pub fn skip(&mut self, candidate: Candidate) -> Result<(), Error> {
-        if !matches!(self.pass, Pass::Observe)
-            || !ptr::eq(self.source, candidate.source)
-            || self.visited == self.count
-            || self.index() != candidate.region.0
-        {
+    /// Continue with the next Region after rejecting this lookup's outstanding
+    /// candidate. Repeated steps yield that candidate until it is skipped.
+    /// A rejected hit cannot contribute to NoRange.
+    pub fn skip_current(&mut self) -> Result<(), Error> {
+        if !matches!(self.pass, Pass::Candidate(_)) {
             return Err(Error::Stale);
         }
         self.blocked = true;
-        self.scan = None;
         self.visited += 1;
+        self.pass = Pass::Observe;
         Ok(())
+    }
+
+    fn candidate(&self, physical: Physical) -> Search {
+        Search::Candidate(Candidate {
+            source: self.source,
+            region: RegionId(self.index()),
+            physical,
+            request: self.request,
+        })
     }
 
     fn index(&self) -> usize {
@@ -239,15 +246,14 @@ impl Lookup {
         })?;
 
         match observation {
-            buddy::Search::Found(found) => Ok(Search::Candidate(Candidate {
-                source: self.source,
-                region: RegionId(index),
-                physical: Physical {
+            buddy::Search::Found(found) => {
+                let physical = Physical {
                     start: found.start,
                     end: found.end,
-                },
-                request: self.request,
-            })),
+                };
+                self.pass = Pass::Candidate(physical);
+                Ok(self.candidate(physical))
+            }
             buddy::Search::Pending(scan) => {
                 self.scan = Some(scan);
                 Ok(Search::Pending)

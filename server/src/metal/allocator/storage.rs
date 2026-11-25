@@ -116,15 +116,12 @@ impl<'a> Initial<'a> {
     }
 }
 
-pub struct Founded {
-    pub source: &'static Allocator,
-    pub allowance: Allowance,
-}
-
 impl Regions<'_> {
     /// Establish the fixed root and deliver initial Issued allocations before
-    /// publishing the source. On rejection the mapping, ranges and receiver
-    /// slots stay with the caller. Absent qualified mapping yields no source.
+    /// publishing the source. Deposit the initial Allowance's close handle
+    /// in its owner's receiver before publication as well. Rejection leaves
+    /// the mapping, ranges and both receivers with the caller. Absent qualified
+    /// mapping yields no source.
     ///
     /// # Safety
     ///
@@ -138,8 +135,9 @@ impl Regions<'_> {
         mapping: &mut Option<MappedRange<'static>>,
         config: Config,
         capacity: u64,
+        allowance_receiver: &mut Option<Allowance>,
         initial: &mut [Initial<'_>],
-    ) -> Result<Option<Founded>, Error> {
+    ) -> Result<Option<&'static Allocator>, Error> {
         if config.granule != self.granule() {
             return Err(Error::Layout);
         }
@@ -149,6 +147,9 @@ impl Regions<'_> {
         else {
             return Ok(None);
         };
+        if allowance_receiver.is_some() {
+            return Err(Error::Receiver);
+        }
         if initial.len() > config.regions.saturating_mul(config.allocations)
             || !capacity.is_multiple_of(config.granule)
         {
@@ -204,16 +205,17 @@ impl Regions<'_> {
         }
 
         let storage = self.take_root(mapping, plan);
-        let founded = initialize(
+        let source = initialize(
             storage,
             config,
             self.entries(),
             capacity,
             committed,
+            allowance_receiver,
             initial,
         );
         self.clear();
-        Ok(Some(founded))
+        Ok(Some(source))
     }
 }
 
@@ -256,8 +258,9 @@ fn initialize(
     descriptions: impl Iterator<Item = Description>,
     capacity: u64,
     committed: u64,
+    allowance_receiver: &mut Option<Allowance>,
     initial: &mut [Initial<'_>],
-) -> Founded {
+) -> &'static Allocator {
     let reserved = storage.reserved();
     let bytes = storage.into_bytes();
     let mut carve = Carve {
@@ -353,9 +356,7 @@ fn initialize(
         let id = item.staged.take().expect("preflighted initial position");
         *item.receiver = Some(Allocation::issued(source, id, item.physical));
     }
+    *allowance_receiver = Some(Allowance::initial(source, allowance));
     source.published.store(published, Release);
-    Founded {
-        source,
-        allowance: Allowance::initial(source, allowance),
-    }
+    source
 }

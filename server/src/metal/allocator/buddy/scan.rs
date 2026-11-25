@@ -41,10 +41,10 @@ impl Request {
         Ok(())
     }
 
-    fn within(self, start: u64, stop: u64) -> Option<Range<u64>> {
+    fn within(self, start: u64, stop: u64, granule: u64) -> Option<Range<u64>> {
         let start = start
             .max(self.first)
-            .checked_next_multiple_of(self.alignment)?;
+            .checked_next_multiple_of(self.alignment.max(granule))?;
         let end = start.checked_add(self.length)?;
         (end <= stop.min(self.limit)).then_some(start..end)
     }
@@ -129,7 +129,7 @@ impl<'storage> Buddy<'storage> {
                 }
             }
             let start = block.base * granule;
-            return Ok(request.within(start, block.end() * granule));
+            return Ok(request.within(start, block.end() * granule, granule));
         }
         Ok(None)
     }
@@ -169,7 +169,9 @@ impl<'storage> Buddy<'storage> {
                 Phase::Visit => match self.state(self.roots[scan.root].first, block) {
                     State::Free => {
                         let start = *scan.run.get_or_insert(block.base * granule);
-                        if let Some(found) = scan.request.within(start, block.end() * granule) {
+                        if let Some(found) =
+                            scan.request.within(start, block.end() * granule, granule)
+                        {
                             return Search::Found(found);
                         }
                         scan.phase = Phase::Advance;

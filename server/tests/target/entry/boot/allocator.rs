@@ -2,8 +2,8 @@ use core::{mem::MaybeUninit, ptr, slice};
 
 use kernel::{
     allocator::{
-        Allocation, Config, Error, Founded, Grant, Initial, Pending, RamPurpose::Metadata, Request,
-        Search,
+        Allocation, Allowance, Config, Error, Grant, Initial, Pending, RamPurpose::Metadata,
+        Request, ReturnId, Search,
     },
     entry::boot::{self, Boot, Condition, MappedRange, Physical, Retirement},
     sync::Acquisition::{Fast, Slow},
@@ -24,6 +24,8 @@ const CONFIG: Config = Config {
 };
 
 static mut RECEIVER: Option<Allocation> = None;
+static mut ALLOWANCE: Option<Allowance> = None;
+static mut RECEIPT: Option<ReturnId> = None;
 
 const fn pages(first: u64, last: u64) -> Physical {
     Physical {
@@ -69,7 +71,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     let mut regions = boot.regions(PAGE, Some(&evidence), &mut scratch).unwrap();
     assert!(regions.entries().map(|entry| entry.physical).eq([scope]));
     assert!(
-        unsafe { regions.allocator(&mut None, CONFIG, 0, &mut []) }
+        unsafe { regions.allocator(&mut None, CONFIG, 0, &mut None, &mut []) }
             .unwrap()
             .is_none()
     );
@@ -81,16 +83,24 @@ pub(super) fn check(boot: &Boot<'_>) {
         unsafe { slice::from_raw_parts_mut(address, (backing.end - backing.start) as usize) };
     let mut mapping = Some(unsafe { MappedRange::new(backing, storage) }.unwrap());
     let receiver = unsafe { &mut *(&raw mut RECEIVER) };
-    let Founded { source, allowance } = unsafe {
-        regions.allocator(
-            &mut mapping,
-            CONFIG,
-            10 * PAGE,
-            &mut [Initial::new(pages(0, 3), receiver)],
-        )
-    }
-    .unwrap()
-    .unwrap();
+    let allowance_receiver = unsafe { &mut *(&raw mut ALLOWANCE) };
+    // Simulate loss of the transient boot result. All obligations have
+    // already reached the original permanent receiving positions.
+    assert!(
+        unsafe {
+            regions.allocator(
+                &mut mapping,
+                CONFIG,
+                10 * PAGE,
+                allowance_receiver,
+                &mut [Initial::new(pages(0, 3), receiver)],
+            )
+        }
+        .unwrap()
+        .is_some()
+    );
+    let allowance = allowance_receiver.take().unwrap();
+    let source = allowance.source();
     assert!(mapping.is_none() && regions.entries().next().is_none());
     assert_eq!(source.root(), backing);
     assert_eq!(source.budget(Slow), Ok((11 * PAGE, PAGE)));
@@ -131,19 +141,29 @@ pub(super) fn check(boot: &Boot<'_>) {
         }
     }
 
+    let window = Physical {
+        start: later.start + 1,
+        end: later.end,
+    };
+    let request = Request::new(PAGE, 1, window, None, Metadata).unwrap();
+    let Search::Candidate(aligned) = source.lookup(request, Some(added)).unwrap().step().unwrap()
+    else {
+        panic!("the new Region has an eligible aligned grain");
+    };
+    assert_eq!(aligned.physical(), pages(17, 18));
+
     let allocation = receiver.take().unwrap();
     let region = allocation.region();
     // This owner did not expose the allocation or issue any actual access.
-    let receipt = source
-        .begin_return(unsafe { allocation.retire() })
-        .ok()
-        .unwrap();
-    assert_eq!(
-        source.pending(region, &mut 0, 64),
-        Ok(Pending::Found(receipt))
-    );
+    let receipt = unsafe { &mut *(&raw mut RECEIPT) };
+    let _lost = source.begin_return(unsafe { allocation.retire() }, receipt);
+    let Pending::Found(pending) = source.pending(region, &mut 0, 64).unwrap() else {
+        panic!("lost response made the return undiscoverable");
+    };
     allowance.shut(Some(added), Fast).unwrap();
-    let done = source.finish_return(receipt, Slow).unwrap();
+    let done = source.finish_return(pending, Slow).unwrap();
+    let receipt = receipt.take().unwrap();
+    assert_eq!(receipt, pending);
     assert_eq!(done.physical, pages(0, 3));
     assert_eq!(source.budget(Fast), Ok((15 * PAGE, 15 * PAGE)));
     allowance.reclaim(Slow).ok().unwrap();

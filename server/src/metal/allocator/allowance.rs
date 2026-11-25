@@ -101,6 +101,10 @@ impl Allowance {
         Self { source, id }
     }
 
+    pub fn source(&self) -> &'static Allocator {
+        self.source
+    }
+
     pub fn id(&self) -> AllowanceId {
         self.id
     }

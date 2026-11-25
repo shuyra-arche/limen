@@ -1,8 +1,8 @@
 use crate::{
     Boot, FirmwareMap, IMAGE, Physical, Retirement,
     allocator::{
-        Allocation, Config, Error, Founded, Grant, Initial, Pending, RamPurpose::Metadata, Request,
-        Search,
+        Allocation, Allocator, Allowance, Config, Error, Grant, Initial, Pending,
+        RamPurpose::Metadata, Request, Retired, ReturnId, Search,
     },
     describe,
     organization::retired,
@@ -56,46 +56,69 @@ fn bootstrap(operation: impl FnOnce(&mut Regions<'_>, &mut Option<MappedRange<'s
     operation(&mut regions, &mut mapping);
 }
 
-fn source(initial: &mut Option<Allocation>, capacity: u64) -> Founded {
-    let mut founded = None;
+fn provision(
+    config: Config,
+    capacity: u64,
+    initial: &mut Option<Allocation>,
+    allowance: &mut Option<Allowance>,
+) {
     bootstrap(|regions, mapping| {
-        founded = unsafe {
-            regions.allocator(
-                mapping,
-                CONFIG,
-                capacity,
-                &mut [Initial::new(pages(0, 3), initial)],
-            )
-        }
-        .unwrap();
+        // Drop the transient source result. The receiver keeps the original
+        // close handle, its exact source, and the separate material receiver.
+        assert!(
+            unsafe {
+                regions.allocator(
+                    mapping,
+                    config,
+                    capacity,
+                    allowance,
+                    &mut [Initial::new(pages(0, 3), initial)],
+                )
+            }
+            .unwrap()
+            .is_some()
+        );
         assert!(mapping.is_none());
         assert_eq!(regions.entries().count(), 0);
     });
-    founded.unwrap()
+}
+
+fn source(initial: &mut Option<Allocation>, capacity: u64) -> (&'static Allocator, Allowance) {
+    let mut receiver = None;
+    provision(CONFIG, capacity, initial, &mut receiver);
+    let allowance = receiver.unwrap();
+    (allowance.source(), allowance)
+}
+
+fn begin_return(source: &Allocator, material: Retired) -> ReturnId {
+    let mut receiver = None;
+    source.begin_return(material, &mut receiver).ok().unwrap();
+    receiver.unwrap()
 }
 
 #[test]
 fn rejects_invalid_geometry_and_receivers_before_consuming_the_root() {
     bootstrap(|regions, mapping| {
         let mut initial = None;
+        let mut allowance = None;
         let input = &mut [Initial::new(pages(3, 5), &mut initial)];
         assert_eq!(
-            unsafe { regions.allocator(mapping, CONFIG, 3 * PAGE, input) }.err(),
+            unsafe { regions.allocator(mapping, CONFIG, 3 * PAGE, &mut allowance, input) }.err(),
             Some(Error::Range)
         );
-        assert!(mapping.is_some() && initial.is_none());
+        assert!(mapping.is_some() && initial.is_none() && allowance.is_none());
         assert_eq!(regions.entries().next().unwrap().physical, SCOPE);
         let config = Config {
             regions: 1,
             ..CONFIG
         };
         assert_eq!(
-            unsafe { regions.allocator(mapping, config, 0, &mut []) }.err(),
+            unsafe { regions.allocator(mapping, config, 0, &mut allowance, &mut []) }.err(),
             Some(Error::Capacity)
         );
         assert!(mapping.is_some());
         assert!(
-            unsafe { regions.allocator(&mut None, CONFIG, 0, &mut []) }
+            unsafe { regions.allocator(&mut None, CONFIG, 0, &mut allowance, &mut []) }
                 .unwrap()
                 .is_none()
         );
@@ -105,7 +128,7 @@ fn rejects_invalid_geometry_and_receivers_before_consuming_the_root() {
 #[test]
 fn independent_history_survives_new_generations_and_refunds_after_shut() {
     let mut initial = None;
-    let Founded { source, allowance } = source(&mut initial, 10 * PAGE);
+    let (source, allowance) = source(&mut initial, 10 * PAGE);
     assert_eq!(source.root(), pages(4, 6));
     assert_eq!(source.budget(Slow), Ok((11 * PAGE, PAGE)));
     let mut halves = [None, None];
@@ -132,10 +155,7 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
     assert_eq!(merged.physical(), pages(0, 3));
     assert_eq!(allowance.balance().unwrap().occupied, 3 * PAGE);
 
-    let receipt = source
-        .begin_return(unsafe { merged.retire() })
-        .ok()
-        .unwrap();
+    let receipt = begin_return(source, unsafe { merged.retire() });
     let mut cursor = 0;
     loop {
         match source.pending(region, &mut cursor, 1).unwrap() {
@@ -160,7 +180,7 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
 #[test]
 fn negative_search_checks_both_passes_and_rejects_new_geometry() {
     let mut initial = None;
-    let Founded { source, allowance } = source(&mut initial, 3 * PAGE);
+    let (source, allowance) = source(&mut initial, 3 * PAGE);
     let left = initial.as_ref().unwrap().region();
     let request = Request::new(2 * PAGE, PAGE, pages(0, 4), Some(ATTRIBUTES), Metadata).unwrap();
     let mut lookup = source.lookup(request, None).unwrap();
@@ -176,10 +196,7 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
     // Observe the negative left Region, then make a qualifying range free.
     assert!(matches!(lookup.step(), Ok(Search::Pending)));
     let material = initial.take().unwrap();
-    let id = source
-        .begin_return(unsafe { material.retire() })
-        .ok()
-        .unwrap();
+    let id = begin_return(source, unsafe { material.retire() });
     source.finish_return(id, Slow).unwrap();
     loop {
         match lookup.step() {
@@ -234,7 +251,7 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     // The Host owner explicitly funds its single actual construction, with a
     // revocable grant limited to its exact allowance, layout and purpose.
     let mut initial = None;
-    let Founded { source, allowance } = source(&mut initial, 8 * PAGE);
+    let (source, allowance) = source(&mut initial, 8 * PAGE);
     let id = allowance.id();
     let spending = TurnLock::new(Some(id));
     let construction = Box::leak(Box::new(TurnLock::new(Construction::new())));
@@ -317,10 +334,10 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
 }
 
 #[test]
-fn a_retired_allowance_reuses_its_slot_without_reusing_its_identity() {
+fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
     use crate::sync::Work;
     let mut initial = None;
-    let Founded { source, allowance } = source(&mut initial, 3 * PAGE);
+    let (source, allowance) = source(&mut initial, 3 * PAGE);
     let original = allowance.id();
     let region = initial.as_ref().unwrap().region();
     let (_, credit) = source.regions().nth(1).unwrap();
@@ -347,10 +364,7 @@ fn a_retired_allowance_reuses_its_slot_without_reusing_its_identity() {
 
     allowance.shut(None, Slow).unwrap();
     let material = initial.take().unwrap();
-    let receipt = source
-        .begin_return(unsafe { material.retire() })
-        .ok()
-        .unwrap();
+    let receipt = begin_return(source, unsafe { material.retire() });
     source.finish_return(receipt, Fast).unwrap();
     allowance.reclaim(Slow).ok().unwrap();
     let index = source.allowance_candidate().unwrap();
@@ -384,28 +398,42 @@ fn a_retired_allowance_reuses_its_slot_without_reusing_its_identity() {
 }
 
 #[test]
-fn issued_material_and_old_return_history_remain_independent_when_slots_fill() {
+fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation() {
     use crate::{
-        allocator::{Construction, ReturnId},
+        allocator::Construction,
         sync::{TurnLock, Work},
     };
 
     let mut initial = None;
-    let Founded { source, allowance } = source(&mut initial, 8 * PAGE);
+    let mut receiver = None;
+    // A single active slot forces the next allocation to reuse it.
+    provision(
+        Config {
+            allocations: 1,
+            ..CONFIG
+        },
+        8 * PAGE,
+        &mut initial,
+        &mut receiver,
+    );
+    let allowance = receiver.unwrap();
+    let source = allowance.source();
     let id = allowance.id();
     let authority = TurnLock::new(id);
     let original = initial.take().unwrap();
     let original_id = original.id();
-    let mut oldest = source
-        .begin_return(unsafe { original.retire() })
-        .ok()
-        .unwrap();
-    assert_eq!(
-        source.finish_return(oldest, Fast).unwrap().allocation,
-        original_id
-    );
+    let region = original.region();
     let mut receipts: [Option<ReturnId>; CONFIG.returns] = [None; CONFIG.returns];
-    receipts[0] = Some(oldest);
+    // The caller loses the response. Recovery discovers the Pending record
+    // independently and does not read the original owner's receipt array.
+    let _lost = source.begin_return(unsafe { original.retire() }, &mut receipts[0]);
+    let Pending::Found(pending) = source.pending(region, &mut 0, CONFIG.returns).unwrap() else {
+        panic!("lost response made the return undiscoverable");
+    };
+    let original_return = source.finish_return(pending, Fast).unwrap();
+    assert_eq!(original_return.allocation, original_id);
+    let owner_receipt = receipts[0].unwrap();
+    assert_eq!(owner_receipt, pending);
     let request = Request::new(PAGE, PAGE, pages(0, 1), None, Metadata).unwrap();
 
     for receipt in &mut receipts[1..] {
@@ -433,16 +461,18 @@ fn issued_material_and_old_return_history_remain_independent_when_slots_fill() {
         assert_ne!(issued.id(), original_id);
         assert_eq!(issued.physical(), pages(0, 1));
         assert_eq!(
-            source.finish_return(oldest, Fast).unwrap().allocation,
+            source
+                .finish_return(owner_receipt, Fast)
+                .unwrap()
+                .allocation,
             original_id
         );
         assert_eq!(allowance.balance().unwrap().occupied, PAGE);
-        let done = source
-            .begin_return(unsafe { issued.retire() })
+        source
+            .begin_return(unsafe { issued.retire() }, receipt)
             .ok()
             .unwrap();
-        source.finish_return(done, Slow).unwrap();
-        *receipt = Some(done);
+        source.finish_return(receipt.unwrap(), Slow).unwrap();
     }
 
     let Search::Candidate(candidate) = source.lookup(request, None).unwrap().step().unwrap() else {
@@ -465,7 +495,7 @@ fn issued_material_and_old_return_history_remain_independent_when_slots_fill() {
     );
     assert_eq!(allowance.balance().unwrap().available(), 8 * PAGE);
 
-    source.acknowledge(oldest).unwrap();
+    source.acknowledge(owner_receipt).unwrap();
     let mut plan = work.plan();
     source
         .plan_construction(&mut plan, candidate.region(), id, construction)
@@ -481,11 +511,44 @@ fn issued_material_and_old_return_history_remain_independent_when_slots_fill() {
             }
         })
         .unwrap();
-    assert_eq!(source.finish_return(oldest, Fast), Err(Error::Stale));
-    oldest = source
-        .begin_return(unsafe { issued.retire() })
-        .ok()
+    assert_eq!(source.finish_return(owner_receipt, Fast), Err(Error::Stale));
+    let mut occupied_receiver = Some(owner_receipt);
+    let (retired, error) = source
+        .begin_return(unsafe { issued.retire() }, &mut occupied_receiver)
+        .err()
         .unwrap();
-    source.finish_return(oldest, Fast).unwrap();
+    assert_eq!(error, Error::Receiver);
+    assert_eq!(occupied_receiver, Some(owner_receipt));
+    assert_eq!(
+        source.pending(region, &mut 0, CONFIG.returns),
+        Ok(Pending::End)
+    );
+    let new_receipt = begin_return(source, retired);
+    source.finish_return(new_receipt, Fast).unwrap();
     assert_eq!(allowance.balance().unwrap().available(), 8 * PAGE);
+}
+
+#[test]
+fn skip_only_advances_the_lookup_with_an_outstanding_candidate() {
+    let mut initial = None;
+    let (source, _allowance) = source(&mut initial, 3 * PAGE);
+    let request = Request::new(PAGE, PAGE, pages(3, 4), None, Metadata).unwrap();
+    let mut first = source.lookup(request, None).unwrap();
+    let mut second = source.lookup(request, None).unwrap();
+    let Search::Candidate(observed) = first.step().unwrap() else {
+        panic!("the first lookup has an eligible grain");
+    };
+    assert_eq!(second.skip_current(), Err(Error::Stale));
+    let Search::Candidate(replayed) = first.step().unwrap() else {
+        panic!("the first lookup still holds its candidate");
+    };
+    assert_eq!(replayed.physical(), observed.physical());
+    first.skip_current().unwrap();
+    assert_eq!(first.skip_current(), Err(Error::Stale));
+    assert!(matches!(first.step(), Ok(Search::Pending)));
+    assert!(matches!(first.step(), Err(Error::Busy)));
+    let Search::Candidate(independent) = second.step().unwrap() else {
+        panic!("the second lookup did not advance");
+    };
+    assert_eq!(independent.physical(), observed.physical());
 }

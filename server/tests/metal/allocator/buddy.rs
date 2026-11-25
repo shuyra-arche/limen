@@ -340,3 +340,18 @@ fn lookup_clips_an_aligned_candidate_to_its_access_window() {
         Search::Missing(_)
     ));
 }
+
+#[test]
+fn both_search_paths_return_an_occupiable_grain_inside_a_clipped_window() {
+    with_forest(0..16_384, 4096, |buddy, geometry| {
+        let request = Request::new(4096, 1).unwrap().restrict(1..12_288).unwrap();
+        let fast = buddy.fast(request).unwrap().unwrap();
+        assert_eq!(fast, 4096..8192);
+        buddy.occupy(fast.clone()).unwrap();
+        buddy.release(fast).unwrap();
+
+        let scanned = complete_search(buddy, geometry, request, 1).unwrap();
+        assert_eq!(scanned, 4096..8192);
+        buddy.occupy(scanned).unwrap();
+    });
+}
