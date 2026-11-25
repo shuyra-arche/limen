@@ -7,8 +7,6 @@ use core::panic::PanicInfo;
 use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 
 unsafe extern "C" {
-    static _trap_stack_start: u8;
-    static _trap_stack_end: u8;
     static limen_test_text_start: u8;
     static limen_test_text_end: u8;
     static _kernel_base: u8;
@@ -81,37 +79,40 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         "direct early trap vector missing",
     );
     let image = (&raw const _kernel_base).addr()..(&raw const _kernel_edge).addr();
+    let bss = (&raw const _bss_start).addr()..(&raw const _bss_end).addr();
     assert!(
         sscratch.is_multiple_of(8)
             && image.contains(&sscratch)
-            && sscratch.checked_add(8).is_some_and(|end| end <= image.end)
+            && sscratch.checked_add(8).is_some_and(|end| {
+                end <= image.end && (end <= bss.start || sscratch >= bss.end)
+            }),
+        "emergency stack claim outside initialized image storage"
     );
     let top: usize;
     unsafe { asm!("ld {}, 0({})", out(reg) top, in(reg) sscratch, options(nostack, readonly)) };
+    let reserved = stack_range();
+    let emergency = top.checked_sub(16 * 1024).expect("emergency stack top");
     assert!(
-        top == (&raw const _trap_stack_end).addr()
-            && top > (&raw const _trap_stack_start).addr()
-            && top.is_multiple_of(16),
-        "emergency stack not armed",
+        top.is_multiple_of(16)
+            && image.contains(&emergency)
+            && top <= image.end
+            && (top <= reserved.start || emergency >= reserved.end)
+            && (top <= sscratch || emergency >= sscratch + 8),
+        "emergency stack is unarmed or overlaps live storage",
     );
-    // Linker boundary labels may alias the Rust stack object. Observe the
-    // relocated addresses directly instead of declaring distinct Rust statics.
-    let (start, end): (usize, usize);
-    unsafe {
-        asm!("lla {}, _boot_stack_start", "lla {}, _boot_stack_end",
-             out(reg) start, out(reg) end, options(nostack, nomem));
-    }
-    let reserved = start..end;
-    assert_eq!(stack_range(), reserved, "boot stack reservation mismatch");
     assert!(
-        reserved.contains(&sp) && sp.is_multiple_of(16),
-        "supervisor stack outside the boot stack",
+        reserved.len() == 32 * 1024
+            && image.contains(&reserved.start)
+            && reserved.end <= image.end
+            && reserved.start.is_multiple_of(16)
+            && reserved.contains(&sp)
+            && sp.is_multiple_of(16),
+        "invalid major stack reservation or supervisor stack pointer",
     );
 
     let zeroed = &raw const ZEROED;
     assert!(
-        ((&raw const _bss_start).addr()..(&raw const _bss_end).addr()).contains(&zeroed.addr())
-            && unsafe { zeroed.read_volatile() } == 0,
+        bss.contains(&zeroed.addr()) && unsafe { zeroed.read_volatile() } == 0,
         "zero-initialized storage missing",
     );
 

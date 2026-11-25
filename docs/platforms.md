@@ -7,11 +7,11 @@ board resources and retains the storage needed for the common handoff.
 ## RV64 virt with OpenSBI
 
 An OpenSBI image supplies `KERNEL_LOAD_ADDRESS` and `limen_platform_ready`.
-The ELF linker provides the final image bounds and reserves the major and
-emergency stacks outside BSS. Firmware enters `_start` on the sole boot hart
-in supervisor mode with Bare translation, the hart ID in `a0` and the physical
-DTB address in `a1`. Metal masks supervisor interrupts, disables floating-point
-and vector state, installs the direct trap vector and clears BSS.
+The ELF linker provides the final image and BSS bounds. The Rust-owned stacks
+live in ordinary writable image storage. Firmware enters `_start` on the sole
+boot hart in supervisor mode with Bare translation, the hart ID in `a0` and the
+physical DTB address in `a1`. Metal masks supervisor interrupts, disables
+floating-point and vector state, installs the direct trap vector and clears BSS.
 
 The DTB must remain readable, immutable and disjoint from the image. Limen
 checks its version-17-compatible header, the nonempty structure block, and the

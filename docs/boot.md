@@ -14,6 +14,14 @@ major ID and the admitted device-tree extent or firmware map when available.
 A rejected handoff uses early diagnostics and requests failure shutdown.
 [Entry](../server/src/entry/boot/mod.rs) · [Admission](../server/src/metal/generic/boot/major.rs)
 
+Generic Metal owns the major stack as an aligned Rust static. The image keeps
+the object resident and writable for the early boot path. On RV64, OpenSBI
+enters a single major hart. The entry loads the stack pointer and installs the
+diagnostic vector, then clears BSS using registers alone before calling Rust.
+HSM starts minors only after the major handoff. The stack resides in the
+reserved image range. Any later return of early physical memory requires a
+runtime stack handoff, departure of its old users and translation retirement.
+
 ## Minor launch
 
 The image selects a known inactive CPU and provides a resident `Minor` record
