@@ -44,8 +44,9 @@ mod loader;
 use handoff::Boot;
 #[path = "../../../src/metal/firmware/map.rs"]
 mod map;
-use loader::Loader;
-use map::{FirmwareMap, MapError};
+use devicetree::memory::DtbMemory;
+use loader::{DeviceTree, Loader};
+use map::{FirmwareMap, FirmwareRegion, MapError};
 #[path = "../../../src/entry/boot/handoff.rs"]
 mod handoff;
 
@@ -71,11 +72,13 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
             stride,
             version,
             descriptor_limit: 2,
-            device_tree: tree,
+            device_tree: tree.map(DeviceTree::Description),
         };
         loader.admit(7).map(|b| {
             assert_eq!(b.hart(), 7);
             assert_eq!(b.firmware_map().unwrap().stride(), stride);
+            assert!(b.dtb_memory().is_none());
+            assert!(b.conventional_ram().is_none());
             b.device_tree()
         })
     };
@@ -84,6 +87,14 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
         Some(Some(dtb.0.as_ptr().addr()..dtb.0.as_ptr().addr() + 96))
     );
     assert_eq!(admit(&descriptors.0, 48, 1, None), Some(None));
+    let loader = Loader {
+        descriptors: &descriptors.0,
+        stride: 48,
+        version: 1,
+        descriptor_limit: 2,
+        device_tree: Some(DeviceTree::Memory(&dtb.0)),
+    };
+    assert!(loader.admit(7).is_none());
     assert!(admit(&descriptors.0, 48, 1, Some(&dtb.0[..40])).is_none());
     assert!(admit(&descriptors.0, 0, 1, None).is_none());
     assert!(admit(&descriptors.0, 48, 2, None).is_none());

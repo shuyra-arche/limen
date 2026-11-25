@@ -7,7 +7,7 @@ use crate::{
 };
 
 mod loader;
-pub use loader::Loader;
+pub use loader::{DeviceTree, Loader};
 
 /// Hand off a loaded image after successful ExitBootServices.
 ///

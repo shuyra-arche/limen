@@ -5,13 +5,12 @@ use crate::metal::boot::major;
 use core::fmt::Write;
 
 pub use crate::metal::boot::{Startup, console::Console, services::Services};
-#[cfg(target_arch = "riscv64")]
 pub use crate::metal::firmware::devicetree::memory::{DtbMemory, Physical, Reservation, Source};
 pub use crate::metal::firmware::map::{FirmwareMap, FirmwareRegion, MapError};
 #[cfg(target_arch = "aarch64")]
 pub use crate::metal::firmware::psci::Conduit;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-pub use crate::metal::firmware::uefi::{Loader, major};
+pub use crate::metal::firmware::uefi::{DeviceTree, Loader, major};
 pub use handoff::Boot;
 pub use major::stack_range;
 

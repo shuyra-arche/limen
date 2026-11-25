@@ -59,7 +59,7 @@ fn main() -> Status {
         version: meta.desc_version,
         // The selected test configurations admit at most 512 descriptors.
         descriptor_limit: 512,
-        device_tree: board,
+        device_tree: board.map(boot::DeviceTree::Memory),
     };
     unsafe { boot::major(board::hart(), &input, &board::SERVICES) }
 }

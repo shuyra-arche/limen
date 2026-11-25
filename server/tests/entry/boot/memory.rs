@@ -1,5 +1,6 @@
-use super::devicetree::memory::{
-    DtbMemory, Error, Physical, Source, describe as describe_into, read,
+use super::{
+    DeviceTree, DtbMemory, FirmwareRegion, Loader,
+    devicetree::memory::{Error, Physical, Source, describe as describe_into, read},
 };
 
 fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
@@ -105,6 +106,65 @@ fn root() -> Tree {
     tree.node("");
     tree.cells(2, 2);
     tree
+}
+
+#[test]
+fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources() {
+    let mut tree = root();
+    tree.memory(&pair(0x1801, 0xd000));
+    tree.reservations.push((0x3400, 0x2300));
+    tree.reserved();
+    tree.node("firmware@5200");
+    tree.property("reg", &pair(0x5200, 0x1100));
+    tree.property("no-map", b"");
+    tree.token(2);
+    tree.token(2);
+
+    #[repr(align(8))]
+    struct Bytes<const N: usize>([u8; N]);
+    let tree = tree.finish(true);
+    let mut storage = Bytes([0; 1024]);
+    let bytes = &mut storage.0[..tree.len()];
+    bytes.copy_from_slice(&tree);
+
+    let mut descriptors = Bytes([0; 5 * 48]);
+    for (entry, (kind, start, pages, attributes)) in
+        descriptors.0.as_chunks_mut::<48>().0.iter_mut().zip([
+            (7, 0xc000, 3, 0x0f),
+            (2, bytes.as_ptr().addr() as u64 & !4095, 2, 0),
+            (7, 0x1000, 8, 8),
+            (7, 0xa000, 1, 1 << 63),
+            (11, 0xb000, 1, 1),
+        ])
+    {
+        super::describe(entry, kind, start, pages, attributes);
+    }
+    let loader = Loader {
+        descriptors: &descriptors.0,
+        stride: 48,
+        version: 1,
+        descriptor_limit: 5,
+        device_tree: Some(DeviceTree::Memory(bytes)),
+    };
+    let boot = loader.admit(7).unwrap();
+    assert_eq!(boot.firmware_map().unwrap().regions().len(), 5);
+    assert_eq!(boot.dtb_memory().unwrap().reservations().len(), 2);
+    let expected = [
+        (0xc000..0xe000, 0x0f),
+        (0x2000..0x3000, 8),
+        (0x7000..0x9000, 8),
+    ];
+    assert!(
+        boot.conventional_ram()
+            .unwrap()
+            .eq(expected.map(|(physical, attributes)| {
+                FirmwareRegion {
+                    kind: 7,
+                    physical,
+                    attributes,
+                }
+            }))
+    );
 }
 
 #[test]
@@ -229,6 +289,33 @@ fn rejects_truncation_bad_cell_widths_and_invalid_reg_tuples() {
         describe(&tree.finish(true)).unwrap_err(),
         Error::Unsupported
     );
+}
+
+#[test]
+fn bounds_the_retained_extent_separately_from_the_parsed_blocks() {
+    let mut tree = root();
+    tree.memory(&pair(0x4000_0000, 0x1000_0000));
+    let mut blob = tree.finish(true);
+    let aavmf_extent = 1024 * 1024 + 4096;
+    blob.resize(aavmf_extent, 0);
+    blob[4..8].copy_from_slice(&(aavmf_extent as u32).to_be_bytes());
+    assert_eq!(
+        describe(&blob).unwrap().ram(),
+        &[Physical {
+            start: 0x4000_0000,
+            end: 0x5000_0000
+        }]
+    );
+
+    // Run beyond the block budget while the retained extent still fits.
+    let strings = 256 * 1024u32;
+    blob[32..36].copy_from_slice(&strings.to_be_bytes());
+    assert_eq!(describe(&blob).unwrap_err(), Error::Capacity);
+
+    let oversized = 2 * 1024 * 1024 + 1;
+    blob.resize(oversized, 0);
+    blob[4..8].copy_from_slice(&(oversized as u32).to_be_bytes());
+    assert_eq!(describe(&blob).unwrap_err(), Error::Capacity);
 }
 
 #[test]

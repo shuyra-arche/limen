@@ -134,7 +134,8 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert!(magic == 0xd00d_feed, "invalid firmware tree magic");
     assert!(length == device_tree.len(), "firmware tree length mismatch");
 
-    let memory = boot.dtb_memory();
+    let memory = boot.dtb_memory().expect("OpenSBI DTB memory");
+    assert!(boot.conventional_ram().is_none());
     assert_eq!(
         memory.ram(),
         &[Physical {

@@ -110,6 +110,8 @@ impl Idtr {
 
 pub(super) fn inspect(boot: boot::Boot, _: &impl MemoryMap) -> ! {
     assert!(boot.device_tree().is_none());
+    assert!(boot.dtb_memory().is_none());
+    assert!(boot.conventional_ram().is_none());
     let idtr = Idtr::read();
     let (sp, flags, cr0): (usize, usize, usize);
     let cs: u16;

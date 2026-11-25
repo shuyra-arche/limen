@@ -1,10 +1,9 @@
 use core::ops::Range;
 
-#[cfg(any(target_arch = "riscv64", test))]
 pub(crate) mod memory;
 
 const ALIGNMENT: usize = 8;
-const HEADER_SIZE: usize = 40;
+pub(super) const HEADER_SIZE: usize = 40;
 const MAGIC: u32 = 0xd00d_feed;
 
 /// # Safety
@@ -28,11 +27,8 @@ pub(crate) unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Op
 
 struct Layout {
     size: u32,
-    #[cfg(any(target_arch = "riscv64", test))]
     structure: Range<u32>,
-    #[cfg(any(target_arch = "riscv64", test))]
     strings: Range<u32>,
-    #[cfg(any(target_arch = "riscv64", test))]
     reservations: u32,
 }
 
@@ -67,11 +63,8 @@ fn layout(header: [u32; 10]) -> Option<Layout> {
     }
     Some(Layout {
         size,
-        #[cfg(any(target_arch = "riscv64", test))]
         structure,
-        #[cfg(any(target_arch = "riscv64", test))]
         strings,
-        #[cfg(any(target_arch = "riscv64", test))]
         reservations: reservations.start,
     })
 }
