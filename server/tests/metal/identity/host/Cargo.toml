@@ -1,0 +1,14 @@
+[package]
+name = "kernel-host-identity"
+version.workspace = true
+edition.workspace = true
+publish = false
+autotests = false
+
+[lib]
+path = "../contracts.rs"
+test = false
+
+[[test]]
+name = "identity"
+path = "../mod.rs"

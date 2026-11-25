@@ -2,8 +2,11 @@
 
 Host suites under `entry/boot/` and `metal/` exercise DTB header validation,
 UEFI descriptor geometry, SBI extension discovery, the bounded allocation
-cursor and RV64 page-table
-entry encoding and atomic operations. Each suite keeps its own
+cursor, fixed identity slots and RV64 page-table entry operations. The Identity
+suite exercises the table implementation with owner-supplied slot storage,
+distinct scopes and separate allocation and return tables. Its compiler tests
+cover token ownership, table categories and the lifetime of a lookup borrow.
+Each suite keeps its own
 `host/Cargo.toml`. The root workspace discovers these packages. Run the commands
 from the repository root so Rustup selects the fixed [toolchain](../../rust-toolchain.toml).
 
