@@ -4,7 +4,7 @@ mod handoff;
 use crate::metal::{boot, generic::boot::major};
 use core::fmt::Write;
 
-pub use crate::metal::generic::firmware::map::FirmwareMap;
+pub use crate::metal::generic::firmware::map::{FirmwareMap, FirmwareRegion, MapError};
 pub use crate::metal::generic::{console::Console, services::Services};
 pub use boot::interface::*;
 pub use handoff::Boot;
