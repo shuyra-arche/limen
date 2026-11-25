@@ -9,6 +9,7 @@ symbol() {
     readelf -Ws "$1" | awk -v name="$2" '$8 == name {print $2}'
 }
 
+failed=0
 for profile in $(jq -r '.[] | select(.id == "boot-handoff" and .platform == "rv64") | .profile' <<<"$plan"); do
     candidate="$evidence/boot-handoff-rv64-$profile/candidate"
     elf="$candidate/platform.elf"
@@ -60,13 +61,14 @@ for profile in $(jq -r '.[] | select(.id == "boot-handoff" and .platform == "rv6
     "$runner" observe "$fault" "$output/run"
     record="$output/run/observation.json"
     serial="$output/run/serial.log"
-    # OpenSBI writes FINISHER_FAIL without an upper-word exit code on
-    # SRST_SYSTEM_FAILURE; QEMU reports guest-panic with exit 0.
+    # The pinned OpenSBI syscon-poweroff path reports guest-shutdown
+    # even for SRST_SYSTEM_FAILURE. QMP proves guest termination, not the
+    # SBI reason; the exact terminal diagnostic distinguishes this case.
     diagnostic="^FAIL Limen boot trap: cause=0x2 pc=$pc_hex value=0x0 stack=$sp_hex status=0x[0-9a-f]+$"
     verdict=inconclusive
     if jq -e '.status == "timeout"' "$record" >/dev/null; then
         verdict=timeout
-    elif jq -e --arg hash "$patched_hash" '.status == "exited" and .code == 0 and .platform_sha256 == $hash and .qmp_shutdown == {guest:true,reason:"guest-panic"}' "$record" >/dev/null &&
+    elif jq -e --arg hash "$patched_hash" '.status == "exited" and .code == 0 and .platform_sha256 == $hash and .qmp_shutdown == {guest:true,reason:"guest-shutdown"}' "$record" >/dev/null &&
         [[ $(tail -c1 "$serial" | od -An -tu1 | tr -d ' \n') == 10 ]] &&
         [[ $(tr -d '\r' < "$serial" | grep -Ec "$diagnostic" || :) == 1 ]] &&
         [[ $(tr -d '\r' < "$serial" | grep -Ec '^FAIL( |$)' || :) == 1 ]] &&
@@ -77,5 +79,10 @@ for profile in $(jq -r '.[] | select(.id == "boot-handoff" and .platform == "rv6
     fi
     jq -n --arg verdict "$verdict" '{verdict:$verdict}' > "$output/result.json"
     printf '%s boot-bss-fault-rv64-%s\n' "${verdict^^}" "$profile"
-    [[ $verdict == pass ]]
+    if [[ $verdict != pass ]]; then
+        failed=1
+        cat "$record" >&2
+        tail -n 10 "$serial" >&2
+    fi
 done
+exit "$failed"

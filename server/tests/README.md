@@ -40,7 +40,11 @@ hash and copies that ELF. It checks the actual instruction sequence and replaces
 only the increment immediately following the first BSS store with an illegal
 instruction. The unmodified ELF remains the normal-boot evidence. The fault
 case requires the exact illegal-instruction PC, the interrupted major stack
-pointer, a complete terminal diagnostic, and a matching native QMP shutdown.
+pointer, a complete terminal diagnostic, and a native QMP guest-shutdown
+with clean process exit. The pinned OpenSBI syscon-poweroff path does not
+expose the SBI reset reason in QMP; the diagnostic and absence of the normal
+handoff marker distinguish the injected failure from a normal boot. The test
+does not independently observe the SBI reset reason.
 Its image, injection record, serial output and verdict are kept beside the
 normal result. No production hook or extra linker symbols are used. Run it
 against the selected output plan with `PLAN` set to the discovery JSON:
