@@ -30,10 +30,10 @@ impl Exclusion {
     /// Storage that must remain reserved throughout this handoff.
     pub fn fixed(self) -> bool {
         match self.occupant {
-            // Loader and Boot Services allocations and ACPI reclaimable memory
-            // may be returned after all their remaining uses end.
+            // Loader and Boot Services allocations may be returned after all
+            // remaining uses end. ACPI reclaim also needs ACPI enablement.
             Occupant::Firmware {
-                kind: 1..=4 | 9,
+                kind: 1..=4,
                 attributes,
             } => attributes & RUNTIME != 0,
             _ => true,
@@ -74,7 +74,8 @@ impl Retirement {
     /// the entire scope. RuntimeStack means the permanent stack is active.
     /// ReadersGone includes other Harts and the last relevant reader.
     /// TranslationRetired covers old CPU translations and page-table walks.
-    /// DevicesIsolated covers old DMA access, including in-flight transactions.
+    /// DevicesIsolated covers old DMA access, including device translations,
+    /// page-table walks and in-flight transactions.
     /// The recorded condition must stay true through physical handoff.
     pub unsafe fn record(&mut self, condition: Condition) {
         self.observed |= condition as u8;

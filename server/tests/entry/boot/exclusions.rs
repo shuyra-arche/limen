@@ -55,11 +55,13 @@ fn every_condition_must_cover_the_requested_physical_scope() {
 #[test]
 fn fixed_claims_outlive_retirement_evidence_and_preserve_partial_pages() {
     #[repr(align(8))]
-    struct Descriptors([u8; 80]);
-    let mut bytes = Descriptors([0; 80]);
+    struct Descriptors([u8; 120]);
+    let mut bytes = Descriptors([0; 120]);
     describe(&mut bytes.0[..40], 2, 0x1000, 1, 0);
-    describe(&mut bytes.0[40..], 7, 0x3000, 1, 1 << 63);
-    let map = FirmwareMap::new(&bytes.0, 40, 1, 2).unwrap();
+    describe(&mut bytes.0[40..80], 7, 0x3000, 1, 1 << 63);
+    // Old access can end before ACPI has been enabled.
+    describe(&mut bytes.0[80..], 9, 0x5000, 1, 0);
+    let map = FirmwareMap::new(&bytes.0, 40, 1, 3).unwrap();
     let boot = Boot::from_uefi(0, IMAGE, Some(0x6001..0x6010), map, None);
     let early = boot.exclusions_for(range(0x1100, 0x1200), range(0x1300, 0x1400));
     assert!(
@@ -79,6 +81,7 @@ fn fixed_claims_outlive_retirement_evidence_and_preserve_partial_pages() {
     for retained in [
         range(0x1000, 0x2000),
         range(0x3000, 0x4000),
+        range(0x5000, 0x6000),
         range(0x6000, 0x7000),
     ] {
         assert!(early.retains(retained, Some(&retirement)).unwrap());

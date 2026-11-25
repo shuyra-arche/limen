@@ -132,6 +132,7 @@ The image, kernel boot stacks, retained handoff bytes and non-reclaimable
 firmware reservations remain excluded while this handoff owns them.
 DTB reservation attributes stay available, including `reusable`. A device
 pool described by a DTB keeps its reservation until its owner can hand it off.
+ACPI reclaimable memory stays reserved until ACPI has been enabled.
 Reclaimable firmware claims become eligible for later admission when all
 their conditions hold. The caller still establishes RAM provenance,
 granularity and actual access before handing a span to Allocator.
