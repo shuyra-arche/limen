@@ -50,6 +50,16 @@ pub struct DtbMemory {
 }
 
 impl DtbMemory {
+    const EMPTY: Self = Self {
+        ram: [Physical { start: 0, end: 0 }; RAM_LIMIT],
+        ram_count: 0,
+        reservations: [Reservation {
+            physical: Physical { start: 0, end: 0 },
+            source: Source::ReservationBlock,
+        }; RESERVATION_LIMIT],
+        reservation_count: 0,
+    };
+
     pub fn ram(&self) -> &[Physical] {
         &self.ram[..self.ram_count]
     }
@@ -115,10 +125,22 @@ pub(crate) unsafe fn read(
     // Only the exact DTB is borrowed. The enclosing window can contain
     // unrelated allocations, firmware storage and uninitialized bytes.
     let blob = unsafe { slice::from_raw_parts(input.cast(), range.len()) };
-    Ok((range, describe(blob)?))
+    let mut memory = None;
+    describe(blob, &mut memory)?;
+    Ok((range, memory.expect("described DTB memory")))
 }
 
-pub(crate) fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
+/// Populate the caller's fixed storage before it leaves the firmware adapter.
+/// A failed decode removes the partial description.
+pub(crate) fn describe(blob: &[u8], output: &mut Option<DtbMemory>) -> Result<(), Error> {
+    let result = parse(blob, output.insert(DtbMemory::EMPTY));
+    if result.is_err() {
+        *output = None;
+    }
+    result
+}
+
+fn parse(blob: &[u8], memory: &mut DtbMemory) -> Result<(), Error> {
     if blob.len() > MAX_BYTES {
         return Err(Error::Capacity);
     }
@@ -132,16 +154,6 @@ pub(crate) fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
         return Err(Error::Format);
     }
 
-    let physical = Physical { start: 0, end: 0 };
-    let mut memory = DtbMemory {
-        ram: [physical; RAM_LIMIT],
-        ram_count: 0,
-        reservations: [Reservation {
-            physical,
-            source: Source::ReservationBlock,
-        }; RESERVATION_LIMIT],
-        reservation_count: 0,
-    };
     let start = layout.reservations;
     // The terminator must lie wholly before the next block.
     let edge = [&layout.structure, &layout.strings]
@@ -188,7 +200,7 @@ pub(crate) fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
             }
             reserved_node = true;
             if properties.enabled()? {
-                tree.reservations(properties, &cells, &mut memory)?;
+                tree.reservations(properties, &cells, memory)?;
             } else {
                 tree.skip(2)?;
             }
@@ -209,7 +221,7 @@ pub(crate) fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
     if tree.token()? != END || !tree.structure.is_empty() || memory.ram().is_empty() {
         return Err(Error::Format);
     }
-    Ok(memory)
+    Ok(())
 }
 
 #[derive(PartialEq, Eq)]

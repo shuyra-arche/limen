@@ -1,4 +1,13 @@
-use super::devicetree::memory::{Error, Physical, Source, describe, read};
+use super::devicetree::memory::{
+    DtbMemory, Error, Physical, Source, describe as describe_into, read,
+};
+
+fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
+    let mut memory = None;
+    let result = describe_into(blob, &mut memory);
+    assert_eq!(memory.is_some(), result.is_ok());
+    result.map(|()| memory.unwrap())
+}
 
 #[derive(Default)]
 struct Tree {
@@ -108,6 +117,9 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
     tree.node("firmware@80001000");
     tree.property("reg", &pair(0x8000_1000, 0x1000));
     tree.property("no-map", b"");
+    tree.node("metadata");
+    tree.property("compatible", b"limen,reservation-fixture\0");
+    tree.token(2);
     tree.token(2);
     tree.node("pool@100001000");
     tree.property("reg", &pair(0x1_0000_1000, 0x1000));
