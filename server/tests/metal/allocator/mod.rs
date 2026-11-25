@@ -46,3 +46,5 @@ fn rejects_address_overflow_and_empty_input() {
     assert_eq!(allocator.reserve(exact), Some(base..edge));
     assert!(Bump::new(edge..edge).is_none());
 }
+
+mod buddy;
