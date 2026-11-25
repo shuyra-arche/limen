@@ -211,3 +211,78 @@ fn console_stops_at_the_first_byte_the_output_cannot_accept() {
     assert!(writer.write_str("圜").is_err());
     assert_eq!(WRITES.load(Ordering::Relaxed), 2);
 }
+
+// Compile the same source and Turn queue against a host-only Hart prefix.
+#[allow(dead_code)]
+#[path = "../../../src/metal/allocator/mod.rs"]
+pub mod allocator;
+#[allow(dead_code)]
+#[path = "../../../src/metal/identity/mod.rs"]
+mod identity;
+#[path = "../../../src/basis/sync/queue.rs"]
+mod queue;
+mod source;
+#[allow(dead_code)]
+#[path = "../../../src/basis/sync/turn.rs"]
+mod turn;
+
+mod entry {
+    pub mod boot {
+        pub use crate::{
+            devicetree::memory::Physical,
+            physical::Retirement,
+            regions::{MappedRange, Region, RegionError, RegionSource, Regions, RootStorage},
+        };
+    }
+}
+
+mod sync {
+    pub use crate::turn::*;
+}
+
+mod metal {
+    pub(crate) use crate::identity;
+
+    pub mod hart {
+        include!("../../../src/metal/hart/node.rs");
+
+        use std::cell::Cell;
+
+        thread_local! { static ACTIVE: Cell<bool> = const { Cell::new(false) }; }
+
+        pub(crate) enum Error {
+            Capacity,
+            Context,
+        }
+
+        pub(crate) struct TurnParticipation(Box<[QueueNode; crate::allocator::REGION_LIMIT + 2]>);
+
+        pub(crate) fn begin_turn(count: usize) -> Result<TurnParticipation, Error> {
+            if count > crate::allocator::REGION_LIMIT + 2 {
+                return Err(Error::Capacity);
+            }
+            if ACTIVE.with(|active| active.replace(true)) {
+                return Err(Error::Context);
+            }
+            Ok(TurnParticipation(Box::new(core::array::from_fn(|_| {
+                QueueNode::new()
+            }))))
+        }
+
+        impl TurnParticipation {
+            pub(crate) fn node(&self, index: usize) -> &QueueNode {
+                &self.0[index]
+            }
+
+            pub(crate) fn held(&self) {}
+
+            pub(crate) fn releasing(&self) {}
+        }
+
+        impl Drop for TurnParticipation {
+            fn drop(&mut self) {
+                ACTIVE.with(|active| assert!(active.replace(false)));
+            }
+        }
+    }
+}

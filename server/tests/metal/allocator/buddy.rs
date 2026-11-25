@@ -324,3 +324,34 @@ fn reports_missing_when_rounding_or_candidate_end_exceeds_physical_addresses() {
         assert_eq!(complete_search(buddy, geometry, high_length, 1), None);
     });
 }
+
+#[test]
+fn lookup_clips_an_aligned_candidate_to_its_access_window() {
+    let geometry = Geometry::new(0..64, 1).unwrap();
+    let mut roots = [const { MaybeUninit::uninit() }; 1];
+    let mut nodes = [const { MaybeUninit::uninit() }; 127];
+    let buddy = Buddy::new(geometry, &mut roots, &mut nodes, 64).unwrap();
+    let request = Request::new(5, 4).unwrap().restrict(7..14).unwrap();
+    assert_eq!(buddy.fast(request).unwrap(), Some(8..13));
+    let request = request.restrict(0..12).unwrap();
+    assert!(buddy.fast(request).unwrap().is_none());
+    assert!(matches!(
+        buddy.scan(request, 16).unwrap(),
+        Search::Missing(_)
+    ));
+}
+
+#[test]
+fn both_search_paths_return_an_occupiable_grain_inside_a_clipped_window() {
+    with_forest(0..16_384, 4096, |buddy, geometry| {
+        let request = Request::new(4096, 1).unwrap().restrict(1..12_288).unwrap();
+        let fast = buddy.fast(request).unwrap().unwrap();
+        assert_eq!(fast, 4096..8192);
+        buddy.occupy(fast.clone()).unwrap();
+        buddy.release(fast).unwrap();
+
+        let scanned = complete_search(buddy, geometry, request, 1).unwrap();
+        assert_eq!(scanned, 4096..8192);
+        buddy.occupy(scanned).unwrap();
+    });
+}

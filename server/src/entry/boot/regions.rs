@@ -72,7 +72,7 @@ pub struct RootStorage<'a> {
     bytes: &'a mut [MaybeUninit<u8>],
 }
 
-impl RootStorage<'_> {
+impl<'a> RootStorage<'a> {
     pub fn physical(&self) -> Physical {
         self.physical
     }
@@ -85,8 +85,36 @@ impl RootStorage<'_> {
         self.source
     }
 
+    pub(crate) fn into_bytes(self) -> &'a mut [MaybeUninit<u8>] {
+        self.bytes
+    }
+
     pub fn bytes(&mut self) -> &mut [MaybeUninit<u8>] {
         self.bytes
+    }
+}
+
+pub(crate) struct RootPlan {
+    index: usize,
+    region: Region,
+    physical: Physical,
+    reserved: Physical,
+    offset: core::ops::Range<usize>,
+}
+
+impl RootPlan {
+    fn remainder(&self) -> [Option<Region>; 2] {
+        let physical = self.region.physical;
+        let part = |start, end| {
+            (start < end).then_some(Region {
+                physical: Physical { start, end },
+                source: self.region.source,
+            })
+        };
+        [
+            part(physical.start, self.reserved.start),
+            part(self.reserved.end, physical.end),
+        ]
     }
 }
 
@@ -244,7 +272,43 @@ impl<'a> Regions<'a> {
         mapping: &mut Option<MappedRange<'m>>,
         layout: Layout,
     ) -> Result<Option<RootStorage<'m>>, RegionError> {
-        let Some(mapped) = mapping.as_ref() else {
+        Ok(self
+            .plan_root(mapping.as_ref(), layout)?
+            .map(|plan| self.take_root(mapping, plan)))
+    }
+
+    pub(crate) fn granule(&self) -> u64 {
+        self.granule
+    }
+
+    pub(crate) fn after_root<'r>(
+        &'r self,
+        plan: &'r RootPlan,
+    ) -> impl Iterator<Item = Region> + 'r {
+        self.entries[..plan.index]
+            .iter()
+            .flatten()
+            .copied()
+            .chain(plan.remainder().into_iter().flatten())
+            .chain(
+                self.entries[plan.index + 1..self.length]
+                    .iter()
+                    .flatten()
+                    .copied(),
+            )
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries[..self.length].fill(None);
+        self.length = 0;
+    }
+
+    pub(crate) fn plan_root(
+        &self,
+        mapping: Option<&MappedRange<'_>>,
+        layout: Layout,
+    ) -> Result<Option<RootPlan>, RegionError> {
+        let Some(mapped) = mapping else {
             return Ok(None);
         };
         let Some((index, region)) = self
@@ -285,40 +349,51 @@ impl<'a> Regions<'a> {
             return Err(RegionError::Capacity);
         }
 
+        Ok(Some(RootPlan {
+            index,
+            region,
+            physical,
+            reserved,
+            offset,
+        }))
+    }
+
+    pub(crate) fn take_root<'m>(
+        &mut self,
+        mapping: &mut Option<MappedRange<'m>>,
+        plan: RootPlan,
+    ) -> RootStorage<'m> {
+        let [left, right] = plan.remainder();
+        let RootPlan {
+            index,
+            region,
+            physical,
+            reserved,
+            offset,
+        } = plan;
         let mapped = mapping.take().expect("checked mapping");
         let storage = &mut mapped.bytes[offset];
         match (left, right) {
-            (true, true) => {
+            (Some(left), Some(right)) => {
                 self.entries.copy_within(index + 1..self.length, index + 2);
                 self.length += 1;
-                self.entries[index] = Some(Region {
-                    physical: Physical {
-                        start: region.physical.start,
-                        end: reserved.start,
-                    },
-                    source: region.source,
-                });
-                self.entries[index + 1] = Some(Region {
-                    physical: Physical {
-                        start: reserved.end,
-                        end: region.physical.end,
-                    },
-                    source: region.source,
-                });
+                self.entries[index] = Some(left);
+                self.entries[index + 1] = Some(right);
             }
-            (true, false) => self.entries[index].as_mut().unwrap().physical.end = reserved.start,
-            (false, true) => self.entries[index].as_mut().unwrap().physical.start = reserved.end,
-            (false, false) => {
+            (Some(remainder), None) | (None, Some(remainder)) => {
+                self.entries[index] = Some(remainder);
+            }
+            (None, None) => {
                 self.entries.copy_within(index + 1..self.length, index);
                 self.length -= 1;
                 self.entries[self.length] = None;
             }
         }
-        Ok(Some(RootStorage {
+        RootStorage {
             physical,
             reserved,
             source: region.source,
             bytes: storage,
-        }))
+        }
     }
 }

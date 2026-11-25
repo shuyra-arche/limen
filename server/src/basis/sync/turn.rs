@@ -23,6 +23,10 @@ pub struct TurnLock<T> {
 unsafe impl<T: Send> Sync for TurnLock<T> {}
 
 impl<T> TurnLock<T> {
+    pub fn get_mut(&mut self) -> &mut T {
+        self.value.get_mut()
+    }
+
     pub const fn new(value: T) -> Self {
         Self {
             queue: Queue::new(),
@@ -164,15 +168,17 @@ pub struct HeldLockSet<'held> {
 }
 
 impl HeldLockSet<'_> {
+    fn contains<T>(&self, lock: &TurnLock<T>) -> bool {
+        self.queues
+            .iter()
+            .any(|queue| ptr::eq(member(*queue), &lock.queue))
+    }
+
     pub fn access<'borrow, T>(
         &'borrow mut self,
         lock: &'borrow TurnLock<T>,
     ) -> Option<&'borrow mut T> {
-        if self
-            .queues
-            .iter()
-            .any(|queue| ptr::eq(member(*queue), &lock.queue))
-        {
+        if self.contains(lock) {
             // The private owner holds this exact queue, and the &mut borrow
             // prevents simultaneous accesses through the set.
             Some(unsafe { &mut *lock.value.get() })

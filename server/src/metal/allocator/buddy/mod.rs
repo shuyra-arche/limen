@@ -109,15 +109,35 @@ impl<'storage> Buddy<'storage> {
         for byte in nodes.iter_mut() {
             byte.write(State::Occupied.encode());
         }
-        for (slot, root) in roots.iter_mut().zip(geometry.roots()) {
-            nodes[root.first].write(State::Free.encode());
-            slot.write(root);
-        }
-        // Both exact prefixes are fully initialized. Root geometry remains
-        // immutable for this instance, including while scans hold a borrow.
-        let roots = unsafe { slice::from_raw_parts(roots.as_ptr().cast::<Root>(), roots.len()) };
+        // The entire exact prefix was initialized above.
         let nodes =
             unsafe { slice::from_raw_parts_mut(nodes.as_mut_ptr().cast::<u8>(), nodes.len()) };
+        Self::initialize(geometry, roots, nodes, edit_limit)
+    }
+
+    // Allocator roots pre-initialize all node bytes before shared admission.
+    // Inactive descendants are never decoded without first setting their state.
+    pub(crate) fn initialize(
+        geometry: Geometry,
+        roots: &'storage mut [MaybeUninit<Root>],
+        nodes: &'storage mut [u8],
+        edit_limit: usize,
+    ) -> Result<Self, Error> {
+        if geometry.edit_bound() > edit_limit {
+            return Err(Error::EditLimit);
+        }
+        let roots = roots
+            .get_mut(..geometry.root_count())
+            .ok_or(Error::Capacity)?;
+        let nodes = nodes
+            .get_mut(..geometry.node_count())
+            .ok_or(Error::Capacity)?;
+        for (slot, root) in roots.iter_mut().zip(geometry.roots()) {
+            nodes[root.first] = State::Free.encode();
+            slot.write(root);
+        }
+        // The exact root prefix has now been initialized.
+        let roots = unsafe { slice::from_raw_parts(roots.as_ptr().cast::<Root>(), roots.len()) };
         Ok(Self {
             geometry,
             roots,

@@ -37,6 +37,9 @@ fn only_published_entries_are_visible_and_reuse_changes_the_key() {
     assert_eq!(table.detach(key), Err(KeyError::WrongState));
 
     assert_eq!(table.publish(reservation, 12).unwrap(), key);
+    assert_eq!(table.capacity(), 1);
+    assert_eq!(table.published_at(0), Some((key, &12)));
+    assert_eq!(table.published_at(1), None);
     assert_eq!(table.get(key), Some(&12));
     *table.get_mut(key).unwrap() = 17;
     assert_eq!(table.reclaim(key).unwrap_err(), KeyError::WrongState);

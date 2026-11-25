@@ -180,6 +180,9 @@ impl<'storage, Scope: Copy + Eq, T> GenerationTable<'storage, Scope, T> {
         }
     }
 
+    // Allocator publishes its business-phase reservation immediately. Owners
+    // with private identity preparation can still cancel before publication.
+    #[allow(dead_code)]
     pub(crate) fn cancel(
         &mut self,
         reservation: Reservation<Scope>,
@@ -201,6 +204,26 @@ impl<'storage, Scope: Copy + Eq, T> GenerationTable<'storage, Scope, T> {
             State::Published(value) => Some(value),
             _ => None,
         }
+    }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn published_at(&self, index: usize) -> Option<(Key<Scope>, &T)> {
+        let entry = self.entries.get(index)?;
+        let State::Published(value) = &entry.state else {
+            return None;
+        };
+        let generation = Generation(NonZeroU32::new(entry.generation)?);
+        Some((
+            Key {
+                scope: self.scope,
+                slot: Slot(index as u32),
+                generation,
+            },
+            value,
+        ))
     }
 
     pub(crate) fn get_mut(&mut self, key: Key<Scope>) -> Option<&mut T> {

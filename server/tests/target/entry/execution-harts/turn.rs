@@ -7,7 +7,7 @@ use core::{
 };
 use kernel::{
     entry::execution::{Current, Error},
-    sync::{Acquisition, AcquisitionError, PlanError, TurnLock, Work},
+    sync::{Acquisition, AcquisitionError, PlanError, TURN_CAPACITY, TurnLock, Work},
 };
 
 static TRANSFER: TurnLock<u64> = TurnLock::new(0);
@@ -81,9 +81,8 @@ pub(super) fn major() {
 }
 
 fn check_capacity() {
-    // This build provisions four nodes per Hart for admitted Turn plans.
-    let locks = [const { TurnLock::new(()) }; 5];
-    let mut work = Work::<5>::new();
+    let locks = [const { TurnLock::new(()) }; TURN_CAPACITY + 1];
+    let mut work = Work::<{ TURN_CAPACITY + 1 }>::new();
     let mut plan = work.plan();
     for lock in &locks {
         plan.insert(lock).unwrap();
@@ -94,11 +93,11 @@ fn check_capacity() {
     );
 
     let mut plan = work.plan();
-    for lock in &locks[..4] {
+    for lock in &locks[..TURN_CAPACITY] {
         plan.insert(lock).unwrap();
     }
     plan.execute(Acquisition::Slow, |_| ())
-        .expect("capacity failure left all four nodes available");
+        .expect("capacity failure left the admitted node supply available");
 }
 
 pub(super) fn minor() {

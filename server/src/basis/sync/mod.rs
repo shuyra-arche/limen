@@ -11,3 +11,6 @@ mod turn;
 pub use leaf::{LeafError, LeafLock};
 pub use snap::{Observation, PublishError, SnapLock, Snapshot, SnapshotBusy};
 pub use turn::{Acquisition, AcquisitionError, HeldLockSet, LockPlan, PlanError, TurnLock, Work};
+
+/// Maximum number of unique Turn locks in a complete plan on one Hart.
+pub const TURN_CAPACITY: usize = crate::metal::hart::TURN_CAPACITY;
