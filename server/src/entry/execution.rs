@@ -23,8 +23,8 @@ use crate::{
         unit::{self, Units},
     },
     metal::{
-        boot as hardware,
         execution::{Hart, LeaveReceipt, LocalHart},
+        hart,
     },
 };
 
@@ -129,7 +129,7 @@ impl Execution {
         stacks: &'static mut Stacks,
         minor: Option<&'static Minor>,
     ) -> Result<Self, EstablishFailure<'a>> {
-        if hardware::current_hart() != boot.hart() {
+        if hart::current_hart() != boot.hart() {
             return Err(EstablishFailure {
                 boot,
                 stacks,
@@ -164,7 +164,7 @@ impl Execution {
     }
 
     fn local(&self) -> Result<(usize, LocalHart<'_>), Error> {
-        let id = hardware::current_hart();
+        let id = hart::current_hart();
         if id == self.major_id {
             return Ok((id, unsafe { self.major.local() }));
         }
@@ -192,7 +192,7 @@ impl Execution {
         entry: fn(&'static Execution) -> !,
     ) -> Result<(), Error> {
         let minor = self.minor_boot.ok_or(Error::Unsupported)?;
-        if hardware::current_hart() != self.major_id || !Hart::supported() {
+        if hart::current_hart() != self.major_id || !Hart::supported() {
             return Err(Error::Unsupported);
         }
         if hart == self.major_id {
@@ -405,7 +405,7 @@ impl Current {
 
     /// The physical Hart executing this continuation when called.
     pub fn hart(&self) -> usize {
-        hardware::current_hart()
+        hart::current_hart()
     }
 
     /// Yield the Hart. Success is returned after a new dispatch resumes this
@@ -440,7 +440,7 @@ extern "C" fn start(argument: *const ()) -> ! {
 fn admit_minor(hart: usize, argument: usize) -> ! {
     // The firmware launch holds a resident Execution for this callback.
     let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
-    assert_eq!(hardware::current_hart(), hart);
+    assert_eq!(hart::current_hart(), hart);
     assert!(Hart::supported());
     let entry = {
         let local = unsafe { execution.minor.local() };

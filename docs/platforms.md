@@ -19,7 +19,7 @@ extents of the structure, strings and first reservation entry. The platform
 validates block contents. Admission also requires the SBI debug console and
 system reset extensions. The image receives the hart ID and admitted tree
 extent. A minor starts through SBI HSM with its resident record in `a1`.
-[RV64 entry](../server/src/metal/riscv/boot/) · [SBI](../server/src/metal/generic/firmware/sbi/)
+[RV64 entry](../server/src/metal/boot/riscv/) · [SBI](../server/src/metal/firmware/sbi/)
 
 ## UEFI loader
 
@@ -43,8 +43,8 @@ requires the full platform reservations, active image/stack/translation
 storage, verified access and old device isolation. RV64 still needs bounded
 DTB memory and reservation decoding; Arm also needs the DTB cross-check.
 Do not interpret missing information as an empty reservation set.
-[UEFI adapter](../server/src/metal/generic/firmware/uefi/) ·
-[Formal boot contract](https://github.com/shuyra-arche/document-limen/blob/c906c09bc268fc85c7b49a674a2f1d8ec220c4cd/server/entry/boot/platforms.md)
+[UEFI adapter](../server/src/metal/firmware/uefi/) ·
+[Formal boot contract](https://github.com/shuyra-arche/document-limen/blob/246170c626ee2b5e316753e95f50f1669e8f47dd/server/entry/boot/platforms.md)
 
 ### x86_64 q35
 
@@ -59,7 +59,7 @@ to calibrate a TSC delay. It supplies the page and delay to the xAPIC
 INIT/SIPI path. The reset stub expects a four-level identity map and addresses
 below 4 GiB for the page-table root, GDT base, entry and launch record. The
 minor enters long mode and loads the kernel IDT. The debug ports belong to the
-test image. [x86_64 entry](../server/src/metal/x86_64/boot/)
+test image. [x86_64 entry](../server/src/metal/boot/x86_64/)
 
 ### AArch64 virt
 
@@ -73,7 +73,7 @@ EL1 vector table. Admission verifies that the DTB matches its declared extent
 and fits in retained loader data in the final map. The minor starts through
 PSCI `CPU_ON` with a launch record as context, restores the major's EL1
 translation controls and installs its stack and vectors. QEMU verifies the
-HVC conduit. [AArch64 entry](../server/src/metal/aarch64/boot/) · [PSCI](../server/src/metal/generic/firmware/psci.rs)
+HVC conduit. [AArch64 entry](../server/src/metal/boot/aarch64/) · [PSCI](../server/src/metal/firmware/psci.rs)
 
 The verified scope on x86 and Arm covers major and minor boot. CPU hotplug,
 general topology admission, interrupt routing and Unit scheduling on these

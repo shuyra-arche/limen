@@ -6,15 +6,15 @@ The firmware or loader enters one major CPU. Metal selects a private 32 KiB
 stack, masks interrupts and installs the architecture's early exception entry.
 All three backends then call `entry::boot::start`.
 
-Generic major admission checks the hardware stack pointer against the reserved
+Common major admission checks the hardware stack pointer against the reserved
 range, reads back the installed CPU state and compares the CPU identity with
 the supplied ID. The selected firmware adapter validates its input. The entry
 calls the image-defined `limen_platform_ready(Boot)` once. The image receives the
 major ID and the admitted device-tree extent or firmware map when available.
 A rejected handoff uses early diagnostics and requests failure shutdown.
-[Entry](../server/src/entry/boot/mod.rs) · [Admission](../server/src/metal/generic/boot/major.rs)
+[Entry](../server/src/entry/boot/mod.rs) · [Admission](../server/src/metal/boot/major.rs)
 
-Generic Metal owns the major stack as an aligned Rust static. The image keeps
+Boot owns the major stack as an aligned Rust static. The image keeps
 the object resident and writable for the early boot path. On RV64, OpenSBI
 enters a single major hart. The entry loads the stack pointer and installs the
 diagnostic vector, then clears BSS using registers alone before calling Rust.
@@ -36,19 +36,20 @@ entry. Only then does it publish `Ready` and invoke the supplied entry.
 
 A definitive rejection releases the record for retry. An unconfirmed xAPIC
 delivery keeps the record, trampoline, GDT and mappings reserved because the
-minor can still enter. [Launch state and safety contract](../server/src/metal/generic/boot/minor.rs)
+minor can still enter. [Launch state and safety contract](../server/src/metal/boot/minor.rs)
 
 ## Adding a backend
 
-Use `metal/<arch>/boot/major.rs` and `minor.rs` for the CPU entry instructions.
+Use `metal/boot/<arch>/major.rs` and `minor.rs` for the CPU entry instructions.
 Place each entry's instructions and operands in its Rust naked function.
 Refer to Rust-owned entries and storage with `sym`, sizes and offsets with
 `const`, and align the function when required by the CPU. Export a fixed name
 when an external consumer requires it, as the RV64 ELF linker does for `_start`.
 
-The matching files in `metal/generic/boot/` own admission and launch state.
-Shared stack storage, DTB header validation, diagnostic output, early service
-publication and allocator code live in `metal/generic/`. Select the CPU
-backend at the module boundary. The backend reads hardware state and selects
-the firmware adapter. The platform image supplies board discovery, device
+The files directly in `metal/boot/` own admission, launch state and early
+diagnostics. Fixed stack storage and local CPU reads live in `metal/hart/`;
+DTB and firmware protocols live in `metal/firmware/`. The checked bootstrap
+cursor is under `metal/allocator/` and is not a runtime allocator. Each
+function selects its own machine backend; Boot uses the firmware adapter
+for the chosen entry protocol. The platform image supplies board discovery, device
 addresses and startup resources. [Platform contracts](platforms.md) · [Early exceptions](exceptions.md)

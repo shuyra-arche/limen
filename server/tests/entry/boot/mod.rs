@@ -1,4 +1,4 @@
-#[path = "../../../src/metal/generic/devicetree.rs"]
+#[path = "../../../src/metal/firmware/devicetree.rs"]
 mod devicetree;
 
 #[repr(align(8))]
@@ -38,10 +38,10 @@ fn rejects_impossible_structure_lengths_and_overlapping_blocks() {
     assert!(!admitted(16, 48, 8, 40));
 }
 
-#[path = "../../../src/metal/generic/firmware/uefi/loader.rs"]
+#[path = "../../../src/metal/firmware/uefi/loader.rs"]
 mod loader;
 use handoff::Boot;
-#[path = "../../../src/metal/generic/firmware/map.rs"]
+#[path = "../../../src/metal/firmware/map.rs"]
 mod map;
 use loader::Loader;
 use map::{FirmwareMap, MapError};
@@ -163,7 +163,7 @@ fn firmware_map_rejects_bad_geometry_overlaps_and_capacity_before_handoff() {
     }
 }
 
-#[path = "../../../src/metal/generic/console.rs"]
+#[path = "../../../src/metal/boot/console.rs"]
 mod console;
 
 #[test]
