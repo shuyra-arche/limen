@@ -43,6 +43,11 @@ change server/src/metal/hart/riscv.rs
 [[ $(boards) == rv64 ]]
 change server/src/metal/hart/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/hart/node.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/basis/sync/host/Cargo.toml"]' >/dev/null
+change server/src/metal/hart/protection.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/execution/mod.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts"]' >/dev/null
 
@@ -56,6 +61,9 @@ change server/tests/target/entry/platforms/main.rs
 [[ $(boards) == 'q35 virt' ]]
 change server/src/basis/room.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts"]' >/dev/null
+change server/tests/basis/sync/contracts.rs
+bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and .manifests == ["server/tests/basis/sync/host/Cargo.toml"]' >/dev/null
+[[ $(bash "$discover" . "$base") == '[]' ]]
 change server/src/entry/boot/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/firmware/uefi/mod.rs

@@ -4,12 +4,13 @@ use crate::{
     entry::boot::Boot,
     metal::{
         boot,
-        hart::{self, stack::Stack},
+        hart::{self, HartLocal, stack::Stack},
     },
 };
 use core::ops::Range;
 
 pub(in crate::metal) static mut STACK: Stack<STACK_BYTES> = Stack::new();
+static LOCAL: HartLocal = HartLocal::new();
 
 /// Image-owned stack reservation for the major CPU.
 pub fn stack_range() -> Range<usize> {
@@ -29,7 +30,10 @@ pub(crate) unsafe fn admit<'a>(hart: usize, input: *const ()) -> Boot<'a> {
         ));
     }
 
-    if hart != hart::current_hart() {
+    // OpenSBI supplies the actual caller's Hart identity in a0. The UEFI
+    // handoff comes from the loader and is checked against the machine ID.
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    if hart != hart::boot_identity() {
         services.reject(format_args!(
             "FAIL Limen boot: major CPU identity mismatch\n"
         ));
@@ -37,5 +41,6 @@ pub(crate) unsafe fn admit<'a>(hart: usize, input: *const ()) -> Boot<'a> {
     let Some(boot) = (unsafe { boot::firmware::admit(hart, input) }) else {
         services.reject(format_args!("FAIL Limen boot: invalid firmware input\n"));
     };
+    unsafe { LOCAL.install(hart) };
     boot
 }

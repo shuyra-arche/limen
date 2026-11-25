@@ -13,7 +13,7 @@ macro_rules! establish_supervisor {
         .option norelax
         la gp, __global_pointer$
         .option pop
-        mv tp, a0
+        mv tp, zero
         "#
     };
 }
@@ -24,33 +24,33 @@ pub use minor::Startup;
 pub(crate) use minor::{MinorContext, minor_context, wake_minor};
 
 pub(crate) fn established() -> bool {
-    let (status, interrupt_enable, translation, vector, scratch): (
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-    );
+    let (status, interrupt_enable, translation): (usize, usize, usize);
     unsafe {
         asm!(
             "csrr {status}, sstatus",
             "csrr {interrupt_enable}, sie",
             "csrr {translation}, satp",
-            "csrr {vector}, stvec",
-            "csrr {scratch}, sscratch",
             status = out(reg) status,
             interrupt_enable = out(reg) interrupt_enable,
             translation = out(reg) translation,
+            options(nomem, nostack),
+        );
+    }
+    status & 2 == 0 && interrupt_enable == 0 && translation == 0 && entry_installed()
+}
+
+pub(crate) fn entry_installed() -> bool {
+    let (vector, scratch): (usize, usize);
+    unsafe {
+        asm!(
+            "csrr {vector}, stvec",
+            "csrr {scratch}, sscratch",
             vector = out(reg) vector,
             scratch = out(reg) scratch,
             options(nomem, nostack),
         );
     }
-    status & 2 == 0
-        && interrupt_enable == 0
-        && translation == 0
-        && vector == trap as *const () as usize
-        && scratch == (&raw const diagnostic::TOP).addr()
+    vector == trap as *const () as usize && scratch == (&raw const diagnostic::TOP).addr()
 }
 
 pub(crate) fn image() -> core::ops::Range<usize> {

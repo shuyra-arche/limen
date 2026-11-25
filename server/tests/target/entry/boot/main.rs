@@ -6,6 +6,9 @@ use core::fmt::Write;
 use core::panic::PanicInfo;
 use kernel::entry::boot::{Boot, Physical, Source, shutdown, stack_range, write};
 
+#[path = "../synchronization.rs"]
+mod synchronization;
+
 unsafe extern "C" {
     static limen_test_text_start: u8;
     static limen_test_text_end: u8;
@@ -79,7 +82,13 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         "direct early trap vector missing",
     );
     let image = (&raw const _kernel_base).addr()..(&raw const _kernel_edge).addr();
-    assert_eq!(boot.image(), Physical { start: image.start as u64, end: image.end as u64 });
+    assert_eq!(
+        boot.image(),
+        Physical {
+            start: image.start as u64,
+            end: image.end as u64
+        }
+    );
     let bss = (&raw const _bss_start).addr()..(&raw const _bss_end).addr();
     assert!(
         sscratch.is_multiple_of(8)
@@ -138,18 +147,32 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let memory = boot.dtb_memory().expect("OpenSBI DTB memory");
     assert!(boot.conventional_ram().is_none());
     let early = boot.exclusions();
-    assert!(early.entries().any(|entry| entry.occupant == kernel::entry::boot::Occupant::MajorStack
-        && entry.physical.start <= sp as u64 && (sp as u64) < entry.physical.end));
-    assert!(early.entries().any(|entry| entry.occupant == kernel::entry::boot::Occupant::TrapStack
-        && boot.image().start <= entry.physical.start && entry.physical.end <= boot.image().end));
-    assert!(early.entries().any(|entry| entry.occupant == kernel::entry::boot::Occupant::DeviceTree
-        && entry.physical.start == device_tree.start as u64 && entry.physical.end == device_tree.end as u64));
+    assert!(early.entries().any(|entry| entry.occupant
+        == kernel::entry::boot::Occupant::MajorStack
+        && entry.physical.start <= sp as u64
+        && (sp as u64) < entry.physical.end));
+    assert!(early.entries().any(|entry| entry.occupant
+        == kernel::entry::boot::Occupant::TrapStack
+        && boot.image().start <= entry.physical.start
+        && entry.physical.end <= boot.image().end));
+    assert!(early.entries().any(|entry| entry.occupant
+        == kernel::entry::boot::Occupant::DeviceTree
+        && entry.physical.start == device_tree.start as u64
+        && entry.physical.end == device_tree.end as u64));
     assert!(early.retains(memory.ram()[0], None).unwrap());
     let mut storage = [None; 4];
     let mut regions = boot.regions(4096, None, &mut storage).unwrap();
     assert!(regions.entries().next().is_none());
-    assert!(regions.reserve_root(&mut None, core::alloc::Layout::new::<u64>()).unwrap().is_none());
-    assert!(early.entries().any(|entry| matches!(entry.occupant, kernel::entry::boot::Occupant::Reservation(_))));
+    assert!(
+        regions
+            .reserve_root(&mut None, core::alloc::Layout::new::<u64>())
+            .unwrap()
+            .is_none()
+    );
+    assert!(early.entries().any(|entry| matches!(
+        entry.occupant,
+        kernel::entry::boot::Occupant::Reservation(_)
+    )));
     assert_eq!(
         memory.ram(),
         &[Physical {
@@ -167,6 +190,9 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         "OpenSBI firmware reservation is missing"
     );
 
+    synchronization::check();
+    synchronization::check_enabled();
+    write("PASS synchronization\n");
     write(
         "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1 regions=0 roots=0\n",
     );

@@ -1,4 +1,7 @@
+#[cfg(target_arch = "riscv64")]
 pub(crate) mod nest;
+#[cfg(target_arch = "riscv64")]
 pub(crate) mod room;
-pub(crate) mod sync;
+pub mod sync;
+#[cfg(target_arch = "riscv64")]
 pub(crate) mod unit;

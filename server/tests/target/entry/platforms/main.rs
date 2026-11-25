@@ -5,6 +5,9 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use kernel::entry::boot;
 
+#[path = "../synchronization.rs"]
+mod synchronization;
+
 static MINOR: boot::Minor = boot::Minor::new();
 static TARGET: AtomicUsize = AtomicUsize::new(usize::MAX);
 static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -24,6 +27,7 @@ fn minor_ready(hart: usize, expected: usize) -> ! {
     assert!(
         MINOR.ready() && MINOR.stack_range().contains(&sp) && !boot::stack_range().contains(&sp)
     );
+    synchronization::check();
     OBSERVED.store(hart, Ordering::Release);
     loop {
         core::hint::spin_loop();
@@ -44,6 +48,10 @@ mod board;
 
 #[entry]
 fn main() -> Status {
+    assert_eq!(
+        kernel::sync::LeafLock::new(()).attempt(|()| ()),
+        Err(kernel::sync::LeafError::Context)
+    );
     let loaded = match uefi::boot::open_protocol_exclusive::<uefi::proto::loaded_image::LoadedImage>(
         uefi::boot::image_handle(),
     ) {
@@ -172,6 +180,8 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         core::hint::spin_loop();
     }
     assert!(MINOR.ready() && unsafe { MINOR.start(target, minor_ready, target, startup) }.is_err());
+    synchronization::check();
+    boot::write("PASS synchronization\n");
     writeln!(
         boot::console().expect("console"),
         "OBSERVED major={} minor={}",

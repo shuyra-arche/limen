@@ -7,7 +7,10 @@ use core::{
     mem::offset_of,
 };
 
-use crate::{basis::room::Occupancy, metal::boot};
+use crate::{
+    basis::room::Occupancy,
+    metal::{boot, hart},
+};
 
 #[repr(C)]
 struct Registers {
@@ -88,7 +91,6 @@ enum State {
 pub(crate) struct Hart {
     dispatcher: Context,
     state: Cell<State>,
-    guards: Cell<usize>,
 }
 
 // Only the LocalHart for the corresponding physical Hart accesses the
@@ -105,7 +107,6 @@ impl Hart {
         Self {
             dispatcher: Context::new(),
             state: Cell::new(State::Idle),
-            guards: Cell::new(0),
         }
     }
 
@@ -125,11 +126,7 @@ impl Hart {
     }
 }
 
-impl<'a> LocalHart<'a> {
-    pub(crate) fn guards(&self) -> &'a Cell<usize> {
-        &self.hart.guards
-    }
-
+impl LocalHart<'_> {
     pub(crate) fn running(&self) -> Option<Occupancy> {
         match self.hart.state.get() {
             State::Running(occupancy) => Some(occupancy),
@@ -146,7 +143,7 @@ impl<'a> LocalHart<'a> {
         argument: *const (),
     ) {
         assert!(matches!(self.hart.state.get(), State::Idle));
-        assert_eq!(self.guards().get(), 0);
+        assert!(hart::can_switch());
         self.hart.state.set(State::Running(occupancy));
         unsafe { self.hart.dispatcher.switch(context, argument) };
         // The dispatcher is executing on its original stack again. The old
@@ -158,7 +155,7 @@ impl<'a> LocalHart<'a> {
     /// Requires invocation on the stack of this exact running occupancy.
     pub(crate) unsafe fn leave(&self, occupancy: Occupancy, context: &Context) {
         assert!(self.running() == Some(occupancy));
-        assert_eq!(self.guards().get(), 0);
+        assert!(hart::can_switch());
         unsafe { context.switch(&self.hart.dispatcher, core::ptr::null()) };
     }
 

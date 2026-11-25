@@ -38,19 +38,22 @@ fn load_idt() {
 static mut IDT: core::mem::MaybeUninit<[Gate; 256]> = core::mem::MaybeUninit::uninit();
 
 pub(crate) fn established() -> bool {
-    let mut idtr = Descriptor { limit: 0, base: 0 };
     let (flags, cr0): (usize, usize);
-    let cs: u16;
     unsafe {
-        asm!("sidt [{}]", in(reg) &mut idtr, options(nostack, preserves_flags));
-        asm!("pushfq", "pop {}", "mov {}, cr0", "mov {:x}, cs",
-             out(reg) flags, out(reg) cr0, out(reg) cs);
+        asm!("pushfq", "pop {}", "mov {}, cr0", out(reg) flags, out(reg) cr0);
     }
-    cs & 3 == 0
-        && cr0 & (1 << 31) != 0
-        && flags & (1 << 9) == 0
-        && idtr.limit as usize + 1 == size_of::<[Gate; 256]>()
-        && idtr.base == (&raw const IDT).addr()
+    cr0 & (1 << 31) != 0 && flags & (1 << 9) == 0 && entry_installed()
+}
+
+pub(crate) fn entry_installed() -> bool {
+    let cs: u16;
+    unsafe { asm!("mov {:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags)) };
+    if cs & 3 != 0 {
+        return false;
+    }
+    let mut idtr = Descriptor { limit: 0, base: 0 };
+    unsafe { asm!("sidt [{}]", in(reg) &mut idtr, options(nostack, preserves_flags)) };
+    idtr.limit as usize + 1 == size_of::<[Gate; 256]>() && idtr.base == (&raw const IDT).addr()
 }
 
 pub(crate) fn park() -> ! {

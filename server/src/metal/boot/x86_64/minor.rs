@@ -190,7 +190,8 @@ unsafe extern "sysv64" fn minor() -> ! {
         finish = sym finish,
     )
 }
-unsafe extern "sysv64" fn finish(hart: usize, slot: &Minor) -> ! {
+unsafe extern "sysv64" fn finish(hart: usize, slot: &'static Minor) -> ! {
+    unsafe { crate::metal::hart::clear_local() };
     // The major CPU has already published the complete, immutable diagnostic IDT.
     super::load_idt();
     minor::arrive(hart, slot)

@@ -1,0 +1,10 @@
+[package]
+name = "kernel-host-sync"
+version.workspace = true
+edition.workspace = true
+publish = false
+autotests = false
+
+[[test]]
+name = "sync"
+path = "../mod.rs"

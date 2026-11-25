@@ -25,6 +25,8 @@
     "server/src/metal/firmware/devicetree/**",
     "server/src/metal/hart/stack.rs",
     "server/src/metal/hart/mod.rs",
+    "server/src/metal/hart/node.rs",
+    "server/src/metal/hart/protection.rs",
     "server/src/metal/hart/riscv.rs",
     "server/src/metal/execution/mod.rs"
   ],

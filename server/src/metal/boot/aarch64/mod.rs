@@ -5,13 +5,23 @@ pub(crate) use major::major as enter_major;
 use core::arch::{asm, naked_asm};
 
 pub(crate) fn established() -> bool {
-    let (el, daif, spsel, vector): (usize, usize, usize, usize);
+    let (daif, spsel): (usize, usize);
     unsafe {
-        asm!("mrs {}, CurrentEL", "mrs {}, DAIF", "mrs {}, SPSel", "mrs {}, VBAR_EL1",
-             out(reg) el, out(reg) daif, out(reg) spsel, out(reg) vector,
+        asm!("mrs {}, DAIF", "mrs {}, SPSel", out(reg) daif, out(reg) spsel,
              options(nostack, nomem, preserves_flags));
     }
-    el == 4 && daif & 0x3c0 == 0x3c0 && spsel == 1 && vector == vectors as *const () as usize
+    daif & 0x3c0 == 0x3c0 && spsel == 1 && entry_installed()
+}
+
+pub(crate) fn entry_installed() -> bool {
+    let el: usize;
+    unsafe { asm!("mrs {}, CurrentEL", out(reg) el, options(nostack, nomem, preserves_flags)) };
+    if el != 4 {
+        return false;
+    }
+    let vector: usize;
+    unsafe { asm!("mrs {}, VBAR_EL1", out(reg) vector, options(nostack, nomem, preserves_flags)) };
+    vector == vectors as *const () as usize
 }
 pub(crate) fn park() -> ! {
     loop {

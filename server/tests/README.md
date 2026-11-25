@@ -15,6 +15,15 @@ RUSTFLAGS=-Dwarnings cargo test --locked --workspace --target x86_64-unknown-lin
 cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
 ```
 
+The Sync Host suite exercises the production MCS queue with controlled
+publication and release interleavings. The compiler checks use the actual
+target library to verify scoped heterogeneous access and reject escaped,
+overlapping or cross-Hart access borrows.
+
+```sh
+bash server/tests/basis/sync/contracts.sh
+```
+
 ## RV64 boot
 
 The Boot owner keeps its platform image and assertions in [target/entry/boot/](target/entry/boot/).
@@ -106,7 +115,9 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
 ```
 
 The guest starts the minor through OpenSBI and coordinates the two Harts
-through a real contention and handoff. It checks that the idle minor skips
+through real Turn contention and handoff. It checks Fast cleanup, Slow
+acquisition across opposite insertion orders and rejection of Yield while
+the Hart participates in a Turn. The idle minor skips
 a Ready Unit pinned to the major. It then verifies independent occupancies,
 rejection before the original leave is settled, continuation migration after
 settlement, and rejection of a late original occupancy after re-entry. A

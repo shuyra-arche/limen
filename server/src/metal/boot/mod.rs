@@ -28,7 +28,7 @@ pub(crate) use backend::enter_major;
 #[cfg(target_arch = "riscv64")]
 pub(crate) use backend::image;
 pub(crate) use backend::{
-    DeliveryError, MinorContext, established, minor_context, park, wake_minor,
+    DeliveryError, MinorContext, entry_installed, established, minor_context, park, wake_minor,
 };
 
 /// Major and minor CPUs use the same ordinary startup stack budget.
