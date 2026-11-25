@@ -4,12 +4,13 @@ use core::sync::atomic::{AtomicUsize, Ordering::Acquire};
 
 use crate::{
     entry::boot::{Physical, Region as Description},
-    sync::{AcquisitionError, TurnLock},
+    sync::{Acquisition, AcquisitionError, TurnLock, Work},
 };
 
 mod allowance;
 pub mod buddy;
 pub(crate) mod bump;
+pub mod pool;
 mod region;
 mod search;
 mod storage;
@@ -105,4 +106,13 @@ fn overlaps(left: Physical, right: Physical) -> bool {
 
 fn range(physical: Physical) -> core::ops::Range<u64> {
     physical.start..physical.end
+}
+
+fn with_turn<T, R>(lock: &TurnLock<T>, operation: impl FnOnce(&mut T) -> R) -> Result<R, Error> {
+    let mut work = Work::<1>::new();
+    let mut plan = work.plan();
+    plan.insert(lock).expect("one Turn");
+    Ok(plan.execute(Acquisition::Fast, |held| {
+        operation(held.access(lock).expect("planned lock"))
+    })?)
 }

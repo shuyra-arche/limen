@@ -41,7 +41,9 @@ struct Mapped([MaybeUninit<u8>; 2 * PAGE as usize]);
 #[repr(align(8))]
 struct Descriptors([u8; 40]);
 
-fn bootstrap(operation: impl FnOnce(&mut Regions<'_>, &mut Option<MappedRange<'static>>)) {
+pub(super) fn bootstrap(
+    operation: impl FnOnce(&mut Regions<'_>, &mut Option<MappedRange<'static>>),
+) {
     let mut descriptors = Descriptors([0; 40]);
     describe(&mut descriptors.0, 7, SCOPE.start, 13, 8);
     let map = FirmwareMap::new(&descriptors.0, 40, 1, 1).unwrap();

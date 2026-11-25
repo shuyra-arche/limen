@@ -28,7 +28,9 @@
     "server/src/metal/hart/protection.rs",
     "server/src/metal/hart/riscv.rs",
     "server/src/basis/sync/**",
-    "server/tests/target/entry/synchronization.rs"
+    "server/tests/target/entry/synchronization.rs",
+    "server/tests/target/entry/memory.rs",
+    "server/tests/target/entry/pool.rs"
   ],
   "run": {
     "kind": "qemu",
@@ -36,6 +38,7 @@
     "expects": [
       "PASS synchronization",
       "PASS allocator source=1 negative=1 delayed=1 return=1",
+      "PASS typed-pool mapped=1 slots=1 reuse=1 joint=1",
       "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1 regions=0 roots=0"
     ]
   }

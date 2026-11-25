@@ -2,7 +2,7 @@ use core::{ptr, sync::atomic::Ordering::Acquire};
 
 use crate::sync::{Acquisition, HeldLockSet, LockPlan, TurnLock, Work};
 
-use super::{Allocator, Error, REGION_LIMIT, RegionId, length, search::with_turn};
+use super::{Allocator, Error, REGION_LIMIT, RegionId, length, with_turn};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AllowanceId {

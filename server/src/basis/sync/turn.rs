@@ -186,6 +186,21 @@ impl HeldLockSet<'_> {
             None
         }
     }
+
+    /// Borrow two distinct, already held locks together for one commit.
+    /// Neither borrow can outlive this access to the complete set.
+    pub fn access_pair<'borrow, T, U>(
+        &'borrow mut self,
+        first: &'borrow TurnLock<T>,
+        second: &'borrow TurnLock<U>,
+    ) -> Option<(&'borrow mut T, &'borrow mut U)> {
+        if ptr::eq(&first.queue, &second.queue) || !self.contains(first) || !self.contains(second) {
+            return None;
+        }
+        // Both queues are held by this set, and they guard distinct values.
+        // The exclusive borrow of the set prevents any other live access.
+        unsafe { Some((&mut *first.value.get(), &mut *second.value.get())) }
+    }
 }
 
 struct Held<'object> {

@@ -19,7 +19,10 @@
     "server/link.x",
     "server/src/basis/**",
     "server/src/entry/execution.rs",
-    "server/src/metal/allocator/buddy/**",
+    "server/src/metal/allocator/**",
+    "server/src/metal/identity/**",
+    "server/tests/target/entry/memory.rs",
+    "server/tests/target/entry/pool.rs",
     "server/src/metal/execution/riscv/**",
     "server/src/metal/boot/console.rs",
     "server/src/metal/boot/services.rs",
@@ -35,6 +38,7 @@
     "kind": "qemu",
     "kernel": "kernel-execution",
     "expects": [
+      "PASS pool value-bytes=512 value-align=64 unit-stack=1",
       "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1 rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1"
     ]
   }
