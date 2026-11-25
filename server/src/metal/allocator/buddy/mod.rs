@@ -166,61 +166,83 @@ impl<'storage> Buddy<'storage> {
     fn matches(
         &self,
         first: usize,
-        block: Block,
+        mut block: Block,
         range: &Range<u64>,
         expected: State,
         visits: &mut usize,
     ) -> bool {
-        *visits += 1;
-        if outside(block, range) {
-            return true;
-        }
-        let state = self.state(first, block);
-        match state {
-            State::Free | State::Occupied => state == expected,
-            State::Mixed(_) => {
-                // A wholly covered mixed node necessarily has both states.
-                !covered(block, range)
-                    && self.matches(first, block.left(), range, expected, visits)
-                    && self.matches(first, block.right(), range, expected, visits)
+        loop {
+            *visits += 1;
+            if !outside(block, range) {
+                match self.state(first, block) {
+                    // Only a boundary node can be partially covered.
+                    State::Mixed(_) if !covered(block, range) => {
+                        block = block.left();
+                        continue;
+                    }
+                    state if state != expected => return false,
+                    _ => {}
+                }
             }
+
+            // A completed right child also completes its parent. The next
+            // unvisited subtree starts at the sibling of a left child.
+            while block.index != 0 && block.index.is_multiple_of(2) {
+                block = block.parent();
+            }
+            if block.index == 0 {
+                return true;
+            }
+            block = block.sibling();
         }
     }
 
     fn rewrite(
         &mut self,
         first: usize,
-        block: Block,
+        mut block: Block,
         range: &Range<u64>,
         replacement: State,
     ) -> usize {
-        if outside(block, range) {
-            return 1;
-        }
-        if covered(block, range) {
-            self.set(first, block, replacement);
-            return 1;
-        }
+        let mut visits = 0;
+        loop {
+            visits += 1;
+            if !outside(block, range) {
+                if covered(block, range) {
+                    self.set(first, block, replacement);
+                } else {
+                    let old = self.state(first, block);
+                    let left = block.left();
+                    if !matches!(old, State::Mixed(_)) {
+                        self.set(first, left, old);
+                        self.set(first, left.sibling(), old);
+                    }
+                    block = left;
+                    continue;
+                }
+            }
 
-        let left = block.left();
-        let right = block.right();
-        let old = self.state(first, block);
-        if !matches!(old, State::Mixed(_)) {
-            self.set(first, left, old);
-            self.set(first, right, old);
+            // Join a parent only after both children have been visited.
+            // The right child's location recovers the parent without a stack.
+            while block.index != 0 && block.index.is_multiple_of(2) {
+                let right = block;
+                block = right.parent();
+                let left = block.left();
+                self.set(
+                    first,
+                    block,
+                    State::join(
+                        self.state(first, left),
+                        self.state(first, right),
+                        left.order,
+                    ),
+                );
+            }
+            if block.index == 0 {
+                return visits;
+            }
+            block = block.sibling();
         }
-        let left_visits = self.rewrite(first, left, range, replacement);
-        let right_visits = self.rewrite(first, right, range, replacement);
-        self.set(
-            first,
-            block,
-            State::join(
-                self.state(first, left),
-                self.state(first, right),
-                left.order,
-            ),
-        );
-        1 + left_visits + right_visits
     }
 
     fn state(&self, first: usize, block: Block) -> State {
