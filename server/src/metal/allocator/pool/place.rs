@@ -1,8 +1,11 @@
 use core::{cell::Cell, ptr::NonNull};
 
+use crate::sync::{HeldLockSet, TurnLock};
+
 use super::{
-    Error, GroupId, Pool,
+    Error, GroupId, Pool, SourceError,
     group::{Slot, State},
+    with_turn,
 };
 
 pub(super) struct Claim<'pool, 'storage, T> {
@@ -11,6 +14,11 @@ pub(super) struct Claim<'pool, 'storage, T> {
     pub(super) index: usize,
     slot: NonNull<Slot<T>>,
 }
+
+// The owning token is unique, its borrow pins the Pool and mapping, and
+// the value cannot have live borrows when that token moves. State remains
+// under the Pool Turn. Moving the token moves the right to access and drop T.
+unsafe impl<T: Send> Send for Claim<'_, '_, T> {}
 
 impl<'pool, 'storage, T> Claim<'pool, 'storage, T> {
     pub(super) fn new(
@@ -57,6 +65,8 @@ pub struct Occupied<'pool, 'storage, T>(Claim<'pool, 'storage, T>);
 pub struct Vacant<'pool, 'storage, T>(Claim<'pool, 'storage, T>);
 
 impl<'pool, 'storage, T> Reservation<'pool, 'storage, T> {
+    /// Write a supported value into the final slot. The Pool layout bounds
+    /// this by-value transfer. Callers still budget constructing T itself.
     pub fn initialize(self, object: T) -> Prepared<'pool, 'storage, T> {
         // The reservation was removed from the free chain. Only it writes T.
         unsafe { self.0.value().write(object) };
@@ -82,8 +92,48 @@ impl<'pool, 'storage, T> Prepared<'pool, 'storage, T> {
             return Err((self, Error::Receiver));
         }
         let pool = self.0.pool;
-        // Deposit the unique owner while the corresponding slot becomes visible.
-        pool.publish(self, receiver)
+        let mut prepared = Some(self);
+        match with_turn(&pool.state, |_| {
+            prepared
+                .take()
+                .expect("single publication")
+                .publish_to(receiver)
+        }) {
+            Ok(result) => result,
+            Err(error) => Err((
+                prepared.expect("preparation was not accepted"),
+                Error::from(error),
+            )),
+        }
+    }
+
+    /// Publish directly into a protected consumer position, using its lock
+    /// and the original Pool from this same held plan.
+    pub fn publish_held<R>(
+        self,
+        held: &mut HeldLockSet<'_>,
+        receiver: &TurnLock<R>,
+        select: impl FnOnce(&mut R) -> &mut Option<Occupied<'pool, 'storage, T>>,
+    ) -> Result<(), (Self, Error)> {
+        let Some((_state, receiver)) = held.access_pair(&self.0.pool.state, receiver) else {
+            return Err((self, SourceError::Protection.into()));
+        };
+        self.publish_to(select(receiver))
+    }
+
+    fn publish_to(
+        self,
+        receiver: &mut Option<Occupied<'pool, 'storage, T>>,
+    ) -> Result<(), (Self, Error)> {
+        if receiver.is_some() {
+            return Err((self, Error::Receiver));
+        }
+        let claim = self.0;
+        let state = claim.state();
+        assert_eq!(state.get(), State::Reserved);
+        state.set(State::Occupied);
+        *receiver = Some(Occupied(claim));
+        Ok(())
     }
 
     pub fn destroy(self) -> Result<Reservation<'pool, 'storage, T>, (Self, Error)> {
@@ -129,29 +179,5 @@ impl<T> Vacant<'_, '_, T> {
             .pool
             .release(&self.0, State::Reclaiming)
             .map_err(|error| (self, error))
-    }
-}
-
-impl<'storage, T> Pool<'storage, T> {
-    fn publish<'pool>(
-        &'pool self,
-        prepared: Prepared<'pool, 'storage, T>,
-        receiver: &mut Option<Occupied<'pool, 'storage, T>>,
-    ) -> Result<(), (Prepared<'pool, 'storage, T>, Error)> {
-        // The closure retains the original prepared token on acquisition error.
-        let mut prepared = Some(prepared);
-        let result = super::with_turn(&self.state, |_| {
-            let claim = prepared.take().expect("single publication").0;
-            let state = claim.state();
-            assert_eq!(state.get(), State::Reserved);
-            state.set(State::Occupied);
-            *receiver = Some(Occupied(claim));
-        });
-        result.map_err(|error| {
-            (
-                prepared.expect("preparation was not accepted"),
-                Error::from(error),
-            )
-        })
     }
 }

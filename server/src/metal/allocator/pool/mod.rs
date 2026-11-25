@@ -5,7 +5,7 @@ mod place;
 
 use core::mem::MaybeUninit;
 
-use crate::sync::TurnLock;
+use crate::sync::{HeldLockSet, LockPlan, PlanError, TurnLock};
 
 use super::{Allocation, Error as SourceError, with_turn};
 use group::{Chain, Group, Links, State};
@@ -13,6 +13,11 @@ use group::{Chain, Group, Links, State};
 pub use group::{Geometry, Supply};
 use place::Claim;
 pub use place::{Occupied, Prepared, Reservation, Vacant};
+
+/// Largest value supported by this increment's by-value initializer.
+pub const VALUE_BYTES: usize = 512;
+/// Largest alignment supported by the by-value initializer, including ZSTs.
+pub const VALUE_ALIGNMENT: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -127,8 +132,10 @@ impl<'storage, T> Pool<'storage, T> {
             .ok_or(Error::Directory)?;
         let retirement = material.return_position()?;
 
-        // Prepare every slot privately after the final fallible check.
-        let group = Group::initialize(
+        // The original owner keeps both inputs throughout the whole slot walk.
+        // Only the short directory publication transfers either input.
+        Group::<T>::prepare(geometry, mapping.as_deref_mut().expect("checked mapping"));
+        let group = Group::new(
             allocation.take().expect("checked Allocation"),
             retirement,
             geometry,
@@ -163,8 +170,13 @@ impl<'storage, T> Pool<'storage, T> {
         })?
     }
 
-    /// The caller supplies the original preparation position. Preserve it
-    /// after reserving, including across suspension or loss of a response.
+    /// Include this Pool in the complete plan for a shared handoff.
+    pub fn plan<'pool>(&'pool self, plan: &mut LockPlan<'pool, '_>) -> Result<(), PlanError> {
+        plan.insert(&self.state)
+    }
+
+    /// The caller supplies the original, exclusively borrowed preparation
+    /// position. Use reserve_held when that position requires a Turn.
     pub fn reserve<'pool>(
         &'pool self,
         receiver: &mut Option<Reservation<'pool, 'storage, T>>,
@@ -172,25 +184,49 @@ impl<'storage, T> Pool<'storage, T> {
         if receiver.is_some() {
             return Err(Error::Receiver);
         }
-        with_turn(&self.state, |state| {
-            let id = state.partial.or(state.empty).ok_or(Error::Full)?;
-            let group = state.group(id);
-            let index = group.head.expect("listed group has free slots");
-            let slot = group.slot(index);
-            // State is accessed only under the Pool Turn.
-            let slot_state = unsafe { &slot.as_ref().state };
-            let State::Free(next) = slot_state.get() else {
-                unreachable!("the free chain contains only unclaimed slots");
-            };
-            let before = group.chain();
-            group.head = next;
-            group.free -= 1;
-            slot_state.set(State::Reserved);
-            state.free -= 1;
-            state.reclassify(id, before);
-            *receiver = Some(Reservation(Claim::new(self, id, index, slot)));
-            Ok(())
-        })?
+        with_turn(&self.state, |state| self.reserve_to(state, receiver))?
+    }
+
+    /// Commit a reservation and its protected preparation record together.
+    /// The caller must retain this original record through suspension or loss
+    /// of the response. The selector runs with both locks held.
+    pub fn reserve_held<'pool, R>(
+        &'pool self,
+        held: &mut HeldLockSet<'_>,
+        receiver: &TurnLock<R>,
+        select: impl FnOnce(&mut R) -> &mut Option<Reservation<'pool, 'storage, T>>,
+    ) -> Result<(), Error> {
+        let (state, receiver) = held
+            .access_pair(&self.state, receiver)
+            .ok_or(SourceError::Protection)?;
+        self.reserve_to(state, select(receiver))
+    }
+
+    fn reserve_to<'pool>(
+        &'pool self,
+        state: &mut Directory<'storage, T>,
+        receiver: &mut Option<Reservation<'pool, 'storage, T>>,
+    ) -> Result<(), Error> {
+        if receiver.is_some() {
+            return Err(Error::Receiver);
+        }
+        let id = state.partial.or(state.empty).ok_or(Error::Full)?;
+        let group = state.group(id);
+        let index = group.head.expect("listed group has free slots");
+        let slot = group.slot(index);
+        // State is accessed only under the Pool Turn.
+        let slot_state = unsafe { &slot.as_ref().state };
+        let State::Free(next) = slot_state.get() else {
+            unreachable!("the free chain contains only unclaimed slots");
+        };
+        let before = group.chain();
+        group.head = next;
+        group.free -= 1;
+        slot_state.set(State::Reserved);
+        state.free -= 1;
+        state.reclassify(id, before);
+        *receiver = Some(Reservation(Claim::new(self, id, index, slot)));
+        Ok(())
     }
 
     fn transition(

@@ -7,7 +7,7 @@ use core::{
 };
 
 use super::super::{Allocation, AllocationId, ReturnId};
-use super::{Error, GroupId};
+use super::{Error, GroupId, VALUE_ALIGNMENT, VALUE_BYTES};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum State {
@@ -37,6 +37,10 @@ pub struct Geometry {
 
 impl Geometry {
     pub fn of<T>(bytes: usize) -> Result<Self, Error> {
+        let value = Layout::new::<T>();
+        if value.size() > VALUE_BYTES || value.align() > VALUE_ALIGNMENT {
+            return Err(Error::Layout);
+        }
         let slot = Layout::new::<Slot<T>>();
         let stride = slot.pad_to_align().size();
         let slots = bytes / stride; // The slot state gives even a ZST a nonzero stride.
@@ -93,12 +97,7 @@ pub(super) struct Group<'storage, T> {
 unsafe impl<T: Send> Send for Group<'_, T> {}
 
 impl<'storage, T> Group<'storage, T> {
-    pub(super) fn initialize(
-        allocation: Allocation,
-        retirement: ReturnId,
-        geometry: Geometry,
-        mapping: &'storage mut [MaybeUninit<u8>],
-    ) -> Self {
+    pub(super) fn prepare(geometry: Geometry, mapping: &mut [MaybeUninit<u8>]) {
         let slots = NonNull::from(mapping).cast::<Slot<T>>();
         for index in 0..geometry.slots {
             let next = (index + 1 < geometry.slots).then_some(index + 1);
@@ -109,6 +108,15 @@ impl<'storage, T> Group<'storage, T> {
                 (&raw mut (*slots.as_ptr().add(index)).state).write(Cell::new(State::Free(next)));
             }
         }
+    }
+
+    pub(super) fn new(
+        allocation: Allocation,
+        retirement: ReturnId,
+        geometry: Geometry,
+        mapping: &'storage mut [MaybeUninit<u8>],
+    ) -> Self {
+        let slots = NonNull::from(mapping).cast::<Slot<T>>();
         Self {
             allocation,
             retirement,

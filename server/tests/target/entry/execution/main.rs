@@ -2,6 +2,11 @@
 #![no_main]
 
 mod buddy;
+#[path = "../memory.rs"]
+mod memory;
+mod pool;
+#[path = "../pool.rs"]
+mod pool_material;
 
 use core::{
     arch::asm,
@@ -41,6 +46,7 @@ fn first(current: &mut Current) -> u64 {
     assert_eq!(SEQUENCE.fetch_add(1, Relaxed), 0);
     FIRST_STACK.store(stack_address(&local), Relaxed);
     buddy::check();
+    pool::check();
     assert_eq!(execution().pending_leave(), Ok(None));
     assert_eq!(execution().enter(), Err(Error::Busy));
     assert_eq!(execution().finish_end(current.id()), Err(Error::Busy));
@@ -94,6 +100,7 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
+    pool::prepare(&boot);
     let major = boot.hart();
     let device_tree = boot.device_tree();
     assert!(major < 4, "unexpected QEMU boot hart");

@@ -1,13 +1,13 @@
-use core::{mem::MaybeUninit, ptr, slice};
-
 use kernel::{
     allocator::{
         Allocation, Allowance, Config, Error, Grant, Initial, Pending, RamPurpose::Metadata,
         Request, ReturnId, Search,
     },
-    entry::boot::{self, Boot, Condition, MappedRange, Physical, Retirement},
+    entry::boot::{self, Boot, MappedRange, Physical},
     sync::Acquisition::{Fast, Slow},
 };
+
+use super::memory::{mapped, retirement};
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x8400_0000;
@@ -34,35 +34,6 @@ const fn pages(first: u64, last: u64) -> Physical {
     }
 }
 
-// The boot guest reserves this test-only RAM window in the bare virt fixture.
-// It is outside the image, both startup stacks, OpenSBI and the retained DTB.
-// No minor or DMA-capable guest driver has run and satp is still zero. The
-// resident stack is permanent for this guest and stays excluded.
-pub(super) fn retirement(boot: &Boot<'_>, physical: Physical) -> Retirement {
-    let exclusions = boot.exclusions();
-    assert!(exclusions.entries().all(|entry| {
-        entry.physical.end <= physical.start || entry.physical.start >= physical.end
-    }));
-    assert!(
-        boot.dtb_memory()
-            .unwrap()
-            .ram()
-            .iter()
-            .any(|ram| { ram.start <= physical.start && physical.end <= ram.end })
-    );
-
-    let mut retirement = Retirement::new(physical).unwrap();
-    for condition in [
-        Condition::RuntimeStack,
-        Condition::ReadersGone,
-        Condition::TranslationRetired,
-        Condition::DevicesIsolated,
-    ] {
-        unsafe { retirement.record(condition) };
-    }
-    retirement
-}
-
 pub(super) fn check(boot: &Boot<'_>) {
     let scope = pages(0, 13);
     let backing = pages(4, 6);
@@ -76,12 +47,8 @@ pub(super) fn check(boot: &Boot<'_>) {
             .is_none()
     );
 
-    let address = ptr::with_exposed_provenance_mut::<MaybeUninit<u8>>(backing.start as usize);
-    // Bare RV64 gives this reserved extent a canonical identity mapping. The
-    // single boot owner has not assigned it to any other object or source.
-    let storage =
-        unsafe { slice::from_raw_parts_mut(address, (backing.end - backing.start) as usize) };
-    let mut mapping = Some(unsafe { MappedRange::new(backing, storage) }.unwrap());
+    // Bare RV64 gives this reserved extent a canonical identity mapping.
+    let mut mapping = Some(unsafe { MappedRange::new(backing, mapped(backing)) }.unwrap());
     let receiver = unsafe { &mut *(&raw mut RECEIVER) };
     let allowance_receiver = unsafe { &mut *(&raw mut ALLOWANCE) };
     // Simulate loss of the transient boot result. All obligations have

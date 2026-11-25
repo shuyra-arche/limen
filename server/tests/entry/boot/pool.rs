@@ -97,7 +97,7 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
 
 #[test]
 fn the_layout_counts_alignment_state_and_zero_sized_values() {
-    #[repr(align(8192))]
+    #[repr(align(128))]
     struct Overaligned;
 
     let [mut material, _] = supplies();
@@ -110,6 +110,25 @@ fn the_layout_counts_alignment_state_and_zero_sized_values() {
         Err(Error::Layout)
     );
     assert!(material.is_some() && mapped.is_some());
+
+    use crate::allocator::pool::{VALUE_ALIGNMENT, VALUE_BYTES};
+    #[repr(align(64))]
+    struct Boundary([u8; VALUE_BYTES]);
+    assert_eq!(size_of::<Boundary>(), VALUE_BYTES);
+    assert_eq!(core::mem::align_of::<Boundary>(), VALUE_ALIGNMENT);
+    assert_eq!(
+        Geometry::of::<Boundary>(PAGE).unwrap().alignment,
+        VALUE_ALIGNMENT
+    );
+    assert_eq!(
+        Geometry::of::<[u8; VALUE_BYTES + 1]>(PAGE),
+        Err(Error::Layout)
+    );
+    assert_eq!(
+        Geometry::of::<[u8; 16 * PAGE]>(32 * PAGE),
+        Err(Error::Layout)
+    );
+    assert_eq!(Boundary([0; VALUE_BYTES]).0[0], 0);
 
     let geometry = Geometry::of::<()>(PAGE).unwrap();
     assert!(geometry.stride > 0);
@@ -249,6 +268,133 @@ fn simultaneous_claims_do_not_share_a_slot() {
         [first.join().unwrap(), second.join().unwrap()]
     });
     assert_ne!(addresses[0], addresses[1]);
+    let capacity = pool.capacity().unwrap();
+    assert_eq!(capacity.free, capacity.slots);
+}
+
+#[test]
+fn reserve_and_publish_commit_into_the_held_consumer_record() {
+    use crate::allocator::Error as SourceError;
+
+    let [mut material, _] = supplies();
+    let mut directory = [GroupSlot::<u64>::EMPTY];
+    let mut bytes = Page([MaybeUninit::uninit(); PAGE]);
+    let mut pool = Pool::new(&mut directory).unwrap();
+    unsafe { pool.install(&mut material, &mut Some(bytes.0.as_mut_slice())) }.unwrap();
+    let free = pool.capacity().unwrap().free;
+    let record = TurnLock::new((None, None));
+    let mut work = Work::<2>::new();
+
+    let mut plan = work.plan();
+    plan.insert(&record).unwrap();
+    plan.execute(Fast, |held| {
+        assert!(held.access_pair(&record, &record).is_none());
+        assert_eq!(
+            pool.reserve_held(held, &record, |record| &mut record.0),
+            Err(Error::Source(SourceError::Protection))
+        );
+        assert!(held.access(&record).unwrap().0.is_none());
+    })
+    .unwrap();
+    assert_eq!(pool.capacity().unwrap().free, free);
+
+    let mut plan = work.plan();
+    plan.insert(&record).unwrap();
+    pool.plan(&mut plan).unwrap();
+    plan.execute(Fast, |held| {
+        pool.reserve_held(held, &record, |record| &mut record.0)
+            .unwrap();
+        assert_eq!(
+            pool.reserve_held(held, &record, |record| &mut record.0),
+            Err(Error::Receiver)
+        );
+    })
+    .unwrap();
+    assert_eq!(pool.capacity().unwrap().free, free - 1);
+
+    let mut plan = work.plan();
+    plan.insert(&record).unwrap();
+    let reservation = plan
+        .execute(Fast, |held| held.access(&record).unwrap().0.take().unwrap())
+        .unwrap();
+    let prepared = reservation.initialize(17);
+
+    let mut plan = work.plan();
+    pool.plan(&mut plan).unwrap();
+    let (prepared, error) = plan
+        .execute(Fast, |held| {
+            prepared.publish_held(held, &record, |record| &mut record.1)
+        })
+        .unwrap()
+        .err()
+        .unwrap();
+    assert_eq!(error, Error::Source(SourceError::Protection));
+
+    let mut plan = work.plan();
+    pool.plan(&mut plan).unwrap();
+    plan.insert(&record).unwrap();
+    plan.execute(Fast, |held| {
+        assert!(held.access(&record).unwrap().1.is_none());
+        prepared
+            .publish_held(held, &record, |record| &mut record.1)
+            .ok()
+            .unwrap();
+        assert_eq!(*held.access(&record).unwrap().1.as_ref().unwrap().get(), 17);
+    })
+    .unwrap();
+
+    let mut plan = work.plan();
+    plan.insert(&record).unwrap();
+    let object = plan
+        .execute(Fast, |held| held.access(&record).unwrap().1.take().unwrap())
+        .unwrap();
+    object.destroy().ok().unwrap().release().ok().unwrap();
+    assert_eq!(pool.capacity().unwrap().free, free);
+}
+
+#[test]
+fn all_unique_handles_transfer_a_send_value_between_workers() {
+    use std::{sync::mpsc::sync_channel, thread};
+
+    let [mut material, _] = supplies();
+    let mut directory = [GroupSlot::<Cell<u64>>::EMPTY];
+    let mut bytes = Page([MaybeUninit::uninit(); PAGE]);
+    let mut pool = Pool::new(&mut directory).unwrap();
+    unsafe { pool.install(&mut material, &mut Some(bytes.0.as_mut_slice())) }.unwrap();
+    let pool = &pool;
+
+    let (reserve, reserved) = sync_channel(1);
+    let (prepare, prepared) = sync_channel(1);
+    let (occupy, occupied) = sync_channel(1);
+    let (settle, vacant) = sync_channel(1);
+    thread::scope(|scope| {
+        let first = scope.spawn(move || {
+            let mut receipt = None;
+            pool.reserve(&mut receipt).unwrap();
+            reserve.send(receipt.unwrap()).ok().unwrap();
+            let value: crate::allocator::pool::Prepared<'_, '_, Cell<u64>> =
+                prepared.recv().unwrap();
+            let mut receiver = None;
+            value.publish(&mut receiver).ok().unwrap();
+            occupy.send(receiver.unwrap()).ok().unwrap();
+            let destroyed: crate::allocator::pool::Vacant<'_, '_, Cell<u64>> =
+                vacant.recv().unwrap();
+            destroyed.release().ok().unwrap();
+        });
+        let second = scope.spawn(move || {
+            let token: crate::allocator::pool::Reservation<'_, '_, Cell<u64>> =
+                reserved.recv().unwrap();
+            prepare.send(token.initialize(Cell::new(71))).ok().unwrap();
+            let object: crate::allocator::pool::Occupied<'_, '_, Cell<u64>> =
+                occupied.recv().unwrap();
+            assert_eq!(object.get().get(), 71);
+            object.get().set(73);
+            assert_eq!(object.get().get(), 73);
+            settle.send(object.destroy().ok().unwrap()).ok().unwrap();
+        });
+        first.join().unwrap();
+        second.join().unwrap();
+    });
     let capacity = pool.capacity().unwrap();
     assert_eq!(capacity.free, capacity.slots);
 }
