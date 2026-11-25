@@ -89,7 +89,7 @@ impl Retirement {
         (self.observed == COMPLETE).then_some(self.physical)
     }
 
-    fn covers(&self, physical: Physical) -> bool {
+    pub(crate) fn covers(&self, physical: Physical) -> bool {
         self.completed()
             .is_some_and(|scope| contains(scope, physical))
     }

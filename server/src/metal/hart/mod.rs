@@ -21,7 +21,9 @@ pub(in crate::metal) use backend::stack_pointer;
 pub(crate) use node::QueueNode;
 #[cfg(target_arch = "riscv64")]
 pub(crate) use protection::can_switch;
-pub(crate) use protection::{Error, LeafParticipation, TurnParticipation, begin_leaf, begin_turn};
+pub(crate) use protection::{
+    Error, LeafParticipation, TURN_CAPACITY, TurnParticipation, begin_leaf, begin_turn,
+};
 
 /// Fixed storage belonging to the verified physical CPU that took this entry.
 pub(in crate::metal) struct HartLocal {

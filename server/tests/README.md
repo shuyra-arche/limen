@@ -181,3 +181,12 @@ The target fixtures also check zero organized regions and zero Bump roots
 when their actual handoff has no retirement or mapping evidence. Host checks
 exercise sorted and attributed regions, granule exclusions, capacity failure,
 and the reservation of real backing bytes supplied by a Host fixture.
+
+On bare RV64 virt, the boot guest also hands over a bounded RAM extent
+with a real mapping. It verifies the fixed root exclusion, the first
+issued allocation, source-wide negative search, delayed admission and
+return through the original records. The UEFI guests exercise the same
+entry with absent retirement and mapping evidence and require that it
+leave the source unpublished. The Host boot suite additionally exercises
+joint lock contention, cancellation, allowance reuse and independent
+return history.

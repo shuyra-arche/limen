@@ -45,7 +45,7 @@ change server/src/metal/hart/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/hart/node.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/basis/sync/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/basis/sync/host/Cargo.toml", "server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
 change server/src/metal/hart/protection.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/execution/mod.rs
@@ -108,6 +108,9 @@ change server/tests/qemu.version
 change rust-toolchain.toml
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.full and .runner and .rv64' >/dev/null
+change server/src/metal/allocator/storage.rs
+[[ $(boards) == 'q35 rv64 virt' ]]
+bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null
 change server/src/metal/allocator/bump.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null

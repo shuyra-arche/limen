@@ -4,9 +4,9 @@ use core::{cell::Cell, marker::PhantomData, sync::atomic::AtomicBool};
 
 use super::{HartLocal, QueueNode, backend, installed, ordinary_entry};
 
-// Current admitted Turn plans, including the execution control lock. A larger
-// future production plan must provision its node budget before publication.
-const NODE_CAPACITY: usize = 4;
+// Opening an Allowance from all Regions takes their locks, the free index,
+// and the selected Allowance slot. Future Pend participants are separate.
+pub(crate) const TURN_CAPACITY: usize = crate::metal::allocator::REGION_LIMIT + 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Error {
@@ -38,7 +38,7 @@ enum Participation {
 pub(super) struct LocalProtection {
     current: Cell<Participation>,
     interrupt: Cell<Option<usize>>,
-    nodes: [QueueNode; NODE_CAPACITY],
+    nodes: [QueueNode; TURN_CAPACITY],
 }
 
 impl LocalProtection {
@@ -46,7 +46,7 @@ impl LocalProtection {
         Self {
             current: Cell::new(Participation::Idle),
             interrupt: Cell::new(None),
-            nodes: [const { QueueNode::new() }; NODE_CAPACITY],
+            nodes: [const { QueueNode::new() }; TURN_CAPACITY],
         }
     }
 
@@ -92,7 +92,7 @@ pub(crate) struct TurnParticipation {
 }
 
 pub(crate) fn begin_turn(count: usize) -> Result<TurnParticipation, Error> {
-    if count == 0 || count > NODE_CAPACITY {
+    if count == 0 || count > TURN_CAPACITY {
         return Err(Error::Capacity);
     }
     let (local, interrupt) = protect()?;

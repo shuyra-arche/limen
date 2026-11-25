@@ -145,6 +145,26 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
             .unwrap()
             .is_none()
     );
+    let configuration = kernel::allocator::Config {
+        granule: uefi::boot::PAGE_SIZE as u64,
+        maximum: 0,
+        regions: 1,
+        grains: 1,
+        roots: 1,
+        allocations: 1,
+        returns: 1,
+        allowances: 1,
+        edits: 2,
+    };
+    assert!(
+        unsafe { regions.allocator(&mut None, configuration, 0, &mut []) }
+            .unwrap()
+            .is_none()
+    );
+    boot::write(
+        "PASS allocator retained without retirement or mapping
+",
+    );
     let view = MemoryMapRef::new(
         map.descriptors(),
         uefi::mem::memory_map::MemoryMapMeta {

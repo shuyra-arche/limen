@@ -324,3 +324,19 @@ fn reports_missing_when_rounding_or_candidate_end_exceeds_physical_addresses() {
         assert_eq!(complete_search(buddy, geometry, high_length, 1), None);
     });
 }
+
+#[test]
+fn lookup_clips_an_aligned_candidate_to_its_access_window() {
+    let geometry = Geometry::new(0..64, 1).unwrap();
+    let mut roots = [const { MaybeUninit::uninit() }; 1];
+    let mut nodes = [const { MaybeUninit::uninit() }; 127];
+    let buddy = Buddy::new(geometry, &mut roots, &mut nodes, 64).unwrap();
+    let request = Request::new(5, 4).unwrap().restrict(7..14).unwrap();
+    assert_eq!(buddy.fast(request).unwrap(), Some(8..13));
+    let request = request.restrict(0..12).unwrap();
+    assert!(buddy.fast(request).unwrap().is_none());
+    assert!(matches!(
+        buddy.scan(request, 16).unwrap(),
+        Search::Missing(_)
+    ));
+}

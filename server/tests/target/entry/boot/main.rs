@@ -9,6 +9,8 @@ use kernel::entry::boot::{Boot, Physical, Source, shutdown, stack_range, write};
 #[path = "../synchronization.rs"]
 mod synchronization;
 
+mod allocator;
+
 unsafe extern "C" {
     static limen_test_text_start: u8;
     static limen_test_text_end: u8;
@@ -190,6 +192,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         "OpenSBI firmware reservation is missing"
     );
 
+    allocator::check(&boot);
     synchronization::check();
     synchronization::check_enabled();
     write("PASS synchronization\n");
