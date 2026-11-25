@@ -19,6 +19,10 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Run(scenario::Inputs),
+    Observe {
+        elf: PathBuf,
+        output: PathBuf,
+    },
     Symbolize {
         elf: PathBuf,
         serial: PathBuf,
@@ -30,6 +34,7 @@ enum Commands {
 fn main() {
     let result: Result<()> = match Cli::parse().command {
         Commands::Run(inputs) => scenario::run(inputs),
+        Commands::Observe { elf, output } => scenario::observe(elf, output),
         Commands::Symbolize {
             elf,
             serial,

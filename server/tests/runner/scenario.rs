@@ -132,17 +132,11 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
     })
 }
 
-fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<bool> {
-    let Run::Qemu {
-        expects, distinct, ..
-    } = &suite.run
-    else {
-        return Err("non-QEMU suite cannot boot".into());
-    };
-    let evidence = variant
-        .root
-        .join(format!("harts-{GUEST_CPUS}-round-{round}"));
-    fresh(&evidence)?;
+fn run_image(
+    elf: &Path,
+    evidence: &Path,
+) -> Result<(process::Outcome, std::io::Result<qmp::Shutdown>)> {
+    fresh(evidence)?;
     let firmware = Path::new(&std::env::var("QEMU_OPENSBI")?).canonicalize()?;
     let qemu = std::env::var("QEMU_RISCV64").unwrap_or("qemu-system-riscv64".into());
     let mut command = Command::new(qemu);
@@ -160,8 +154,35 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<bo
         .args(["-m", "128M", "-monitor", "none", "-nic", "none", "-bios"])
         .arg(firmware)
         .arg("-kernel")
-        .arg(&variant.elf);
-    let (mut result, shutdown) = qmp::run(command, &evidence, Duration::from_secs(120))?;
+        .arg(elf);
+    qmp::run(command, evidence, Duration::from_secs(120))
+}
+
+/// Execute an already-linked image without interpreting its guest outcome.
+/// The scenario owner, not the launcher, decides whether the evidence passes.
+pub fn observe(elf: PathBuf, evidence: PathBuf) -> Result<()> {
+    let elf = elf.canonicalize()?;
+    let (result, shutdown) = run_image(&elf, &evidence)?;
+    let mut value = serde_json::to_value(&result)?;
+    value["qmp_shutdown"] = match shutdown {
+        Ok(receipt) => serde_json::to_value(receipt)?,
+        Err(error) => serde_json::json!({"error": error.to_string()}),
+    };
+    value["platform_sha256"] = digest(&elf)?.into();
+    json(&evidence.join("observation.json"), &value)
+}
+
+fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<bool> {
+    let Run::Qemu {
+        expects, distinct, ..
+    } = &suite.run
+    else {
+        return Err("non-QEMU suite cannot boot".into());
+    };
+    let evidence = variant
+        .root
+        .join(format!("harts-{GUEST_CPUS}-round-{round}"));
+    let (mut result, shutdown) = run_image(&variant.elf, &evidence)?;
     let log = fs::read(evidence.join("serial.log"))?;
     let details = match std::str::from_utf8(&log) {
         Ok(log) => verify::check(log, expects, distinct.as_ref())?,

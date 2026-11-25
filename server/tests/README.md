@@ -34,6 +34,21 @@ complete serial assertions, one QMP `SHUTDOWN` event with `guest=true` and
 `reason=guest-shutdown`, and a clean QEMU exit. The serial log, QMP transcript
 and verdict are preserved with the candidate revision.
 
+The Boot owner also exercises a terminal trap during the BSS clear. After a
+normal boot-handoff run, `target/entry/boot/fault.sh` verifies the recorded ELF
+hash and copies that ELF. It checks the actual instruction sequence and replaces
+only the increment immediately following the first BSS store with an illegal
+instruction. The unmodified ELF remains the normal-boot evidence. The fault
+case requires the exact illegal-instruction PC, the interrupted major stack
+pointer, a complete terminal diagnostic, and a matching native QMP shutdown.
+Its image, injection record, serial output and verdict are kept beside the
+normal result. No production hook or extra linker symbols are used. Run it
+against the selected output plan with `PLAN` set to the discovery JSON:
+
+```sh
+bash server/tests/target/entry/boot/fault.sh "$runner" "$evidence"
+```
+
 The Target workflow runs affected owner-local `suite.json` scenarios on four virtual CPUs and uploads their evidence. Ordinary boots enter on the
 firmware-selected CPU. The RV64 cross-Hart scenario and both UEFI board fixtures start a second participant.
 
