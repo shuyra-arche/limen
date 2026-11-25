@@ -1,15 +1,15 @@
-use core::{cell::Cell, ptr::NonNull};
+use core::ptr::NonNull;
 
 use crate::sync::{HeldLockSet, TurnLock};
 
 use super::{
-    Error, GroupId, Pool, SourceError,
-    group::{Slot, State},
+    Error, GroupId, GroupRecord, Pool, SourceError,
+    group::{Completion, Slot, SlotState, State},
     with_turn,
 };
 
 pub(super) struct Claim<'pool, 'storage, T> {
-    pool: &'pool Pool<'storage, T>,
+    pub(super) pool: &'pool Pool<'storage, T>,
     pub(super) group: GroupId,
     pub(super) index: usize,
     slot: NonNull<Slot<T>>,
@@ -35,16 +35,41 @@ impl<'pool, 'storage, T> Claim<'pool, 'storage, T> {
         }
     }
 
-    // The caller holds the originating Pool Turn.
-    pub(super) fn state(&self) -> &Cell<State> {
+    // State transitions require the originating Turn or the unique right
+    // to publish the destructor's completion.
+    pub(super) fn state(&self) -> &SlotState {
         // The token holds the original Pool and the fixed, live slot.
         unsafe { &self.slot.as_ref().state }
     }
 
-    fn value(&self) -> *mut T {
+    pub(super) fn value(&self) -> *mut T {
         // The linear token gives exclusive value access. Inactive slots are
         // never exposed as &T and the state field is disjoint.
         unsafe { self.slot.as_ref().value.get().cast::<T>() }
+    }
+
+    pub(super) fn destroy(self, from: State) -> Result<Vacant<'pool, 'storage, T>, (Self, Error)> {
+        let completion = match with_turn(&self.pool.state, |directory| {
+            let slot = self.state();
+            assert_eq!(slot.get(), from);
+            slot.set(State::Reclaiming);
+            directory.next_completion.take()
+        }) {
+            Ok(completion) => completion,
+            Err(error) => return Err((self, error.into())),
+        };
+        let vacant = Vacant {
+            pool: self.pool,
+            group: self.group,
+            index: self.index,
+            completion,
+        };
+        // The unique claim excludes all borrows and a second destroyer.
+        unsafe { self.value().drop_in_place() };
+        // This is the final mapped-slot access. A recovery worker may release
+        // the slot, and the group may shut, before the receipt is returned.
+        self.state().complete_destruction(completion);
+        Ok(vacant)
     }
 }
 
@@ -58,11 +83,17 @@ pub struct Prepared<'pool, 'storage, T>(Claim<'pool, 'storage, T>);
 
 /// The consumer's unique typed object. Borrowing does not leave this owner.
 #[must_use = "the original owner must destroy and settle this object"]
-pub struct Occupied<'pool, 'storage, T>(Claim<'pool, 'storage, T>);
+pub struct Occupied<'pool, 'storage, T>(pub(super) Claim<'pool, 'storage, T>);
 
-/// The original object has been destroyed. Its slot stays claimed until settled.
-#[must_use = "the original owner must release this destroyed slot"]
-pub struct Vacant<'pool, 'storage, T>(Claim<'pool, 'storage, T>);
+/// Direct receipt for one completed destructor. The Pool can also recover
+/// the slot independently. This receipt keeps no pointer to the slot's bytes.
+#[must_use = "release the slot directly or let the Pool recover it"]
+pub struct Vacant<'pool, 'storage, T> {
+    pool: &'pool Pool<'storage, T>,
+    group: GroupId,
+    index: usize,
+    completion: Completion,
+}
 
 impl<'pool, 'storage, T> Reservation<'pool, 'storage, T> {
     /// Write a supported value into the final slot. The Pool layout bounds
@@ -74,9 +105,12 @@ impl<'pool, 'storage, T> Reservation<'pool, 'storage, T> {
     }
 
     pub fn cancel(self) -> Result<(), (Self, Error)> {
-        self.0
-            .pool
-            .release(&self.0, State::Reserved)
+        let result = with_turn(&self.0.pool.state, |directory| {
+            directory.release(self.0.group, self.0.index, State::Reserved)
+        });
+        result
+            .map_err(Error::from)
+            .flatten()
             .map_err(|error| (self, error))
     }
 }
@@ -139,12 +173,10 @@ impl<'pool, 'storage, T> Prepared<'pool, 'storage, T> {
     pub fn destroy(self) -> Result<Reservation<'pool, 'storage, T>, (Self, Error)> {
         // Check the ordinary execution context before running a destructor.
         // The original preparation retains exclusive ownership throughout.
-        if let Err(error) = self
-            .0
-            .pool
-            .transition(&self.0, State::Reserved, State::Reserved)
-        {
-            return Err((self, error));
+        if let Err(error) = with_turn(&self.0.pool.state, |_| {
+            assert_eq!(self.0.state().get(), State::Reserved);
+        }) {
+            return Err((self, error.into()));
         }
         unsafe { self.0.value().drop_in_place() };
         Ok(Reservation(self.0))
@@ -159,25 +191,81 @@ impl<'pool, 'storage, T> Occupied<'pool, 'storage, T> {
     }
 
     pub fn destroy(self) -> Result<Vacant<'pool, 'storage, T>, (Self, Error)> {
-        if let Err(error) = self
-            .0
-            .pool
-            .transition(&self.0, State::Occupied, State::Reclaiming)
-        {
-            return Err((self, error));
-        }
-        // The Turn was released and this token owns all references to T.
-        // A reclaiming slot cannot be acquired until this destructor returns.
-        unsafe { self.0.value().drop_in_place() };
-        Ok(Vacant(self.0))
+        self.0
+            .destroy(State::Occupied)
+            .map_err(|(claim, error)| (Self(claim), error))
     }
 }
 
 impl<T> Vacant<'_, '_, T> {
+    /// Settle the original slot directly under the Pool Turn. If recovery
+    /// already settled it, return Stale without touching any later lifetime.
+    /// Exhausting the Pool's non-reusing numbers leaves scan recovery available.
     pub fn release(self) -> Result<(), (Self, Error)> {
-        self.0
-            .pool
-            .release(&self.0, State::Reclaiming)
+        if self.completion == Completion::UNTRACKED {
+            return Err((self, SourceError::IdentityExhausted.into()));
+        }
+        let result = with_turn(&self.pool.state, |directory| {
+            directory.release(self.group, self.index, State::Destroyed(self.completion))
+        });
+        result
+            .map_err(Error::from)
+            .flatten()
             .map_err(|error| (self, error))
+    }
+}
+
+/// A recovery pass needs only the Pool root and a fresh cursor.
+#[derive(Default)]
+pub struct ReleaseCursor {
+    group: usize,
+    slot: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReleaseProgress {
+    Released,
+    More,
+    End,
+}
+
+impl<T> Pool<'_, T> {
+    /// Settle at most one destroyed slot. Inspect at most `budget` directory
+    /// steps or slots (capped at 64). End resets the cursor for another pass.
+    /// A failed acquisition leaves the cursor intact.
+    pub fn release_destroyed(
+        &self,
+        cursor: &mut ReleaseCursor,
+        budget: usize,
+    ) -> Result<ReleaseProgress, Error> {
+        Ok(with_turn(&self.state, |state| {
+            for _ in 0..budget.min(64) {
+                if cursor.group >= state.count {
+                    *cursor = ReleaseCursor::default();
+                    return ReleaseProgress::End;
+                }
+                if let Some(GroupRecord::Open(group)) = &state.groups[cursor.group].0
+                    && cursor.slot < group.geometry.slots
+                {
+                    let index = cursor.slot;
+                    cursor.slot += 1;
+                    // The Turn keeps this mapping live. Acquire observes the
+                    // destructor's normal completion before the slot is reused.
+                    if let State::Destroyed(completion) =
+                        unsafe { group.slot(index).as_ref().state.get() }
+                    {
+                        let id = GroupId(cursor.group, group.material.allocation.id());
+                        state
+                            .release(id, index, State::Destroyed(completion))
+                            .expect("completion observed under the same Turn");
+                        return ReleaseProgress::Released;
+                    }
+                } else {
+                    cursor.group += 1;
+                    cursor.slot = 0;
+                }
+            }
+            ReleaseProgress::More
+        })?)
     }
 }

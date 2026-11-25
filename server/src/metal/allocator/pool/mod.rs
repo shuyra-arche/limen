@@ -2,17 +2,22 @@
 
 mod group;
 mod place;
+mod reference;
+mod retirement;
 
 use core::mem::MaybeUninit;
 
 use crate::sync::{HeldLockSet, LockPlan, PlanError, TurnLock};
 
-use super::{Allocation, Error as SourceError, with_turn};
-use group::{Chain, Group, Links, State};
+use super::{Allocation, AllocationId, Error as SourceError, with_turn};
+use group::{Chain, Completion, Group, Links, State};
 
 pub use group::{Geometry, Supply};
 use place::Claim;
-pub use place::{Occupied, Prepared, Reservation, Vacant};
+pub use place::{Occupied, Prepared, ReleaseCursor, ReleaseProgress, Reservation, Vacant};
+pub use reference::{Detached, REFERENCE_LIMIT, Reclaim, Reference, Stable, StableOwner};
+use retirement::GroupRecord;
+pub use retirement::Retirement;
 
 /// Largest value supported by this increment's by-value initializer.
 pub const VALUE_BYTES: usize = 512;
@@ -26,6 +31,8 @@ pub enum Error {
     Material,
     Receiver,
     Full,
+    Busy,
+    References,
     Stale,
     Source(SourceError),
 }
@@ -36,13 +43,13 @@ impl From<SourceError> for Error {
     }
 }
 
-/// Fixed position in this Pool's directory. Installed groups persist for the
-/// pool lifetime. No directory position is reused while this qualifier exists.
+/// A fixed directory position qualified by its original Allocation.
+/// A returned position is not reused in this fixed pool.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GroupId(usize);
+pub struct GroupId(usize, AllocationId);
 
 /// Storage supplied by the actual consumer outside its reclaimable pages.
-pub struct GroupSlot<'storage, T>(Option<Group<'storage, T>>);
+pub struct GroupSlot<'storage, T>(Option<GroupRecord<'storage, T>>);
 
 impl<T> GroupSlot<'_, T> {
     pub const EMPTY: Self = Self(None);
@@ -55,16 +62,20 @@ pub struct Pool<'storage, T> {
 struct Directory<'storage, T> {
     groups: &'storage mut [GroupSlot<'storage, T>],
     count: usize,
+    open: usize,
     bytes: usize,
     capacity: usize,
     free: usize,
+    next_completion: Completion,
     empty: Option<GroupId>,
     partial: Option<GroupId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Capacity {
+    /// Groups open to new slot claims.
     pub groups: usize,
+    /// Exact physical charge still carried by this Pool's records.
     pub bytes: usize,
     pub slots: usize,
     pub free: usize,
@@ -81,9 +92,11 @@ impl<'storage, T> Pool<'storage, T> {
             state: TurnLock::new(Directory {
                 groups,
                 count: 0,
+                open: 0,
                 bytes: 0,
                 capacity: 0,
                 free: 0,
+                next_completion: Completion::FIRST,
                 empty: None,
                 partial: None,
             }),
@@ -97,20 +110,20 @@ impl<'storage, T> Pool<'storage, T> {
     ///
     /// Supplied bytes must be exclusively writable with no live objects or
     /// aliases. A slice of the Allocation's full length must be its exact
-    /// canonical mapping in byte order. The mapping and the independent
-    /// directory and root must remain under the persistent owner's control
-    /// for the pool lifetime.
+    /// canonical mapping in byte order. Keep it under the persistent owner's
+    /// control and valid until the group has been shut. The independent
+    /// directory and root must survive all upstream return and receipt work.
     pub unsafe fn install(
         &mut self,
         allocation: &mut Option<Allocation>,
         mapping: &mut Option<&'storage mut [MaybeUninit<u8>]>,
     ) -> Result<GroupId, Error> {
         let state = self.state.get_mut();
-        let id = GroupId(state.count);
         if state.count == state.groups.len() {
             return Err(Error::Directory);
         }
         let material = allocation.as_ref().ok_or(Error::Material)?;
+        let id = GroupId(state.count, material.id());
         let storage = mapping.as_ref().ok_or(Error::Material)?;
         let physical = material.physical();
         if usize::try_from(physical.end - physical.start).ok() != Some(storage.len()) {
@@ -141,8 +154,9 @@ impl<'storage, T> Pool<'storage, T> {
             geometry,
             mapping.take().expect("checked mapping"),
         );
-        state.groups[id.0].0 = Some(group);
+        state.groups[id.0].0 = Some(GroupRecord::Open(group));
         state.count += 1;
+        state.open += 1;
         state.capacity = capacity;
         state.free += geometry.slots;
         state.bytes = bytes;
@@ -152,7 +166,7 @@ impl<'storage, T> Pool<'storage, T> {
 
     pub fn capacity(&self) -> Result<Capacity, Error> {
         Ok(with_turn(&self.state, |state| Capacity {
-            groups: state.count,
+            groups: state.open,
             bytes: state.bytes,
             slots: state.capacity,
             free: state.free,
@@ -160,13 +174,9 @@ impl<'storage, T> Pool<'storage, T> {
     }
 
     pub fn supply(&self, id: GroupId) -> Result<Supply, Error> {
-        with_turn(&self.state, |state| {
-            state
-                .groups
-                .get(id.0)
-                .and_then(|entry| entry.0.as_ref())
-                .map(Group::supply)
-                .ok_or(Error::Stale)
+        with_turn(&self.state, |state| match state.entry(id)? {
+            GroupRecord::Open(group) => Ok(group.supply()),
+            _ => Err(Error::Stale),
         })?
     }
 
@@ -228,40 +238,40 @@ impl<'storage, T> Pool<'storage, T> {
         *receiver = Some(Reservation(Claim::new(self, id, index, slot)));
         Ok(())
     }
-
-    fn transition(
-        &self,
-        claim: &Claim<'_, 'storage, T>,
-        from: State,
-        to: State,
-    ) -> Result<(), Error> {
-        with_turn(&self.state, |_| {
-            let state = claim.state();
-            assert_eq!(state.get(), from);
-            state.set(to);
-        })?;
-        Ok(())
-    }
-
-    fn release(&self, claim: &Claim<'_, 'storage, T>, expected: State) -> Result<(), Error> {
-        with_turn(&self.state, |state| {
-            let group = state.group(claim.group);
-            let before = group.chain();
-            let slot = claim.state();
-            assert_eq!(slot.get(), expected);
-            slot.set(State::Free(group.head));
-            group.head = Some(claim.index);
-            group.free += 1;
-            state.free += 1;
-            state.reclassify(claim.group, before);
-        })?;
-        Ok(())
-    }
 }
 
 impl<'storage, T> Directory<'storage, T> {
+    fn release(&mut self, id: GroupId, index: usize, expected: State) -> Result<(), Error> {
+        let GroupRecord::Open(group) = self.entry(id)? else {
+            return Err(Error::Stale);
+        };
+        let before = group.chain();
+        // The Pool Turn keeps the open group and its slot mapped.
+        let slot = unsafe { &group.slot(index).as_ref().state };
+        if slot.get() != expected {
+            return Err(Error::Stale);
+        }
+        slot.set(State::Free(group.head));
+        group.head = Some(index);
+        group.free += 1;
+        self.free += 1;
+        self.reclassify(id, before);
+        Ok(())
+    }
+
+    fn entry(&mut self, id: GroupId) -> Result<&mut GroupRecord<'storage, T>, Error> {
+        self.groups
+            .get_mut(id.0)
+            .and_then(|entry| entry.0.as_mut())
+            .filter(|entry| entry.allocation() == id.1)
+            .ok_or(Error::Stale)
+    }
+
     fn group(&mut self, id: GroupId) -> &mut Group<'storage, T> {
-        self.groups[id.0].0.as_mut().expect("published group")
+        let GroupRecord::Open(group) = self.entry(id).expect("published group") else {
+            unreachable!("only open groups have usable slots");
+        };
+        group
     }
 
     fn head(&mut self, chain: Chain) -> &mut Option<GroupId> {

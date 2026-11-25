@@ -7,8 +7,11 @@ use core::{
 use crate::{
     Physical,
     allocator::{
-        Allocation, Config, Initial,
-        pool::{Capacity, Error, Geometry, GroupSlot, Pool},
+        Allocation, Allowance, Config, Initial,
+        pool::{
+            Capacity, Error, Geometry, GroupSlot, Pool, REFERENCE_LIMIT, ReleaseCursor,
+            ReleaseProgress, Retirement, Stable,
+        },
     },
     source::bootstrap,
     sync::{Acquisition::Fast, TurnLock, Work},
@@ -30,7 +33,22 @@ const CONFIG: Config = Config {
 #[repr(align(4096))]
 struct Page([MaybeUninit<u8>; PAGE]);
 
+fn retain<R>(mut attempt: impl FnMut() -> Result<R, Error>) -> R {
+    for _ in 0..16 {
+        match attempt() {
+            Ok(reference) => return reference,
+            Err(Error::Busy) => {}
+            Err(error) => panic!("unexpected retain error: {error:?}"),
+        }
+    }
+    panic!("retain stayed Busy for 16 attempts");
+}
+
 fn supplies() -> [Option<Allocation>; 2] {
+    supply().0
+}
+
+fn supply() -> ([Option<Allocation>; 2], Allowance) {
     let mut blocks = [None, None];
     let mut allowance = None;
     bootstrap(|regions, mapping| {
@@ -53,7 +71,7 @@ fn supplies() -> [Option<Allocation>; 2] {
         .unwrap()
         .unwrap();
     });
-    blocks
+    (blocks, allowance.unwrap())
 }
 
 #[test]
@@ -397,4 +415,421 @@ fn all_unique_handles_transfer_a_send_value_between_workers() {
     });
     let capacity = pool.capacity().unwrap();
     assert_eq!(capacity.free, capacity.slots);
+}
+
+#[test]
+fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles() {
+    use crate::allocator::pool::Reclaim;
+    use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    use std::{sync::mpsc::sync_channel, thread};
+
+    struct Record<'a>(&'a AtomicUsize);
+    impl Drop for Record<'_> {
+        fn drop(&mut self) {
+            let lock = TurnLock::new(());
+            let mut work = Work::<1>::new();
+            let mut plan = work.plan();
+            plan.insert(&lock).unwrap();
+            plan.execute(Fast, |_| self.0.fetch_add(1, Relaxed))
+                .unwrap();
+        }
+    }
+
+    let [mut material, _] = supplies();
+    let mut directory = [GroupSlot::<Stable<Record<'_>>>::EMPTY];
+    let mut page = Page([MaybeUninit::uninit(); PAGE]);
+    let drops = AtomicUsize::new(0);
+    let mut pool = Pool::new(&mut directory).unwrap();
+    let group = unsafe { pool.install(&mut material, &mut Some(&mut page.0)) }.unwrap();
+    let slots = pool.capacity().unwrap().slots;
+    let mut reserved = None;
+    let mut occupied = None;
+    pool.reserve(&mut reserved).unwrap();
+    reserved
+        .take()
+        .unwrap()
+        .initialize(Stable::new(Record(&drops)))
+        .publish(&mut occupied)
+        .ok()
+        .unwrap();
+
+    let original = TurnLock::new(occupied.take().map(|object| object.stabilize()));
+    let mut work = Work::<1>::new();
+    let mut plan = work.plan();
+    plan.insert(&original).unwrap();
+    let reference = plan
+        .execute(Fast, |held| {
+            let owner = held.access(&original).unwrap().as_ref().unwrap();
+            retain(|| owner.reference())
+        })
+        .unwrap();
+    let address = ptr::from_ref(reference.get()).addr();
+    let mut copies = Vec::new();
+    for _ in 0..REFERENCE_LIMIT - 2 {
+        copies.push(retain(|| reference.try_retain()));
+    }
+    assert_eq!(reference.try_retain().err(), Some(Error::References));
+    copies.clear();
+    let mut plan = work.plan();
+    plan.insert(&original).unwrap();
+    let detached = plan
+        .execute(Fast, |held| {
+            held.access(&original).unwrap().take().unwrap().detach()
+        })
+        .unwrap();
+
+    let recovery = TurnLock::new(None::<Reclaim<'_, '_, Record<'_>>>);
+    let (release, wait) = sync_channel(0);
+    thread::scope(|scope| {
+        let old = scope.spawn(move || {
+            // A holder can still retain while the base is detached.
+            let old = retain(|| reference.try_retain());
+            assert_eq!(ptr::from_ref(old.get()).addr(), address);
+            wait.recv().unwrap();
+        });
+        let mut work = Work::<2>::new();
+        let mut plan = work.plan();
+        pool.plan(&mut plan).unwrap();
+        plan.insert(&recovery).unwrap();
+        let result = plan
+            .execute(Fast, |held| {
+                detached.claim_held(held, &recovery, |slot| slot)
+            })
+            .unwrap();
+        release.send(()).unwrap();
+        let (detached, error) = result.err().unwrap();
+        assert_eq!(error, Error::References);
+        old.join().unwrap();
+
+        assert_eq!(drops.load(Relaxed), 0);
+        assert_eq!(pool.capacity().unwrap().free, slots - 1);
+        assert_eq!(pool.shut(group), Err(Error::Busy));
+        let mut plan = work.plan();
+        pool.plan(&mut plan).unwrap();
+        plan.insert(&recovery).unwrap();
+        plan.execute(Fast, |held| {
+            detached.claim_held(held, &recovery, |slot| slot)
+        })
+        .unwrap()
+        .ok()
+        .unwrap();
+        let mut plan = work.plan();
+        plan.insert(&recovery).unwrap();
+        let reclaimed = plan
+            .execute(Fast, |held| held.access(&recovery).unwrap().take().unwrap())
+            .unwrap();
+        scope.spawn(move || {
+            let _receipt = reclaimed.destroy().ok().unwrap();
+        });
+    });
+
+    assert_eq!(drops.load(Relaxed), 1);
+    assert_eq!(pool.shut(group), Err(Error::Busy));
+    assert_eq!(pool.capacity().unwrap().free, slots - 1);
+    // The destructor's worker exited without passing back a slot token.
+    let mut cursor = ReleaseCursor::default();
+    assert_eq!(
+        pool.release_destroyed(&mut cursor, 0),
+        Ok(ReleaseProgress::More)
+    );
+    assert_eq!(
+        pool.release_destroyed(&mut cursor, 1),
+        Ok(ReleaseProgress::Released)
+    );
+    pool.reserve(&mut reserved).unwrap();
+    reserved
+        .take()
+        .unwrap()
+        .initialize(Stable::new(Record(&drops)))
+        .publish(&mut occupied)
+        .ok()
+        .unwrap();
+    let owner = occupied.take().unwrap().stabilize();
+    let reference = retain(|| owner.reference());
+    assert_eq!(ptr::from_ref(reference.get()).addr(), address);
+    drop(reference);
+    let mut reclaim = None;
+    owner.detach().claim(&mut reclaim).ok().unwrap();
+    reclaim
+        .unwrap()
+        .destroy()
+        .ok()
+        .unwrap()
+        .release()
+        .ok()
+        .unwrap();
+    assert_eq!(drops.load(Relaxed), 2);
+    assert_eq!(pool.capacity().unwrap().free, slots);
+}
+
+#[test]
+fn recovery_releases_an_ordinary_object_after_its_destroyer_exits() {
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+    struct Record<'a>(&'a AtomicUsize);
+
+    impl Drop for Record<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Relaxed);
+        }
+    }
+
+    let [mut material, _] = supplies();
+    let mut directory = [GroupSlot::<Record<'_>>::EMPTY];
+    let mut page = Page([MaybeUninit::uninit(); PAGE]);
+    let drops = AtomicUsize::new(0);
+    let mut pool = Pool::new(&mut directory).unwrap();
+    let group = unsafe { pool.install(&mut material, &mut Some(&mut page.0)) }.unwrap();
+    let slots = pool.capacity().unwrap().slots;
+    let mut reserved = None;
+    let mut occupied = None;
+    pool.reserve(&mut reserved).unwrap();
+    reserved
+        .unwrap()
+        .initialize(Record(&drops))
+        .publish(&mut occupied)
+        .ok()
+        .unwrap();
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                let _receipt = occupied.unwrap().destroy().ok().unwrap();
+            })
+            .join()
+            .unwrap();
+    });
+
+    assert_eq!(pool.shut(group), Err(Error::Busy));
+    assert_eq!(pool.capacity().unwrap().free, slots - 1);
+    assert_eq!(
+        pool.release_destroyed(&mut ReleaseCursor::default(), 1),
+        Ok(ReleaseProgress::Released)
+    );
+    assert_eq!(pool.capacity().unwrap().free, slots);
+    assert_eq!(drops.load(Relaxed), 1);
+}
+
+#[test]
+fn a_direct_completion_beyond_the_scan_budget_cannot_release_a_later_object() {
+    let [mut material, _] = supplies();
+    let mut directory = [GroupSlot::<Stable<u64>>::EMPTY];
+    let mut page = Page([MaybeUninit::uninit(); PAGE]);
+    let mut pool = Pool::new(&mut directory).unwrap();
+    let group = unsafe { pool.install(&mut material, &mut Some(&mut page.0)) }.unwrap();
+    let slots = pool.capacity().unwrap().slots;
+    assert!(slots > 64);
+    let mut prefix = [const { None }; 64];
+    for place in &mut prefix {
+        pool.reserve(place).unwrap();
+    }
+    let destroy = || {
+        let mut reserved = None;
+        let mut occupied = None;
+        let mut reclamation = None;
+        pool.reserve(&mut reserved).unwrap();
+        reserved
+            .unwrap()
+            .initialize(Stable::new(37))
+            .publish(&mut occupied)
+            .ok()
+            .unwrap();
+        let owner = occupied.unwrap().stabilize();
+        let reference = retain(|| owner.reference());
+        let address = ptr::from_ref(reference.get()).addr();
+        drop(reference);
+        owner.detach().claim(&mut reclamation).ok().unwrap();
+        (address, reclamation.unwrap().destroy().ok().unwrap())
+    };
+    let (address, direct) = destroy();
+    assert_eq!(
+        pool.release_destroyed(&mut ReleaseCursor::default(), 64),
+        Ok(ReleaseProgress::More)
+    );
+    assert_eq!(pool.capacity().unwrap().free, slots - 65);
+    direct.release().ok().unwrap();
+    assert_eq!(pool.capacity().unwrap().free, slots - 64);
+
+    let (original, old) = destroy();
+    assert_eq!(original, address);
+    let mut cursor = ReleaseCursor::default();
+    assert_eq!(
+        pool.release_destroyed(&mut cursor, 64),
+        Ok(ReleaseProgress::More)
+    );
+    assert_eq!(
+        pool.release_destroyed(&mut cursor, 1),
+        Ok(ReleaseProgress::Released)
+    );
+    let (reused, current) = destroy();
+    assert_eq!(reused, address);
+    let (old, error) = old.release().err().unwrap();
+    assert_eq!(error, Error::Stale);
+    assert_eq!(pool.capacity().unwrap().free, slots - 65);
+    current.release().ok().unwrap();
+    for place in prefix {
+        place.unwrap().cancel().ok().unwrap();
+    }
+    pool.shut(group).unwrap();
+    assert_eq!(old.release().err().unwrap().1, Error::Stale);
+}
+
+#[test]
+fn a_destructor_with_unknown_outcome_does_not_make_the_slot_reusable() {
+    struct Fault;
+
+    impl Drop for Fault {
+        fn drop(&mut self) {
+            panic!("destructor fault");
+        }
+    }
+
+    let [mut material, _] = supplies();
+    let mut directory = [GroupSlot::<Fault>::EMPTY];
+    let mut page = Page([MaybeUninit::uninit(); PAGE]);
+    let mut pool = Pool::new(&mut directory).unwrap();
+    let group = unsafe { pool.install(&mut material, &mut Some(&mut page.0)) }.unwrap();
+    let slots = pool.capacity().unwrap().slots;
+    let mut reserved = None;
+    let mut occupied = None;
+    pool.reserve(&mut reserved).unwrap();
+    reserved
+        .unwrap()
+        .initialize(Fault)
+        .publish(&mut occupied)
+        .ok()
+        .unwrap();
+    assert!(std::thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                let _receipt = occupied.unwrap().destroy().ok().unwrap();
+            })
+            .join()
+            .is_err()
+    }));
+
+    let mut cursor = ReleaseCursor::default();
+    for _ in 0..slots {
+        assert_eq!(
+            pool.release_destroyed(&mut cursor, 1),
+            Ok(ReleaseProgress::More)
+        );
+    }
+    assert_eq!(
+        pool.release_destroyed(&mut cursor, 2),
+        Ok(ReleaseProgress::End)
+    );
+    assert_eq!(pool.capacity().unwrap().free, slots - 1);
+    assert_eq!(pool.shut(group), Err(Error::Busy));
+}
+
+#[test]
+fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
+    use crate::allocator::{Error as SourceError, Pending};
+
+    let ([mut a, mut b], allowance) = supply();
+    let region = a.as_ref().unwrap().region();
+    let source = allowance.source();
+    let mut directory = [const { GroupSlot::<u64>::EMPTY }; 2];
+    let mut left = Page([MaybeUninit::uninit(); PAGE]);
+    let mut right = Page([MaybeUninit::uninit(); PAGE]);
+    let mut pool = Pool::new(&mut directory).unwrap();
+    let (original, b) = {
+        let a = unsafe { pool.install(&mut a, &mut Some(&mut left.0)) }.unwrap();
+        let b = unsafe { pool.install(&mut b, &mut Some(&mut right.0)) }.unwrap();
+        let original = pool.supply(a).unwrap();
+        let pool = &pool;
+        std::thread::scope(|scope| {
+            scope
+                .spawn(move || {
+                    let physical = pool.shut(a).unwrap();
+                    assert_eq!(pool.shut(a), Ok(physical));
+                    assert_eq!(pool.supply(a), Err(Error::Stale));
+                    assert_eq!(pool.finish_return(a, Fast), Err(Error::Busy));
+                })
+                .join()
+                .unwrap();
+        });
+        (original, b)
+    };
+    let mut reserved = None;
+    pool.reserve(&mut reserved).unwrap();
+    assert_eq!(pool.shut(b), Err(Error::Busy));
+    assert_eq!(pool.capacity().unwrap().groups, 1);
+    assert_eq!(pool.capacity().unwrap().bytes, 2 * PAGE);
+    assert_eq!(allowance.balance().unwrap().occupied, 2 * PAGE as u64);
+    assert_eq!(source.pending(region, &mut 0, 64), Ok(Pending::End));
+
+    let physical = {
+        let Retirement::Shutting(a, physical) = pool.retirement(&mut 0, 1).unwrap() else {
+            panic!("expected the original shut group from the Pool root");
+        };
+        // The fixture is the sole mapping owner and no slot from A escaped.
+        unsafe { pool.begin_return(a, Fast) }.unwrap();
+        physical
+    };
+    assert_eq!(
+        source.pending(region, &mut 0, 64),
+        Ok(Pending::Found(original.retirement))
+    );
+    let done = source.finish_return(original.retirement, Fast).unwrap();
+    assert_eq!(
+        source.acknowledge(original.retirement),
+        Err(SourceError::Protection)
+    );
+    assert_eq!(source.finish_return(original.retirement, Fast), Ok(done));
+    assert_eq!(done.physical, physical);
+    assert_eq!(done.allocation, original.allocation);
+    assert_eq!(pool.capacity().unwrap().bytes, 2 * PAGE);
+    assert_eq!(allowance.balance().unwrap().occupied, PAGE as u64);
+    let Retirement::Returning(a) = pool.retirement(&mut 0, 1).unwrap() else {
+        panic!("expected the handed-off group from the Pool root");
+    };
+    let (left, right) = std::thread::scope(|scope| {
+        let left = scope.spawn(|| pool.finish_return(a, crate::sync::Acquisition::Slow));
+        let right = scope.spawn(|| pool.finish_return(a, crate::sync::Acquisition::Slow));
+        (left.join().unwrap(), right.join().unwrap())
+    });
+    assert_eq!(left, Ok(done));
+    assert_eq!(right, Ok(done));
+    assert_eq!(pool.finish_return(a, Fast), Ok(done));
+    assert_eq!(
+        source.acknowledge(original.retirement),
+        Err(SourceError::Stale)
+    );
+    assert_eq!(pool.capacity().unwrap().bytes, PAGE);
+    let mut cursor = 0;
+    assert_eq!(pool.retirement(&mut cursor, 1), Ok(Retirement::More));
+    assert_eq!(pool.retirement(&mut cursor, 1), Ok(Retirement::End));
+    assert_eq!(cursor, 0);
+
+    reserved.take().unwrap().cancel().ok().unwrap();
+    pool.shut(b).unwrap();
+    assert_eq!(pool.reserve(&mut reserved), Err(Error::Full));
+    unsafe { pool.begin_return(b, Fast) }.unwrap();
+    pool.finish_return(b, Fast).unwrap();
+    assert_eq!(
+        pool.capacity().unwrap(),
+        Capacity {
+            groups: 0,
+            bytes: 0,
+            slots: 0,
+            free: 0
+        }
+    );
+    assert_eq!(allowance.balance().unwrap().occupied, 0);
+}
+
+#[test]
+fn an_id_from_another_pool_cannot_close_a_same_index_group() {
+    let [mut a, mut b] = supplies();
+    let mut left = [GroupSlot::<u64>::EMPTY];
+    let mut right = [GroupSlot::<u64>::EMPTY];
+    let mut old = Page([MaybeUninit::uninit(); PAGE]);
+    let mut new = Page([MaybeUninit::uninit(); PAGE]);
+    let mut first = Pool::new(&mut left).unwrap();
+    let mut second = Pool::new(&mut right).unwrap();
+    let original = unsafe { first.install(&mut a, &mut Some(&mut old.0)) }.unwrap();
+    unsafe { second.install(&mut b, &mut Some(&mut new.0)) }.unwrap();
+    assert_eq!(second.shut(original), Err(Error::Stale));
+    assert_eq!(second.capacity().unwrap().groups, 1);
 }

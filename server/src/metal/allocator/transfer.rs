@@ -65,6 +65,10 @@ impl Allocation {
         self.physical
     }
 
+    pub(super) fn source(&self) -> &'static Allocator {
+        self.source
+    }
+
     /// The prepaid Return location belongs to the upstream source's table.
     /// Learning its identity does not authorize handoff or completion.
     pub(super) fn return_position(&self) -> Result<ReturnId, Error> {
@@ -111,8 +115,14 @@ pub(super) struct AllocationRecord {
 #[derive(Clone, Copy)]
 pub(super) enum ReturnRecord {
     Reserved(AllocationId),
-    Pending(AllocationId, AllowanceId),
-    Done(Returned),
+    Pending(AllocationId, AllowanceId, ReceiptOwner),
+    Done(Returned, ReceiptOwner),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum ReceiptOwner {
+    Caller,
+    Pool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -450,6 +460,10 @@ impl Allocator {
         Ok(())
     }
 
+    pub(super) fn return_state(&self, id: ReturnId) -> Result<&TurnLock<State>, Error> {
+        Ok(&self.region(id.region)?.state)
+    }
+
     /// Move the exact retired input to its prepaid Return slot and record that
     /// identity in the original owner's durable receipt position before releasing
     /// the Region. Pending discovery can then finish even if the caller loses
@@ -469,21 +483,8 @@ impl Allocator {
             }
             let region = self.region(allocation.id.region)?;
             with_turn(&region.state, |state| {
-                let record = state.active(allocation)?;
-                let retirement = state
-                    .returns
-                    .get_mut(record.retirement.key)
-                    .ok_or(Error::Stale)?;
-                if !matches!(*retirement, ReturnRecord::Reserved(id) if id == allocation.id) {
-                    return Err(Error::Stale);
-                }
-                *retirement = ReturnRecord::Pending(allocation.id, record.allowance);
-                state
-                    .allocations
-                    .get_mut(allocation.id.key)
-                    .expect("active")
-                    .phase = Phase::Returning;
-                *receipt = Some(record.retirement);
+                // The original Retired input certifies all prior uses ended.
+                *receipt = Some(unsafe { state.begin_retired(allocation, ReceiptOwner::Caller) }?);
                 Ok(())
             })?
         })();
@@ -496,8 +497,8 @@ impl Allocator {
         let region = self.region(id.region)?;
         let allowance = match with_turn(&region.state, |state| state.returns.get(id.key).copied())?
         {
-            Some(ReturnRecord::Pending(_, allowance)) => allowance,
-            Some(ReturnRecord::Done(done)) => return Ok(done),
+            Some(ReturnRecord::Pending(_, allowance, _)) => allowance,
+            Some(ReturnRecord::Done(done, _)) => return Ok(done),
             _ => return Err(Error::Stale),
         };
         let slot = self.slot(allowance)?;
@@ -507,11 +508,13 @@ impl Allocator {
         plan.insert(slot).expect("original Allowance");
         plan.execute(mode, |held| {
             let state = held.access(&region.state).expect("return Region");
-            let allocation = match state.returns.get(id.key) {
-                Some(ReturnRecord::Pending(allocation, original)) if *original == allowance => {
-                    *allocation
+            let (allocation, owner) = match state.returns.get(id.key) {
+                Some(ReturnRecord::Pending(allocation, original, owner))
+                    if *original == allowance =>
+                {
+                    (*allocation, *owner)
                 }
-                Some(ReturnRecord::Done(done)) => return Ok(*done),
+                Some(ReturnRecord::Done(done, _)) => return Ok(*done),
                 _ => return Err(Error::Stale),
             };
             let record = *state.allocations.get(allocation.key).ok_or(Error::Stale)?;
@@ -540,7 +543,8 @@ impl Allocator {
                 allocation,
                 physical: record.physical,
             };
-            *state.returns.get_mut(id.key).expect("original Return") = ReturnRecord::Done(done);
+            *state.returns.get_mut(id.key).expect("original Return") =
+                ReturnRecord::Done(done, owner);
             let refund = held
                 .access(slot)
                 .expect("original Allowance")
@@ -581,15 +585,50 @@ impl Allocator {
     }
 
     /// The trusted original receipt owner ends the independent history.
+    /// A Pool-owned receipt can only be cleared in its joint reconciliation.
     pub fn acknowledge(&self, id: ReturnId) -> Result<(), Error> {
-        let region = self.region(id.region)?;
-        with_turn(&region.state, |state| {
-            if !matches!(state.returns.get(id.key), Some(ReturnRecord::Done(_))) {
-                return Err(Error::Stale);
-            }
-            remove(&mut state.returns, id.key);
-            Ok(())
+        with_turn(self.return_state(id)?, |state| {
+            state.acknowledge_return(id, ReceiptOwner::Caller)
         })?
+    }
+}
+
+impl State {
+    /// The caller holds the original Region and proves all mapped, software
+    /// and hardware uses of this Allocation have ended.
+    pub(super) unsafe fn begin_retired(
+        &mut self,
+        allocation: &Allocation,
+        owner: ReceiptOwner,
+    ) -> Result<ReturnId, Error> {
+        let record = self.active(allocation)?;
+        let retirement = self
+            .returns
+            .get_mut(record.retirement.key)
+            .ok_or(Error::Stale)?;
+        if !matches!(*retirement, ReturnRecord::Reserved(id) if id == allocation.id) {
+            return Err(Error::Stale);
+        }
+        *retirement = ReturnRecord::Pending(allocation.id, record.allowance, owner);
+        self.allocations
+            .get_mut(allocation.id.key)
+            .expect("active")
+            .phase = Phase::Returning;
+        Ok(record.retirement)
+    }
+
+    pub(super) fn acknowledge_return(
+        &mut self,
+        id: ReturnId,
+        owner: ReceiptOwner,
+    ) -> Result<(), Error> {
+        match self.returns.get(id.key) {
+            Some(ReturnRecord::Done(_, original)) if *original == owner => {}
+            Some(ReturnRecord::Done(..)) => return Err(Error::Protection),
+            _ => return Err(Error::Stale),
+        }
+        remove(&mut self.returns, id.key);
+        Ok(())
     }
 }
 
