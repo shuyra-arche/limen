@@ -1,9 +1,10 @@
 use core::{
     alloc::Layout,
-    cell::{Cell, UnsafeCell},
+    cell::UnsafeCell,
     marker::PhantomData,
     mem::MaybeUninit,
     ptr::NonNull,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use super::super::{Allocation, AllocationId, ReturnId};
@@ -15,13 +16,55 @@ pub(super) enum State {
     Reserved,
     Occupied,
     Reclaiming,
+    Destroyed,
 }
 
-/// State can change under the Pool Turn while another slot's object is
-/// initialized, borrowed or destroyed. Neither operation borrows the group
-/// bytes as an exclusive slice after publication.
+/// The Pool Turn protects state transitions and the free chain. The unique
+/// reclaimer publishes Destroyed with Release after the lock-free destructor.
+pub(super) struct SlotState(AtomicUsize);
+
+impl SlotState {
+    fn new(state: State) -> Self {
+        Self(AtomicUsize::new(Self::encode(state)))
+    }
+
+    fn encode(state: State) -> usize {
+        match state {
+            State::Free(None) => 0,
+            State::Reserved => 1,
+            State::Occupied => 2,
+            State::Reclaiming => 3,
+            State::Destroyed => 4,
+            // Slot indices are bounded by the validated Layout array size.
+            State::Free(Some(next)) => next + 5,
+        }
+    }
+
+    pub(super) fn get(&self) -> State {
+        match self.0.load(Ordering::Acquire) {
+            0 => State::Free(None),
+            1 => State::Reserved,
+            2 => State::Occupied,
+            3 => State::Reclaiming,
+            4 => State::Destroyed,
+            next => State::Free(Some(next - 5)),
+        }
+    }
+
+    pub(super) fn set(&self, state: State) {
+        self.0.store(Self::encode(state), Ordering::Relaxed);
+    }
+
+    pub(super) fn complete_destruction(&self) {
+        self.0
+            .store(Self::encode(State::Destroyed), Ordering::Release);
+    }
+}
+
+/// Neither a slot transition nor an object access borrows the group bytes
+/// as an exclusive slice after publication.
 pub(super) struct Slot<T> {
-    pub(super) state: Cell<State>,
+    pub(super) state: SlotState,
     pub(super) value: UnsafeCell<MaybeUninit<T>>,
 }
 
@@ -104,7 +147,8 @@ impl<'storage, T> Group<'storage, T> {
             // MaybeUninit<T> is valid, and no group-size or T-size temporary
             // needs to occupy the bootstrap stack.
             unsafe {
-                (&raw mut (*slots.as_ptr().add(index)).state).write(Cell::new(State::Free(next)));
+                (&raw mut (*slots.as_ptr().add(index)).state)
+                    .write(SlotState::new(State::Free(next)));
             }
         }
     }

@@ -15,8 +15,12 @@ use group::{Chain, Group, Links, State};
 pub use group::{Geometry, Supply};
 use place::Claim;
 pub use place::{Occupied, Prepared, Reservation, Vacant};
-pub use reference::{Detached, REFERENCE_LIMIT, Reclaim, Reference, Stable, StableOwner};
+pub use reference::{
+    Detached, REFERENCE_LIMIT, Reclaim, Reference, ReleaseCursor, ReleaseProgress, Stable,
+    StableOwner,
+};
 use retirement::GroupRecord;
+pub use retirement::Retirement;
 
 /// Largest value supported by this increment's by-value initializer.
 pub const VALUE_BYTES: usize = 512;
@@ -252,21 +256,26 @@ impl<'storage, T> Pool<'storage, T> {
 
     fn release(&self, claim: &Claim<'_, 'storage, T>, expected: State) -> Result<(), Error> {
         with_turn(&self.state, |state| {
-            let group = state.group(claim.group);
-            let before = group.chain();
-            let slot = claim.state();
-            assert_eq!(slot.get(), expected);
-            slot.set(State::Free(group.head));
-            group.head = Some(claim.index);
-            group.free += 1;
-            state.free += 1;
-            state.reclassify(claim.group, before);
+            state.release(claim.group, claim.index, expected)
         })?;
         Ok(())
     }
 }
 
 impl<'storage, T> Directory<'storage, T> {
+    fn release(&mut self, id: GroupId, index: usize, expected: State) {
+        let group = self.group(id);
+        let before = group.chain();
+        // The Pool Turn keeps the open group and its slot mapped.
+        let slot = unsafe { &group.slot(index).as_ref().state };
+        assert_eq!(slot.get(), expected);
+        slot.set(State::Free(group.head));
+        group.head = Some(index);
+        group.free += 1;
+        self.free += 1;
+        self.reclassify(id, before);
+    }
+
     fn entry(&mut self, id: GroupId) -> Result<&mut GroupRecord<'storage, T>, Error> {
         self.groups
             .get_mut(id.0)

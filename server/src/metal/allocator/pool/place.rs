@@ -1,10 +1,10 @@
-use core::{cell::Cell, ptr::NonNull};
+use core::ptr::NonNull;
 
 use crate::sync::{HeldLockSet, TurnLock};
 
 use super::{
     Error, GroupId, Pool, SourceError,
-    group::{Slot, State},
+    group::{Slot, SlotState, State},
     with_turn,
 };
 
@@ -35,8 +35,9 @@ impl<'pool, 'storage, T> Claim<'pool, 'storage, T> {
         }
     }
 
-    // The caller holds the originating Pool Turn.
-    pub(super) fn state(&self) -> &Cell<State> {
+    // State transitions require the originating Turn or the unique right
+    // to publish the destructor's completion.
+    pub(super) fn state(&self) -> &SlotState {
         // The token holds the original Pool and the fixed, live slot.
         unsafe { &self.slot.as_ref().state }
     }

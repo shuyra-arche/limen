@@ -1,6 +1,8 @@
 use crate::sync::{Acquisition, Work};
 
-use super::super::{Allocation, AllocationId, Allocator, Physical, ReturnId, Returned};
+use super::super::{
+    Allocation, AllocationId, Allocator, Physical, ReturnId, Returned, transfer::ReceiptOwner,
+};
 use super::{
     Error, GroupId, Pool, SourceError,
     group::{Chain, Group},
@@ -49,7 +51,46 @@ impl<T> GroupRecord<'_, T> {
     }
 }
 
+/// Work rediscovered from the Pool's original directory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Retirement {
+    /// Check the original access evidence before beginning the physical return.
+    Shutting(GroupId, Physical),
+    /// The original source accepted the handoff. Its refund can be reconciled.
+    Returning(GroupId),
+    More,
+    End,
+}
+
 impl<T> Pool<'_, T> {
+    /// Advance a recovery pass by at most `budget` directory entries, capped
+    /// at 64. A failed acquisition leaves the cursor intact. End resets it
+    /// to revisit retained work. No mapped group bytes are accessed.
+    pub fn retirement(&self, cursor: &mut usize, budget: usize) -> Result<Retirement, Error> {
+        Ok(with_turn(&self.state, |state| {
+            let stop = (*cursor).saturating_add(budget.min(64)).min(state.count);
+            while *cursor < stop {
+                let index = *cursor;
+                *cursor += 1;
+                let entry = state.groups[index].0.as_ref().expect("installed group");
+                let id = GroupId(index, entry.allocation());
+                match entry {
+                    GroupRecord::Shutting(material) => {
+                        return Retirement::Shutting(id, material.allocation.physical());
+                    }
+                    GroupRecord::Returning(_) => return Retirement::Returning(id),
+                    GroupRecord::Open(_) | GroupRecord::Retired(_) => {}
+                }
+            }
+            if *cursor >= state.count {
+                *cursor = 0;
+                Retirement::End
+            } else {
+                Retirement::More
+            }
+        })?)
+    }
+
     /// Close an empty group to all future claims and withdraw its capacity.
     /// All old slot owners (including detached or reclaiming ones) must settle
     /// before the group can shut. The physical charge remains until refund.
@@ -111,7 +152,8 @@ impl<T> Pool<'_, T> {
                 GroupRecord::Shutting(material) => {
                     // The fixed identity matches the original Allocation, and
                     // the caller proved its exact access lifecycle has ended.
-                    let retirement = unsafe { region.begin_retired(&material.allocation) }?;
+                    let retirement =
+                        unsafe { region.begin_retired(&material.allocation, ReceiptOwner::Pool) }?;
                     assert_eq!(retirement, receipt.retirement);
                     *entry = GroupRecord::Returning(receipt);
                     Ok(())
@@ -164,7 +206,7 @@ impl<T> Pool<'_, T> {
                 GroupRecord::Returning(_) => {}
                 _ => unreachable!("a handed-off group never reopens"),
             }
-            region.acknowledge_return(receipt.retirement)?;
+            region.acknowledge_return(receipt.retirement, ReceiptOwner::Pool)?;
             *entry = GroupRecord::Retired(done);
             state.bytes -= (done.physical.end - done.physical.start) as usize;
             Ok(done)
