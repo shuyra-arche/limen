@@ -1,5 +1,5 @@
 use crate::{
-    entry::boot::Boot,
+    entry::boot::{Boot, Physical},
     metal::{
         boot::{self, services::Services},
         firmware::{devicetree, map::FirmwareMap},

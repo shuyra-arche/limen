@@ -1,6 +1,7 @@
 //! Major CPU handoff. Metal installs the kernel stack and exception entry before
 //! calling the common admission gate. The trusted image receives Boot exactly once.
 mod handoff;
+mod physical;
 use crate::metal::boot::major;
 use core::fmt::Write;
 
@@ -13,12 +14,36 @@ pub use crate::metal::firmware::psci::Conduit;
 pub use crate::metal::firmware::uefi::{DeviceTree, Loader, major};
 pub use handoff::Boot;
 pub use major::stack_range;
+pub use physical::{Condition, Exclusion, Exclusions, Occupant, RangeError, Retirement};
 
 /// The firmware adapter supplies a stable DTB (OpenSBI) or Loader (UEFI).
 /// All referenced storage and mappings remain reserved until the consumer is done.
 pub(crate) unsafe extern "C" fn start(hart: usize, input: *const ()) -> ! {
     let boot = unsafe { major::admit(hart, input) };
+    if !boot.stacks_in_image() {
+        Services::active().reject(format_args!(
+            "FAIL Limen boot: stacks outside physical image\n"
+        ));
+    }
     unsafe { limen_platform_ready(boot) }
+}
+
+impl Boot<'_> {
+    pub fn exclusions(&self) -> Exclusions<'_> {
+        self.exclusions_for(
+            physical::extent(stack_range()),
+            physical::extent(crate::metal::boot::trap_stack_range()),
+        )
+    }
+
+    fn stacks_in_image(&self) -> bool {
+        let image = self.image();
+        physical::contains(image, physical::extent(stack_range()))
+            && physical::contains(
+                image,
+                physical::extent(crate::metal::boot::trap_stack_range()),
+            )
+    }
 }
 
 /// Obtain early output when supplied by the boot environment.

@@ -44,11 +44,19 @@ mod loader;
 use handoff::Boot;
 #[path = "../../../src/metal/firmware/map.rs"]
 mod map;
-use devicetree::memory::DtbMemory;
+use devicetree::memory::{DtbMemory, Physical, Source};
 use loader::{DeviceTree, Loader};
 use map::{FirmwareMap, FirmwareRegion, MapError};
+mod exclusions;
 #[path = "../../../src/entry/boot/handoff.rs"]
 mod handoff;
+#[path = "../../../src/entry/boot/physical.rs"]
+mod physical;
+
+const IMAGE: Physical = Physical {
+    start: 0x1000,
+    end: 0x2000,
+};
 
 #[test]
 fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
@@ -68,6 +76,7 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
     d[24..32].copy_from_slice(&2u64.to_le_bytes());
     let admit = |descriptors: &[u8], stride, version, tree: Option<&[u8]>| {
         let loader = Loader {
+            image: IMAGE,
             descriptors,
             stride,
             version,
@@ -88,6 +97,7 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
     );
     assert_eq!(admit(&descriptors.0, 48, 1, None), Some(None));
     let loader = Loader {
+        image: IMAGE,
         descriptors: &descriptors.0,
         stride: 48,
         version: 1,
@@ -165,6 +175,7 @@ fn firmware_map_rejects_bad_geometry_overlaps_and_capacity_before_handoff() {
         describe(&mut bytes.0[48..], 2, base, pages, 0);
         assert_eq!(FirmwareMap::new(&bytes.0, 48, 1, 2).err(), Some(error));
         let loader = Loader {
+            image: IMAGE,
             descriptors: &bytes.0,
             stride: 48,
             version: 1,

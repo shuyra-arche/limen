@@ -150,3 +150,9 @@ firmware reservations. q35 checks the handoff without a DTB. The Boot Host
 suite covers overlapping reservations, partial pages, absent coverage and
 conflicting UEFI types and runtime attributes.
 [Platform contracts](../../docs/platforms.md)
+
+The three board fixtures also check the real image, major and trap stacks,
+and the retained firmware inputs that their boot paths supply. Each checks
+that missing retirement evidence retains a RAM span. Host cases exercise
+overlapping claims, partial-page exclusions and the four independent
+retirement conditions for a checked physical scope.

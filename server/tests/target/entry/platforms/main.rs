@@ -44,6 +44,18 @@ mod board;
 
 #[entry]
 fn main() -> Status {
+    let loaded = match uefi::boot::open_protocol_exclusive::<uefi::proto::loaded_image::LoadedImage>(
+        uefi::boot::image_handle(),
+    ) {
+        Ok(loaded) => loaded,
+        Err(error) => return error.status(),
+    };
+    let (base, size) = loaded.info();
+    drop(loaded);
+    let start = base.addr() as u64;
+    let Some(end) = start.checked_add(size) else {
+        return Status::COMPROMISED_DATA;
+    };
     let board = match board::capture() {
         Ok(input) => input,
         Err(status) => {
@@ -54,6 +66,7 @@ fn main() -> Status {
     let map = unsafe { uefi::boot::exit_boot_services(None) };
     let meta = map.meta();
     let input = boot::Loader {
+        image: boot::Physical { start, end },
         descriptors: map.buffer(),
         stride: meta.desc_size,
         version: meta.desc_version,
@@ -68,6 +81,51 @@ fn main() -> Status {
 extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     assert_eq!(boot.hart(), board::hart());
     let map = boot.firmware_map().expect("final UEFI map");
+    let early = boot.exclusions();
+    let major = boot::stack_range();
+    let minor = MINOR.stack_range();
+    let image = boot.image();
+    assert!(image.start <= minor.start as u64 && minor.end as u64 <= image.end);
+    assert!(
+        early
+            .entries()
+            .any(|entry| entry.occupant == boot::Occupant::MajorStack
+                && entry.physical.start == major.start as u64
+                && entry.physical.end == major.end as u64)
+    );
+    assert!(
+        early
+            .entries()
+            .any(|entry| entry.occupant == boot::Occupant::TrapStack
+                && image.start <= entry.physical.start
+                && entry.physical.end <= image.end)
+    );
+    let descriptors = map.descriptors().as_ptr_range();
+    assert!(
+        early
+            .entries()
+            .any(|entry| entry.occupant == boot::Occupant::FirmwareMap
+                && entry.physical.start == descriptors.start.addr() as u64
+                && entry.physical.end == descriptors.end.addr() as u64)
+    );
+    if let Some(tree) = boot.device_tree() {
+        assert!(
+            early
+                .entries()
+                .any(|entry| entry.occupant == boot::Occupant::DeviceTree
+                    && entry.physical.start == tree.start as u64
+                    && entry.physical.end == tree.end as u64)
+        );
+    }
+    let candidate = map
+        .regions()
+        .find(|entry| entry.kind == 7)
+        .expect("conventional memory");
+    let scope = boot::Physical {
+        start: candidate.physical.start,
+        end: candidate.physical.end,
+    };
+    assert!(early.retains(scope, None).unwrap());
     let view = MemoryMapRef::new(
         map.descriptors(),
         uefi::mem::memory_map::MemoryMapMeta {
@@ -110,6 +168,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         OBSERVED.load(Ordering::Acquire)
     )
     .unwrap();
+    boot::write("PASS early physical exclusions\n");
     board::inspect(boot, &view)
 }
 

@@ -1,5 +1,5 @@
 use super::{
-    DeviceTree, DtbMemory, FirmwareRegion, Loader,
+    DeviceTree, DtbMemory, FirmwareRegion, IMAGE, Loader,
     devicetree::memory::{Error, Physical, Source, describe as describe_into, read},
 };
 
@@ -140,6 +140,7 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
         super::describe(entry, kind, start, pages, attributes);
     }
     let loader = Loader {
+        image: IMAGE,
         descriptors: &descriptors.0,
         stride: 48,
         version: 1,
@@ -149,6 +150,14 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
     let boot = loader.admit(7).unwrap();
     assert_eq!(boot.firmware_map().unwrap().regions().len(), 5);
     assert_eq!(boot.dtb_memory().unwrap().reservations().len(), 2);
+    let early = boot.exclusions_for(IMAGE, IMAGE);
+    assert_eq!(
+        early
+            .entries()
+            .filter(|entry| matches!(entry.occupant, super::physical::Occupant::Reservation(_)))
+            .count(),
+        2
+    );
     let expected = [
         (0xc000..0xe000, 0x0f),
         (0x2000..0x3000, 8),
@@ -243,6 +252,17 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
             end: 0x1_0000_2000
         }
     );
+    let early = super::physical::Exclusions::new(IMAGE, IMAGE, IMAGE, None, None, Some(&map));
+    let claims = early
+        .entries()
+        .filter(|entry| matches!(entry.occupant, super::physical::Occupant::Reservation(_)));
+    assert!(
+        claims.eq(reservations.iter().map(|entry| super::physical::Exclusion {
+            physical: entry.physical,
+            occupant: super::physical::Occupant::Reservation(entry.source),
+        }))
+    );
+    assert!(early.entries().all(|entry| entry.fixed()));
 }
 
 #[test]
@@ -422,18 +442,20 @@ fn checks_the_trusted_readable_window_before_reading_the_blob() {
     let end = start + blob.len();
     // The backing fixture is truly readable and immutable throughout these calls.
     assert_eq!(
-        unsafe { read(input, start..start + 39, 0..0) }.unwrap_err(),
+        unsafe { read(input, start..start + 39, 0..0, &mut None) }.unwrap_err(),
         Error::Window
     );
     assert_eq!(
-        unsafe { read(input, start..end - 1, 0..0) }.unwrap_err(),
+        unsafe { read(input, start..end - 1, 0..0, &mut None) }.unwrap_err(),
         Error::Window
     );
     assert_eq!(
-        unsafe { read(input, start..end, end - 1..end + 1) }.unwrap_err(),
+        unsafe { read(input, start..end, end - 1..end + 1, &mut None) }.unwrap_err(),
         Error::Format
     );
-    let (extent, memory) = unsafe { read(input, start..end, 0..0) }.unwrap();
+    let mut memory = None;
+    let extent = unsafe { read(input, start..end, 0..0, &mut memory) }.unwrap();
+    let memory = memory.unwrap();
     assert_eq!(extent, start..end);
     assert_eq!(memory.ram().len(), 1);
 }
