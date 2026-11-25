@@ -126,6 +126,17 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         end: candidate.physical.end,
     };
     assert!(early.retains(scope, None).unwrap());
+    let mut storage = [None; 4];
+    let mut regions = boot
+        .regions(uefi::boot::PAGE_SIZE as u64, None, &mut storage)
+        .unwrap();
+    assert!(regions.entries().next().is_none());
+    assert!(
+        regions
+            .reserve_root(&mut None, core::alloc::Layout::new::<u64>())
+            .unwrap()
+            .is_none()
+    );
     let view = MemoryMapRef::new(
         map.descriptors(),
         uefi::mem::memory_map::MemoryMapMeta {
@@ -168,7 +179,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         OBSERVED.load(Ordering::Acquire)
     )
     .unwrap();
-    boot::write("PASS early physical exclusions\n");
+    boot::write("PASS early physical exclusions regions=0 roots=0\n");
     board::inspect(boot, &view)
 }
 

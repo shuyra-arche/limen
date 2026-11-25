@@ -1,0 +1,131 @@
+use super::physical::Condition;
+use super::regions::{MappedRange, Region, RegionError, RegionSource, Regions};
+use super::{Boot, FirmwareMap, IMAGE, Physical, Retirement, describe};
+use core::{alloc::Layout, mem::MaybeUninit};
+
+fn range(start: u64, end: u64) -> Physical {
+    Physical { start, end }
+}
+
+pub(super) fn retired(scope: Physical) -> Retirement {
+    let mut evidence = Retirement::new(scope).unwrap();
+    // Host fixtures model complete evidence for the given range.
+    for condition in [
+        Condition::DevicesIsolated,
+        Condition::TranslationRetired,
+        Condition::ReadersGone,
+        Condition::RuntimeStack,
+    ] {
+        unsafe { evidence.record(condition) };
+    }
+    evidence
+}
+
+#[repr(align(8))]
+struct Descriptors<const N: usize>([u8; N]);
+
+#[test]
+fn sorts_sources_clips_the_evidence_and_excludes_partial_reserved_pages() {
+    let mut storage = Descriptors([0; 120]);
+    describe(&mut storage.0[..40], 7, 0x8000, 3, 0x21);
+    describe(&mut storage.0[40..80], 7, 0x2000, 4, 8);
+    describe(&mut storage.0[80..], 7, 0x6000, 2, 1 << 63);
+    let map = FirmwareMap::new(&storage.0, 40, 1, 3).unwrap();
+    let boot = Boot::from_uefi(0, IMAGE, Some(0x4301..0x4500), map, None);
+    let exclusions = boot.exclusions_for(IMAGE, IMAGE);
+    let evidence = retired(range(0x2fff, 0xa001));
+    let expected = [
+        Region {
+            physical: range(0x3000, 0x4000),
+            source: RegionSource::Uefi { attributes: 8 },
+        },
+        Region {
+            physical: range(0x5000, 0x6000),
+            source: RegionSource::Uefi { attributes: 8 },
+        },
+        Region {
+            physical: range(0x8000, 0xa000),
+            source: RegionSource::Uefi { attributes: 0x21 },
+        },
+    ];
+    let mut regions = [None; 3];
+    let ready = Regions::organize(&boot, &exclusions, 4096, Some(&evidence), &mut regions).unwrap();
+    assert!(ready.entries().eq(expected));
+    let result = Regions::organize(&boot, &exclusions, 4096, Some(&evidence), &mut regions[..2]);
+    assert_eq!(result.err(), Some(RegionError::Capacity));
+    assert_eq!(&regions[..2], &[None, None]);
+    assert_eq!(
+        Regions::organize(&boot, &exclusions, 3, Some(&evidence), &mut regions).err(),
+        Some(RegionError::Granule)
+    );
+    let partial = Retirement::new(range(0x2000, 0xa000)).unwrap();
+    let held = Regions::organize(&boot, &exclusions, 4096, Some(&partial), &mut regions).unwrap();
+    assert_eq!(held.entries().count(), 0);
+}
+
+#[test]
+fn a_root_consumes_a_mapped_grant_and_removes_its_whole_physical_page() {
+    let mut descriptors = Descriptors([0; 40]);
+    describe(&mut descriptors.0, 7, 0x2000, 7, 8);
+    let map = FirmwareMap::new(&descriptors.0, 40, 1, 1).unwrap();
+    let boot = Boot::from_uefi(0, IMAGE, None, map, None);
+    let exclusions = boot.exclusions_for(IMAGE, IMAGE);
+    let evidence = retired(range(0x2000, 0x9000));
+    let layout = Layout::from_size_align(17, 64).unwrap();
+    #[repr(align(8192))]
+    struct Backing([MaybeUninit<u8>; 8192]);
+    let mut backing = Backing([MaybeUninit::uninit(); 8192]);
+    let mut mapping =
+        Some(unsafe { MappedRange::new(range(0x3001, 0x5000), &mut backing.0[1..]) }.unwrap());
+
+    let mut small = [None; 1];
+    let mut geometry =
+        Regions::organize(&boot, &exclusions, 4096, Some(&evidence), &mut small).unwrap();
+    assert!(geometry.reserve_root(&mut None, layout).unwrap().is_none());
+    assert_eq!(
+        geometry.reserve_root(&mut mapping, layout).err(),
+        Some(RegionError::Capacity)
+    );
+    assert!(mapping.is_some());
+    assert!(
+        geometry
+            .entries()
+            .map(|r| r.physical)
+            .eq([range(0x2000, 0x9000)])
+    );
+
+    let mut space = [None; 2];
+    let mut held = Regions::organize(&boot, &exclusions, 4096, None, &mut space).unwrap();
+    assert!(held.reserve_root(&mut mapping, layout).unwrap().is_none());
+    assert!(mapping.is_some());
+
+    let mut geometry =
+        Regions::organize(&boot, &exclusions, 4096, Some(&evidence), &mut space).unwrap();
+    let mismatched = Layout::from_size_align(17, 8192).unwrap();
+    assert_eq!(
+        geometry.reserve_root(&mut mapping, mismatched).err(),
+        Some(RegionError::Layout)
+    );
+    let too_large = Layout::from_size_align(8193, 64).unwrap();
+    assert_eq!(
+        geometry.reserve_root(&mut mapping, too_large).err(),
+        Some(RegionError::Layout)
+    );
+    assert!(mapping.is_some());
+    let mut root = geometry
+        .reserve_root(&mut mapping, layout)
+        .unwrap()
+        .unwrap();
+    assert!(mapping.is_none());
+    assert_eq!(root.physical(), range(0x3040, 0x3051));
+    assert_eq!(root.reserved(), range(0x3000, 0x4000));
+    assert_eq!(root.source(), RegionSource::Uefi { attributes: 8 });
+    assert_eq!(root.bytes().len(), 17);
+    root.bytes()[0].write(0xaa);
+    assert!(
+        geometry
+            .entries()
+            .map(|r| r.physical)
+            .eq([range(0x2000, 0x3000), range(0x4000, 0x9000)])
+    );
+}

@@ -101,8 +101,8 @@ change rust-toolchain.toml
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.full and .runner and .rv64' >/dev/null
 change server/src/metal/allocator/bump.rs
-[[ $(boards) == "" ]]
-bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null
+[[ $(boards) == 'q35 rv64 virt' ]]
+bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null
 change server/src/metal/boot/x86_64/example.rs
 previous=$(git rev-parse HEAD)
 mkdir -p server/src/metal/boot/aarch64

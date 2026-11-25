@@ -1,0 +1,324 @@
+//! Organize early physical ranges and reserve explicitly mapped root storage.
+
+use super::{
+    Boot, Exclusions, Physical, Retirement,
+    bump::Bump,
+    physical::{check, contains},
+};
+use core::{alloc::Layout, mem::MaybeUninit};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegionError {
+    Granule,
+    Range,
+    Overlap,
+    Capacity,
+    Layout,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegionSource {
+    DeviceTree,
+    Uefi { attributes: u64 },
+    DeviceTreeAndUefi { attributes: u64 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Region {
+    pub physical: Physical,
+    pub source: RegionSource,
+}
+
+/// Checked geometry in borrowed scratch storage. The ranges describe physical
+/// candidates for the next handoff and grant no addressability or ownership.
+pub struct Regions<'a> {
+    entries: &'a mut [Option<Region>],
+    length: usize,
+    granule: u64,
+}
+
+/// Exclusive mapped storage supplied by its actual owner for early roots.
+/// A successful reservation consumes this input; a rejected one leaves it.
+pub struct MappedRange<'a> {
+    physical: Physical,
+    bytes: &'a mut [MaybeUninit<u8>],
+}
+
+impl<'a> MappedRange<'a> {
+    /// Associate a checked physical extent with exclusive writable storage.
+    ///
+    /// # Safety
+    /// Every byte in the slice must map the corresponding physical byte
+    /// throughout the borrow. The backing storage must be exclusively owned
+    /// by the caller, free of prior reservations and inaccessible by aliases.
+    pub unsafe fn new(
+        physical: Physical,
+        bytes: &'a mut [MaybeUninit<u8>],
+    ) -> Result<Self, RegionError> {
+        check(physical).map_err(|_| RegionError::Range)?;
+        if physical.end - physical.start != bytes.len() as u64 {
+            return Err(RegionError::Range);
+        }
+        Ok(Self { physical, bytes })
+    }
+}
+
+/// Storage reserved for a root layout. Its entire backing granules have
+/// already been removed from the geometry.
+pub struct RootStorage<'a> {
+    physical: Physical,
+    reserved: Physical,
+    source: RegionSource,
+    bytes: &'a mut [MaybeUninit<u8>],
+}
+
+impl RootStorage<'_> {
+    pub fn physical(&self) -> Physical {
+        self.physical
+    }
+
+    pub fn reserved(&self) -> Physical {
+        self.reserved
+    }
+
+    pub fn source(&self) -> RegionSource {
+        self.source
+    }
+
+    pub fn bytes(&mut self) -> &mut [MaybeUninit<u8>] {
+        self.bytes
+    }
+}
+
+impl<'a> Regions<'a> {
+    pub(super) fn organize(
+        boot: &Boot<'_>,
+        exclusions: &Exclusions<'_>,
+        granule: u64,
+        retirement: Option<&Retirement>,
+        storage: &'a mut [Option<Region>],
+    ) -> Result<Self, RegionError> {
+        storage.fill(None);
+        if !granule.is_power_of_two() {
+            return Err(RegionError::Granule);
+        }
+        let mut regions = Self {
+            entries: storage,
+            length: 0,
+            granule,
+        };
+        let Some(scope) = retirement.and_then(Retirement::completed) else {
+            return Ok(regions);
+        };
+        if let Err(error) = regions.collect(boot, exclusions, scope) {
+            regions.entries.fill(None);
+            return Err(error);
+        }
+        Ok(regions)
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = Region> + '_ {
+        self.entries[..self.length].iter().flatten().copied()
+    }
+
+    fn collect(
+        &mut self,
+        boot: &Boot<'_>,
+        exclusions: &Exclusions<'_>,
+        scope: Physical,
+    ) -> Result<(), RegionError> {
+        if let Some(regions) = boot.conventional_ram() {
+            for region in regions {
+                self.exclude(
+                    Physical {
+                        start: region.physical.start,
+                        end: region.physical.end,
+                    },
+                    RegionSource::DeviceTreeAndUefi {
+                        attributes: region.attributes,
+                    },
+                    exclusions,
+                    scope,
+                )?;
+            }
+        } else if let Some(map) = boot.firmware_map() {
+            for region in map.conventional() {
+                self.exclude(
+                    Physical {
+                        start: region.physical.start,
+                        end: region.physical.end,
+                    },
+                    RegionSource::Uefi {
+                        attributes: region.attributes,
+                    },
+                    exclusions,
+                    scope,
+                )?;
+            }
+        } else if let Some(memory) = boot.dtb_memory() {
+            for &region in memory.ram() {
+                self.exclude(region, RegionSource::DeviceTree, exclusions, scope)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn exclude(
+        &mut self,
+        candidate: Physical,
+        source: RegionSource,
+        exclusions: &Exclusions<'_>,
+        scope: Physical,
+    ) -> Result<(), RegionError> {
+        let end = self.floor(candidate.end.min(scope.end));
+        let start = candidate.start.max(scope.start);
+        if start >= end {
+            return Ok(());
+        }
+        // Since end is aligned, rounding an address below it cannot overflow.
+        let mut cursor = start
+            .checked_next_multiple_of(self.granule)
+            .ok_or(RegionError::Range)?;
+        while cursor < end {
+            let mut next = end;
+            let mut blocked = cursor;
+            for claim in exclusions.entries().filter(|entry| entry.fixed()) {
+                let first = self.floor(claim.physical.start);
+                if first > cursor {
+                    next = next.min(first);
+                } else {
+                    let last = claim
+                        .physical
+                        .end
+                        .checked_next_multiple_of(self.granule)
+                        .unwrap_or(end);
+                    blocked = blocked.max(last.min(end));
+                }
+            }
+            if blocked > cursor {
+                cursor = blocked;
+            } else {
+                self.insert(Region {
+                    physical: Physical {
+                        start: cursor,
+                        end: next,
+                    },
+                    source,
+                })?;
+                cursor = next;
+            }
+        }
+        Ok(())
+    }
+
+    fn floor(&self, address: u64) -> u64 {
+        address & !(self.granule - 1)
+    }
+
+    fn insert(&mut self, region: Region) -> Result<(), RegionError> {
+        let position = self.entries[..self.length].partition_point(|entry| {
+            entry.expect("occupied region").physical.start < region.physical.start
+        });
+        if (position > 0
+            && self.entries[position - 1].unwrap().physical.end > region.physical.start)
+            || (position < self.length
+                && region.physical.end > self.entries[position].unwrap().physical.start)
+        {
+            return Err(RegionError::Overlap);
+        }
+        if self.length == self.entries.len() {
+            return Err(RegionError::Capacity);
+        }
+        self.entries
+            .copy_within(position..self.length, position + 1);
+        self.entries[position] = Some(region);
+        self.length += 1;
+        Ok(())
+    }
+
+    /// Reserve one layout from a real mapped grant. With no qualifying grant,
+    /// return no root and leave the geometry and input unchanged. Layout and
+    /// range capacity checks precede consumption or mutation.
+    pub fn reserve_root<'m>(
+        &mut self,
+        mapping: &mut Option<MappedRange<'m>>,
+        layout: Layout,
+    ) -> Result<Option<RootStorage<'m>>, RegionError> {
+        let Some(mapped) = mapping.as_ref() else {
+            return Ok(None);
+        };
+        let Some((index, region)) = self
+            .entries()
+            .enumerate()
+            .find(|(_, region)| contains(region.physical, mapped.physical))
+        else {
+            return Ok(None);
+        };
+        let address = mapped.bytes.as_ptr().addr();
+        let limit = address
+            .checked_add(mapped.bytes.len())
+            .ok_or(RegionError::Range)?;
+        if layout.size() == 0
+            || mapped.physical.start % layout.align() as u64 != (address % layout.align()) as u64
+        {
+            return Err(RegionError::Layout);
+        }
+        let mut bump = Bump::new(address..limit).ok_or(RegionError::Layout)?;
+        let bytes = bump.reserve(layout).ok_or(RegionError::Layout)?;
+        let offset = bytes.start - address..bytes.end - address;
+        // Bump proved the offsets within the slice, whose length matches
+        // the checked physical extent.
+        let physical = Physical {
+            start: mapped.physical.start + offset.start as u64,
+            end: mapped.physical.start + offset.end as u64,
+        };
+        let reserved = Physical {
+            start: self.floor(physical.start),
+            end: physical
+                .end
+                .checked_next_multiple_of(self.granule)
+                .ok_or(RegionError::Range)?,
+        };
+        let left = region.physical.start < reserved.start;
+        let right = reserved.end < region.physical.end;
+        if left && right && self.length == self.entries.len() {
+            return Err(RegionError::Capacity);
+        }
+
+        let mapped = mapping.take().expect("checked mapping");
+        let storage = &mut mapped.bytes[offset];
+        match (left, right) {
+            (true, true) => {
+                self.entries.copy_within(index + 1..self.length, index + 2);
+                self.length += 1;
+                self.entries[index] = Some(Region {
+                    physical: Physical {
+                        start: region.physical.start,
+                        end: reserved.start,
+                    },
+                    source: region.source,
+                });
+                self.entries[index + 1] = Some(Region {
+                    physical: Physical {
+                        start: reserved.end,
+                        end: region.physical.end,
+                    },
+                    source: region.source,
+                });
+            }
+            (true, false) => self.entries[index].as_mut().unwrap().physical.end = reserved.start,
+            (false, true) => self.entries[index].as_mut().unwrap().physical.start = reserved.end,
+            (false, false) => {
+                self.entries.copy_within(index + 1..self.length, index);
+                self.length -= 1;
+                self.entries[self.length] = None;
+            }
+        }
+        Ok(Some(RootStorage {
+            physical,
+            reserved,
+            source: region.source,
+            bytes: storage,
+        }))
+    }
+}

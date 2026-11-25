@@ -145,6 +145,10 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert!(early.entries().any(|entry| entry.occupant == kernel::entry::boot::Occupant::DeviceTree
         && entry.physical.start == device_tree.start as u64 && entry.physical.end == device_tree.end as u64));
     assert!(early.retains(memory.ram()[0], None).unwrap());
+    let mut storage = [None; 4];
+    let mut regions = boot.regions(4096, None, &mut storage).unwrap();
+    assert!(regions.entries().next().is_none());
+    assert!(regions.reserve_root(&mut None, core::alloc::Layout::new::<u64>()).unwrap().is_none());
     assert!(early.entries().any(|entry| matches!(entry.occupant, kernel::entry::boot::Occupant::Reservation(_))));
     assert_eq!(
         memory.ram(),
@@ -164,7 +168,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     );
 
     write(
-        "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1\n",
+        "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1 regions=0 roots=0\n",
     );
     shutdown(true)
 }

@@ -73,7 +73,7 @@ impl<'a> Boot<'a> {
     }
 }
 
-#[cfg(target_arch = "riscv64")]
+#[cfg(any(target_arch = "riscv64", test))]
 impl Boot<'static> {
     pub(crate) fn from_opensbi(
         hart: usize,

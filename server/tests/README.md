@@ -156,3 +156,7 @@ and the retained firmware inputs that their boot paths supply. Each checks
 that missing retirement evidence retains a RAM span. Host cases exercise
 overlapping claims, partial-page exclusions and the four independent
 retirement conditions for a checked physical scope.
+The target fixtures also check zero organized regions and zero Bump roots
+when their actual handoff has no retirement or mapping evidence. Host checks
+exercise sorted and attributed regions, granule exclusions, capacity failure,
+and the reservation of real backing bytes supplied by a Host fixture.
