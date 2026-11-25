@@ -7,6 +7,7 @@ runner=false
 rv64=false
 for path in "${changed[@]}"; do
     case "$path" in
+        rust-toolchain.toml) full=true ;;
         Cargo.toml|Cargo.lock|.cargo/*|server/Cargo.toml|server/build.rs|tools/tests/checks.sh|tools/tests/changes.sh|.github/workflows/check.yml) full=true ;;
         server/src/metal/x86_64/*|server/src/metal/aarch64/*|server/src/metal/generic/firmware/psci.rs|server/src/metal/generic/firmware/uefi/*) ;;
         server/src/*|server/link.x) rv64=true ;;

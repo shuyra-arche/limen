@@ -3,11 +3,12 @@
 Host suites under `entry/boot/` and `metal/` exercise DTB header validation,
 SBI extension discovery, the bounded allocation cursor and RV64 page-table
 entry encoding and atomic operations. Each suite keeps its own
-`host/Cargo.toml`. The root workspace discovers these packages.
+`host/Cargo.toml`. The root workspace discovers these packages. Run the commands
+from the repository root so Rustup selects the fixed [toolchain](../../rust-toolchain.toml).
 
 ```sh
-RUSTFLAGS=-Dwarnings cargo +nightly test --locked --workspace --target x86_64-unknown-linux-gnu
-cargo +nightly test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
+RUSTFLAGS=-Dwarnings cargo test --locked --workspace --target x86_64-unknown-linux-gnu
+cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
 ```
 
 ## RV64 boot
@@ -21,7 +22,7 @@ also uses the hart state management extension.
 
 ```sh
 bash tools/tests/discover.sh "$PWD" ""
-cargo +nightly build --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
+cargo build --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --suite server/tests/target/entry/boot --kernel "$PWD" \
   --output /tmp/limen-boot --profile debug
@@ -58,7 +59,7 @@ firmware-selected CPU. The RV64 cross-Hart scenario and both UEFI board fixtures
 
 Target discovery compares the PR against its merge base and selects each board and
 profile from the owner manifests. Changes to a board backend or its fixture select
-that board. Shared boot entry, verification runner, and QEMU version changes select
+that board. Shared boot entry, verification runner, Rust and QEMU version changes select
 all affected guests. Manual dispatch runs the full suite. One Target job installs
 the selected emulators, firmware and Rust targets, builds the host runner once,
 and executes up to two guests concurrently. The artifact contains a per-case log,
@@ -80,7 +81,9 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
 The guest verifies separate stacks in the shared Kernel Nest, Yield and resume,
 exact leave receipts, ending and reaping, and reuse with a new identity. It
 also exercises rejection before occupancy, Busy, stale identity and dormant
-cancellation. A cancelled Unit releases its slot under a new generation
+cancellation. A rejected execution constructor returns the original boot handoff
+and exclusive stack supply, which the guest uses to retry successfully. A
+cancelled Unit releases its slot under a new generation
 without executing its entry.
 
 Run [target/entry/execution-harts/](target/entry/execution-harts/) to exercise
@@ -111,7 +114,7 @@ The Target workflow selects the Debian trixie-backports snapshot providing
 directories with `OVMF_DIR` and `AAVMF_DIR` respectively.
 
 ```sh
-rustup target add --toolchain nightly x86_64-unknown-uefi aarch64-unknown-uefi
+rustup target add x86_64-unknown-uefi aarch64-unknown-uefi
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --suite server/tests/target/entry/platforms --kernel "$PWD" \
   --output /tmp/limen-platforms --profile debug

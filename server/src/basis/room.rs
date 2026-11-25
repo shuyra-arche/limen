@@ -1,9 +1,18 @@
 //! Bounded Hart participation, Unit admission and exact execution occupancy.
 
-use super::unit::{CAPACITY, Error, UnitId};
+use super::unit::{CAPACITY, UnitId};
 use crate::metal::execution::LeaveReceipt;
 
 const HART_CAPACITY: usize = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Error {
+    Busy,
+    Capacity,
+    Gone,
+    State,
+    Unsupported,
+}
 
 // Participation slots are assigned once and retained for the Room lifetime.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

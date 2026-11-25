@@ -12,6 +12,7 @@ on:
       - ".cargo/config.toml"
       - "tools/tests/**"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/target.yml"
   push:
     branches: [main]
@@ -25,6 +26,7 @@ on:
       - ".cargo/config.toml"
       - "tools/tests/**"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/target.yml"
   workflow_dispatch:
 
@@ -73,7 +75,6 @@ jobs:
     container: debian:trixie
     timeout-minutes: 30
     env:
-      RUSTUP_TOOLCHAIN: nightly
       QEMU_RISCV64: qemu-system-riscv64
       QEMU_OPENSBI: /usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin
       PLAN: ${{ needs.discover.outputs.plan }}
@@ -83,14 +84,13 @@ jobs:
           set -euo pipefail
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential jq
-          targets=()
           packages=()
           firmware=()
           for platform in $(jq -r 'map(.platform) | unique[]' <<<"$PLAN"); do
             case "$platform" in
-              rv64) targets+=(riscv64gc-unknown-none-elf); packages+=(qemu-system-riscv); firmware+=(opensbi) ;;
-              q35)  targets+=(x86_64-unknown-uefi); packages+=(qemu-system-x86); firmware+=(ovmf) ;;
-              virt) targets+=(aarch64-unknown-uefi); packages+=(qemu-system-arm); firmware+=(qemu-efi-aarch64) ;;
+              rv64) packages+=(qemu-system-riscv); firmware+=(opensbi) ;;
+              q35)  packages+=(qemu-system-x86); firmware+=(ovmf) ;;
+              virt) packages+=(qemu-system-arm); firmware+=(qemu-efi-aarch64) ;;
               host) ;;
               *) exit 2 ;;
             esac
@@ -101,17 +101,29 @@ jobs:
             apt-get -o Acquire::Retries=3 update
             apt-get install -y --no-install-recommends -t trixie-backports "${packages[@]}"
           fi
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
-          if (( ${#targets[@]} )); then
-            list=$(IFS=,; echo "${targets[*]}")
-            targets=(--target "$list")
-          fi
-          sh /tmp/rustup.sh -y --profile minimal --default-toolchain "$RUSTUP_TOOLCHAIN" "${targets[@]}"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
+          sh /tmp/rustup.sh -y --profile minimal --default-toolchain none
+          source "$HOME/.cargo/env"
+          rustc -Vv
+          targets=()
+          for platform in $(jq -r 'map(.platform) | unique[]' <<<"$PLAN"); do
+            case "$platform" in
+              rv64) targets+=(riscv64gc-unknown-none-elf) ;;
+              q35)  targets+=(x86_64-unknown-uefi) ;;
+              virt) targets+=(aarch64-unknown-uefi) ;;
+              host) ;;
+              *) exit 2 ;;
+            esac
+          done
+          if (( ${#targets[@]} )); then rustup target add "${targets[@]}"; fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Run project-owned verification
         run: |
           set -euo pipefail
