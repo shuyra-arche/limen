@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+mod buddy;
+
 use core::{
     arch::asm,
     hint::black_box,
@@ -38,6 +40,7 @@ fn first(current: &mut Current) -> u64 {
     let local = black_box(0x1234_5678usize);
     assert_eq!(SEQUENCE.fetch_add(1, Relaxed), 0);
     FIRST_STACK.store(stack_address(&local), Relaxed);
+    buddy::check();
     assert_eq!(execution().pending_leave(), Ok(None));
     assert_eq!(execution().enter(), Err(Error::Busy));
     assert_eq!(execution().finish_end(current.id()), Err(Error::Busy));
@@ -178,7 +181,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
     write(concat!(
         "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1",
-        " rejected_before_occupy=1 dormant_reaped=1\n",
+        " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1\n",
     ));
     shutdown(true)
 }

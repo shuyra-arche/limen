@@ -24,6 +24,16 @@ overlapping or cross-Hart access borrows.
 bash server/tests/basis/sync/contracts.sh
 ```
 
+The Allocator Host suite checks the fixed Buddy forest against an independent
+flat occupancy model. It enumerates small physical regions and fragmented
+states, exercises exact edits and bounded scan resumption, and checks the
+structural visit bounds. The target boot suites exercise the earlier physical
+handoff. Runtime admission of a Buddy region requires the Allocator source.
+
+```sh
+RUSTFLAGS=-Dwarnings cargo test --locked -p kernel-host-allocator --target x86_64-unknown-linux-gnu
+```
+
 ## RV64 boot
 
 The Boot owner keeps its platform image and assertions in [target/entry/boot/](target/entry/boot/).
