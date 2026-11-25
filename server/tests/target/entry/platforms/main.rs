@@ -54,11 +54,11 @@ fn main() -> Status {
     let map = unsafe { uefi::boot::exit_boot_services(None) };
     let meta = map.meta();
     let input = boot::Loader {
-        map: boot::FirmwareMap {
-            descriptors: map.buffer(),
-            stride: meta.desc_size,
-            version: meta.desc_version,
-        },
+        descriptors: map.buffer(),
+        stride: meta.desc_size,
+        version: meta.desc_version,
+        // The selected test configurations admit at most 512 descriptors.
+        descriptor_limit: 512,
         device_tree: board,
     };
     unsafe { boot::major(board::hart(), &input, &board::SERVICES) }
@@ -69,16 +69,31 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     assert_eq!(boot.hart(), board::hart());
     let map = boot.firmware_map().expect("final UEFI map");
     let view = MemoryMapRef::new(
-        map.descriptors,
+        map.descriptors(),
         uefi::mem::memory_map::MemoryMapMeta {
-            map_size: map.descriptors.len(),
-            desc_size: map.stride,
-            desc_version: map.version,
+            map_size: map.descriptors().len(),
+            desc_size: map.stride(),
+            desc_version: map.version(),
             map_key: Default::default(),
         },
     )
     .unwrap();
-    assert!(view.entries().any(|d| d.page_count > 0));
+    assert_eq!(map.regions().len(), view.entries().count());
+    assert!(map.regions().any(|r| r.kind == 7));
+    for (region, descriptor) in map.regions().zip(view.entries()) {
+        assert_eq!(region.physical.start, descriptor.phys_start);
+        assert_eq!(
+            region.physical.end,
+            descriptor
+                .phys_start
+                .checked_add(descriptor.page_count.checked_mul(4096).unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            region.kind == 7,
+            descriptor.ty == uefi::mem::memory_map::MemoryType::CONVENTIONAL
+        );
+    }
     let target = TARGET.load(Ordering::Acquire);
     assert_ne!(target, boot.hart());
     let startup = board::startup();

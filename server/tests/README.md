@@ -1,7 +1,8 @@
 # Limen tests
 
 Host suites under `entry/boot/` and `metal/` exercise DTB header validation,
-SBI extension discovery, the bounded allocation cursor and RV64 page-table
+UEFI descriptor geometry, SBI extension discovery, the bounded allocation
+cursor and RV64 page-table
 entry encoding and atomic operations. Each suite keeps its own
 `host/Cargo.toml`. The root workspace discovers these packages. Run the commands
 from the repository root so Rustup selects the fixed [toolchain](../../rust-toolchain.toml).

@@ -28,7 +28,23 @@ q35 and AAVMF loads `EFI/BOOT/BOOTAA64.EFI` on virt. The loader captures board
 inputs, exits Boot Services with the final memory map and calls
 `entry::boot::major`. It keeps the handoff, firmware allocations, loader stack
 and identity mappings reserved. It supplies optional post-exit output and
-shutdown callbacks. [UEFI adapter](../server/src/metal/generic/firmware/uefi/)
+shutdown callbacks. The loader supplies the actual descriptor bytes, stride,
+version and a configured descriptor-count limit. After entry, the common
+UEFI adapter checks every physical range, rejects zero page counts, arithmetic
+overflow and overlapping descriptors, and exposes an immutable FirmwareMap.
+The original kind and attributes are retained; a conventional-memory
+descriptor is not an Allocation or proof of safe access. The check uses
+bounded pairwise comparisons without ordinary allocation. The selected test
+profiles use a limit of 512 descriptors; other images set their own validated
+configuration bound.
+
+This step establishes descriptor geometry only. Initial RAM admission still
+requires the full platform reservations, active image/stack/translation
+storage, verified access and old device isolation. RV64 still needs bounded
+DTB memory and reservation decoding; Arm also needs the DTB cross-check.
+Do not interpret missing information as an empty reservation set.
+[UEFI adapter](../server/src/metal/generic/firmware/uefi/) ·
+[Formal boot contract](https://github.com/shuyra-arche/document-limen/blob/c906c09bc268fc85c7b49a674a2f1d8ec220c4cd/server/entry/boot/platforms.md)
 
 ### x86_64 q35
 
