@@ -1,0 +1,91 @@
+use super::handoff::Boot;
+use super::physical::{Condition, Occupant, Retirement};
+use super::{FirmwareMap, IMAGE, Physical, describe};
+
+fn range(start: u64, end: u64) -> Physical {
+    Physical { start, end }
+}
+
+const CONDITIONS: [Condition; 4] = [
+    Condition::RuntimeStack,
+    Condition::ReadersGone,
+    Condition::TranslationRetired,
+    Condition::DevicesIsolated,
+];
+
+#[test]
+fn every_condition_must_cover_the_requested_physical_scope() {
+    #[repr(align(8))]
+    struct Descriptors([u8; 40]);
+    let mut bytes = Descriptors([0; 40]);
+    describe(&mut bytes.0, 4, 0x4000, 3, 0);
+    let map = FirmwareMap::new(&bytes.0, 40, 1, 1).unwrap();
+    let boot = Boot::from_uefi(0, IMAGE, Some(0x6001..0x6010), map, None);
+    let early = boot.exclusions_for(range(0x1100, 0x1200), range(0x1300, 0x1400));
+    let page = range(0x4000, 0x5000);
+    assert!(early.retains(page, None).unwrap());
+    for missing in CONDITIONS {
+        let mut retirement = Retirement::new(page).unwrap();
+        for condition in CONDITIONS
+            .into_iter()
+            .rev()
+            .filter(|value| *value != missing)
+        {
+            // The fixture models a completed condition for the exact scope.
+            unsafe { retirement.record(condition) };
+        }
+        assert!(early.retains(page, Some(&retirement)).unwrap());
+        unsafe { retirement.record(missing) };
+        assert!(!early.retains(page, Some(&retirement)).unwrap());
+        assert!(
+            early
+                .retains(range(0x4000, 0x5001), Some(&retirement))
+                .unwrap()
+        );
+        assert!(
+            early
+                .retains(range(0x5000, 0x6000), Some(&retirement))
+                .unwrap()
+        );
+    }
+    assert!(early.retains(range(0x4000, 0x4000), None).is_err());
+    assert!(Retirement::new(range(0x5000, 0x4000)).is_err());
+}
+
+#[test]
+fn fixed_claims_outlive_retirement_evidence_and_preserve_partial_pages() {
+    #[repr(align(8))]
+    struct Descriptors([u8; 80]);
+    let mut bytes = Descriptors([0; 80]);
+    describe(&mut bytes.0[..40], 2, 0x1000, 1, 0);
+    describe(&mut bytes.0[40..], 7, 0x3000, 1, 1 << 63);
+    let map = FirmwareMap::new(&bytes.0, 40, 1, 2).unwrap();
+    let boot = Boot::from_uefi(0, IMAGE, Some(0x6001..0x6010), map, None);
+    let early = boot.exclusions_for(range(0x1100, 0x1200), range(0x1300, 0x1400));
+    assert!(
+        early
+            .entries()
+            .any(|entry| entry.occupant == Occupant::FirmwareMap && entry.fixed())
+    );
+    assert!(
+        early
+            .entries()
+            .any(|entry| entry.occupant == Occupant::MajorStack && entry.fixed())
+    );
+    let mut retirement = Retirement::new(range(0x1000, 0x7000)).unwrap();
+    for condition in CONDITIONS {
+        unsafe { retirement.record(condition) };
+    }
+    for retained in [
+        range(0x1000, 0x2000),
+        range(0x3000, 0x4000),
+        range(0x6000, 0x7000),
+    ] {
+        assert!(early.retains(retained, Some(&retirement)).unwrap());
+    }
+    assert!(
+        !early
+            .retains(range(0x2000, 0x3000), Some(&retirement))
+            .unwrap()
+    );
+}

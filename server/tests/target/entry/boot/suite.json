@@ -28,7 +28,7 @@
     "kind": "qemu",
     "kernel": "boot-handoff",
     "expects": [
-      "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1"
+      "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1"
     ]
   }
 }

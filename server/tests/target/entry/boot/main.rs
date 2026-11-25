@@ -79,6 +79,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         "direct early trap vector missing",
     );
     let image = (&raw const _kernel_base).addr()..(&raw const _kernel_edge).addr();
+    assert_eq!(boot.image(), Physical { start: image.start as u64, end: image.end as u64 });
     let bss = (&raw const _bss_start).addr()..(&raw const _bss_end).addr();
     assert!(
         sscratch.is_multiple_of(8)
@@ -136,6 +137,15 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
     let memory = boot.dtb_memory().expect("OpenSBI DTB memory");
     assert!(boot.conventional_ram().is_none());
+    let early = boot.exclusions();
+    assert!(early.entries().any(|entry| entry.occupant == kernel::entry::boot::Occupant::MajorStack
+        && entry.physical.start <= sp as u64 && (sp as u64) < entry.physical.end));
+    assert!(early.entries().any(|entry| entry.occupant == kernel::entry::boot::Occupant::TrapStack
+        && boot.image().start <= entry.physical.start && entry.physical.end <= boot.image().end));
+    assert!(early.entries().any(|entry| entry.occupant == kernel::entry::boot::Occupant::DeviceTree
+        && entry.physical.start == device_tree.start as u64 && entry.physical.end == device_tree.end as u64));
+    assert!(early.retains(memory.ram()[0], None).unwrap());
+    assert!(early.entries().any(|entry| matches!(entry.occupant, kernel::entry::boot::Occupant::Reservation(_))));
     assert_eq!(
         memory.ram(),
         &[Physical {
@@ -154,7 +164,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     );
 
     write(
-        "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1\n",
+        "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1\n",
     );
     shutdown(true)
 }

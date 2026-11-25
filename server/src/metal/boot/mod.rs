@@ -5,6 +5,7 @@ pub(crate) mod major;
 pub(crate) mod minor;
 pub(crate) mod services;
 pub(in crate::metal) mod trap;
+pub(crate) use trap::stack_range as trap_stack_range;
 
 #[cfg(target_arch = "riscv64")]
 #[path = "riscv/mod.rs"]

@@ -107,3 +107,31 @@ The verified scope on x86 and Arm covers major and minor boot, and on Arm
 also the DTB and UEFI memory cross-check. CPU hotplug,
 general topology admission, interrupt routing and Unit scheduling on these
 targets require separate implementation and verification.
+
+## Early physical exclusions
+
+RV64 supplies the resident image extent from its linker. The UEFI loader
+supplies the physical image extent under the entry identity map. The test
+loaders take it from UEFI Loaded Image before ExitBootServices. Common boot
+checks that the image contains the major and early trap stacks before
+delivering the handoff.
+
+`Boot::exclusions` records the resident image, both kernel stacks, the
+retained DTB and UEFI map bytes, and the original firmware reservations.
+It walks the existing bounded descriptions without allocating a second range
+table. Separate claims can overlap. An overlap with a live byte range retains
+the queried physical span, including a whole page that contains only some
+of those bytes. Image-owned minor stacks remain covered by the image.
+
+`Exclusions::retains` keeps spans reserved unless retirement evidence covers
+the whole query. The permanent stack must be active, the relevant readers
+and Harts must have left the old storage, and the owners must confirm old
+CPU translations and page-table walks have retired and old device access
+is isolated. The current boot backends provide no such combined evidence.
+The image, kernel boot stacks, retained handoff bytes and non-reclaimable
+firmware reservations remain excluded while this handoff owns them.
+DTB reservation attributes stay available, including `reusable`. A device
+pool described by a DTB keeps its reservation until its owner can hand it off.
+Reclaimable firmware claims become eligible for later admission when all
+their conditions hold. The caller still establishes RAM provenance,
+granularity and actual access before handing a span to Allocator.

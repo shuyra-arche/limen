@@ -116,7 +116,9 @@ pub(crate) unsafe fn read(
     input: *const (),
     window: Range<usize>,
     image: Range<usize>,
-) -> Result<(Range<usize>, DtbMemory), Error> {
+    memory: &mut Option<DtbMemory>,
+) -> Result<Range<usize>, Error> {
+    *memory = None;
     let start = input.addr();
     let header_end = start.checked_add(HEADER_SIZE).ok_or(Error::Window)?;
     if !window.contains(&start) || header_end > window.end {
@@ -132,9 +134,8 @@ pub(crate) unsafe fn read(
     // Only the exact DTB is borrowed. The enclosing window can contain
     // unrelated allocations, firmware storage and uninitialized bytes.
     let blob = unsafe { slice::from_raw_parts(input.cast(), range.len()) };
-    let mut memory = None;
-    describe(blob, &mut memory)?;
-    Ok((range, memory.expect("described DTB memory")))
+    describe(blob, memory)?;
+    Ok(range)
 }
 
 /// Populate the caller's fixed storage before it leaves the firmware adapter.

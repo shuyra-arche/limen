@@ -1,4 +1,4 @@
-use super::{Boot, FirmwareMap, devicetree};
+use super::{Boot, FirmwareMap, Physical, devicetree};
 
 /// How the trusted platform uses its retained DTB.
 pub enum DeviceTree<'a> {
@@ -13,6 +13,8 @@ const LOADER_DATA: u32 = 2;
 /// Loader-owned storage retained across the stack switch and Boot delivery.
 /// The optional DTB is the exact, immutable copy in loader-data pages.
 pub struct Loader<'a> {
+    /// Physical extent of the resident image under the entry identity map.
+    pub image: Physical,
     pub descriptors: &'a [u8],
     pub stride: usize,
     pub version: u32,
@@ -22,6 +24,9 @@ pub struct Loader<'a> {
 
 impl<'a> Loader<'a> {
     pub(crate) fn admit(&self, hart: usize) -> Option<Boot<'a>> {
+        if self.image.start >= self.image.end {
+            return None;
+        }
         let map = FirmwareMap::new(
             self.descriptors,
             self.stride,
@@ -61,6 +66,6 @@ impl<'a> Loader<'a> {
             }
             None => None,
         };
-        Some(Boot::from_uefi(hart, device_tree, map, memory))
+        Some(Boot::from_uefi(hart, self.image, device_tree, map, memory))
     }
 }

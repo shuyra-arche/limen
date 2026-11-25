@@ -5,6 +5,11 @@ use core::sync::atomic::AtomicPtr;
 const BYTES: usize = 16 * 1024;
 static mut STACK: Stack<BYTES> = Stack::new();
 
+pub(crate) fn stack_range() -> core::ops::Range<usize> {
+    let start = (&raw const STACK).addr();
+    start..start + BYTES
+}
+
 // The image relocation arms the stack before any CPU can enter a vector,
 // including traps during RV64 BSS initialization. Each vector atomically takes
 // the pointer and leaves null. Only the winner can call Rust on this stack.

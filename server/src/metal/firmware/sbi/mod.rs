@@ -94,10 +94,17 @@ pub(crate) unsafe fn admit(
         static DTB_WINDOW_END: u8;
     }
     let window = (&raw const DTB_WINDOW_START).addr()..(&raw const DTB_WINDOW_END).addr();
+    let image = crate::metal::boot::image();
+    let mut memory = None;
     let parsed =
-        unsafe { super::devicetree::memory::read(input, window, crate::metal::boot::image()) };
+        unsafe { super::devicetree::memory::read(input, window, image.clone(), &mut memory) };
     match parsed {
-        Ok((tree, memory)) => Some(crate::entry::boot::Boot::from_opensbi(hart, tree, memory)),
+        Ok(tree) => Some(crate::entry::boot::Boot::from_opensbi(
+            hart,
+            image,
+            tree,
+            memory.expect("described DTB memory"),
+        )),
         Err(error) => Services::active().reject(format_args!("FAIL Limen boot: DTB {error:?}\n")),
     }
 }
