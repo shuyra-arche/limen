@@ -38,7 +38,7 @@ const fn pages(first: u64, last: u64) -> Physical {
 // It is outside the image, both startup stacks, OpenSBI and the retained DTB.
 // No minor or DMA-capable guest driver has run and satp is still zero. The
 // resident stack is permanent for this guest and stays excluded.
-fn retirement(boot: &Boot<'_>, physical: Physical) -> Retirement {
+pub(super) fn retirement(boot: &Boot<'_>, physical: Physical) -> Retirement {
     let exclusions = boot.exclusions();
     assert!(exclusions.entries().all(|entry| {
         entry.physical.end <= physical.start || entry.physical.start >= physical.end

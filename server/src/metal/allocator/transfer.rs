@@ -12,7 +12,7 @@ use crate::{
 
 use super::{
     Allocator, AllowanceId, Candidate, Error, RegionId, allowance::SlotState, length, range,
-    region::State, search::with_turn,
+    region::State, with_turn,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,6 +63,15 @@ impl Allocation {
 
     pub fn physical(&self) -> Physical {
         self.physical
+    }
+
+    /// The prepaid Return location belongs to the upstream source's table.
+    /// Learning its identity does not authorize handoff or completion.
+    pub(super) fn return_position(&self) -> Result<ReturnId, Error> {
+        let region = self.source.region(self.id.region)?;
+        with_turn(&region.state, |state| {
+            state.active(self).map(|record| record.retirement)
+        })?
     }
 
     /// Conclude the consumer's actual access lifecycle.

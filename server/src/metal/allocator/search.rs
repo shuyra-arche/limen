@@ -1,14 +1,11 @@
 use core::sync::atomic::Ordering::Acquire;
 
-use crate::{
-    entry::boot::{Physical, RegionSource},
-    sync::{Acquisition, TurnLock, Work},
-};
+use crate::entry::boot::{Physical, RegionSource};
 
 use super::{
     Allocator, Description, Error, REGION_LIMIT, RegionId,
     buddy::{self, Revision, Scan},
-    length, overlaps, range,
+    length, overlaps, range, with_turn,
 };
 
 /// The recipient's intended use, independent of the physical range selected.
@@ -281,16 +278,4 @@ impl Lookup {
         }
         Ok(Search::Pending)
     }
-}
-
-pub(super) fn with_turn<T, R>(
-    lock: &TurnLock<T>,
-    operation: impl FnOnce(&mut T) -> R,
-) -> Result<R, Error> {
-    let mut work = Work::<1>::new();
-    let mut plan = work.plan();
-    plan.insert(lock).expect("one Turn");
-    Ok(plan.execute(Acquisition::Fast, |held| {
-        operation(held.access(lock).expect("planned lock"))
-    })?)
 }

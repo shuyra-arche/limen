@@ -10,6 +10,7 @@ use kernel::entry::boot::{Boot, Physical, Source, shutdown, stack_range, write};
 mod synchronization;
 
 mod allocator;
+mod pool;
 
 unsafe extern "C" {
     static limen_test_text_start: u8;
@@ -193,6 +194,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     );
 
     allocator::check(&boot);
+    pool::check(&boot);
     synchronization::check();
     synchronization::check_enabled();
     write("PASS synchronization\n");
