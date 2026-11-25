@@ -14,7 +14,7 @@ without relying on its previous contents.
 Each entry exchanges the pointer for null using registers. Only the CPU that
 obtains a non-null top switches to it and enters Rust. A nested or concurrent
 exception parks without touching the reporting CPU's stack. The terminal path
-never returns the pointer. [Stack and reporting policy](../server/src/metal/generic/boot/trap.rs)
+never returns the pointer. [Stack and reporting policy](../server/src/metal/boot/trap.rs)
 
 ## Capturing the interrupted context
 
@@ -34,4 +34,4 @@ The reporter attempts diagnostic output and requests failure shutdown even if
 the writer refuses a byte. It parks the CPU if reset is unavailable or returns.
 UEFI images supply immutable callbacks valid after Boot Services exit. An RV64
 early trap probes SBI directly because it can precede normal service publication.
-[Services](../server/src/metal/generic/services.rs)
+[Services](../server/src/metal/boot/services.rs)

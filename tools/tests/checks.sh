@@ -9,7 +9,7 @@ for path in "${changed[@]}"; do
     case "$path" in
         rust-toolchain.toml) full=true ;;
         Cargo.toml|Cargo.lock|.cargo/*|server/Cargo.toml|server/build.rs|tools/tests/checks.sh|tools/tests/changes.sh|.github/workflows/check.yml) full=true ;;
-        server/src/metal/x86_64/*|server/src/metal/aarch64/*|server/src/metal/generic/firmware/psci.rs|server/src/metal/generic/firmware/uefi/*) ;;
+        server/src/metal/boot/x86_64/*|server/src/metal/boot/aarch64/*|server/src/metal/hart/x86_64.rs|server/src/metal/hart/aarch64.rs|server/src/metal/firmware/psci.rs|server/src/metal/firmware/uefi/*) ;;
         server/src/*|server/link.x) rv64=true ;;
         server/tests/runner/*|server/tests/qemu.version|server/tests/target/*/suite.json) runner=true ;;
     esac
@@ -20,7 +20,7 @@ while IFS= read -r -d '' manifest; do
     owner=${manifest%/host/Cargo.toml}
     for path in "${changed[@]}"; do
         if [[ $path == "$owner/"* || $path == "${owner/server\/tests/server\/src}/"* ||
-              ( $owner == server/tests/entry/boot && ( $path == server/src/metal/generic/firmware/map.rs || $path == server/src/metal/generic/firmware/uefi/loader.rs || $path == server/src/metal/generic/devicetree.rs || $path == server/src/metal/generic/console.rs ) ) ]]; then
+              ( $owner == server/tests/entry/boot && ( $path == server/src/metal/firmware/map.rs || $path == server/src/metal/firmware/uefi/loader.rs || $path == server/src/metal/firmware/devicetree.rs || $path == server/src/metal/boot/console.rs ) ) ]]; then
             manifests+=("$manifest")
             break
         fi

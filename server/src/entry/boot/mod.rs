@@ -1,12 +1,15 @@
 //! Major CPU handoff. Metal installs the kernel stack and exception entry before
 //! calling the common admission gate. The trusted image receives Boot exactly once.
 mod handoff;
-use crate::metal::{boot, generic::boot::major};
+use crate::metal::boot::major;
 use core::fmt::Write;
 
-pub use crate::metal::generic::firmware::map::{FirmwareMap, FirmwareRegion, MapError};
-pub use crate::metal::generic::{console::Console, services::Services};
-pub use boot::interface::*;
+pub use crate::metal::boot::{Startup, console::Console, services::Services};
+pub use crate::metal::firmware::map::{FirmwareMap, FirmwareRegion, MapError};
+#[cfg(target_arch = "aarch64")]
+pub use crate::metal::firmware::psci::Conduit;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub use crate::metal::firmware::uefi::{Loader, major};
 pub use handoff::Boot;
 pub use major::stack_range;
 
@@ -38,4 +41,4 @@ unsafe extern "Rust" {
     fn limen_platform_ready(boot: Boot<'_>) -> !;
 }
 
-pub use crate::metal::generic::boot::minor::{Minor, StartError};
+pub use crate::metal::boot::minor::{Minor, StartError};
