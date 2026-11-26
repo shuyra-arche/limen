@@ -1,28 +1,34 @@
 #![no_std]
 #![no_main]
 
+mod harts;
 mod mapping;
 
 use core::{arch::asm, fmt::Write, mem::MaybeUninit, ops::Range, ptr::NonNull};
 use kernel::{
     access::MappedRange,
     address::{PhysicalAddress, PhysicalRange},
-    entry::boot::{
-        self, Boot, Occupant, RiscvCpus, RiscvExtension, RiscvIsa, RiscvMmu, RiscvMmuMode,
-    },
-    module::{Abi, Contract, Machine, ModuleImage, ModuleSlots, Permissions, UseError},
+    entry::boot::{self, Boot, Occupant},
+    module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, Permissions, UseError},
 };
 use limen_treaty::model::PageSize;
 use mapping::PAGE;
 
 const IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/module.elf"));
+const ROOT_IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sv39-root.elf"));
 const MAX_PAGES: usize = 16;
 
 #[repr(C, align(4096))]
 struct Storage([MaybeUninit<u8>; MAX_PAGES * PAGE as usize]);
 
-// The boot image keeps exclusive custody of both arenas through shutdown.
-static mut STORAGE: Storage = Storage([MaybeUninit::new(0); MAX_PAGES * PAGE as usize]);
+impl Storage {
+    const fn new() -> Self {
+        Self([MaybeUninit::new(0); MAX_PAGES * PAGE as usize])
+    }
+}
+
+// The boot image owns both independently loaded images' exact page reserves.
+static mut STORAGE: [Storage; 2] = [const { Storage::new() }; 2];
 
 struct ReservedPages {
     storage: NonNull<MaybeUninit<u8>>,
@@ -58,28 +64,6 @@ fn covers(outer: &Range<u64>, inner: &Range<u64>) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
 }
 
-fn check_hart(boot: &Boot<'_>) {
-    let tree = boot.device_tree_description().unwrap();
-    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
-    let cpu = cpus.cpu(boot.hart() as u64).unwrap().unwrap();
-    assert!(cpu.enabled());
-    let cpu_count = tree
-        .nodes()
-        .filter(|node| {
-            node.parent_id() == Some(cpus.node().id())
-                && node.string(b"device_type").unwrap() == Some(b"cpu")
-        })
-        .count();
-    assert_eq!(cpu_count, 1);
-    let mmu = RiscvMmu::describe(&cpu).unwrap().unwrap();
-    assert!(matches!(
-        mmu.maximum(),
-        RiscvMmuMode::Sv39 | RiscvMmuMode::Sv48 | RiscvMmuMode::Sv57
-    ));
-    let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
-    assert!(isa.has(RiscvExtension::InstructionFence));
-}
-
 struct Resident {
     text: Range<u64>,
     read_only: Range<u64>,
@@ -102,11 +86,13 @@ impl Resident {
             tree,
         };
 
-        let source = IMAGE.as_ptr_range();
-        assert!(covers(
-            &resident.read_only,
-            &(source.start.addr() as u64..source.end.addr() as u64)
-        ));
+        for image in [IMAGE, ROOT_IMAGE] {
+            let source = image.as_ptr_range();
+            assert!(covers(
+                &resident.read_only,
+                &(source.start.addr() as u64..source.end.addr() as u64)
+            ));
+        }
         let backing = physical(mapping::backing());
         let storage = physical(storage);
         let linked_writable = physical(writable..linked.end);
@@ -182,145 +168,249 @@ impl Resident {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
-    check_hart(&boot);
+struct ImagePages {
+    range: Range<u64>,
+    permissions: [Option<Permissions>; MAX_PAGES],
+}
+
+impl ImagePages {
+    fn count(&self) -> u64 {
+        (self.range.end - self.range.start) / PAGE
+    }
+
+    fn entries(&self) -> &[Option<Permissions>] {
+        &self.permissions[..self.count() as usize]
+    }
+
+    fn permission(&self, page: u64) -> Option<Permissions> {
+        self.permissions[((page - self.range.start) / PAGE) as usize]
+    }
+
+    fn present(&self) -> u64 {
+        self.entries().iter().filter(|page| page.is_some()).count() as u64
+    }
+
+    fn restore(&self, root: &mapping::Root, material: ReservedPages, entry: u64) {
+        assert_eq!(material.physical, physical(self.range.clone()));
+        root.publish(
+            self.range.start,
+            &[Some(Permissions::ReadWrite); MAX_PAGES][..self.count() as usize],
+        );
+        // Reuse the same physical byte that held the old executable entry.
+        let mut reused =
+            unsafe { MappedRange::from_identity(material.physical, material.storage) }.unwrap();
+        let replaced = &mut reused.bytes()[(entry - self.range.start) as usize];
+        unsafe {
+            core::ptr::write_volatile(replaced, MaybeUninit::new(0xa5));
+            assert_eq!(core::ptr::read_volatile(replaced).assume_init(), 0xa5);
+        }
+    }
+}
+
+fn prepare(
+    contract: Contract,
+    storage: NonNull<MaybeUninit<u8>>,
+) -> (Layout<'static>, ReservedPages, ImagePages) {
     let image = ModuleImage::select(
-        &[IMAGE],
+        &[IMAGE, ROOT_IMAGE],
         Machine::Riscv64,
         PageSize::new(PAGE).unwrap(),
-        Contract::MmuGeometry,
+        contract,
     )
     .unwrap()
     .unwrap();
-    assert_eq!(image.description().abi(), Abi::Scalar);
-
-    let storage = NonNull::new((&raw mut STORAGE).cast::<MaybeUninit<u8>>()).unwrap();
     let start = storage.addr().get() as u64;
     let length = image.required_length().get();
     assert!(length != 0 && length.is_multiple_of(PAGE));
-    let count = length / PAGE;
-    assert!(count <= MAX_PAGES as u64);
-    assert!(start.is_multiple_of(PAGE));
-    let target = start..start + length;
+    assert!(length / PAGE <= MAX_PAGES as u64 && start.is_multiple_of(PAGE));
+    let range = start..start.checked_add(length).unwrap();
     let material = ReservedPages {
         storage,
-        physical: physical(target.clone()),
+        physical: physical(range.clone()),
     };
-    let resident = Resident::from_boot(&boot, start..start + size_of::<Storage>() as u64);
-    let mut root = mapping::Root::new();
-    for (range, permission) in resident.ranges() {
-        root.map(range, permission);
-    }
-    let total = resident.page_count();
-    root.verify_private(total, |page| resident.permission(page));
-    // The live image, retained DTB, and diagnostic entry keep their identity
-    // mappings throughout. This virt probe runs one Hart and leaves DMA idle.
-    unsafe { root.activate() };
-    root.verify_active(total, |page| resident.permission(page));
-
     let layout = {
-        // This image-owned arena has one confirmed RW/NX mapping under Sv39.
+        // This reserved arena has one verified writable, nonexecuting view.
         let mut view =
             unsafe { MappedRange::from_identity(material.physical, material.storage) }.unwrap();
         image.prepare(&mut view, start).unwrap()
     };
-    assert_eq!(layout.physical(), physical(target.clone()));
-    assert_eq!(layout.virtual_range(), target);
-    let mut final_pages = [None; MAX_PAGES];
-    let final_pages = &mut final_pages[..count as usize];
+    assert_eq!(layout.physical(), material.physical);
+    assert_eq!(layout.virtual_range(), range);
+    let mut permissions = [None; MAX_PAGES];
     for segment in layout.segments() {
         let first = segment.physical.start().get();
         let last = segment.physical.end().get();
         assert_eq!(segment.virtual_range, first..last);
-        assert!(covers(&target, &segment.virtual_range));
+        assert!(covers(&range, &segment.virtual_range));
         assert!(first.is_multiple_of(PAGE) && last.is_multiple_of(PAGE));
         for page in
-            &mut final_pages[((first - start) / PAGE) as usize..((last - start) / PAGE) as usize]
+            &mut permissions[((first - start) / PAGE) as usize..((last - start) / PAGE) as usize]
         {
             assert!(page.replace(segment.permissions).is_none());
         }
     }
-    let entry = layout.entry(Contract::MmuGeometry).unwrap();
-    assert!(target.contains(&entry));
-    assert_eq!(
-        final_pages[((entry - start) / PAGE) as usize],
-        Some(Permissions::ReadExecute)
-    );
-    assert!(final_pages.contains(&Some(Permissions::ReadOnly)));
-    assert!(final_pages.contains(&Some(Permissions::ReadWrite)));
+    let entry = layout.entry(contract).unwrap();
+    let pages = ImagePages { range, permissions };
+    assert!(pages.range.contains(&entry));
+    assert_eq!(pages.permission(entry), Some(Permissions::ReadExecute));
+    (layout, material, pages)
+}
 
-    // The write borrow has ended. Revoke every staging translation and
-    // complete local invalidation before making any instruction executable.
-    root.withdraw(target.clone(), |_| Some(Permissions::ReadWrite));
-    root.verify_active(total - count, |page| {
+#[unsafe(no_mangle)]
+extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
+    use kernel::module::Sv39Encoding;
+
+    let peer = harts::check(&boot);
+    let storage = NonNull::new((&raw mut STORAGE).cast::<Storage>()).unwrap();
+    let start = storage.addr().get() as u64;
+    let resident = Resident::from_boot(&boot, start..start + size_of::<[Storage; 2]>() as u64);
+    let mut initial = mapping::Root::new();
+    for (range, permission) in resident.ranges() {
+        initial.map(range, permission);
+    }
+    let total = resident.page_count();
+    initial.verify_private(total, |page| resident.permission(page));
+    // No other Hart is active yet. The independent initial mapping supplies
+    // access to both module arenas, both root banks and the trap path.
+    unsafe { initial.activate() };
+    initial.verify_active(total, |page| resident.permission(page));
+
+    let (geometry_layout, geometry_material, geometry_pages) =
+        prepare(Contract::MmuGeometry, storage.cast());
+    let (root_layout, root_material, root_pages) =
+        prepare(Contract::Sv39Root, unsafe { storage.add(1) }.cast());
+    let geometry_entry = geometry_layout.entry(Contract::MmuGeometry).unwrap();
+    let root_entry = root_layout.entry(Contract::Sv39Root).unwrap();
+    let images = [&geometry_pages, &root_pages];
+    let reserved = total - geometry_pages.count() - root_pages.count();
+    let outside_images = |page| {
         resident
             .permission(page)
-            .filter(|_| !target.contains(&page))
-    });
-    root.publish(start, final_pages);
-    let present = final_pages.iter().filter(|page| page.is_some()).count() as u64;
-    root.verify_active(total - count + present, |page| {
-        if target.contains(&page) {
-            final_pages[((page - start) / PAGE) as usize]
-        } else {
-            resident.permission(page)
-        }
-    });
-
-    let slots = ModuleSlots::<1>::new();
-    // The trusted fixture declares the scalar ELF entry. Its exact mapping
-    // is RX and this sole Hart has executed FENCE.I.
-    let module = unsafe { slots.publish(layout, material, []) }.ok().unwrap();
-    let caller = module.acquire(Contract::MmuGeometry, 1).unwrap();
-    let sibling = module.acquire(Contract::MmuGeometry, 1).unwrap();
-    assert_eq!(caller.entry(), entry);
-    assert_eq!(sibling.entry(), entry);
-    let geometry = unsafe {
-        let query = core::mem::transmute::<u64, unsafe extern "C" fn() -> u64>(caller.entry());
-        query()
+            .filter(|_| images.iter().all(|image| !image.range.contains(&page)))
     };
-    assert_eq!(geometry, PAGE);
-    module.shut();
+    // Revoke writable staging translations before publishing either image.
+    // Only the major can access this initial root at this point.
+    for pages in images {
+        initial.withdraw(pages.range.clone(), |_| Some(Permissions::ReadWrite));
+    }
+    initial.verify_active(reserved, outside_images);
+    for pages in images {
+        initial.publish(pages.range.start, pages.entries());
+    }
+    let published = reserved + geometry_pages.present() + root_pages.present();
+    let placed = |page| match images.iter().find(|image| image.range.contains(&page)) {
+        Some(image) => image.permission(page),
+        None => resident.permission(page),
+    };
+    initial.verify_active(published, placed);
+
+    let slots = ModuleSlots::<2>::new();
+    // The major verified exact permissions and synchronized instructions.
+    // The minor will fence before its first use of either root.
+    let geometry = unsafe { slots.publish(geometry_layout, geometry_material, []) }
+        .ok()
+        .unwrap();
+    let provider = geometry.acquire(Contract::MmuGeometry, 1).unwrap();
+    let retained = geometry.acquire(Contract::MmuGeometry, 1).unwrap();
+    let backend = unsafe { slots.publish(root_layout, root_material, [retained]) }
+        .ok()
+        .unwrap();
+    let encoder = backend.bind_sv39().unwrap();
+    let mut successor = initial.successor();
+
+    for (range, _) in resident.ranges() {
+        for page in range.step_by(PAGE as usize) {
+            if let Some(permission) = placed(page) {
+                successor.map_with(page..page + PAGE, permission, |address, value| {
+                    let kind = match value {
+                        None => Sv39Encoding::Branch,
+                        Some(Permissions::ReadOnly) => Sv39Encoding::ReadOnly,
+                        Some(Permissions::ReadWrite) => Sv39Encoding::ReadWrite,
+                        Some(Permissions::ReadExecute) => Sv39Encoding::ReadExecute,
+                    };
+                    unsafe { encoder.encode(PhysicalAddress::new(address), kind) }.unwrap()
+                });
+            }
+        }
+    }
+    successor.verify_inactive(published, placed);
+    let root_physical = PhysicalAddress::new(successor.storage().start);
+    let context = unsafe { encoder.encode(root_physical, Sv39Encoding::Context) }.unwrap();
+    assert_eq!(context, successor.context());
+    assert_ne!(context, initial.context());
+    let misaligned = PhysicalAddress::new(root_physical.get() + 1);
+    assert!(unsafe { encoder.encode(misaligned, Sv39Encoding::Context) }.is_none());
+
+    let replies = unsafe {
+        harts::exercise(
+            peer,
+            [initial.context(), context],
+            &provider,
+            &encoder,
+            || {
+                // The remote Hart still uses the initial root. Switch the major
+                // while retaining both table sets and both callable instances.
+                mapping::switch_context(initial.context(), context);
+                successor.verify_active(published, placed);
+                assert_eq!(
+                    encoder
+                        .encode(root_physical, Sv39Encoding::Context)
+                        .unwrap(),
+                    context,
+                );
+            },
+        )
+    };
+    assert_eq!(replies, [PAGE; 2]);
+
+    // The minor has left both roots and is physically STOPPED. The provider
+    // still cannot retire until the dependent executable and its use end.
+    geometry.shut();
     assert!(matches!(
-        module.acquire(Contract::MmuGeometry, 1),
+        geometry.acquire(Contract::MmuGeometry, 1),
         Err(UseError::Closed)
     ));
-    assert!(matches!(module.retire(), Err(UseError::Busy)));
-    drop(caller);
-    assert!(matches!(module.retire(), Err(UseError::Busy)));
-    drop(sibling);
+    assert!(matches!(geometry.retire(), Err(UseError::Busy)));
+    drop(provider);
+    assert!(matches!(geometry.retire(), Err(UseError::Busy)));
 
-    let retirement = module.retire().ok().unwrap();
-    root.withdraw(target.clone(), |page| {
-        final_pages[((page - start) / PAGE) as usize]
-    });
-    root.verify_active(total - count, |page| {
-        resident
-            .permission(page)
-            .filter(|_| !target.contains(&page))
-    });
-    // All entry paths are closed. The only Hart has no module mapping or
-    // stale translation, and no device uses the reserved pages.
-    unsafe { retirement.complete() };
-    let returned = module.reclaim().ok().unwrap();
-    assert_eq!(returned.physical, physical(target));
-    root.publish(
-        start,
-        &[Some(Permissions::ReadWrite); MAX_PAGES][..count as usize],
-    );
-    root.verify_active(total, |page| resident.permission(page));
-    // Restore the source's writable identity mapping and reuse the returned
-    // storage only once the module and all old instruction use have ended.
-    let mut reused =
-        unsafe { MappedRange::from_identity(returned.physical, returned.storage) }.unwrap();
-    let replaced = &mut reused.bytes()[(entry - start) as usize];
+    backend.shut();
+    assert!(matches!(backend.retire(), Err(UseError::Busy)));
+    drop(encoder);
+    let retirement = backend.retire().unwrap();
+    // No Hart can reenter the old root. Check both roots after withdrawing
+    // the dependent's exact pages.
     unsafe {
-        core::ptr::write_volatile(replaced, MaybeUninit::new(0xa5));
-        assert_eq!(core::ptr::read_volatile(replaced).assume_init(), 0xa5);
+        initial.withdraw_inactive(root_pages.range.clone(), |page| root_pages.permission(page))
+    };
+    successor.withdraw(root_pages.range.clone(), |page| root_pages.permission(page));
+    let provider_only = |page| placed(page).filter(|_| !root_pages.range.contains(&page));
+    initial.verify_inactive(reserved + geometry_pages.present(), provider_only);
+    successor.verify_active(reserved + geometry_pages.present(), provider_only);
+    unsafe { retirement.complete() };
+    assert!(matches!(geometry.retire(), Err(UseError::Busy)));
+    let returned_root = backend.reclaim().ok().unwrap();
+
+    let retirement = geometry.retire().unwrap();
+    unsafe {
+        initial.withdraw_inactive(geometry_pages.range.clone(), |page| {
+            geometry_pages.permission(page)
+        });
     }
+    successor.withdraw(geometry_pages.range.clone(), |page| {
+        geometry_pages.permission(page)
+    });
+    initial.verify_inactive(reserved, outside_images);
+    successor.verify_active(reserved, outside_images);
+    unsafe { initial.clear_inactive() };
+    initial.verify_inactive(0, |_| None);
+    unsafe { retirement.complete() };
+    let returned_geometry = geometry.reclaim().ok().unwrap();
+    root_pages.restore(&successor, returned_root, root_entry);
+    geometry_pages.restore(&successor, returned_geometry, geometry_entry);
+    successor.verify_active(total, |page| resident.permission(page));
     boot::write(
-        "PASS riscv-module-execution virt sv39=1 private=1 revoked=1 permissions=1 aliases=0 geometry=4096 uses=2 shut=1 retired=1 reuse=1\n",
+        "PASS riscv-module-execution virt sv39=1 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2\n",
     );
     boot::shutdown(true)
 }

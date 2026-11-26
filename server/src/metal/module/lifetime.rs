@@ -8,7 +8,9 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use super::{Contract, Layout};
+#[cfg(target_arch = "riscv64")]
+use super::Sv39Root;
+use super::{Abi, Contract, Layout, Machine};
 use crate::address::PhysicalRange;
 
 // Closing admission and observing the final release cover the same
@@ -53,8 +55,8 @@ impl<const SLOTS: usize> ModuleSlots<SLOTS> {
 
     /// Publish the exact prepared image with its material and its immutable
     /// direct dependencies. Each dependency already has a live provider,
-    /// giving the graph a publication order. Slot exhaustion returns the
-    /// caller's original layout, material and uses.
+    /// giving the graph a publication order. Slot exhaustion or an invalid
+    /// Sv39 dependency returns the caller's original layout, material and uses.
     ///
     /// # Safety
     ///
@@ -81,6 +83,12 @@ impl<const SLOTS: usize> ModuleSlots<SLOTS> {
             [ModuleUse<'provider>; DEPENDENCIES],
         ),
     > {
+        if layout.image.description.abi() == Abi::Sv39Root
+            && (sv39_geometry(&dependencies).is_none()
+                || layout.entry(Contract::Sv39Root) == Some(0))
+        {
+            return Err((layout, material, dependencies));
+        }
         for state in &self.states {
             if state
                 .compare_exchange(VACANT, OPEN, Ordering::Relaxed, Ordering::Relaxed)
@@ -144,6 +152,14 @@ impl<'slot, Material, const DEPENDENCIES: usize> Module<'slot, '_, '_, Material,
         self.layout.virtual_range()
     }
 
+    /// Bind this encoder to its own retained geometry provider.
+    #[cfg(target_arch = "riscv64")]
+    pub fn bind_sv39(&self) -> Result<Sv39Root<'_>, UseError> {
+        let geometry = sv39_geometry(self.dependencies.as_slice()).ok_or(UseError::Interface)?;
+        let encoder = self.acquire(Contract::Sv39Root, 1)?;
+        Ok(Sv39Root::new(encoder, geometry))
+    }
+
     /// Acquire the exact published interface for a persistent consumer.
     /// Ordinary calls use this borrow and do not change the use count.
     pub fn acquire(&self, contract: Contract, version: u32) -> Result<ModuleUse<'_>, UseError> {
@@ -172,6 +188,9 @@ impl<'slot, Material, const DEPENDENCIES: usize> Module<'slot, '_, '_, Material,
                     return Ok(ModuleUse {
                         state: self.state,
                         entry,
+                        contract,
+                        version,
+                        machine: self.layout.image.machine,
                     });
                 }
                 Err(observed) => state = observed,
@@ -233,11 +252,26 @@ impl<'slot, Material, const DEPENDENCIES: usize> Module<'slot, '_, '_, Material,
 pub struct ModuleUse<'module> {
     state: &'module AtomicUsize,
     entry: u64,
+    contract: Contract,
+    version: u32,
+    machine: Machine,
 }
 
 impl<'module> ModuleUse<'module> {
     pub fn id(&self) -> ModuleId<'module> {
         ModuleId(self.state)
+    }
+
+    pub fn contract(&self) -> Contract {
+        self.contract
+    }
+
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    pub fn machine(&self) -> Machine {
+        self.machine
     }
 
     /// Numeric entry for the consumer's previously validated domain ABI.
@@ -251,6 +285,19 @@ impl Drop for ModuleUse<'_> {
     fn drop(&mut self) {
         self.state.fetch_sub(USE, Ordering::Release);
     }
+}
+
+fn sv39_geometry<'borrow, 'provider>(
+    dependencies: &'borrow [ModuleUse<'provider>],
+) -> Option<&'borrow ModuleUse<'provider>> {
+    let [geometry] = dependencies else {
+        return None;
+    };
+    (geometry.contract() == Contract::MmuGeometry
+        && geometry.version() == 1
+        && geometry.machine() == Machine::Riscv64
+        && geometry.entry() != 0)
+        .then_some(geometry)
 }
 
 /// Exclusive scope for withdrawal of the exact module. Dropping this before

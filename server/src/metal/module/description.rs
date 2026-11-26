@@ -1,6 +1,6 @@
 //! Versioned module declarations carried in a bounded ELF note.
 
-use super::elf::Elf;
+use super::elf::{Elf, Machine};
 use crate::metal::firmware::devicetree::{DeviceTree, Error as TreeError, Node, NodeId};
 
 const NOTE_OWNER: &[u8] = b"SHUYRA\0";
@@ -30,11 +30,14 @@ impl From<TreeError> for DescriptionError {
     }
 }
 
-/// Integer-only ELF target calls, using SysV on x86_64 and the native ELF
-/// integer calling conventions on RV64 and AArch64.
+/// Supported native ELF calling contracts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Abi {
+    /// Integer-only calls, using SysV on x86_64 and the native ELF integer
+    /// calling conventions on RV64 and AArch64.
     Scalar,
+    /// RV64 C ABI with a caller-borrowed, versioned geometry import table.
+    Sv39Root,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,6 +45,9 @@ pub enum Contract {
     /// Version 1 takes no arguments and returns the base translation page
     /// size in bytes as a u64. Zero means the active configuration is unsupported.
     MmuGeometry,
+    /// Version 1 takes a geometry import table, a physical byte address and
+    /// the kind of Sv39 root entry to encode. Zero means unsupported.
+    Sv39Root,
 }
 
 /// An entry declaration tied to the original immutable note.
@@ -81,7 +87,7 @@ pub struct Description<'a> {
 }
 
 impl<'a> Description<'a> {
-    pub(super) fn read(elf: &Elf<'a>) -> Result<Self, DescriptionError> {
+    pub(super) fn read(elf: &Elf<'a>, machine: Machine) -> Result<Self, DescriptionError> {
         let tree = DeviceTree::new(note(elf)?)?;
         let mut nodes = tree.nodes();
         let root = nodes.next().ok_or(DescriptionError::Missing)?;
@@ -90,6 +96,7 @@ impl<'a> Description<'a> {
         }
         let abi = match word(&root, b"abi")? {
             1 => Abi::Scalar,
+            2 if machine == Machine::Riscv64 => Abi::Sv39Root,
             _ => return Err(DescriptionError::Unsupported),
         };
 
@@ -102,10 +109,10 @@ impl<'a> Description<'a> {
         if declaration.parent_id() != Some(interfaces.id()) {
             return Err(DescriptionError::Unsupported);
         }
-        let interface = read_interface(elf, &declaration)?;
+        let interface = read_interface(elf, &declaration, abi)?;
         if let Some(extra) = nodes.next() {
             if extra.parent_id() == Some(interfaces.id()) {
-                read_interface(elf, &extra)?;
+                read_interface(elf, &extra, abi)?;
                 return Err(DescriptionError::Duplicate);
             }
             return Err(DescriptionError::Unsupported);
@@ -164,12 +171,14 @@ fn note_field(bytes: &[u8], length: u32) -> Result<(&[u8], &[u8]), DescriptionEr
 fn read_interface<'a>(
     elf: &Elf<'a>,
     node: &Node<'_, 'a>,
+    abi: Abi,
 ) -> Result<Interface<'a>, DescriptionError> {
-    let contract = match node
+    let compatible = node
         .string(b"compatible")?
-        .ok_or(DescriptionError::Missing)?
-    {
-        b"shuyra,mmu-geometry" => Contract::MmuGeometry,
+        .ok_or(DescriptionError::Missing)?;
+    let contract = match (abi, compatible) {
+        (Abi::Scalar, b"shuyra,mmu-geometry") => Contract::MmuGeometry,
+        (Abi::Sv39Root, b"shuyra,sv39-root") => Contract::Sv39Root,
         _ => return Err(DescriptionError::Unsupported),
     };
     let version = word(node, b"version")?;

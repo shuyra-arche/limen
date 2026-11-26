@@ -3,10 +3,14 @@
 mod description;
 mod elf;
 mod lifetime;
+#[cfg(target_arch = "riscv64")]
+mod sv39;
 
 pub use description::{Abi, Contract, Description, DescriptionError, Interface};
 pub use elf::{Machine, Permissions};
 pub use lifetime::{Module, ModuleId, ModuleSlots, ModuleUse, Retirement, UseError};
+#[cfg(target_arch = "riscv64")]
+pub use sv39::{Sv39Encoding, Sv39Root};
 
 use crate::{
     access::MappedRange,
@@ -33,6 +37,7 @@ pub struct ModuleImage<'a> {
     elf: elf::Elf<'a>,
     description: Description<'a>,
     page_size: PageSize,
+    machine: Machine,
 }
 
 impl<'a> ModuleImage<'a> {
@@ -41,11 +46,12 @@ impl<'a> ModuleImage<'a> {
     /// machine and actual initial page granule.
     pub fn read(bytes: &'a [u8], machine: Machine, page_size: PageSize) -> Result<Self, Error> {
         let elf = elf::Elf::read(bytes, machine, page_size.get())?;
-        let description = Description::read(&elf).map_err(Error::Description)?;
+        let description = Description::read(&elf, machine).map_err(Error::Description)?;
         Ok(Self {
             elf,
             description,
             page_size,
+            machine,
         })
     }
 

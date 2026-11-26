@@ -1,8 +1,8 @@
-use super::{IMAGES, PAGE};
+use super::{IMAGES, PAGE, SV39_ROOT};
 use crate::{
     access::MappedRange,
     address::PhysicalAddress,
-    module::{Contract, Layout, ModuleImage, ModuleSlots, UseError},
+    module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, UseError},
 };
 use std::{mem::MaybeUninit, sync::Barrier, thread};
 
@@ -177,4 +177,81 @@ fn capacity_failure_keeps_the_layout_material_and_dependency() {
         unsafe { slots.publish(next_layout, next_backing, []) }.is_err(),
         "a boot-only identity slot cannot be reused after retirement"
     );
+}
+
+#[test]
+fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
+    let (machine, bytes) = IMAGES[0];
+    let geometry = ModuleImage::read(bytes, machine, PAGE).unwrap();
+    let root = ModuleImage::read(SV39_ROOT, machine, PAGE).unwrap();
+    let (geometry_layout, geometry_material) = prepare(&geometry, 0x20_0000, 0x4000_0000);
+    let (other_layout, other_material) = prepare(&image(), 0x21_0000, 0x4001_0000);
+    let (root_layout, root_material) = prepare(&root, 0x22_0000, 0x4002_0000);
+    let (second_layout, second_material) = prepare(&root, 0x23_0000, 0x4003_0000);
+    let root_physical = root_layout.physical();
+    let root_entry = root_layout.entry(Contract::Sv39Root).unwrap();
+    let root_storage = root_material.as_ptr();
+    let slots = ModuleSlots::<3>::new();
+    let geometry = unsafe { slots.publish(geometry_layout, geometry_material, []) }
+        .ok()
+        .unwrap();
+    let other = unsafe { slots.publish(other_layout, other_material, []) }
+        .ok()
+        .unwrap();
+
+    // These buffers only model custody. Their numerical entries are never
+    // called on the Host.
+    let (layout, material, []) = unsafe { slots.publish(root_layout, root_material, []) }
+        .err()
+        .unwrap();
+    let wrong_machine = other.acquire(GEOMETRY, 1).unwrap();
+    let (layout, material, [wrong_machine]) =
+        unsafe { slots.publish(layout, material, [wrong_machine]) }
+            .err()
+            .unwrap();
+    assert_eq!(wrong_machine.id(), other.id());
+    assert_eq!(wrong_machine.machine(), Machine::X86_64);
+    drop(wrong_machine);
+
+    let first = geometry.acquire(GEOMETRY, 1).unwrap();
+    let second = geometry.acquire(GEOMETRY, 1).unwrap();
+    let (layout, material, [first, second]) =
+        unsafe { slots.publish(layout, material, [first, second]) }
+            .err()
+            .unwrap();
+    assert_eq!(first.id(), geometry.id());
+    assert_eq!(second.id(), geometry.id());
+    assert_eq!(first.contract(), GEOMETRY);
+    assert_eq!(first.version(), 1);
+    drop(second);
+    assert_eq!(layout.physical(), root_physical);
+    assert_eq!(layout.entry(Contract::Sv39Root), Some(root_entry));
+    assert_eq!(material.as_ptr(), root_storage);
+
+    // Three earlier rejections leave the one available publication slot free.
+    let root = unsafe { slots.publish(layout, material, [first]) }
+        .ok()
+        .unwrap();
+    let wrong_contract = root.acquire(Contract::Sv39Root, 1).unwrap();
+    let available = ModuleSlots::<1>::new();
+    let (_, _, [wrong_contract]) =
+        unsafe { available.publish(second_layout, second_material, [wrong_contract]) }
+            .err()
+            .unwrap();
+    assert_eq!(wrong_contract.id(), root.id());
+    assert_eq!(wrong_contract.contract(), Contract::Sv39Root);
+    assert_eq!(wrong_contract.entry(), root_entry);
+    drop(wrong_contract);
+
+    geometry.shut();
+    assert!(matches!(geometry.retire(), Err(UseError::Busy)));
+    root.shut();
+    unsafe { root.retire().unwrap().complete() };
+    let returned = root.reclaim().ok().unwrap();
+    assert_eq!(returned.as_ptr(), root_storage);
+    unsafe { geometry.retire().unwrap().complete() };
+    drop(geometry.reclaim().ok().unwrap());
+    other.shut();
+    unsafe { other.retire().unwrap().complete() };
+    drop(other.reclaim().ok().unwrap());
 }
