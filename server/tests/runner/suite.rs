@@ -22,6 +22,8 @@ pub enum Run {
     Qemu {
         kernel: String,
         #[serde(default)]
+        harts: Option<NonZeroU8>,
+        #[serde(default)]
         imports: Vec<String>,
         #[serde(default)]
         features: Vec<String>,

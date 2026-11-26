@@ -334,12 +334,23 @@ impl<'a> Elf<'a> {
 
     pub(super) fn is_file_executable(&self, address: u64) -> bool {
         address.is_multiple_of(self.instruction)
-            && address.checked_add(self.instruction).is_some_and(|end| {
-                self.segments().any(|segment| {
-                    segment.permissions == Permissions::ReadExecute
-                        && segment.address <= address
-                        && end <= segment.address + segment.file.len() as u64
-                })
+            && self.segments().any(|segment| {
+                if segment.permissions != Permissions::ReadExecute {
+                    return false;
+                }
+                let offset = address
+                    .checked_sub(segment.address)
+                    .and_then(|offset| usize::try_from(offset).ok());
+                let Some(bytes) = offset.and_then(|offset| segment.file.get(offset..)) else {
+                    return false;
+                };
+                if self.instruction != 2 {
+                    return bytes.len() >= self.instruction as usize;
+                }
+                // An RV64 compressed image can still start with a 32-bit
+                // instruction. Check its width before accepting the entry.
+                matches!(bytes, [first, _, ..] if first & 3 != 3)
+                    || matches!(bytes, [first, _, _, _, ..] if first & 3 == 3 && first & 31 != 31)
             })
     }
 

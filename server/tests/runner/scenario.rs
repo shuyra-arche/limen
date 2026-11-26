@@ -33,11 +33,13 @@ pub struct Inputs {
 struct Variant {
     root: PathBuf,
     elf: PathBuf,
+    harts: u8,
 }
 
 fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result<Variant> {
     let Run::Qemu {
         kernel,
+        harts,
         imports,
         features,
         environment,
@@ -99,11 +101,12 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
 
     let qemu = std::env::var("QEMU_RISCV64").unwrap_or("qemu-system-riscv64".into());
     let firmware = Path::new(&std::env::var("QEMU_OPENSBI")?).canonicalize()?;
+    let harts = harts.map_or(GUEST_CPUS, |count| count.get());
     let mut inputs = serde_json::json!({
         "source": source,
         "suite": suite.id,
         "profile": args.profile,
-        "harts": GUEST_CPUS,
+        "harts": harts,
         "tools": tools(&provider, &qemu, &firmware)?,
         "suite_sha256": composition::hashes(&owner.join(relative))?,
         "builds": [format!("{command:?}")],
@@ -129,12 +132,14 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
     Ok(Variant {
         root: root.to_owned(),
         elf,
+        harts,
     })
 }
 
 fn run_image(
     elf: &Path,
     evidence: &Path,
+    harts: u8,
 ) -> Result<(process::Outcome, std::io::Result<qmp::Shutdown>)> {
     fresh(evidence)?;
     let firmware = Path::new(&std::env::var("QEMU_OPENSBI")?).canonicalize()?;
@@ -150,7 +155,7 @@ fn run_image(
             "rv64",
             "-smp",
         ])
-        .arg(GUEST_CPUS.to_string())
+        .arg(harts.to_string())
         .args(["-m", "128M", "-monitor", "none", "-nic", "none", "-bios"])
         .arg(firmware)
         .arg("-kernel")
@@ -162,7 +167,7 @@ fn run_image(
 /// The scenario owner, not the launcher, decides whether the evidence passes.
 pub fn observe(elf: PathBuf, evidence: PathBuf) -> Result<()> {
     let elf = elf.canonicalize()?;
-    let (result, shutdown) = run_image(&elf, &evidence)?;
+    let (result, shutdown) = run_image(&elf, &evidence, GUEST_CPUS)?;
     let mut value = serde_json::to_value(&result)?;
     value["qmp_shutdown"] = match shutdown {
         Ok(receipt) => serde_json::to_value(receipt)?,
@@ -179,10 +184,9 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<bo
     else {
         return Err("non-QEMU suite cannot boot".into());
     };
-    let evidence = variant
-        .root
-        .join(format!("harts-{GUEST_CPUS}-round-{round}"));
-    let (mut result, shutdown) = run_image(&variant.elf, &evidence)?;
+    let harts = variant.harts;
+    let evidence = variant.root.join(format!("harts-{harts}-round-{round}"));
+    let (mut result, shutdown) = run_image(&variant.elf, &evidence, harts)?;
     let log = fs::read(evidence.join("serial.log"))?;
     let details = match std::str::from_utf8(&log) {
         Ok(log) => verify::check(log, expects, distinct.as_ref())?,
@@ -200,7 +204,7 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<bo
     value["platform_sha256"] = digest(&variant.elf)?.into();
     json(&evidence.join("result.json"), &value)?;
     println!(
-        "{} {} {} harts={GUEST_CPUS} round={round}: {}",
+        "{} {} {} harts={harts} round={round}: {}",
         verdict.to_ascii_uppercase(),
         suite.id,
         args.profile,

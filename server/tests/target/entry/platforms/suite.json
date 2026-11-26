@@ -52,6 +52,7 @@
       "virt": [
         "server/src/metal/boot/aarch64/**",
         "server/tests/target/entry/platforms/virt.rs",
+        "server/tests/target/entry/platforms/devicetree.rs",
         "server/tests/target/entry/platforms/pl011.rs",
         "server/src/metal/firmware/psci.rs",
         "server/src/metal/firmware/arm.rs",

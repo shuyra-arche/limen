@@ -1,26 +1,34 @@
 #![no_std]
 #![no_main]
 
+#[cfg(target_arch = "aarch64")]
+#[path = "board/aarch64.rs"]
+mod board;
+#[cfg(target_arch = "x86_64")]
+#[path = "board/x86_64.rs"]
+mod board;
+#[cfg(target_arch = "aarch64")]
+#[path = "arm_mapping.rs"]
+mod mapping;
+#[cfg(target_arch = "x86_64")]
+#[path = "x86_mapping.rs"]
 mod mapping;
 
-use core::{
-    arch::{asm, x86_64::__cpuid},
-    fmt::{self, Write},
-};
+use core::fmt::{self, Write};
 use kernel::{
     access::MappedRange,
     address::{PhysicalAddress, PhysicalRange},
     entry::boot::{self, FirmwareMap},
-    module::{Contract, Machine, ModuleImage, Permissions},
+    module::{Contract, ModuleImage, Permissions},
 };
 use limen_treaty::model::{ByteLength, PageSize};
 use uefi::{
     mem::memory_map::{MemoryAttribute, MemoryMap, MemoryType},
     prelude::*,
-    proto::{loaded_image::LoadedImage, pi::mp::MpServices, security::MemoryProtection},
+    proto::{loaded_image::LoadedImage, security::MemoryProtection},
 };
 
-const IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/x86_64.elf"));
+const IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/module.elf"));
 const MAX_PAGES: usize = 16;
 const PAGE: u64 = mapping::PAGE;
 
@@ -40,35 +48,23 @@ struct Output;
 impl Write for Output {
     fn write_str(&mut self, text: &str) -> fmt::Result {
         for byte in text.bytes() {
-            write_byte(byte);
+            if !board::write_byte(byte) {
+                return Err(fmt::Error);
+            }
         }
         Ok(())
     }
 }
 
-fn write_byte(byte: u8) -> bool {
-    unsafe {
-        asm!("out dx, al", in("dx") 0xe9u16, in("al") byte, options(nomem, nostack, preserves_flags))
-    };
-    true
-}
-
-fn reset(success: bool) {
-    unsafe {
-        asm!("out dx, eax", in("dx") 0xf4u16, in("eax") if success { 0x10u32 } else { 0x11u32 },
-        options(nomem, nostack, preserves_flags))
-    };
-}
-
 static SERVICES: boot::Services = boot::Services {
-    output: Some(write_byte),
-    reset: Some(reset),
+    output: Some(board::write_byte),
+    reset: Some(board::reset),
 };
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
     let _ = writeln!(Output, "FAIL module-execution {info}");
-    reset(false);
+    board::reset(false);
     loop {
         core::hint::spin_loop();
     }
@@ -85,17 +81,10 @@ fn checked_map(map: &impl MemoryMap) -> FirmwareMap<'_> {
     FirmwareMap::new(map.buffer(), meta.desc_size, meta.desc_version, 512).unwrap()
 }
 
-fn assert_single_cpu() {
-    let handle = uefi::boot::get_handle_for_protocol::<MpServices>().unwrap();
-    let mp = uefi::boot::open_protocol_exclusive::<MpServices>(handle).unwrap();
-    let processors = mp.get_number_of_processors().unwrap();
-    assert_eq!((processors.total, processors.enabled), (1, 1));
-}
-
 fn prepare() -> Placement {
     let image = ModuleImage::select(
         &[IMAGE],
-        Machine::X86_64,
+        board::MACHINE,
         PageSize::new(PAGE).unwrap(),
         Contract::MmuGeometry,
     )
@@ -135,6 +124,9 @@ fn prepare() -> Placement {
         image.prepare(&mut view, start).unwrap()
     });
 
+    #[cfg(target_arch = "aarch64")]
+    mapping::without_interrupts(|| mapping::clean(physical));
+
     let mut pages = [Permissions::ReadOnly; MAX_PAGES];
     for segment in layout.segments() {
         let first = segment.physical.start().get();
@@ -152,16 +144,33 @@ fn prepare() -> Placement {
     assert!(pages[..count].contains(&Permissions::ReadOnly));
     assert!(pages[..count].contains(&Permissions::ReadWrite));
 
+    for (index, permission) in pages[..count].iter().enumerate() {
+        let first = start + index as u64 * PAGE;
+        if *permission != Permissions::ReadWrite {
+            protection
+                .set_memory_attributes(first..first + PAGE, MemoryAttribute::READ_ONLY)
+                .unwrap();
+        }
+    }
+    let sealed = uefi::boot::memory_map(MemoryType::LOADER_DATA).unwrap();
+    mapping::without_interrupts(|| {
+        unsafe {
+            root.check(checked_map(&sealed), physical, |page| {
+                let index = ((page - start) / PAGE) as usize;
+                match pages[index] {
+                    Permissions::ReadExecute => Permissions::ReadOnly,
+                    permission => permission,
+                }
+            })
+        }
+        .unwrap();
+    });
+
     for (index, permission) in pages[..count].iter().copied().enumerate() {
         let first = start + index as u64 * PAGE;
         let scope = first..first + PAGE;
-        if permission != Permissions::ReadWrite {
-            protection
-                .set_memory_attributes(scope.clone(), MemoryAttribute::READ_ONLY)
-                .unwrap();
-        }
         if permission == Permissions::ReadExecute {
-            // Close the write mapping while the page is still non-executable.
+            // The checked root is already read-only and non-executable here.
             protection
                 .clear_memory_attributes(scope.clone(), MemoryAttribute::EXECUTE_PROTECT)
                 .unwrap();
@@ -182,7 +191,6 @@ fn prepare() -> Placement {
     };
     let after = uefi::boot::memory_map(MemoryType::LOADER_DATA).unwrap();
     mapping::without_interrupts(|| {
-        mapping::synchronize(physical);
         unsafe {
             root.check(checked_map(&after), physical, |page| {
                 placement.permission(page)
@@ -201,7 +209,7 @@ impl Placement {
 
 #[entry]
 fn main() -> Status {
-    assert_single_cpu();
+    let device_tree = board::capture();
     let loaded =
         uefi::boot::open_protocol_exclusive::<LoadedImage>(uefi::boot::image_handle()).unwrap();
     let (base, size) = loaded.info();
@@ -219,11 +227,10 @@ fn main() -> Status {
         stride: meta.desc_size,
         version: meta.desc_version,
         descriptor_limit: 512,
-        device_tree: None,
+        device_tree,
         acpi: None,
     };
-    let hart = (__cpuid(1).ebx >> 24) as usize;
-    unsafe { boot::major(hart, &input, &SERVICES) }
+    unsafe { boot::major(board::hart(), &input, &SERVICES) }
 }
 
 #[unsafe(no_mangle)]
@@ -242,20 +249,18 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
                 .check(map, placement.physical, |page| placement.permission(page))
         }
         .unwrap();
+        #[cfg(target_arch = "aarch64")]
         mapping::synchronize(placement.physical);
-        // The active, unchanged major root exposes only the verified identity
-        // permissions for the retained module pages. The independently built
-        // fixture's exact MMU geometry ABI is SysV with a single u64 result.
-        let query = unsafe {
-            core::mem::transmute::<usize, unsafe extern "sysv64" fn() -> u64>(
-                placement.entry as usize,
-            )
-        };
-        unsafe { query() }
+        // The retained pages are executable through the proved initial root.
+        // The original trusted image declares the target's scalar geometry ABI.
+        unsafe { board::query(placement.entry as usize) }
     });
     assert_eq!(geometry, PAGE);
-    boot::write(
-        "PASS module-execution q35 strictnx=1 private=1 permissions=1 identity=1 aliases=0 geometry=4096\n",
-    );
+    writeln!(
+        Output,
+        "PASS module-execution {} strictnx=1 private=1 permissions=1 identity=1 aliases=0 geometry={geometry}",
+        board::NAME
+    )
+    .unwrap();
     boot::shutdown(true)
 }

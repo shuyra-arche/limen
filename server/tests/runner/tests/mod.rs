@@ -34,7 +34,7 @@ fn projects_own_their_manifests_and_verdicts() {
 }
 
 #[test]
-fn board_boot_accepts_a_single_hart_and_rejects_zero() {
+fn guest_suites_accept_a_single_hart_and_reject_zero() {
     let manifest = |harts| {
         serde_json::json!({
             "kind": "board-boot",
@@ -46,6 +46,18 @@ fn board_boot_accepts_a_single_hart_and_rejects_zero() {
     assert!(matches!(
         run,
         suite::Run::BoardBoot { harts: Some(count), .. } if count.get() == 1
+    ));
+    assert!(serde_json::from_value::<suite::Run>(manifest(0)).is_err());
+
+    let manifest = |harts| {
+        serde_json::json!({
+            "kind": "qemu", "kernel": "module-riscv", "expects": ["PASS"], "harts": harts,
+        })
+    };
+    let run = serde_json::from_value::<suite::Run>(manifest(1)).unwrap();
+    assert!(matches!(
+        run,
+        suite::Run::Qemu { harts: Some(count), .. } if count.get() == 1
     ));
     assert!(serde_json::from_value::<suite::Run>(manifest(0)).is_err());
 }
