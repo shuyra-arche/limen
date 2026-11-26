@@ -75,7 +75,7 @@ pub fn check(boot: &Boot<'_>) -> usize {
         let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
         assert!(isa.has(RiscvExtension::InstructionFence));
     }
-    assert!(boot.sbi_services().hart_state_management());
+    assert!(kernel::metal::firmware::sbi::platform_services().hart_state_management());
     assert_eq!(status(major), STARTED);
     assert_eq!(status(minor), STOPPED);
     minor
