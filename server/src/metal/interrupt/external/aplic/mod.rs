@@ -13,7 +13,7 @@ const IDC_BYTES: usize = 32;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 mod direct;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
-pub use direct::{Claim, Direct, Failure};
+pub use direct::{Claim, Direct, Effect, Failure, Source, State};
 
 /// The checked physical domain and exact direct-delivery target, not authority.
 #[derive(Clone, Copy, Debug)]
@@ -146,7 +146,7 @@ impl<'a> Description<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u32)]
+#[repr(u8)]
 pub enum Mode {
     EdgeRising = 4,
     EdgeFalling = 5,
