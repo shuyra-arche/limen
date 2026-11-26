@@ -7,7 +7,7 @@ use kernel::metal::{
         Mode,
         description::{RiscvMmu, RiscvMmuMode},
     },
-    time::RiscvTimebase,
+    time::riscv::RiscvTimebase,
 };
 
 fn cpu_scope() -> Fixture {

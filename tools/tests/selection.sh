@@ -105,14 +105,16 @@ change server/src/metal/boot/minor.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution-harts","platform-boot","riscv-module-execution"]' >/dev/null
 change server/src/metal/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-for source in server/src/metal/firmware/psci/native.rs server/src/metal/firmware/arm/native.rs; do
+for source in server/src/metal/firmware/psci/native.rs server/src/metal/interrupt/gic/native.rs server/src/metal/time/aarch64/native.rs; do
     change "$source"
     [[ $(boards) == virt ]]
     bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 done
 for source in server/src/metal/hart/aarch64/description.rs \
               server/src/metal/firmware/psci/mod.rs \
-              server/src/metal/firmware/arm/mod.rs; do
+              server/src/metal/interrupt/mod.rs \
+              server/src/metal/interrupt/gic/mod.rs \
+              server/src/metal/time/aarch64/mod.rs; do
     change "$source"
     [[ $(boards) == virt ]]
     bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
@@ -133,7 +135,7 @@ change server/src/metal/firmware/devicetree/mod.rs
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 for source in server/src/metal/hart/riscv/description.rs \
               server/src/metal/execution/riscv/description.rs \
-              server/src/metal/time/mod.rs; do
+              server/src/metal/time/riscv/mod.rs; do
     change "$source"
     [[ $(boards) == rv64 ]]
     bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null

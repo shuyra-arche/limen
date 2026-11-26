@@ -1,10 +1,11 @@
 use core::{arch::asm, fmt::Write};
 use kernel::entry::boot;
 use kernel::metal::{
-    firmware::arm::{GenericTimer, GicV3, Trigger},
     firmware::devicetree::{DeviceTree, Error as TreeError},
     firmware::psci::{Conduit, PsciDescription},
     hart::aarch64::description::Aarch64Cpus,
+    interrupt::gic::{GicV3, Trigger},
+    time::aarch64::GenericTimer,
 };
 use uefi::{
     Status,

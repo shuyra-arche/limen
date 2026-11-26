@@ -2,11 +2,12 @@
 use super::fixture::Fixture;
 use kernel::metal::{
     firmware::{
-        arm::{GenericTimer, Trigger},
         devicetree::{DeviceTree, Error},
         psci::{Conduit, PsciDescription, PsciVersion},
     },
     hart::aarch64::description::Aarch64Cpus,
+    interrupt::gic::Trigger,
+    time::aarch64::GenericTimer,
 };
 
 fn cpus(affinities: &[u64]) -> Vec<u8> {

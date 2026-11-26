@@ -1,5 +1,4 @@
 pub mod acpi;
-pub mod arm;
 pub mod devicetree;
 #[cfg(any(limen_target, test))]
 pub(crate) mod facts;

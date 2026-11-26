@@ -40,3 +40,14 @@ impl Node<'_, '_> {
         }
     }
 }
+
+pub(crate) fn cell(value: Option<&[u8]>) -> Result<Option<u32>, Error> {
+    value
+        .map(|bytes| {
+            bytes
+                .try_into()
+                .map(u32::from_be_bytes)
+                .map_err(|_| Error::Format)
+        })
+        .transpose()
+}
