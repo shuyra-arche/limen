@@ -2,7 +2,8 @@ use core::arch::asm;
 use kernel::metal::module::Machine;
 use kernel::metal::{
     firmware::devicetree::DeviceTree, firmware::psci::Conduit, firmware::psci::PsciDescription,
-    firmware::uefi::DeviceTree as LoaderTree, hart::Aarch64Cpus,
+    firmware::uefi::DeviceTree as LoaderTree,
+    hart::aarch64::description::Aarch64Cpus,
 };
 use uefi::Status;
 
