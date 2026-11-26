@@ -6,7 +6,11 @@ use core::{
     mem::offset_of,
 };
 
-pub(crate) fn extensions_off() -> bool {
+/// The native integer-only switch is valid in the verified Bare environment.
+pub(crate) fn cooperative_ready() -> bool {
+    if !crate::metal::boot::established() {
+        return false;
+    }
     let status: usize;
     unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nomem, nostack)) };
     const EXTENSIONS: usize = (3 << 13) | (3 << 9);

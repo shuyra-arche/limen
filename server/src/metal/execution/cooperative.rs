@@ -2,13 +2,8 @@
 
 use core::{cell::Cell, marker::PhantomData};
 
-use super::{Context, extensions_off};
-use crate::metal::{boot, hart};
-
-/// The linked cooperative backend is usable only in its verified environment.
-pub(crate) fn cooperative_ready() -> bool {
-    boot::established() && extensions_off()
-}
+use super::Context;
+use crate::metal::hart;
 
 #[derive(Clone, Copy)]
 pub(crate) struct LeaveReceipt<Occupancy>(Occupancy);
