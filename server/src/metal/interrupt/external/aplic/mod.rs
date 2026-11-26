@@ -117,7 +117,11 @@ impl<'a> Description<'a> {
             return Err(Error::Conflict);
         }
         let bytes = device.property(b"interrupts")?.ok_or(Error::Missing)?;
-        let [id, flags] = *bytes.as_chunks::<4>().0.first_chunk::<2>().ok_or(Error::Format)?;
+        let [id, flags] = *bytes
+            .as_chunks::<4>()
+            .0
+            .first_chunk::<2>()
+            .ok_or(Error::Format)?;
         if bytes.len() != 8 {
             return Err(Error::Unsupported);
         }

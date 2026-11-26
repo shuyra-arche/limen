@@ -43,8 +43,7 @@ impl<'a> RiscvCpus<'a> {
             return Err(Error::Unsupported);
         }
         let parent = node.parent()?.ok_or(Error::Missing)?;
-        if parent.parent_id() != Some(self.source)
-            || parent.string(b"device_type")? != Some(b"cpu")
+        if parent.parent_id() != Some(self.source) || parent.string(b"device_type")? != Some(b"cpu")
         {
             return Err(Error::Format);
         }
@@ -52,12 +51,13 @@ impl<'a> RiscvCpus<'a> {
             (1, Some(value)) if value.len() == 4 => {
                 u64::from(u32::from_be_bytes(value.try_into().unwrap()))
             }
-            (2, Some(value)) if value.len() == 8 => {
-                u64::from_be_bytes(value.try_into().unwrap())
-            }
+            (2, Some(value)) if value.len() == 8 => u64::from_be_bytes(value.try_into().unwrap()),
             _ => return Err(Error::Format),
         };
-        if self.cpu(id)?.is_none_or(|cpu| cpu.node().id() != parent.id()) {
+        if self
+            .cpu(id)?
+            .is_none_or(|cpu| cpu.node().id() != parent.id())
+        {
             return Err(Error::Conflict);
         }
         Ok(id)

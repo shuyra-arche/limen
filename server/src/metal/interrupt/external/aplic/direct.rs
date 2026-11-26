@@ -204,9 +204,7 @@ impl<'a> Direct<'a> {
         self.modes[index] = Some(route.mode);
         self.write(index * 4, route.mode as u32);
         self.write(TARGET + index * 4, target);
-        if self.read(index * 4) != route.mode as u32
-            || self.read(TARGET + index * 4) != target
-        {
+        if self.read(index * 4) != route.mode as u32 || self.read(TARGET + index * 4) != target {
             return Err(self.unconfirmed());
         }
         Ok(())
@@ -300,7 +298,10 @@ impl<'a> Direct<'a> {
     /// Reborrow the original unclosed claim, without another destructive read.
     pub fn current(&mut self) -> Option<Claim<'_, 'a>> {
         match self.reception {
-            Reception::Claimed(record) => Some(Claim { owner: self, record }),
+            Reception::Claimed(record) => Some(Claim {
+                owner: self,
+                record,
+            }),
             _ => None,
         }
     }

@@ -5,7 +5,13 @@ use kernel::metal::{
     platform::description::devicetree::{DeviceTree, Error},
 };
 
-fn fixture(aplic_targets: &[u32], timer_targets: &[u32], source: u32, parent: u32, span: u32) -> Vec<u8> {
+fn fixture(
+    aplic_targets: &[u32],
+    timer_targets: &[u32],
+    source: u32,
+    parent: u32,
+    span: u32,
+) -> Vec<u8> {
     let mut fixture = Fixture::root();
     fixture.node(b"cpus");
     fixture.cells(b"#address-cells", &[1]);
@@ -27,7 +33,12 @@ fn fixture(aplic_targets: &[u32], timer_targets: &[u32], source: u32, parent: u3
     fixture.end();
 
     for (name, base, handle, targets) in [
-        (b"aplic@c000000".as_slice(), 0x0c00_0000, 4, &[2, 11, 1, 11][..]),
+        (
+            b"aplic@c000000".as_slice(),
+            0x0c00_0000,
+            4,
+            &[2, 11, 1, 11][..],
+        ),
         (b"aplic@d000000".as_slice(), 0x0d00_0000, 5, aplic_targets),
     ] {
         fixture.node(name);
@@ -72,7 +83,10 @@ fn sparse_hart_ids_follow_the_actual_controller_order() {
     assert_eq!(timer.counter().start().get(), 0x0200_bff8);
     assert_eq!(timer.comparator().start().get(), 0x0200_4008);
     assert_eq!(timer.comparator().length().get(), 8);
-    assert_eq!(timer.clock_scope(), tree.find_path(b"/cpus").unwrap().unwrap().id());
+    assert_eq!(
+        timer.clock_scope(),
+        tree.find_path(b"/cpus").unwrap().unwrap().id()
+    );
 }
 
 #[test]
@@ -100,7 +114,11 @@ fn malformed_or_mixed_targets_are_not_admitted() {
 
 #[test]
 fn routes_and_windows_are_checked_before_native_access() {
-    for (source, parent, error) in [(0, 5, Error::Range), (97, 5, Error::Range), (10, 4, Error::Conflict)] {
+    for (source, parent, error) in [
+        (0, 5, Error::Range),
+        (97, 5, Error::Range),
+        (10, 4, Error::Conflict),
+    ] {
         let bytes = fixture(&[2, 9, 1, 9], &[2, 7, 1, 7], source, parent, 0x8000);
         let tree = DeviceTree::new(&bytes).unwrap();
         let description = aplic::Description::read(&tree, 3).unwrap().unwrap();

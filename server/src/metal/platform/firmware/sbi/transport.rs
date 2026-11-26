@@ -2,7 +2,9 @@
 
 use core::arch::asm;
 
-use super::probe::{DEBUG_CONSOLE, Extensions, HART_STATE_MANAGEMENT, SYSTEM_RESET, SbiServices, TIMER};
+use super::probe::{
+    DEBUG_CONSOLE, Extensions, HART_STATE_MANAGEMENT, SYSTEM_RESET, SbiServices, TIMER,
+};
 
 const BASE: usize = 0x10;
 const HART_STATUS: usize = 2;
