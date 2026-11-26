@@ -1,11 +1,14 @@
 use core::sync::atomic::Ordering::Acquire;
 
-use crate::entry::boot::{Physical, RegionSource};
+use crate::{
+    address::{PhysicalAddress, PhysicalRange},
+    entry::boot::RegionSource,
+};
 
 use super::{
     Allocator, Description, Error, REGION_LIMIT, RegionId,
     buddy::{self, Revision, Scan},
-    length, overlaps, range, with_turn,
+    buddy_range, length, with_turn,
 };
 
 /// The recipient's intended use, independent of the physical range selected.
@@ -24,7 +27,7 @@ pub struct Request {
     buddy: buddy::Request,
     length: u64,
     alignment: u64,
-    window: Physical,
+    window: PhysicalRange,
     attributes: Option<RegionSource>,
     purpose: RamPurpose,
 }
@@ -33,12 +36,12 @@ impl Request {
     pub fn new(
         length: u64,
         alignment: u64,
-        window: Physical,
+        window: PhysicalRange,
         attributes: Option<RegionSource>,
         purpose: RamPurpose,
     ) -> Result<Self, Error> {
         let buddy = buddy::Request::new(length, alignment)
-            .and_then(|request| request.restrict(range(window)))
+            .and_then(|request| request.restrict(buddy_range(window)))
             .map_err(|_| Error::Layout)?;
         Ok(Self {
             buddy,
@@ -63,7 +66,7 @@ impl Request {
     }
 
     fn accepts(self, region: Description) -> bool {
-        overlaps(self.window, region.physical)
+        self.window.overlaps(region.physical)
             && self
                 .attributes
                 .is_none_or(|attributes| attributes == region.source)
@@ -75,12 +78,12 @@ impl Request {
 pub struct Candidate {
     pub(super) source: &'static Allocator,
     pub(super) region: RegionId,
-    pub(super) physical: Physical,
+    pub(super) physical: PhysicalRange,
     pub(super) request: Request,
 }
 
 impl Candidate {
-    pub fn physical(self) -> Physical {
+    pub fn physical(self) -> PhysicalRange {
         self.physical
     }
 
@@ -101,7 +104,7 @@ pub enum Search {
 
 enum Pass {
     Observe,
-    Candidate(Physical),
+    Candidate(PhysicalRange),
     Verify,
     Directory,
     Finished,
@@ -202,7 +205,7 @@ impl Lookup {
         Ok(())
     }
 
-    fn candidate(&self, physical: Physical) -> Search {
+    fn candidate(&self, physical: PhysicalRange) -> Search {
         Search::Candidate(Candidate {
             source: self.source,
             region: RegionId(self.index()),
@@ -244,10 +247,11 @@ impl Lookup {
 
         match observation {
             buddy::Search::Found(found) => {
-                let physical = Physical {
-                    start: found.start,
-                    end: found.end,
-                };
+                let physical = PhysicalRange::new(
+                    PhysicalAddress::new(found.start),
+                    PhysicalAddress::new(found.end),
+                )
+                .expect("Buddy produces nonempty ranges");
                 self.pass = Pass::Candidate(physical);
                 Ok(self.candidate(physical))
             }

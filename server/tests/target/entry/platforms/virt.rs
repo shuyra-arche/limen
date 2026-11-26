@@ -9,6 +9,8 @@ use uefi::{
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use super::memory;
+
 #[path = "pl011.rs"]
 mod pl011;
 static FIRMWARE_VECTORS: AtomicUsize = AtomicUsize::new(0);
@@ -176,15 +178,10 @@ pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
     let size = unsafe { dtb_size(tree.start as *const u8, map, &[MemoryType::LOADER_DATA]) };
     assert_eq!(size, Ok(tree.len()));
 
-    let memory = boot.dtb_memory().expect("decoded DTB memory");
-    assert_eq!(
-        memory.ram(),
-        &[boot::Physical {
-            start: 0x4000_0000,
-            end: 0x5000_0000
-        }]
-    );
-    let bank = memory.ram()[0];
+    let description = boot.dtb_memory().expect("decoded DTB memory");
+    let bank = memory::extent(0x4000_0000, 0x5000_0000);
+    assert!(description.ram().eq([bank]));
+    let tree = memory::extent(tree.start as u64, tree.end as u64);
     let mut compared = boot
         .conventional_ram()
         .expect("DTB and final UEFI map")
@@ -192,16 +189,18 @@ pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
     assert!(compared.peek().is_some());
     for region in compared {
         let range = region.physical;
-        assert!(bank.start <= range.start && range.start < range.end && range.end <= bank.end);
-        assert!(range.end <= tree.start as u64 || tree.end as u64 <= range.start);
-        assert!(memory.reservations().iter().all(|reserved| {
-            range.end <= reserved.physical.start || reserved.physical.end <= range.start
-        }));
+        assert!(bank.covers(range));
+        assert!(!range.overlaps(tree));
+        assert!(
+            description
+                .reservations()
+                .all(|reserved| !range.overlaps(reserved.physical))
+        );
         assert!(map.entries().any(|d| {
             d.ty == MemoryType::CONVENTIONAL
                 && d.att.bits() == region.attributes
-                && d.phys_start <= range.start
-                && range.end <= d.phys_start + d.page_count * PAGE_SIZE as u64
+                && d.phys_start <= range.start().get()
+                && range.end().get() <= d.phys_start + d.page_count * PAGE_SIZE as u64
         }));
     }
     boot::console()

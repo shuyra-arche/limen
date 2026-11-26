@@ -1,10 +1,8 @@
 //! Physical exclusions and the conditions for retiring early use.
 
-use super::{DtbMemory, FirmwareMap, Physical, Source};
+use super::{DtbMemory, FirmwareMap, Source};
+use crate::address::{PhysicalAddress, PhysicalRange};
 use core::ops::Range;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RangeError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Occupant {
@@ -19,7 +17,7 @@ pub enum Occupant {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Exclusion {
-    pub physical: Physical,
+    pub physical: PhysicalRange,
     pub occupant: Occupant,
 }
 
@@ -53,17 +51,16 @@ pub enum Condition {
 /// Monotonic completion evidence for one physical scope. The scope alone
 /// supplies no evidence.
 pub struct Retirement {
-    physical: Physical,
+    physical: PhysicalRange,
     observed: u8,
 }
 
 impl Retirement {
-    pub fn new(physical: Physical) -> Result<Self, RangeError> {
-        check(physical)?;
-        Ok(Self {
+    pub fn new(physical: PhysicalRange) -> Self {
+        Self {
             physical,
             observed: 0,
-        })
+        }
     }
 
     /// Record one condition for this scope.
@@ -81,7 +78,7 @@ impl Retirement {
         self.observed |= condition as u8;
     }
 
-    pub(super) fn completed(&self) -> Option<Physical> {
+    pub(super) fn completed(&self) -> Option<PhysicalRange> {
         const COMPLETE: u8 = Condition::RuntimeStack as u8
             | Condition::ReadersGone as u8
             | Condition::TranslationRetired as u8
@@ -89,9 +86,8 @@ impl Retirement {
         (self.observed == COMPLETE).then_some(self.physical)
     }
 
-    pub(crate) fn covers(&self, physical: Physical) -> bool {
-        self.completed()
-            .is_some_and(|scope| contains(scope, physical))
+    pub(crate) fn covers(&self, physical: PhysicalRange) -> bool {
+        self.completed().is_some_and(|scope| scope.covers(physical))
     }
 }
 
@@ -105,9 +101,9 @@ pub struct Exclusions<'a> {
 
 impl<'a> Exclusions<'a> {
     pub(super) fn new(
-        image: Physical,
-        major: Physical,
-        trap: Physical,
+        image: PhysicalRange,
+        major: PhysicalRange,
+        trap: PhysicalRange,
         tree: Option<Range<usize>>,
         map: Option<FirmwareMap<'a>>,
         memory: Option<&'a DtbMemory>,
@@ -137,7 +133,7 @@ impl<'a> Exclusions<'a> {
     /// have several occupants, such as a stack inside the resident image.
     pub fn entries(&self) -> impl Iterator<Item = Exclusion> + '_ {
         let reservations = self.memory.into_iter().flat_map(|memory| {
-            memory.reservations().iter().map(|reservation| Exclusion {
+            memory.reservations().map(|reservation| Exclusion {
                 physical: reservation.physical,
                 occupant: Occupant::Reservation(reservation.source),
             })
@@ -146,10 +142,7 @@ impl<'a> Exclusions<'a> {
             map.regions()
                 .filter(|region| region.kind != CONVENTIONAL || region.attributes & RUNTIME != 0)
                 .map(|region| Exclusion {
-                    physical: Physical {
-                        start: region.physical.start,
-                        end: region.physical.end,
-                    },
+                    physical: region.physical,
                     occupant: Occupant::Firmware {
                         kind: region.kind,
                         attributes: region.attributes,
@@ -167,36 +160,19 @@ impl<'a> Exclusions<'a> {
     /// Test a candidate physical span against the current exclusions. Any
     /// overlap retains the whole queried span. The caller still validates RAM
     /// provenance, granularity and access before handing it to an allocator.
-    pub fn retains(
-        &self,
-        physical: Physical,
-        retirement: Option<&Retirement>,
-    ) -> Result<bool, RangeError> {
-        check(physical)?;
+    pub fn retains(&self, physical: PhysicalRange, retirement: Option<&Retirement>) -> bool {
         if !retirement.is_some_and(|evidence| evidence.covers(physical)) {
-            return Ok(true);
+            return true;
         }
-        Ok(self.entries().any(|entry| {
-            entry.fixed()
-                && entry.physical.start < physical.end
-                && physical.start < entry.physical.end
-        }))
+        self.entries()
+            .any(|entry| entry.fixed() && entry.physical.overlaps(physical))
     }
 }
 
-pub(super) fn extent(range: Range<usize>) -> Physical {
-    Physical {
-        start: range.start as u64,
-        end: range.end as u64,
-    }
-}
-
-pub(super) fn check(physical: Physical) -> Result<(), RangeError> {
-    (physical.start < physical.end)
-        .then_some(())
-        .ok_or(RangeError)
-}
-
-pub(super) fn contains(outer: Physical, inner: Physical) -> bool {
-    outer.start <= inner.start && inner.end <= outer.end
+pub(super) fn extent(range: Range<usize>) -> PhysicalRange {
+    PhysicalRange::new(
+        PhysicalAddress::new(range.start as u64),
+        PhysicalAddress::new(range.end as u64),
+    )
+    .expect("nonempty extent supplied by the boot owner")
 }

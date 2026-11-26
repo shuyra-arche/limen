@@ -12,3 +12,10 @@ dependencies = [
 [[package]]
 name = "kernel"
 version = "0.0.1"
+dependencies = [
+ "limen-treaty",
+]
+
+[[package]]
+name = "limen-treaty"
+version = "0.0.1"

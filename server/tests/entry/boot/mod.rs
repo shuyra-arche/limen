@@ -1,3 +1,7 @@
+#[path = "../../../src/metal/mmu/internal/access.rs"]
+pub mod access;
+#[path = "../../../src/metal/address.rs"]
+pub mod address;
 #[path = "../../../src/metal/firmware/devicetree/mod.rs"]
 mod devicetree;
 mod memory;
@@ -44,7 +48,8 @@ mod loader;
 use handoff::Boot;
 #[path = "../../../src/metal/firmware/map.rs"]
 mod map;
-use devicetree::memory::{DtbMemory, Physical, Source};
+use address::{PhysicalAddress, PhysicalRange};
+use devicetree::memory::{DtbMemory, Source};
 use loader::{DeviceTree, Loader};
 use map::{FirmwareMap, FirmwareRegion, MapError};
 use physical::{Exclusions, Retirement};
@@ -59,10 +64,13 @@ mod physical;
 #[path = "../../../src/entry/boot/regions.rs"]
 mod regions;
 
-const IMAGE: Physical = Physical {
-    start: 0x1000,
-    end: 0x2000,
-};
+fn range(start: u64, end: u64) -> PhysicalRange {
+    PhysicalRange::new(PhysicalAddress::new(start), PhysicalAddress::new(end)).unwrap()
+}
+
+fn image() -> PhysicalRange {
+    range(0x1000, 0x2000)
+}
 
 #[test]
 fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
@@ -82,7 +90,7 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
     d[24..32].copy_from_slice(&2u64.to_le_bytes());
     let admit = |descriptors: &[u8], stride, version, tree: Option<&[u8]>| {
         let loader = Loader {
-            image: IMAGE,
+            image: image(),
             descriptors,
             stride,
             version,
@@ -103,7 +111,7 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
     );
     assert_eq!(admit(&descriptors.0, 48, 1, None), Some(None));
     let loader = Loader {
-        image: IMAGE,
+        image: image(),
         descriptors: &descriptors.0,
         stride: 48,
         version: 1,
@@ -140,11 +148,11 @@ fn firmware_map_preserves_unsorted_adjacent_regions_and_raw_attributes() {
     let mut regions = map.regions();
     assert_eq!(regions.len(), 2);
     let first = regions.next().unwrap();
-    assert_eq!(first.physical, 0x3000..0x5000);
+    assert_eq!(first.physical, range(0x3000, 0x5000));
     assert_eq!(first.kind, 7);
     assert_eq!(first.attributes, 8);
     let second = regions.next().unwrap();
-    assert_eq!(second.physical, 0x1000..0x3000);
+    assert_eq!(second.physical, range(0x1000, 0x3000));
     assert_eq!(second.kind, 0);
     assert_eq!(second.attributes, 0x8000_0000_0000_0000);
     assert!(regions.next().is_none());
@@ -181,7 +189,7 @@ fn firmware_map_rejects_bad_geometry_overlaps_and_capacity_before_handoff() {
         describe(&mut bytes.0[48..], 2, base, pages, 0);
         assert_eq!(FirmwareMap::new(&bytes.0, 48, 1, 2).err(), Some(error));
         let loader = Loader {
-            image: IMAGE,
+            image: image(),
             descriptors: &bytes.0,
             stride: 48,
             version: 1,
@@ -232,9 +240,8 @@ mod turn;
 mod entry {
     pub mod boot {
         pub use crate::{
-            devicetree::memory::Physical,
             physical::Retirement,
-            regions::{MappedRange, Region, RegionError, RegionSource, Regions, RootStorage},
+            regions::{Region, RegionError, RegionSource, Regions, RootStorage},
         };
     }
 }

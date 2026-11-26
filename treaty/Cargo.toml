@@ -1,0 +1,10 @@
+[package]
+name = "limen-treaty"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+test = false
+bench = false
+doctest = false

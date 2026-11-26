@@ -1,10 +1,11 @@
-use super::{DtbMemory, FirmwareMap, FirmwareRegion, Physical, physical::Exclusions};
+use super::{DtbMemory, FirmwareMap, FirmwareRegion, physical::Exclusions};
+use crate::address::PhysicalRange;
 use core::ops::Range;
 
 /// Facts admitted on the major CPU. These carry no allocation authority.
 pub struct Boot<'a> {
     hart: usize,
-    image: Physical,
+    image: PhysicalRange,
     device_tree: Option<Range<usize>>,
     firmware_map: Option<FirmwareMap<'a>>,
     memory: Option<DtbMemory>,
@@ -15,11 +16,15 @@ impl<'a> Boot<'a> {
         self.hart
     }
 
-    pub fn image(&self) -> Physical {
+    pub fn image(&self) -> PhysicalRange {
         self.image
     }
 
-    pub(super) fn exclusions_for(&self, major: Physical, trap: Physical) -> Exclusions<'_> {
+    pub(super) fn exclusions_for(
+        &self,
+        major: PhysicalRange,
+        trap: PhysicalRange,
+    ) -> Exclusions<'_> {
         Exclusions::new(
             self.image(),
             major,
@@ -58,7 +63,7 @@ impl<'a> Boot<'a> {
     #[cfg(not(target_arch = "riscv64"))]
     pub(crate) fn from_uefi(
         hart: usize,
-        image: Physical,
+        image: PhysicalRange,
         device_tree: Option<Range<usize>>,
         firmware_map: FirmwareMap<'a>,
         memory: Option<DtbMemory>,

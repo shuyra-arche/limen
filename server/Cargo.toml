@@ -12,3 +12,6 @@ path = "src/lib.rs"
 test = false
 bench = false
 doctest = false
+
+[target.'cfg(any(target_arch = "riscv64", all(any(target_arch = "aarch64", target_arch = "x86_64"), any(target_os = "none", target_os = "uefi"))))'.dependencies]
+limen-treaty = { path = "../treaty" }

@@ -1,8 +1,10 @@
 #[cfg(any(target_arch = "riscv64", test))]
 use super::extent;
 use super::{HEADER_SIZE, layout};
+use crate::address::{PhysicalAddress, PhysicalRange};
 #[cfg(any(target_arch = "riscv64", test))]
 use core::{ops::Range, slice};
+use limen_treaty::model::ByteLength;
 
 const MAX_BLOCK_BYTES: usize = 256 * 1024;
 // AAVMF retains the QEMU tree with free space and an extra EFI page.
@@ -18,22 +20,6 @@ const NOP: u32 = 4;
 const END: u32 = 9;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Physical {
-    pub start: u64,
-    pub end: u64,
-}
-
-impl Physical {
-    fn new(start: u64, size: u64) -> Result<Self, Error> {
-        let end = start.checked_add(size).ok_or(Error::Range)?;
-        if start == end {
-            return Err(Error::Range);
-        }
-        Ok(Self { start, end })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Source {
     ReservationBlock,
     ReservedMemory { no_map: bool, reusable: bool },
@@ -41,56 +27,53 @@ pub enum Source {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Reservation {
-    pub physical: Physical,
+    pub physical: PhysicalRange,
     pub source: Source,
 }
 
 /// The memory descriptions retained from a fully checked firmware tree.
 #[derive(Debug)]
 pub struct DtbMemory {
-    ram: [Physical; RAM_LIMIT],
+    ram: [Option<PhysicalRange>; RAM_LIMIT],
     ram_count: usize,
-    reservations: [Reservation; RESERVATION_LIMIT],
+    reservations: [Option<Reservation>; RESERVATION_LIMIT],
     reservation_count: usize,
 }
 
 impl DtbMemory {
     const EMPTY: Self = Self {
-        ram: [Physical { start: 0, end: 0 }; RAM_LIMIT],
+        ram: [None; RAM_LIMIT],
         ram_count: 0,
-        reservations: [Reservation {
-            physical: Physical { start: 0, end: 0 },
-            source: Source::ReservationBlock,
-        }; RESERVATION_LIMIT],
+        reservations: [None; RESERVATION_LIMIT],
         reservation_count: 0,
     };
 
-    pub fn ram(&self) -> &[Physical] {
-        &self.ram[..self.ram_count]
-    }
-
-    pub fn reservations(&self) -> &[Reservation] {
-        &self.reservations[..self.reservation_count]
-    }
-
-    fn add_ram(&mut self, region: Physical) -> Result<(), Error> {
-        if self
-            .ram()
+    pub fn ram(&self) -> impl ExactSizeIterator<Item = PhysicalRange> + '_ {
+        self.ram[..self.ram_count]
             .iter()
-            .any(|other| region.start < other.end && other.start < region.end)
-        {
+            .map(|entry| entry.expect("occupied RAM description"))
+    }
+
+    pub fn reservations(&self) -> impl ExactSizeIterator<Item = Reservation> + '_ {
+        self.reservations[..self.reservation_count]
+            .iter()
+            .map(|entry| entry.expect("occupied memory reservation"))
+    }
+
+    fn add_ram(&mut self, region: PhysicalRange) -> Result<(), Error> {
+        if self.ram().any(|other| region.overlaps(other)) {
             return Err(Error::Range);
         }
-        *self.ram.get_mut(self.ram_count).ok_or(Error::Capacity)? = region;
+        *self.ram.get_mut(self.ram_count).ok_or(Error::Capacity)? = Some(region);
         self.ram_count += 1;
         Ok(())
     }
 
-    fn add_reservation(&mut self, physical: Physical, source: Source) -> Result<(), Error> {
+    fn add_reservation(&mut self, physical: PhysicalRange, source: Source) -> Result<(), Error> {
         *self
             .reservations
             .get_mut(self.reservation_count)
-            .ok_or(Error::Capacity)? = Reservation { physical, source };
+            .ok_or(Error::Capacity)? = Some(Reservation { physical, source });
         self.reservation_count += 1;
         Ok(())
     }
@@ -184,11 +167,12 @@ fn parse(blob: &[u8], memory: &mut DtbMemory) -> Result<(), Error> {
         if base == 0 && size == 0 {
             break;
         }
-        let physical = Physical::new(base, size)?;
+        let physical = PhysicalAddress::new(base)
+            .span(ByteLength::new(size))
+            .ok_or(Error::Range)?;
         if memory
             .reservations()
-            .iter()
-            .any(|other| physical.start < other.physical.end && other.physical.start < physical.end)
+            .any(|other| physical.overlaps(other.physical))
         {
             return Err(Error::Range);
         }
@@ -231,7 +215,7 @@ fn parse(blob: &[u8], memory: &mut DtbMemory) -> Result<(), Error> {
         }
         tree.skip(2)?;
     }
-    if tree.token()? != END || !tree.structure.is_empty() || memory.ram().is_empty() {
+    if tree.token()? != END || !tree.structure.is_empty() || memory.ram_count == 0 {
         return Err(Error::Format);
     }
     Ok(())
@@ -261,7 +245,7 @@ impl Cells {
     fn reg(
         &self,
         bytes: Option<&[u8]>,
-        mut record: impl FnMut(Physical) -> Result<(), Error>,
+        mut record: impl FnMut(PhysicalRange) -> Result<(), Error>,
     ) -> Result<(), Error> {
         fn number(bytes: &[u8]) -> u64 {
             bytes
@@ -277,7 +261,10 @@ impl Cells {
         }
         for tuple in tuples {
             let (address, size) = tuple.split_at(self.address);
-            record(Physical::new(number(address), number(size))?)?;
+            let physical = PhysicalAddress::new(number(address))
+                .span(ByteLength::new(number(size)))
+                .ok_or(Error::Range)?;
+            record(physical)?;
         }
         Ok(())
     }

@@ -1,12 +1,15 @@
 //! Checked physical descriptions from the final UEFI memory map.
 //! A descriptor is a firmware fact, not permission to allocate or access RAM.
 
-use super::devicetree::memory::{DtbMemory, Reservation};
-use core::{iter, ops::Range};
+use super::devicetree::memory::DtbMemory;
+use crate::address::{PhysicalAddress, PhysicalRange};
+use core::iter;
+use limen_treaty::model::{Alignment, PageCount, PageSize};
 
 const PREFIX: usize = 40;
 const ALIGNMENT: usize = 8;
-const PAGE_BYTES: u64 = 4096;
+const PAGE_SIZE: PageSize = PageSize::new(4096).expect("UEFI page size");
+const PAGE_ALIGNMENT: Alignment = Alignment::new(PAGE_SIZE.get()).expect("UEFI page alignment");
 const CONVENTIONAL_MEMORY: u32 = 7;
 const RUNTIME: u64 = 1 << 63;
 
@@ -23,7 +26,7 @@ pub enum MapError {
 #[derive(Debug, PartialEq, Eq)]
 pub struct FirmwareRegion {
     pub kind: u32,
-    pub physical: Range<u64>,
+    pub physical: PhysicalRange,
     pub attributes: u64,
 }
 
@@ -65,9 +68,7 @@ impl<'a> FirmwareMap<'a> {
             let region = decode(entry).ok_or(MapError::Range)?;
             for earlier in entries.clone().take(index) {
                 let other = decode(earlier).ok_or(MapError::Range)?;
-                if region.physical.start < other.physical.end
-                    && other.physical.start < region.physical.end
-                {
+                if region.physical.overlaps(other.physical) {
                     return Err(MapError::Overlap);
                 }
             }
@@ -108,52 +109,53 @@ impl<'a> FirmwareMap<'a> {
         memory: &'b DtbMemory,
     ) -> impl Iterator<Item = FirmwareRegion> + 'b {
         self.conventional().flat_map(move |region| {
-            memory.ram().iter().flat_map(move |bank| {
-                // Keep only complete UEFI pages supported by the DTB.
-                let start = region.physical.start.max(bank.start);
-                let end = page_floor(region.physical.end.min(bank.end));
-                let start = start.checked_next_multiple_of(PAGE_BYTES).unwrap_or(end);
-                unreserved(start..end, memory.reservations()).map(move |physical| FirmwareRegion {
+            memory
+                .ram()
+                .filter_map(move |bank| {
+                    // Keep only complete UEFI pages supported by the DTB.
+                    complete_pages(region.physical.intersect(bank)?)
+                })
+                .flat_map(move |pages| unreserved(pages, memory))
+                .map(move |physical| FirmwareRegion {
                     kind: region.kind,
                     physical,
                     attributes: region.attributes,
                 })
-            })
         })
     }
 }
 
-fn page_floor(address: u64) -> u64 {
-    address - address % PAGE_BYTES
+fn complete_pages(range: PhysicalRange) -> Option<PhysicalRange> {
+    let start = range.start().align_up(PAGE_ALIGNMENT)?;
+    let end = range.end().align_down(PAGE_ALIGNMENT);
+    PhysicalRange::new(start, end)
 }
 
 /// Walk one intersection using a cursor over a bounded reservation list.
 /// All reservations, including overlapping ones, cover any page they touch.
 fn unreserved(
-    range: Range<u64>,
-    reservations: &[Reservation],
-) -> impl Iterator<Item = Range<u64>> + '_ {
-    let mut start = range.start;
+    range: PhysicalRange,
+    memory: &DtbMemory,
+) -> impl Iterator<Item = PhysicalRange> + '_ {
+    let mut start = range.start();
+    let end = range.end();
     iter::from_fn(move || {
-        while start < range.end {
-            let mut next = range.end;
+        while start < end {
+            let mut next = end;
             let mut blocked = start;
-            for reservation in reservations {
-                let base = page_floor(reservation.physical.start);
+            for reservation in memory.reservations() {
+                let base = reservation.physical.start().align_down(PAGE_ALIGNMENT);
                 if base > start {
                     next = next.min(base);
                 } else {
-                    let end = reservation
-                        .physical
-                        .end
-                        .checked_next_multiple_of(PAGE_BYTES);
-                    blocked = blocked.max(end.unwrap_or(range.end).min(range.end));
+                    let last = reservation.physical.end().align_up(PAGE_ALIGNMENT);
+                    blocked = blocked.max(last.unwrap_or(end).min(end));
                 }
             }
             if blocked > start {
                 start = blocked;
             } else {
-                let segment = start..next;
+                let segment = PhysicalRange::new(start, next).expect("nonempty unreserved segment");
                 start = next;
                 return Some(segment);
             }
@@ -167,13 +169,14 @@ fn decode(entry: &[u8]) -> Option<FirmwareRegion> {
     let start = u64::from_le_bytes(entry[8..16].try_into().unwrap());
     let pages = u64::from_le_bytes(entry[24..32].try_into().unwrap());
     let attributes = u64::from_le_bytes(entry[32..40].try_into().unwrap());
-    if !start.is_multiple_of(PAGE_BYTES) || pages == 0 {
+    let start = PhysicalAddress::new(start);
+    if !start.is_aligned(PAGE_ALIGNMENT) {
         return None;
     }
-    let end = start.checked_add(pages.checked_mul(PAGE_BYTES)?)?;
+    let physical = start.span(PAGE_SIZE.bytes(PageCount::new(pages))?)?;
     Some(FirmwareRegion {
         kind,
-        physical: start..end,
+        physical,
         attributes,
     })
 }

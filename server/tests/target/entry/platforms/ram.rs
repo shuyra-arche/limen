@@ -3,14 +3,14 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use kernel::entry::boot::{Boot, Condition, Physical, RegionSource, Retirement};
+use kernel::entry::boot::{Boot, Condition, RegionSource, Retirement};
 use uefi::{
     Status,
     boot::{self as firmware, AllocateType, MemoryType, PAGE_SIZE},
     mem::memory_map::MemoryMap,
 };
 
-use super::foundation;
+use super::{foundation, memory};
 
 const BYTES: usize = foundation::PAGES * PAGE_SIZE;
 static WINDOW: AtomicUsize = AtomicUsize::new(0);
@@ -60,23 +60,18 @@ pub(super) fn check(boot: &Boot<'_>) {
     let start = WINDOW.load(Ordering::Acquire);
     assert_ne!(start, 0);
     assert_eq!(translation_root(), ROOT.load(Ordering::Relaxed));
-    let scope = Physical {
-        start: start as u64,
-        end: (start + BYTES) as u64,
-    };
+    let scope = memory::extent(start as u64, (start + BYTES) as u64);
     let map = boot.firmware_map().unwrap();
     assert!(map.regions().any(|region| {
-        region.kind == MemoryType::CONVENTIONAL.0
-            && region.physical.start <= scope.start
-            && scope.end <= region.physical.end
+        region.kind == MemoryType::CONVENTIONAL.0 && region.physical.covers(scope)
     }));
     assert!(
-        boot.exclusions().entries().all(|entry| {
-            entry.physical.end <= scope.start || scope.end <= entry.physical.start
-        })
+        boot.exclusions()
+            .entries()
+            .all(|entry| !entry.physical.overlaps(scope))
     );
 
-    let mut evidence = Retirement::new(scope).unwrap();
+    let mut evidence = Retirement::new(scope);
     let mut descriptions = [None; 1];
     // The scope was granted to this guest as conventional RAM and stayed
     // conventional through the final map. It contained no firmware stack,
@@ -111,5 +106,5 @@ pub(super) fn check(boot: &Boot<'_>) {
         RegionSource::DeviceTreeAndUefi { .. }
     ));
 
-    unsafe { foundation::check(boot, scope.start, &evidence) };
+    unsafe { foundation::check(boot, scope.start().get(), &evidence) };
 }

@@ -1,13 +1,14 @@
 use kernel::{
+    address::PhysicalRange,
     allocator::{
         Allocation, Allowance, Config, Error, Grant, Initial, Pending, RamPurpose::Metadata,
         Request, ReturnId, Search,
     },
-    entry::boot::{self, Boot, MappedRange, Physical},
+    entry::boot::{self, Boot},
     sync::Acquisition::{Fast, Slow},
 };
 
-use super::memory::{mapped, retirement};
+use super::memory::{extent, mapped, retirement};
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x8400_0000;
@@ -27,11 +28,8 @@ static mut RECEIVER: Option<Allocation> = None;
 static mut ALLOWANCE: Option<Allowance> = None;
 static mut RECEIPT: Option<ReturnId> = None;
 
-const fn pages(first: u64, last: u64) -> Physical {
-    Physical {
-        start: BASE + first * PAGE,
-        end: BASE + last * PAGE,
-    }
+fn pages(first: u64, last: u64) -> PhysicalRange {
+    extent(BASE + first * PAGE, BASE + last * PAGE)
 }
 
 pub(super) fn check(boot: &Boot<'_>) {
@@ -48,7 +46,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     );
 
     // Bare RV64 gives this reserved extent a canonical identity mapping.
-    let mut mapping = Some(unsafe { MappedRange::new(backing, mapped(backing)) }.unwrap());
+    let mut mapping = Some(unsafe { mapped(backing) });
     let receiver = unsafe { &mut *(&raw mut RECEIVER) };
     let allowance_receiver = unsafe { &mut *(&raw mut ALLOWANCE) };
     // Simulate loss of the transient boot result. All obligations have
@@ -108,10 +106,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         }
     }
 
-    let window = Physical {
-        start: later.start + 1,
-        end: later.end,
-    };
+    let window = extent(later.start().get() + 1, later.end().get());
     let request = Request::new(PAGE, 1, window, None, Metadata).unwrap();
     let Search::Candidate(aligned) = source.lookup(request, Some(added)).unwrap().step().unwrap()
     else {

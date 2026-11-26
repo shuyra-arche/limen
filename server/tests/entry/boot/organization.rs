@@ -1,14 +1,11 @@
 use super::physical::Condition;
-use super::regions::{MappedRange, Region, RegionError, RegionSource, Regions};
-use super::{Boot, FirmwareMap, IMAGE, Physical, Retirement, describe};
+use super::regions::{Region, RegionError, RegionSource, Regions};
+use super::{Boot, FirmwareMap, PhysicalRange, Retirement, describe, image, range};
+use crate::access::{Error as AccessError, MappedRange};
 use core::{alloc::Layout, mem::MaybeUninit};
 
-fn range(start: u64, end: u64) -> Physical {
-    Physical { start, end }
-}
-
-pub(super) fn retired(scope: Physical) -> Retirement {
-    let mut evidence = Retirement::new(scope).unwrap();
+pub(super) fn retired(scope: PhysicalRange) -> Retirement {
+    let mut evidence = Retirement::new(scope);
     // Host fixtures model complete evidence for the given range.
     for condition in [
         Condition::DevicesIsolated,
@@ -31,8 +28,8 @@ fn sorts_sources_clips_the_evidence_and_excludes_partial_reserved_pages() {
     describe(&mut storage.0[40..80], 7, 0x2000, 4, 8);
     describe(&mut storage.0[80..], 7, 0x6000, 2, 1 << 63);
     let map = FirmwareMap::new(&storage.0, 40, 1, 3).unwrap();
-    let boot = Boot::from_uefi(0, IMAGE, Some(0x4301..0x4500), map, None);
-    let exclusions = boot.exclusions_for(IMAGE, IMAGE);
+    let boot = Boot::from_uefi(0, image(), Some(0x4301..0x4500), map, None);
+    let exclusions = boot.exclusions_for(image(), image());
     let evidence = retired(range(0x2fff, 0xa001));
     let expected = [
         Region {
@@ -58,7 +55,7 @@ fn sorts_sources_clips_the_evidence_and_excludes_partial_reserved_pages() {
         Regions::organize(&boot, &exclusions, 3, Some(&evidence), &mut regions).err(),
         Some(RegionError::Granule)
     );
-    let partial = Retirement::new(range(0x2000, 0xa000)).unwrap();
+    let partial = Retirement::new(range(0x2000, 0xa000));
     let held = Regions::organize(&boot, &exclusions, 4096, Some(&partial), &mut regions).unwrap();
     assert_eq!(held.entries().count(), 0);
 }
@@ -68,8 +65,8 @@ fn a_root_consumes_a_mapped_grant_and_removes_its_whole_physical_page() {
     let mut descriptors = Descriptors([0; 40]);
     describe(&mut descriptors.0, 7, 0x2000, 7, 8);
     let map = FirmwareMap::new(&descriptors.0, 40, 1, 1).unwrap();
-    let boot = Boot::from_uefi(0, IMAGE, None, map, None);
-    let exclusions = boot.exclusions_for(IMAGE, IMAGE);
+    let boot = Boot::from_uefi(0, image(), None, map, None);
+    let exclusions = boot.exclusions_for(image(), image());
     let evidence = retired(range(0x2000, 0x9000));
     let layout = Layout::from_size_align(17, 64).unwrap();
     #[repr(align(8192))]
@@ -128,4 +125,64 @@ fn a_root_consumes_a_mapped_grant_and_removes_its_whole_physical_page() {
             .map(|r| r.physical)
             .eq([range(0x2000, 0x3000), range(0x4000, 0x9000)])
     );
+}
+
+#[test]
+fn exclusive_mapping_checks_extent_and_splits_without_losing_the_original() {
+    let mut bytes = [MaybeUninit::uninit(); 16];
+    let address = bytes.as_mut_ptr().addr();
+    for invalid in [range(0, 15), range(0, 17), range(0, u64::MAX)] {
+        assert!(matches!(
+            unsafe { MappedRange::new(invalid, &mut bytes) },
+            Err(AccessError::Range)
+        ));
+    }
+
+    let physical = range(0x2000, 0x2010);
+    // This Host fixture models the exact physical correspondence of the
+    // exclusive backing. No target mapping or hardware evidence is inferred.
+    let mut mapping = unsafe { MappedRange::new(physical, &mut bytes) }.unwrap();
+    for offset in [0, 16, usize::MAX] {
+        let (mut original, error) = mapping.split(offset).err().unwrap();
+        assert_eq!(error, AccessError::Split);
+        assert_eq!(original.physical(), physical);
+        assert_eq!(original.length(), 16);
+        assert_eq!(original.bytes().as_mut_ptr().addr(), address);
+        mapping = original;
+    }
+    let (mut left, mut right) = mapping.split(5).ok().unwrap();
+    assert_eq!(left.physical(), range(0x2000, 0x2005));
+    assert_eq!(right.physical(), range(0x2005, 0x2010));
+    assert_eq!(left.length(), 5);
+    assert_eq!(right.length(), 11);
+    assert_eq!(left.bytes().as_mut_ptr().addr(), address);
+    assert_eq!(right.bytes().as_mut_ptr().addr(), address + 5);
+    left.bytes()[4].write(0x41);
+    right.bytes()[0].write(0x42);
+    assert_eq!(unsafe { bytes[4].assume_init() }, 0x41);
+    assert_eq!(unsafe { bytes[5].assume_init() }, 0x42);
+}
+
+#[test]
+fn identity_mapping_checks_raw_geometry_before_borrowing() {
+    let mut bytes = [MaybeUninit::uninit(); 16];
+    let base = core::ptr::NonNull::new(bytes.as_mut_ptr()).unwrap();
+    let start = base.addr().get() as u64;
+    for invalid in [
+        range(start + 1, start + 17),
+        range(start, start + isize::MAX as u64 + 1),
+    ] {
+        assert!(matches!(
+            unsafe { MappedRange::from_identity(invalid, base) },
+            Err(AccessError::Range)
+        ));
+    }
+
+    // This fixture models an identity view of its one backing array.
+    let physical = range(start, start + 16);
+    let mut mapping = unsafe { MappedRange::from_identity(physical, base) }.unwrap();
+    assert_eq!(mapping.physical(), physical);
+    assert_eq!(mapping.bytes().as_mut_ptr(), base.as_ptr());
+    mapping.bytes()[15].write(0x6c);
+    assert_eq!(unsafe { bytes[15].assume_init() }, 0x6c);
 }

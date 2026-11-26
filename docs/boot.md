@@ -53,3 +53,37 @@ cursor is under `metal/allocator/` and is not a runtime allocator. Each
 function selects its own machine backend; Boot uses the firmware adapter
 for the chosen entry protocol. The platform image supplies board discovery, device
 addresses and startup resources. [Platform contracts](platforms.md) · [Early exceptions](exceptions.md)
+
+## Mapped storage
+
+A physical extent is a coordinate, not a Rust pointer or an access grant.
+The actual mapping owner supplies an exclusive `access::MappedRange` with
+valid storage and physical correspondence for the entire borrow. Splitting
+it consumes the original borrow, produces disjoint subranges, and does not
+split an Allocation or issue a new refund right. Root reservation retains
+the actual selected mapping and accounts for its whole reserved granules.
+
+An owner starting with a raw pointer from the original identity mapping can
+use `MappedRange::from_identity`. It checks both machine-width endpoints,
+nonempty slice length and the base address before borrowing. It derives the
+slice from the supplied pointer. The owner must already hold the complete
+writable RAM range and preserve exclusive access, mapping and attributes
+for each derived use.
+
+For ordinary issued material, `allocator::MappedStorage::prepare` combines
+the unique Allocation and its exclusive mapping. The complete physical
+ranges must match; equal ranges or lengths alone do not prove the original
+allocation generation or the real mapping. Its unsafe boundary requires
+that independent evidence from the actual owner. A failed pair returns
+both original inputs. Pool installation consumes the pair only after all
+directory, layout, capacity and original Return checks succeed. It retains
+the actual source and mapping lifetime, and does not treat software closure
+or an address as proof of retirement. No arbitrary slice or implicit global
+heap is accepted by the Pool.
+
+The three boot fixtures use their actual reserved or issued RAM and the
+original machine mapping. Each verifies native access at both ends of a
+Pool group's original allocation and repeats the check after the same range
+is issued with a new generation. Their evidence covers major-CPU data
+access. Executable material, table publication, successor roots and
+firmware CPU/DMA retirement have their own target checks.

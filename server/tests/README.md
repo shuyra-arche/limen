@@ -208,6 +208,7 @@ evidence still prevents RAM admission.
 | Root preflight | An invalid capacity leaves the mapping, region description and receiver fields intact. Successful publication accounts for all root and managed bytes. |
 | Fragmentation and active identities | Two free single-page runs cannot satisfy a contiguous two-page request. An available page cannot be reserved when both Allocation slots are occupied, and the charge is unchanged. |
 | Full typed Pool | A detached stable object stays readable through its counted reference. Reclamation is denied until the last reference ends. The existing reclaim and release path can free a slot while all other slots are held. |
+| Original mapped storage | The guest checks identity correspondence and performs native volatile writes and reads at both ends of the exclusive Pool allocation. After retirement and reissue, a fresh borrow of the same range passes with distinct byte values. |
 | Pending return and full history | Recovery finds the original return by scanning the bounded source. The retained result blocks a new reservation even after physical refund until the owner acknowledges it. The Pool separately demonstrates recovery from its own directory. |
 | Same-address reuse and closure | The replacement receives a new generation and is taken and accessed after spending revocation. Old receipts cannot charge or refund it. Closing the Allowance moves the subsequent refund to the original Region and preserves the permanent PendSpace charge. |
 

@@ -23,7 +23,11 @@ mod basis;
         any(target_os = "none", target_os = "uefi")
     ),
 ))]
-pub use {basis::pend, basis::sync, metal::allocator};
+pub use {
+    basis::pend,
+    basis::sync,
+    metal::{address, allocator, mmu::internal::access},
+};
 #[cfg(any(
     target_arch = "riscv64",
     all(

@@ -8,7 +8,7 @@ use crate::metal::boot::major;
 use core::fmt::Write;
 
 pub use crate::metal::boot::{Startup, console::Console, services::Services};
-pub use crate::metal::firmware::devicetree::memory::{DtbMemory, Physical, Reservation, Source};
+pub use crate::metal::firmware::devicetree::memory::{DtbMemory, Reservation, Source};
 pub use crate::metal::firmware::map::{FirmwareMap, FirmwareRegion, MapError};
 #[cfg(target_arch = "aarch64")]
 pub use crate::metal::firmware::psci::Conduit;
@@ -16,8 +16,8 @@ pub use crate::metal::firmware::psci::Conduit;
 pub use crate::metal::firmware::uefi::{DeviceTree, Loader, major};
 pub use handoff::Boot;
 pub use major::stack_range;
-pub use physical::{Condition, Exclusion, Exclusions, Occupant, RangeError, Retirement};
-pub use regions::{MappedRange, Region, RegionError, RegionSource, Regions, RootStorage};
+pub use physical::{Condition, Exclusion, Exclusions, Occupant, Retirement};
+pub use regions::{Region, RegionError, RegionSource, Regions, RootStorage};
 
 /// The firmware adapter supplies a stable DTB (OpenSBI) or Loader (UEFI).
 /// All referenced storage and mappings remain reserved until the consumer is done.
@@ -51,11 +51,8 @@ impl Boot<'_> {
 
     fn stacks_in_image(&self) -> bool {
         let image = self.image();
-        physical::contains(image, physical::extent(stack_range()))
-            && physical::contains(
-                image,
-                physical::extent(crate::metal::boot::trap_stack_range()),
-            )
+        image.covers(physical::extent(stack_range()))
+            && image.covers(physical::extent(crate::metal::boot::trap_stack_range()))
     }
 }
 

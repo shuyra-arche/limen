@@ -5,13 +5,13 @@
 use core::ptr;
 
 use crate::{
-    entry::boot::Physical,
+    address::{PhysicalAddress, PhysicalRange},
     metal::identity::{GenerationTable, Key, ReserveError},
     sync::{Acquisition, HeldLockSet, LockPlan, TurnLock, Work},
 };
 
 use super::{
-    Allocator, AllowanceId, Candidate, Error, RegionId, allowance::SlotState, length, range,
+    Allocator, AllowanceId, Candidate, Error, RegionId, allowance::SlotState, buddy_range, length,
     region::State, with_turn,
 };
 
@@ -37,7 +37,7 @@ pub struct ReturnId {
 pub struct Allocation {
     source: &'static Allocator,
     id: AllocationId,
-    physical: Physical,
+    physical: PhysicalRange,
 }
 
 /// Ownership and completed retirement of the exact original material.
@@ -45,7 +45,11 @@ pub struct Allocation {
 pub struct Retired(Allocation);
 
 impl Allocation {
-    pub(super) fn issued(source: &'static Allocator, id: AllocationId, physical: Physical) -> Self {
+    pub(super) fn issued(
+        source: &'static Allocator,
+        id: AllocationId,
+        physical: PhysicalRange,
+    ) -> Self {
         Self {
             source,
             id,
@@ -61,7 +65,7 @@ impl Allocation {
         self.id.region
     }
 
-    pub fn physical(&self) -> Physical {
+    pub fn physical(&self) -> PhysicalRange {
         self.physical
     }
 
@@ -92,7 +96,7 @@ impl Allocation {
 }
 
 impl Retired {
-    pub fn physical(&self) -> Physical {
+    pub fn physical(&self) -> PhysicalRange {
         self.0.physical
     }
 
@@ -146,7 +150,7 @@ pub(super) enum Phase {
 
 #[derive(Clone, Copy)]
 pub(super) struct AllocationRecord {
-    physical: Physical,
+    physical: PhysicalRange,
     allowance: AllowanceId,
     retirement: ReturnId,
     phase: Phase,
@@ -169,7 +173,7 @@ pub(super) enum ReceiptOwner {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Returned {
     pub allocation: AllocationId,
-    pub physical: Physical,
+    pub physical: PhysicalRange,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -319,7 +323,7 @@ impl State {
     pub(super) fn record(
         &mut self,
         region: RegionId,
-        physical: Physical,
+        physical: PhysicalRange,
         allowance: AllowanceId,
         phase: Phase,
     ) -> AllocationId {
@@ -446,7 +450,7 @@ impl Allocator {
         state.capacity(1)?;
         state
             .buddy()
-            .occupy(range(candidate.physical))
+            .occupy(buddy_range(candidate.physical))
             .map_err(|_| Error::Changed)?;
         let id = state.record(
             candidate.region,
@@ -549,7 +553,7 @@ impl Allocator {
         let unassigned = state.unassigned.checked_add(credit).ok_or(Error::Balance)?;
         state
             .buddy()
-            .release(range(record.physical))
+            .release(buddy_range(record.physical))
             .expect("reserved physical range");
         state.settle_reserved(reservation.id, record);
         state.unassigned = unassigned;
@@ -645,7 +649,7 @@ impl Allocator {
             let unassigned = state.unassigned.checked_add(credit).ok_or(Error::Balance)?;
             state
                 .buddy()
-                .release(range(record.physical))
+                .release(buddy_range(record.physical))
                 .expect("original occupied range");
             state.unassigned = unassigned;
             remove(&mut state.allocations, allocation.key);
@@ -754,28 +758,17 @@ impl Allocator {
     pub unsafe fn split(
         &'static self,
         input: Retired,
-        boundary: u64,
+        boundary: PhysicalAddress,
         receivers: &mut [Option<Allocation>; 2],
         mode: Acquisition,
     ) -> Result<(), (Retired, Error)> {
-        let physical = input.physical();
-        if boundary <= physical.start
-            || boundary >= physical.end
-            || !boundary.is_multiple_of(self.config.granule)
-        {
+        if !boundary.get().is_multiple_of(self.config.granule) {
             return Err((input, Error::Layout));
         }
-        let output = [
-            Physical {
-                start: physical.start,
-                end: boundary,
-            },
-            Physical {
-                start: boundary,
-                end: physical.end,
-            },
-        ];
-        let result = self.convert([&input], output, receivers, mode);
+        let Some((left, right)) = input.physical().split(boundary) else {
+            return Err((input, Error::Layout));
+        };
+        let result = self.convert([&input], [left, right], receivers, mode);
         result.map_err(|error| (input, error))
     }
 
@@ -794,15 +787,15 @@ impl Allocator {
         receiver: &mut Option<Allocation>,
         mode: Acquisition,
     ) -> Result<(), (Retired, Retired, Error)> {
-        let fits =
-            left.physical().end == right.physical().start && left.0.id.region == right.0.id.region;
+        let fits = left.physical().end() == right.physical().start()
+            && left.0.id.region == right.0.id.region;
         if !fits {
             return Err((left, right, Error::Range));
         }
-        let physical = Physical {
-            start: left.physical().start,
-            end: right.physical().end,
-        };
+        let physical = left
+            .physical()
+            .merge(right.physical())
+            .expect("consecutive allocation ranges");
         let result = self.convert(
             [&left, &right],
             [physical],
@@ -815,7 +808,7 @@ impl Allocator {
     fn convert<const INPUTS: usize, const OUTPUTS: usize>(
         &'static self,
         inputs: [&Retired; INPUTS],
-        outputs: [Physical; OUTPUTS],
+        outputs: [PhysicalRange; OUTPUTS],
         receivers: &mut [Option<Allocation>; OUTPUTS],
         mode: Acquisition,
     ) -> Result<(), Error> {

@@ -1,8 +1,9 @@
 use super::organization::retired;
 use super::regions::{RegionSource, Regions};
 use super::{
-    DeviceTree, DtbMemory, FirmwareRegion, IMAGE, Loader,
-    devicetree::memory::{Error, Physical, Source, describe as describe_into, read},
+    DeviceTree, DtbMemory, FirmwareRegion, Loader,
+    devicetree::memory::{Error, Source, describe as describe_into, read},
+    image, range,
 };
 
 fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
@@ -142,7 +143,7 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
         super::describe(entry, kind, start, pages, attributes);
     }
     let loader = Loader {
-        image: IMAGE,
+        image: image(),
         descriptors: &descriptors.0,
         stride: 48,
         version: 1,
@@ -152,7 +153,7 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
     let boot = loader.admit(7).unwrap();
     assert_eq!(boot.firmware_map().unwrap().regions().len(), 5);
     assert_eq!(boot.dtb_memory().unwrap().reservations().len(), 2);
-    let early = boot.exclusions_for(IMAGE, IMAGE);
+    let early = boot.exclusions_for(image(), image());
     assert_eq!(
         early
             .entries()
@@ -161,9 +162,9 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
         2
     );
     let expected = [
-        (0xc000..0xe000, 0x0f),
-        (0x2000..0x3000, 8),
-        (0x7000..0x9000, 8),
+        (range(0xc000, 0xe000), 0x0f),
+        (range(0x2000, 0x3000), 8),
+        (range(0x7000, 0x9000), 8),
     ];
     assert!(
         boot.conventional_ram()
@@ -176,17 +177,19 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
                 }
             }))
     );
-    let evidence = retired(Physical {
-        start: 0x1000,
-        end: 0x10000,
-    });
+    let evidence = retired(range(0x1000, 0x10000));
     let mut space = [None; 3];
     let ready = Regions::organize(&boot, &early, 4096, Some(&evidence), &mut space).unwrap();
-    assert!(ready.entries().map(|r| (r.physical.start, r.source)).eq([
-        (0x2000, RegionSource::DeviceTreeAndUefi { attributes: 8 }),
-        (0x7000, RegionSource::DeviceTreeAndUefi { attributes: 8 }),
-        (0xc000, RegionSource::DeviceTreeAndUefi { attributes: 0x0f }),
-    ]));
+    assert!(
+        ready
+            .entries()
+            .map(|r| (r.physical.start().get(), r.source))
+            .eq([
+                (0x2000, RegionSource::DeviceTreeAndUefi { attributes: 8 }),
+                (0x7000, RegionSource::DeviceTreeAndUefi { attributes: 8 }),
+                (0xc000, RegionSource::DeviceTreeAndUefi { attributes: 0x0f }),
+            ])
+    );
 }
 
 #[test]
@@ -214,29 +217,14 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
     tree.token(2);
     let blob = tree.finish(true);
     let map = describe(&blob).unwrap();
-    assert_eq!(
-        map.ram(),
-        &[
-            Physical {
-                start: 0x8000_0000,
-                end: 0x8080_0000
-            },
-            Physical {
-                start: 0x1_0000_0000,
-                end: 0x1_0040_0000
-            },
-        ]
-    );
-    let reservations = map.reservations();
+    assert!(map.ram().eq([
+        range(0x8000_0000, 0x8080_0000),
+        range(0x1_0000_0000, 0x1_0040_0000),
+    ]));
+    let reservations = map.reservations().collect::<Vec<_>>();
     assert_eq!(reservations.len(), 3);
     assert_eq!(reservations[0].source, Source::ReservationBlock);
-    assert_eq!(
-        reservations[0].physical,
-        Physical {
-            start: 0x8000_0000,
-            end: 0x8000_3000
-        }
-    );
+    assert_eq!(reservations[0].physical, range(0x8000_0000, 0x8000_3000));
     assert_eq!(
         reservations[1].source,
         Source::ReservedMemory {
@@ -244,13 +232,7 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
             reusable: false
         }
     );
-    assert_eq!(
-        reservations[1].physical,
-        Physical {
-            start: 0x8000_1000,
-            end: 0x8000_2000
-        }
-    );
+    assert_eq!(reservations[1].physical, range(0x8000_1000, 0x8000_2000));
     assert_eq!(
         reservations[2].source,
         Source::ReservedMemory {
@@ -260,12 +242,9 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
     );
     assert_eq!(
         reservations[2].physical,
-        Physical {
-            start: 0x1_0000_1000,
-            end: 0x1_0000_2000
-        }
+        range(0x1_0000_1000, 0x1_0000_2000)
     );
-    let early = super::physical::Exclusions::new(IMAGE, IMAGE, IMAGE, None, None, Some(&map));
+    let early = super::physical::Exclusions::new(image(), image(), image(), None, None, Some(&map));
     let claims = early
         .entries()
         .filter(|entry| matches!(entry.occupant, super::physical::Occupant::Reservation(_)));
@@ -277,11 +256,8 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
     );
     assert!(early.entries().all(|entry| entry.fixed()));
     let boot = super::Boot::from_opensbi(0, 0x1000..0x2000, 0x3000..0x4000, map);
-    let early = boot.exclusions_for(IMAGE, IMAGE);
-    let evidence = retired(Physical {
-        start: 0x8000_0000,
-        end: 0x1_0040_0000,
-    });
+    let early = boot.exclusions_for(image(), image());
+    let evidence = retired(range(0x8000_0000, 0x1_0040_0000));
     let mut space = [None; 3];
     let ready = Regions::organize(&boot, &early, 4096, Some(&evidence), &mut space).unwrap();
     assert!(
@@ -289,16 +265,11 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
             .entries()
             .all(|entry| entry.source == RegionSource::DeviceTree)
     );
-    assert!(
-        ready
-            .entries()
-            .map(|entry| (entry.physical.start, entry.physical.end))
-            .eq([
-                (0x8000_3000, 0x8080_0000),
-                (0x1_0000_0000, 0x1_0000_1000),
-                (0x1_0000_2000, 0x1_0040_0000),
-            ])
-    );
+    assert!(ready.entries().map(|entry| entry.physical).eq([
+        range(0x8000_3000, 0x8080_0000),
+        range(0x1_0000_0000, 0x1_0000_1000),
+        range(0x1_0000_2000, 0x1_0040_0000),
+    ]));
 }
 
 #[test]
@@ -314,12 +285,11 @@ fn uses_the_parent_cell_widths_and_skips_unrelated_nested_properties() {
     tree.token(2);
     tree.token(2);
     let blob = tree.finish(true);
-    assert_eq!(
-        describe(&blob).unwrap().ram(),
-        &[Physical {
-            start: 0x8000_0000,
-            end: 0x8010_0000
-        }]
+    assert!(
+        describe(&blob)
+            .unwrap()
+            .ram()
+            .eq([range(0x8000_0000, 0x8010_0000)])
     );
 }
 
@@ -355,12 +325,11 @@ fn bounds_the_retained_extent_separately_from_the_parsed_blocks() {
     let aavmf_extent = 1024 * 1024 + 4096;
     blob.resize(aavmf_extent, 0);
     blob[4..8].copy_from_slice(&(aavmf_extent as u32).to_be_bytes());
-    assert_eq!(
-        describe(&blob).unwrap().ram(),
-        &[Physical {
-            start: 0x4000_0000,
-            end: 0x5000_0000
-        }]
+    assert!(
+        describe(&blob)
+            .unwrap()
+            .ram()
+            .eq([range(0x4000_0000, 0x5000_0000)])
     );
 
     // Run beyond the block budget while the retained extent still fits.
