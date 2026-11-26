@@ -205,7 +205,9 @@ return history.
 The Host module suite generates independent ELF64 images for RV64, x86_64
 and AArch64 using the pinned compiler and linker. It checks bounded format
 admission, candidate selection, file-backed entries, R/RX/RW layout, BSS
-zeroing and relative relocation into private mapped storage.
+zeroing and relative relocation into private mapped storage. It also
+checks exact provider identity, dependency retention, admission racing
+with Shut, and material retention on failed publication and retirement.
 
 ```sh
 RUSTFLAGS=-Dwarnings cargo test --locked -p kernel-host-module --target x86_64-unknown-linux-gnu
@@ -216,13 +218,19 @@ strict-NX and on AArch64 virt with AAVMF strict-NX. Each guest uses one Hart,
 prepares an independent module in private RW/NX pages, closes write access
 before enabling execution, and checks effective permissions and aliases in
 the active root. After ExitBootServices and the Limen major handoff, it
-rechecks the retained mapping and calls the module's MMU geometry entry.
+rechecks the retained mapping and calls the module's MMU geometry entry
+through a retained use. The guest closes admission, drains two uses and
+retains the mapped pages because the inherited root cannot be withdrawn
+by this guest.
 
 The [RV64 module guest](target/entry/module-riscv/) uses one Hart on OpenSBI
 virt. After the Limen major handoff in Bare mode, it activates an Sv39 root
 from image-owned storage, checks private RW/NX staging pages and invalidates
 their writable translations before publishing the module. It then
 synchronizes the instruction stream and calls the same geometry entry.
+The guest closes admission and drains two uses. It withdraws the exact
+mappings, completes translation and instruction maintenance, verifies
+their absence in the active root and reuses the returned pages as RW/NX.
 
 Each guest requires the entry to return 4096 and QEMU to report a successful
 exit or guest shutdown. Run the suites in either profile. The UEFI suite

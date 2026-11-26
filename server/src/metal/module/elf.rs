@@ -161,7 +161,7 @@ impl Header {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Elf<'a> {
     bytes: &'a [u8],
     headers: &'a [[u8; PROGRAM_HEADER]],

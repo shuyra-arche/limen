@@ -70,7 +70,7 @@ timeout --foreground --kill-after=3s 45s "$qemu" "${args[@]}" -S -qmp stdio <&3 
 cat "$out/stderr.log" "$log"
 printf '%s\n' "$status" >"$out/exit.status"
 [[ "$status" == "$expected_exit" ]]
-grep -Fxq "PASS module-execution $board strictnx=1 private=1 permissions=1 identity=1 aliases=0 geometry=4096" "$log"
+grep -Fxq "PASS module-execution $board strictnx=1 private=1 permissions=1 identity=1 aliases=0 geometry=4096 uses=2 shut=1 retained=1" "$log"
 jq -es 'all(.[]; has("error") | not)
     and any(.[]; .id == "capabilities" and has("return"))
     and any(.[]; .id == "start" and has("return"))' "$out/qmp.jsonl" >/dev/null

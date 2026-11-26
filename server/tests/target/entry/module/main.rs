@@ -19,7 +19,7 @@ use kernel::{
     access::MappedRange,
     address::{PhysicalAddress, PhysicalRange},
     entry::boot::{self, FirmwareMap},
-    module::{Contract, ModuleImage, Permissions},
+    module::{Contract, Layout, ModuleImage, ModuleSlots, Permissions, UseError},
 };
 use limen_treaty::model::{ByteLength, PageSize};
 use uefi::{
@@ -32,11 +32,14 @@ const IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/module.elf"));
 const MAX_PAGES: usize = 16;
 const PAGE: u64 = mapping::PAGE;
 
-#[derive(Clone, Copy)]
-struct Placement {
+struct FirmwarePages {
     physical: PhysicalRange,
     pages: [Permissions; MAX_PAGES],
-    entry: u64,
+}
+
+struct Placement {
+    storage: FirmwarePages,
+    layout: Layout<'static>,
     root: mapping::Root,
 }
 
@@ -183,25 +186,24 @@ fn prepare() -> Placement {
         assert_eq!(protection.get_memory_attributes(scope).unwrap(), expected);
     }
 
-    let placement = Placement {
-        physical,
-        pages,
-        entry,
-        root,
-    };
+    let storage = FirmwarePages { physical, pages };
     let after = uefi::boot::memory_map(MemoryType::LOADER_DATA).unwrap();
     mapping::without_interrupts(|| {
         unsafe {
             root.check(checked_map(&after), physical, |page| {
-                placement.permission(page)
+                storage.permission(page)
             })
         }
         .unwrap();
     });
-    placement
+    Placement {
+        storage,
+        layout,
+        root,
+    }
 }
 
-impl Placement {
+impl FirmwarePages {
     fn permission(&self, page: u64) -> Permissions {
         self.pages[((page - self.physical.start().get()) / PAGE) as usize]
     }
@@ -216,7 +218,7 @@ fn main() -> Status {
     let image = physical_range(base.addr() as u64, size);
     drop(loaded);
     let placement = prepare();
-    assert!(!image.overlaps(placement.physical));
+    assert!(!image.overlaps(placement.storage.physical));
     unsafe { (&raw mut PLACEMENT).write(Some(placement)) };
 
     let map = unsafe { uefi::boot::exit_boot_services(None) };
@@ -235,30 +237,55 @@ fn main() -> Status {
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
-    let placement = unsafe { (&raw const PLACEMENT).read() }.unwrap();
+    // The same sole CPU moves the retained placement out exactly once.
+    let Placement {
+        storage,
+        layout,
+        root,
+    } = unsafe { (&raw mut PLACEMENT).replace(None) }.unwrap();
     let map = boot.firmware_map().unwrap();
+    let physical = storage.physical;
     const LOADER_DATA: u32 = 2;
-    assert!(map.regions().any(|region| {
-        region.kind == LOADER_DATA && region.physical.covers(placement.physical)
-    }));
+    assert!(
+        map.regions()
+            .any(|region| region.kind == LOADER_DATA && region.physical.covers(physical))
+    );
 
-    let geometry = mapping::without_interrupts(|| {
-        unsafe {
-            placement
-                .root
-                .check(map, placement.physical, |page| placement.permission(page))
-        }
-        .unwrap();
+    let slots = ModuleSlots::<1>::new();
+    let (module, geometry) = mapping::without_interrupts(|| {
+        unsafe { root.check(map, physical, |page| storage.permission(page)) }.unwrap();
         #[cfg(target_arch = "aarch64")]
-        mapping::synchronize(placement.physical);
-        // The retained pages are executable through the proved initial root.
-        // The original trusted image declares the target's scalar geometry ABI.
-        unsafe { board::query(placement.entry as usize) }
+        mapping::synchronize(physical);
+        // The initial root keeps the exact executable pages visible on the
+        // only Hart. The image declares the target's scalar geometry ABI.
+        let module = unsafe { slots.publish(layout, storage, []) }.ok().unwrap();
+        let caller = module.acquire(Contract::MmuGeometry, 1).unwrap();
+        let sibling = module.acquire(Contract::MmuGeometry, 1).unwrap();
+        assert_eq!(caller.entry(), sibling.entry());
+        let geometry = unsafe { board::query(caller.entry() as usize) };
+        module.shut();
+        assert!(matches!(
+            module.acquire(Contract::MmuGeometry, 1),
+            Err(UseError::Closed)
+        ));
+        assert!(matches!(module.retire(), Err(UseError::Busy)));
+        drop(caller);
+        assert!(matches!(module.retire(), Err(UseError::Busy)));
+        drop(sibling);
+        (module, geometry)
     });
     assert_eq!(geometry, PAGE);
+
+    // The guest lacks authority to edit the inherited firmware root after
+    // ExitBootServices. Unfinished retirement keeps the pages reserved.
+    drop(module.retire().ok().unwrap());
+    let _retained = match module.reclaim() {
+        Err(module) => module,
+        Ok(_) => panic!("reclaimed the still-mapped firmware pages"),
+    };
     writeln!(
         Output,
-        "PASS module-execution {} strictnx=1 private=1 permissions=1 identity=1 aliases=0 geometry={geometry}",
+        "PASS module-execution {} strictnx=1 private=1 permissions=1 identity=1 aliases=0 geometry={geometry} uses=2 shut=1 retained=1",
         board::NAME
     )
     .unwrap();

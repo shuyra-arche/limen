@@ -164,14 +164,17 @@ impl Root {
         &TABLES[table].0[index(page, 0)]
     }
 
-    pub fn revoke_write(&self, range: Range<u64>) {
+    pub fn withdraw(&self, range: Range<u64>, expected: impl Fn(u64) -> Option<Permissions>) {
         self.check_active();
         for page in range.step_by(PAGE as usize) {
             let pte = self.entry(page);
-            assert_eq!(read(pte), leaf(page, Permissions::ReadWrite));
+            assert_eq!(
+                read(pte),
+                expected(page).map_or(0, |permission| leaf(page, permission))
+            );
             write(pte, 0);
         }
-        unsafe { asm!("sfence.vma x0, x0", options(nostack)) };
+        unsafe { asm!("sfence.vma x0, x0", "fence.i", options(nostack)) };
     }
 
     pub fn publish(&self, start: u64, pages: &[Option<Permissions>]) {

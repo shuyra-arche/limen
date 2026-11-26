@@ -20,7 +20,11 @@ Module reads bounded ELF64 `ET_DYN` program headers and a source-scoped
 zeroes private mapped storage and applies the target's relative relocations.
 The returned layout gives numeric addresses and requested page permissions.
 The initial mapping owner establishes actual permissions and instruction
-visibility for execution. See the [formal Module contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/module/README.md).
+visibility, then publishes into fixed boot slots. A published module owns
+its backing and the uses of already published providers. Each consumer
+keeps an exact ModuleUse through its calls and cleanup. Shut closes new uses.
+The mapping owner settles old mapping and instruction effects before
+reclaim returns the original backing. See the [formal Module contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/module/README.md).
 
 For build commands see the [repository README](../README.md). The architecture
 and Treaty contracts are maintained in [Document Limen](https://github.com/shuyra-arche/document-limen).
