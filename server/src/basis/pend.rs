@@ -1,24 +1,24 @@
 //! Root allocation authority installed in the kernel's initial PendSpace.
 
-use core::ptr;
 use limen_treaty::model::{Alignment, ByteLength};
 
 use crate::{
     allocator::{
-        self, AllocationConstruction, AllocationId, Allocator, Allowance, AllowanceId, Candidate,
-        RamPurpose, Spender,
+        self, AllocationConstruction, AllocationId, AllocationPermit, AllocationPermitSlot,
+        Allowance, Candidate, LayoutLimit,
     },
     metal::sync::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
-    Limit,
     Receiver,
     Installed,
     Revoked,
     Exhausted,
+    Protection,
     Source(allocator::Error),
+    Acquire(TurnAcquireError),
 }
 
 impl From<allocator::Error> for Error {
@@ -29,30 +29,7 @@ impl From<allocator::Error> for Error {
 
 impl From<TurnAcquireError> for Error {
     fn from(error: TurnAcquireError) -> Self {
-        Self::Source(error.into())
-    }
-}
-
-/// The actual source and share, bounded to metadata requests. No Cell or
-/// initial Cell handle can be issued from this permit.
-#[derive(Clone, Copy)]
-struct AllocationPermit {
-    source: &'static Allocator,
-    allowance: AllowanceId,
-    maximum: ByteLength,
-    alignment: Alignment,
-}
-
-impl AllocationPermit {
-    fn check(self, candidate: Candidate) -> Result<(), Error> {
-        let request = candidate.request();
-        if request.purpose() != RamPurpose::Metadata
-            || request.length() > self.maximum
-            || request.alignment() > self.alignment
-        {
-            return Err(Error::Limit);
-        }
-        Ok(())
+        Self::Acquire(error)
     }
 }
 
@@ -93,6 +70,7 @@ impl State {
 /// sole local handle is never reused. The initial branch has no parent,
 /// descendants or persistent uses. Its gate and holding share this Turn.
 pub struct PendSpace {
+    permit_slot: AllocationPermitSlot,
     state: TurnLock<State>,
 }
 
@@ -105,6 +83,7 @@ pub struct Initial<'receiver> {
 impl PendSpace {
     pub const fn new() -> Self {
         Self {
+            permit_slot: AllocationPermitSlot::metadata(),
             state: TurnLock::new(State::Fresh),
         }
     }
@@ -125,18 +104,16 @@ impl PendSpace {
         roles: Initial<'_>,
         mode: TurnMode,
     ) -> Result<(), Error> {
-        if maximum.get() == 0 {
-            return Err(Error::Limit);
-        }
+        let limit = LayoutLimit::new(maximum, alignment)?;
         if roles.spending.is_some() || roles.closing.is_some() {
             return Err(Error::Receiver);
         }
         let mut work = TurnWorkspace::<2>::new();
         let mut plan = work.plan();
         plan.insert(&self.state).expect("initial PendSpace");
-        allowance.plan_spender(&mut plan)?;
+        allowance.plan_initial_permit(&mut plan)?;
         plan.acquire(mode, |held| {
-            allowance.check_spender(held)?;
+            let permit = allowance.issue_initial_permit(held, &self.permit_slot, limit)?;
             let receiver = held.access(&self.state).expect("initial PendSpace");
             if let State::Published(pend) = receiver {
                 return Err(if pend.holding.is_some() {
@@ -146,19 +123,13 @@ impl PendSpace {
                 });
             }
             *receiver = State::Published(Pend {
-                holding: Some(AllocationPermit {
-                    source: allowance.source(),
-                    allowance: allowance.id(),
-                    maximum,
-                    alignment,
-                }),
+                holding: Some(permit),
                 branch: Admission::Open,
             });
             *roles.spending = Some(Handle { space: self });
             *roles.closing = Some(Revoker { space: self });
             Ok(())
-        })
-        .map_err(allocator::Error::from)?
+        })?
     }
 }
 
@@ -196,13 +167,9 @@ pub struct Handle {
 }
 
 impl Handle {
-    fn spender(self) -> Spender {
-        Spender(ptr::from_ref(&self.space.state).addr())
-    }
-
     fn resolve(self, held: &mut TurnAccess<'_>) -> Result<AllocationPermit, Error> {
         held.access(&self.space.state)
-            .ok_or(allocator::Error::Protection)?
+            .ok_or(Error::Protection)?
             .resolve()
     }
 
@@ -216,28 +183,18 @@ impl Handle {
         let mut work = TurnWorkspace::<4>::new();
         let mut plan = work.plan();
         plan.insert(&self.space.state).expect("original PendSpace");
-        permit.source.plan_construction(
+        permit.source().plan_construction(
             &mut plan,
             candidate.region(),
-            permit.allowance,
+            permit.allowance(),
             receiver,
         )?;
         plan.acquire(mode, |held| {
             let permit = self.resolve(held)?;
-            permit.check(candidate)?;
             // The original holding, its root branch, source and receiver are
             // all protected by this plan. Nothing from discovery authorizes.
-            Ok(unsafe {
-                permit.source.reserve(
-                    held,
-                    candidate,
-                    permit.allowance,
-                    receiver,
-                    Some(self.spender()),
-                )
-            }?)
-        })
-        .map_err(allocator::Error::from)?
+            Ok(unsafe { permit.source().reserve(held, candidate, permit, receiver) }?)
+        })?
     }
 
     pub fn issue(
@@ -247,24 +204,21 @@ impl Handle {
     ) -> Result<AllocationId, Error> {
         let permit = self.space.state.acquire(|state| state.resolve())??;
         let (region, allowance) = receiver.reservation()?;
-        if allowance != permit.allowance {
-            return Err(allocator::Error::Protection.into());
+        if allowance != permit.allowance() {
+            return Err(allocator::Error::PermitOrigin.into());
         }
         let mut work = TurnWorkspace::<4>::new();
         let mut plan = work.plan();
         plan.insert(&self.space.state).expect("original PendSpace");
         permit
-            .source
+            .source()
             .plan_construction(&mut plan, region, allowance, receiver)?;
         plan.acquire(mode, |held| {
             let permit = self.resolve(held)?;
-            let candidate = permit.source.reserved_candidate(held, receiver)?;
-            permit.check(candidate)?;
             // The allocator matches the original spending position before
             // issuing. A different Pend over the same share cannot substitute.
-            Ok(unsafe { permit.source.issue(held, receiver, Some(self.spender())) }?)
-        })
-        .map_err(allocator::Error::from)?
+            Ok(unsafe { permit.source().issue(held, receiver, permit) }?)
+        })?
     }
 
     /// End the one external holding. Existing Allocator obligations remain

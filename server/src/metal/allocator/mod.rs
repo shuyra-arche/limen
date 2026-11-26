@@ -18,6 +18,7 @@ mod allowance;
 pub mod buddy;
 pub(crate) mod bump;
 mod construction;
+mod permit;
 pub mod pool;
 mod region;
 mod returns;
@@ -28,7 +29,7 @@ mod storage;
 pub use allocation::{Allocation, AllocationId};
 pub use allowance::{Allowance, AllowanceCandidate, AllowanceId, Balance};
 pub use construction::AllocationConstruction;
-pub(crate) use construction::Spender;
+pub(crate) use permit::{AllocationPermit, AllocationPermitSlot, LayoutLimit};
 pub use region::{Grant, RegionDescription, RegionOrigin};
 pub use returns::{Pending, Retired, ReturnId, ReturnReceipt, Returned};
 pub(crate) use root::RootInitialization;
@@ -50,6 +51,8 @@ pub enum Error {
     AllocationCapacity,
     ReturnCapacity,
     Receiver,
+    PermitOrigin,
+    PermitLimit,
     Protection,
     Busy,
     Stale,

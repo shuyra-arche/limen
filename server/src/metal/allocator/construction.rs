@@ -9,7 +9,9 @@ use crate::{
 
 use super::{
     Allocation, AllocationId, Allocator, AllowanceId, Candidate, Error, RegionId,
-    allocation::Phase, allowance::SlotState,
+    allocation::Phase,
+    allowance::SlotState,
+    permit::{AllocationPermit, AllocationPermitSlot},
 };
 
 #[derive(Clone, Copy)]
@@ -18,12 +20,8 @@ struct Reservation {
     id: AllocationId,
     allowance: AllowanceId,
     candidate: Candidate,
-    spender: Option<Spender>,
+    permit_slot: &'static AllocationPermitSlot,
 }
-
-/// The canonical lock address of the original, permanently installed Pend.
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) struct Spender(pub(crate) usize);
 
 enum Preparation {
     Open,
@@ -167,18 +165,19 @@ impl Allocator {
     /// # Safety
     ///
     /// The complete plan must also protect the actual authorization. The
-    /// caller must revalidate its live role, ancestry, requested purpose and
-    /// the exact candidate's layout and Allowance against that authorization.
+    /// caller must obtain the permit from its live original holding and
+    /// revalidate the branch under the same protection.
     /// The construction is the real durable original request and receiver.
     pub(crate) unsafe fn reserve(
         &'static self,
         held: &mut TurnAccess<'_>,
         candidate: Candidate,
-        allowance: AllowanceId,
+        permit: AllocationPermit,
         construction: &'static AllocationConstruction,
-        spender: Option<Spender>,
     ) -> Result<AllocationId, Error> {
         let region = self.region(candidate.region)?;
+        permit.check(self, candidate)?;
+        let allowance = permit.allowance();
         if !matches!(
             held.access(&construction.state).ok_or(Error::Protection)?,
             Preparation::Open
@@ -208,26 +207,29 @@ impl Allocator {
             id,
             allowance,
             candidate,
-            spender,
+            permit_slot: permit.slot(),
         });
         Ok(id)
     }
 
     /// # Safety
     ///
-    /// Revalidate the same actual spending authority, purpose, layout and
-    /// receiving responsibility under the complete live plan. Issuance may
-    /// take place only in the still open original construction.
+    /// Recover the permit from its live holding under the complete plan and
+    /// keep that protection through the commit. Issuance may take place only
+    /// in the still open original construction.
     pub(crate) unsafe fn issue(
         &'static self,
         held: &mut TurnAccess<'_>,
         construction: &'static AllocationConstruction,
-        spender: Option<Spender>,
+        permit: AllocationPermit,
     ) -> Result<AllocationId, Error> {
         let reservation = reservation(self, held, construction)?;
-        if reservation.spender != spender {
-            return Err(Error::Protection);
+        if reservation.allowance != permit.allowance()
+            || !reservation.permit_slot.matches(permit.slot())
+        {
+            return Err(Error::PermitOrigin);
         }
+        permit.check(self, reservation.candidate)?;
         let region = self.region(reservation.id.region())?;
         let slot = self.slot(reservation.allowance)?;
         let mut balance = held
@@ -252,16 +254,6 @@ impl Allocator {
         *held.access(&construction.state).expect("receiver") =
             Preparation::Issued(Some(Allocation::issued(self, reservation.id, physical)));
         Ok(reservation.id)
-    }
-
-    /// Read the immutable request of the actual reserved construction under
-    /// its lock for the final authorization check before Issue.
-    pub(crate) fn reserved_candidate(
-        &self,
-        held: &mut TurnAccess<'_>,
-        construction: &'static AllocationConstruction,
-    ) -> Result<Candidate, Error> {
-        Ok(reservation(self, held, construction)?.candidate)
     }
 
     /// Cancelling a closed preparation needs no new spending authority.

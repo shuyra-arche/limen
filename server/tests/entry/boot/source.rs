@@ -6,8 +6,12 @@ use crate::{
         RegionDescription, RegionOrigin, Request, Retired, ReturnId, Search,
     },
     describe, image,
-    metal::sync::TurnMode::{Fast, Slow},
+    metal::sync::{
+        TurnAcquireError,
+        TurnMode::{Fast, Slow},
+    },
     organization::retired,
+    pend::{Error as PendError, Handle, Initial as InitialPend, PendSpace, Revoker},
     range,
     regions::Regions,
 };
@@ -193,12 +197,46 @@ fn only_the_original_source_can_resolve_region_and_allowance_slots() {
     other_allowance.reclaim(Fast).ok().unwrap();
 }
 
+fn metadata_spending(allowance: &Allowance) -> (Handle, Revoker) {
+    let space = Box::leak(Box::new(PendSpace::new()));
+    let mut spending = None;
+    let mut closing = None;
+    unsafe {
+        space.publish_initial(
+            allowance,
+            ByteLength::new(PAGE),
+            Alignment::new(PAGE).unwrap(),
+            InitialPend {
+                spending: &mut spending,
+                closing: &mut closing,
+            },
+            Fast,
+        )
+    }
+    .unwrap();
+    (spending.unwrap(), closing.unwrap())
+}
+
+fn metadata_candidate(source: &'static Allocator) -> crate::allocator::Candidate {
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(PAGE).unwrap(),
+        pages(3, 4),
+        Some(ATTRIBUTES),
+        Metadata,
+    )
+    .unwrap();
+    let Search::Candidate(candidate) = source.lookup(request, None).unwrap().step().unwrap() else {
+        panic!("expected the fixture's free metadata page");
+    };
+    candidate
+}
+
 #[test]
 fn initial_pend_limits_and_revalidates_the_original_spender() {
     use crate::{
         allocator::{AllocationConstruction, RamPurpose},
         metal::sync::TurnWorkspace,
-        pend::{Error as PendError, Initial as InitialPend, PendSpace},
     };
     use std::{sync::mpsc::sync_channel, thread};
 
@@ -225,7 +263,7 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
                     },
                     Fast
                 ),
-                Err(PendError::Limit)
+                Err(PendError::Source(Error::PermitLimit))
             );
             assert!(spending.is_none() && closing.is_none());
             space
@@ -297,7 +335,7 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
         ] {
             assert_eq!(
                 handle.reserve(invalid, cancelled, Fast),
-                Err(PendError::Limit)
+                Err(PendError::Source(Error::PermitLimit))
             );
         }
         assert_eq!(allowance.balance(), Ok(before));
@@ -319,14 +357,14 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
             held.recv().unwrap();
             let result = handle.reserve(valid, cancelled, Fast);
             release.send(()).unwrap();
-            assert_eq!(result, Err(PendError::Source(Error::Busy)));
+            assert_eq!(result, Err(PendError::Acquire(TurnAcquireError::Busy)));
         });
         assert_eq!(allowance.balance(), Ok(before));
         handle.reserve(valid, cancelled, Fast).unwrap();
         assert_eq!(cancelled.cancel(Fast), Err(Error::Receiver));
         assert_eq!(
             different.issue(cancelled, Fast),
-            Err(PendError::Source(Error::Protection))
+            Err(PendError::Source(Error::PermitOrigin))
         );
         assert_eq!(revoker.revoked(), Ok(false));
         revoker.revoke().unwrap();
@@ -383,6 +421,136 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
     assert_eq!(receipt.finish(Fast).unwrap().allocation, issued_id);
     receipt.acknowledge().unwrap();
     assert_eq!(receipt.finish(Fast), Err(Error::Stale));
+    assert_eq!(allowance.balance(), Ok(before));
+}
+
+#[test]
+fn reserve_and_revocation_order_the_original_holding() {
+    use crate::allocator::AllocationConstruction;
+    use std::{sync::Barrier, thread};
+
+    let mut initial = None;
+    let (source, allowance) = source(&mut initial, 8 * PAGE);
+    let (spending, revoker) = metadata_spending(&allowance);
+    let candidate = metadata_candidate(source);
+    let construction = &*Box::leak(Box::new(AllocationConstruction::new()));
+    let before = allowance.balance().unwrap();
+    let start = Barrier::new(2);
+    let reserved = thread::scope(|scope| {
+        let closing = scope.spawn(|| {
+            start.wait();
+            revoker.revoke()
+        });
+        start.wait();
+        let reserved = spending.reserve(candidate, construction, Slow);
+        assert_eq!(closing.join().unwrap(), Ok(()));
+        reserved
+    });
+    assert_eq!(revoker.revoked(), Ok(true));
+    match reserved {
+        Ok(_) => {
+            let balance = allowance.balance().unwrap();
+            assert_eq!(balance.reserved, before.reserved + PAGE);
+            assert_eq!(balance.occupied, before.occupied);
+            assert_eq!(spending.issue(construction, Slow), Err(PendError::Revoked));
+        }
+        Err(PendError::Revoked) => assert_eq!(allowance.balance(), Ok(before)),
+        unexpected => panic!("unsettled reserve/revoke race: {unexpected:?}"),
+    }
+    construction.shut().unwrap();
+    assert_eq!(construction.cancel(Slow), Ok(()));
+    assert_eq!(construction.cancel(Slow), Ok(()));
+    assert_eq!(allowance.balance(), Ok(before));
+    assert_eq!(metadata_candidate(source).physical(), candidate.physical());
+}
+
+#[test]
+fn issue_and_allowance_shut_order_the_same_charge() {
+    use crate::allocator::AllocationConstruction;
+    use std::{sync::Barrier, thread};
+
+    let mut initial = None;
+    let (source, allowance) = source(&mut initial, 8 * PAGE);
+    let (spending, _) = metadata_spending(&allowance);
+    let candidate = metadata_candidate(source);
+    let construction = &*Box::leak(Box::new(AllocationConstruction::new()));
+    let before = allowance.balance().unwrap();
+    let reserved = spending.reserve(candidate, construction, Slow).unwrap();
+    let start = Barrier::new(2);
+    let issued = thread::scope(|scope| {
+        let closing = scope.spawn(|| {
+            start.wait();
+            allowance.shut(Some(candidate.region()), Slow)
+        });
+        start.wait();
+        let issued = spending.issue(construction, Slow);
+        assert_eq!(closing.join().unwrap(), Ok(()));
+        issued
+    });
+
+    match issued {
+        Ok(id) => {
+            assert_eq!(id, reserved);
+            let mut material = None;
+            unsafe { construction.take(&mut material) }.unwrap();
+            let receipt = begin_return(source, unsafe { material.unwrap().retire() });
+            assert_eq!(source.finish_return(receipt, Slow).unwrap().allocation, id);
+        }
+        Err(PendError::Source(Error::Shut)) => {
+            construction.shut().unwrap();
+            construction.cancel(Slow).unwrap();
+        }
+        unexpected => panic!("unsettled issue/shut race: {unexpected:?}"),
+    }
+    let balance = allowance.balance().unwrap();
+    assert_eq!(balance.reserved, 0);
+    assert_eq!(balance.occupied, before.occupied);
+    assert_eq!(balance.available(), 0);
+    let capacity = initial_capacity(source);
+    assert_eq!(
+        source.budget(Fast),
+        Ok((capacity, capacity - before.occupied))
+    );
+}
+
+#[test]
+fn issue_and_cancellation_have_one_winner() {
+    use crate::allocator::AllocationConstruction;
+    use std::{sync::Barrier, thread};
+
+    let mut initial = None;
+    let (source, allowance) = source(&mut initial, 8 * PAGE);
+    let (spending, _) = metadata_spending(&allowance);
+    let construction = &*Box::leak(Box::new(AllocationConstruction::new()));
+    let before = allowance.balance().unwrap();
+    let reserved = spending
+        .reserve(metadata_candidate(source), construction, Slow)
+        .unwrap();
+    let start = Barrier::new(2);
+    let (issued, cancelled) = thread::scope(|scope| {
+        let cancellation = scope.spawn(|| {
+            start.wait();
+            construction.shut()?;
+            construction.cancel(Slow)
+        });
+        start.wait();
+        let issued = spending.issue(construction, Slow);
+        (issued, cancellation.join().unwrap())
+    });
+
+    match (issued, cancelled) {
+        (Ok(id), Err(Error::Receiver)) => {
+            assert_eq!(id, reserved);
+            let mut material = None;
+            unsafe { construction.take(&mut material) }.unwrap();
+            let receipt = begin_return(source, unsafe { material.unwrap().retire() });
+            assert_eq!(source.finish_return(receipt, Slow).unwrap().allocation, id);
+        }
+        (Err(PendError::Source(Error::Receiver)), Ok(())) => {
+            assert_eq!(construction.cancel(Slow), Ok(()));
+        }
+        unexpected => panic!("unsettled issue/cancel race: {unexpected:?}"),
+    }
     assert_eq!(allowance.balance(), Ok(before));
 }
 
@@ -615,10 +783,7 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
 
 #[test]
 fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
-    use crate::{
-        allocator::AllocationConstruction,
-        metal::sync::{TurnAcquireError, TurnLock, TurnWorkspace},
-    };
+    use crate::{allocator::AllocationConstruction, metal::sync::TurnWorkspace};
     use std::{sync::mpsc::sync_channel, thread};
 
     // The Host owner explicitly funds its single actual construction, with a
@@ -626,7 +791,7 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     let mut initial = None;
     let (source, allowance) = source(&mut initial, 8 * PAGE);
     let id = allowance.id();
-    let spending = TurnLock::new(Some(id));
+    let (spending, revoker) = metadata_spending(&allowance);
     let construction = Box::leak(Box::new(AllocationConstruction::new()));
     let construction = &*construction;
     let request = Request::new(
@@ -656,54 +821,25 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
             .unwrap();
         });
         held.recv().unwrap();
-        let mut work = TurnWorkspace::<4>::new();
-        let mut plan = work.plan();
-        source
-            .plan_construction(&mut plan, candidate.region(), id, construction)
-            .unwrap();
-        plan.insert(&spending).unwrap();
-        let result = plan.acquire(Fast, |_| panic!("partially held commit"));
+        let result = spending.reserve(candidate, construction, Fast);
         release.send(()).unwrap();
-        assert_eq!(result, Err::<(), _>(TurnAcquireError::Busy));
+        assert_eq!(result, Err(PendError::Acquire(TurnAcquireError::Busy)));
         assert_eq!(allowance.balance().unwrap().reserved, 0);
     });
 
-    let mut work = TurnWorkspace::<4>::new();
-    let mut plan = work.plan();
-    source
-        .plan_construction(&mut plan, candidate.region(), id, construction)
-        .unwrap();
-    plan.insert(&spending).unwrap();
-    plan.acquire(Slow, |locks| {
-        assert_eq!(*locks.access(&spending).unwrap(), Some(id));
-        assert_eq!(candidate.request().length(), ByteLength::new(PAGE));
-        assert_eq!(
-            candidate.request().alignment(),
-            Alignment::new(PAGE).unwrap()
-        );
-        assert_eq!(candidate.request().purpose(), Metadata);
-        unsafe { source.reserve(locks, candidate, id, construction, None) }.unwrap()
-    })
-    .unwrap();
+    assert_eq!(candidate.physical(), pages(3, 4));
+    spending.reserve(candidate, construction, Slow).unwrap();
     assert_eq!(allowance.balance().unwrap().reserved, PAGE);
 
+    let mut work = TurnWorkspace::<3>::new();
     let mut plan = work.plan();
     source
         .plan_construction(&mut plan, candidate.region(), id, construction)
         .unwrap();
-    plan.insert(&spending).unwrap();
-    plan.acquire(Slow, |locks| {
-        assert_eq!(
-            source
-                .reserved_candidate(locks, construction)
-                .unwrap()
-                .physical(),
-            pages(3, 4)
-        );
-        *locks.access(&spending).unwrap() = None;
-        construction.shut_held(locks).unwrap();
-    })
-    .unwrap();
+    plan.acquire(Slow, |locks| construction.shut_held(locks))
+        .unwrap()
+        .unwrap();
+    revoker.revoke().unwrap();
     allowance.shut(Some(candidate.region()), Fast).unwrap();
     construction.cancel(Slow).unwrap();
     assert_eq!(allowance.balance().unwrap().reserved, 0);
@@ -713,11 +849,12 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
 
 #[test]
 fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
-    use crate::metal::sync::TurnWorkspace;
+    use crate::{allocator::AllocationConstruction, metal::sync::TurnWorkspace};
     let mut initial = None;
     let (source, allowance) = source(&mut initial, 3 * PAGE);
     let capacity = initial_capacity(source);
     let original = allowance.id();
+    let (original_spending, _) = metadata_spending(&allowance);
     let region = initial.as_ref().unwrap().region();
     let (_, credit) = source.regions().nth(1).unwrap();
     assert_eq!(credit.physical.start(), source.root().end());
@@ -758,6 +895,17 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
     let next = receiver.take().unwrap();
     assert_ne!(next.id(), original);
 
+    let construction = &*Box::leak(Box::new(AllocationConstruction::new()));
+    let candidate = metadata_candidate(source);
+    assert_eq!(
+        original_spending.reserve(candidate, construction, Fast),
+        Err(PendError::Source(Error::Stale))
+    );
+    let (spending, _) = metadata_spending(&next);
+    spending.reserve(candidate, construction, Fast).unwrap();
+    construction.shut().unwrap();
+    construction.cancel(Fast).unwrap();
+
     let mut plan = work.plan();
     source
         .plan_transfer(&mut plan, original, second.id())
@@ -779,10 +927,7 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
 
 #[test]
 fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation() {
-    use crate::{
-        allocator::AllocationConstruction,
-        metal::sync::{TurnLock, TurnWorkspace},
-    };
+    use crate::allocator::AllocationConstruction;
 
     let mut initial = None;
     let mut receiver = None;
@@ -798,8 +943,7 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
     );
     let allowance = receiver.unwrap();
     let source = allowance.source();
-    let id = allowance.id();
-    let authority = TurnLock::new(id);
+    let (spending, _) = metadata_spending(&allowance);
     let original = initial.take().unwrap();
     let original_id = original.id();
     let region = original.region();
@@ -829,23 +973,8 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
             panic!("exact grain was not refunded");
         };
         let construction = &*Box::leak(Box::new(AllocationConstruction::new()));
-        let mut work = TurnWorkspace::<4>::new();
-        let mut plan = work.plan();
-        source
-            .plan_construction(&mut plan, candidate.region(), id, construction)
-            .unwrap();
-        plan.insert(&authority).unwrap();
-        plan.acquire(Slow, |held| {
-            assert_eq!(*held.access(&authority).unwrap(), id);
-            assert_eq!(candidate.request().purpose(), Metadata);
-            let reserved =
-                unsafe { source.reserve(held, candidate, id, construction, None) }.unwrap();
-            assert_eq!(
-                unsafe { source.issue(held, construction, None) },
-                Ok(reserved)
-            );
-        })
-        .unwrap();
+        let reserved = spending.reserve(candidate, construction, Slow).unwrap();
+        assert_eq!(spending.issue(construction, Slow), Ok(reserved));
         let mut issued = None;
         unsafe { construction.take(&mut issued) }.unwrap();
         let issued = issued.unwrap();
@@ -870,38 +999,15 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
         panic!("metadata saturation cannot rule out a physical range");
     };
     let construction = &*Box::leak(Box::new(AllocationConstruction::new()));
-    let mut work = TurnWorkspace::<4>::new();
-    let mut plan = work.plan();
-    source
-        .plan_construction(&mut plan, candidate.region(), id, construction)
-        .unwrap();
-    plan.insert(&authority).unwrap();
     assert_eq!(
-        plan.acquire(Fast, |held| {
-            assert_eq!(*held.access(&authority).unwrap(), id);
-            assert_eq!(candidate.request().purpose(), Metadata);
-            unsafe { source.reserve(held, candidate, id, construction, None) }
-        }),
-        Ok(Err(Error::ReturnCapacity))
+        spending.reserve(candidate, construction, Fast),
+        Err(PendError::Source(Error::ReturnCapacity))
     );
     assert_eq!(allowance.balance().unwrap().available(), 8 * PAGE);
 
     source.acknowledge(owner_receipt).unwrap();
-    let mut plan = work.plan();
-    source
-        .plan_construction(&mut plan, candidate.region(), id, construction)
-        .unwrap();
-    plan.insert(&authority).unwrap();
-    plan.acquire(Slow, |held| {
-        assert_eq!(*held.access(&authority).unwrap(), id);
-        unsafe {
-            source
-                .reserve(held, candidate, id, construction, None)
-                .unwrap();
-            source.issue(held, construction, None).unwrap();
-        }
-    })
-    .unwrap();
+    let reserved = spending.reserve(candidate, construction, Slow).unwrap();
+    assert_eq!(spending.issue(construction, Slow), Ok(reserved));
     assert_eq!(source.finish_return(owner_receipt, Fast), Err(Error::Stale));
     let mut issued = None;
     unsafe { construction.take(&mut issued) }.unwrap();
