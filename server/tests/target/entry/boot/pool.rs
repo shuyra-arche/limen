@@ -18,7 +18,7 @@ static mut TYPED: MaybeUninit<Pool<'static, Entry>> = MaybeUninit::uninit();
 static mut ALLOCATION: Option<Allocation> = None;
 static mut ALLOWANCE: Option<Allowance> = None;
 
-fn reference<'pool>(owner: &StableOwner<'pool, '_, TurnLock<usize>>) -> Reference<'pool, TurnLock<usize>> {
+pub(super) fn reference<'pool, T: Sync>(owner: &StableOwner<'pool, '_, T>) -> Reference<'pool, T> {
     for _ in 0..16 {
         match owner.reference() {
             Ok(reference) => return reference,

@@ -198,8 +198,10 @@ reference keeps that object alive after detachment. Once the reference ends,
 the consumer can reclaim the object and hand the group back. The recovery
 step finds the return in the original Pool directory and refunds the original
 Allowance. The PendSpace occupies one of two Allocation slots, so reissuing
-the same page exercises reuse of the other slot with a new generation. The
-guest checks that the old upstream receipt is stale and that replay of the
-Pool's retained result leaves the new charge in place. The replacement can
-still refund its charge after the original spending authority is revoked
-and released.
+the same page exercises reuse of the other slot with a new generation.
+Replaying the Pool's retained result leaves the replacement's charge in
+place. The consumer takes the replacement from its original Construction
+after the spending authority is revoked and released, then performs a
+volatile write and read through the bare mapping. The guest checks that the
+old upstream receipt is stale both while the new receipt can settle its
+refund and while the new receipt can replay the completed result.
