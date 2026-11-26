@@ -29,7 +29,7 @@
     "server/src/metal/hart/mod.rs",
     "server/src/metal/hart/node.rs",
     "server/src/metal/hart/protection.rs",
-    "server/src/basis/sync/**",
+    "server/src/metal/sync/**",
     "server/tests/target/entry/synchronization.rs",
     "server/tests/target/entry/memory.rs",
     "server/tests/target/entry/foundation.rs",

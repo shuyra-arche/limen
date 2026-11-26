@@ -7,7 +7,7 @@ use core::{
 };
 use kernel::{
     entry::execution::{Current, Error},
-    sync::{Acquisition, AcquisitionError, PlanError, TURN_CAPACITY, TurnLock, Work},
+    sync::{TURN_CAPACITY, TurnAcquireError, TurnLock, TurnMode, TurnPlanError, TurnWorkspace},
 };
 
 static TRANSFER: TurnLock<u64> = TurnLock::new(0);
@@ -40,23 +40,27 @@ fn wait(phase: Phase) {
 pub(super) fn major() {
     check_capacity();
 
-    let mut work = Work::<1>::new();
+    let mut work = TurnWorkspace::<1>::new();
     let mut plan = work.plan();
     plan.insert(&TRANSFER).unwrap();
     plan.insert(&TRANSFER).expect("two roles share one entry");
-    assert_eq!(plan.insert(&COUNT), Err(PlanError::Capacity));
+    assert_eq!(plan.insert(&COUNT), Err(TurnPlanError::Capacity));
+    assert_eq!(
+        plan.acquire(TurnMode::Fast, |_| panic!("overflowed plan entered")),
+        Err(TurnAcquireError::Capacity)
+    );
 
     let mut plan = work.plan();
     plan.insert(&TRANSFER).unwrap();
     plan.insert(&TRANSFER).unwrap();
-    plan.execute(Acquisition::Fast, |held| {
+    plan.acquire(TurnMode::Fast, |held| {
         assert!(held.access(&COUNT).is_none(), "lock outside the set");
-        let mut nested = Work::<1>::new();
+        let mut nested = TurnWorkspace::<1>::new();
         let mut plan = nested.plan();
         plan.insert(&COUNT).unwrap();
         assert_eq!(
-            plan.execute(Acquisition::Fast, |_| panic!("nested Turn entered")),
-            Err(AcquisitionError::Context),
+            plan.acquire(TurnMode::Fast, |_| panic!("nested Turn entered")),
+            Err(TurnAcquireError::Context),
         );
 
         publish(Phase::Held);
@@ -69,11 +73,11 @@ pub(super) fn major() {
     increment(false);
     wait(Phase::Finished);
 
-    let mut work = Work::<2>::new();
+    let mut work = TurnWorkspace::<2>::new();
     let mut plan = work.plan();
     plan.insert(&COUNT).unwrap();
     plan.insert(&PAIR).unwrap();
-    plan.execute(Acquisition::Fast, |held| {
+    plan.acquire(TurnMode::Fast, |held| {
         assert_eq!(*held.access(&COUNT).unwrap(), 2 * ROUNDS);
         assert_eq!(*held.access(&PAIR).unwrap(), [2 * ROUNDS, !(2 * ROUNDS)]);
     })
@@ -82,50 +86,54 @@ pub(super) fn major() {
 
 fn check_capacity() {
     let locks = [const { TurnLock::new(()) }; TURN_CAPACITY + 1];
-    let mut work = Work::<{ TURN_CAPACITY + 1 }>::new();
+    let mut work = TurnWorkspace::<{ TURN_CAPACITY + 1 }>::new();
     let mut plan = work.plan();
     for lock in &locks {
         plan.insert(lock).unwrap();
     }
     assert_eq!(
-        plan.execute(Acquisition::Slow, |_| panic!("oversized plan entered")),
-        Err(AcquisitionError::Capacity),
+        plan.acquire(TurnMode::Slow, |_| panic!("oversized plan entered")),
+        Err(TurnAcquireError::Capacity),
     );
 
     let mut plan = work.plan();
     for lock in &locks[..TURN_CAPACITY] {
         plan.insert(lock).unwrap();
     }
-    plan.execute(Acquisition::Slow, |_| ())
+    plan.acquire(TurnMode::Slow, |_| ())
         .expect("capacity failure left the admitted node supply available");
 }
 
 pub(super) fn minor() {
     wait(Phase::Held);
-    let mut work = Work::<3>::new();
-    let mut plan = work.plan();
-    plan.insert(&COUNT).unwrap();
-    plan.insert(&PAIR).unwrap();
-    plan.insert(&TRANSFER).unwrap();
-    assert_eq!(
-        plan.execute(Acquisition::Fast, |_| panic!("incomplete set entered")),
-        Err(AcquisitionError::Busy),
-    );
+    let prefix = [const { TurnLock::new(()) }; TURN_CAPACITY - 1];
+    let mut work = TurnWorkspace::<TURN_CAPACITY>::new();
+    for count in 1..=prefix.len() {
+        let mut plan = work.plan();
+        for lock in &prefix[..count] {
+            plan.insert(lock).unwrap();
+        }
+        plan.insert(&TRANSFER).unwrap();
+        let retry = Retry(&prefix[0]);
+        assert_eq!(
+            plan.acquire(TurnMode::Fast, move |_| {
+                drop(retry);
+                panic!("incomplete set entered");
+            }),
+            Err(TurnAcquireError::Busy),
+        );
+    }
 
     let mut plan = work.plan();
-    plan.insert(&COUNT).unwrap();
-    plan.insert(&PAIR).unwrap();
-    plan.execute(Acquisition::Fast, |held| {
-        assert_eq!(*held.access(&COUNT).unwrap(), 0);
-        assert_eq!(*held.access(&PAIR).unwrap(), [0, !0]);
-    })
-    .expect("Busy released both acquired prefixes");
+    for lock in &prefix {
+        plan.insert(lock).unwrap();
+    }
+    plan.acquire(TurnMode::Slow, |_| ())
+        .expect("Busy released each acquired prefix");
     publish(Phase::Retired);
 
-    let mut plan = work.plan();
-    plan.insert(&TRANSFER).unwrap();
-    let value = plan
-        .execute(Acquisition::Fast, |held| *held.access(&TRANSFER).unwrap())
+    let value = TRANSFER
+        .acquire(|value| *value)
         .expect("handoff of the contended lock");
     assert_eq!(value, VALUE);
 
@@ -133,18 +141,25 @@ pub(super) fn minor() {
     publish(Phase::Finished);
 }
 
+struct Retry<'a>(&'a TurnLock<()>);
+
+impl Drop for Retry<'_> {
+    fn drop(&mut self) {
+        self.0
+            .acquire(|_| ())
+            .expect("callback capture is dropped after the Busy prefix is released");
+    }
+}
+
 pub(super) fn check_leave(current: &mut Current) {
-    let mut work = Work::<1>::new();
-    let mut plan = work.plan();
-    plan.insert(&LEAVE).unwrap();
-    let result = plan
-        .execute(Acquisition::Fast, |_| current.yield_now())
+    let result = LEAVE
+        .acquire(|_| current.yield_now())
         .expect("occupied Unit can acquire an ordinary Turn");
     assert_eq!(result, Err(Error::State));
 }
 
 fn increment(reverse: bool) {
-    let mut work = Work::<2>::new();
+    let mut work = TurnWorkspace::<2>::new();
     for _ in 0..ROUNDS {
         let mut plan = work.plan();
         if reverse {
@@ -154,7 +169,7 @@ fn increment(reverse: bool) {
             plan.insert(&COUNT).unwrap();
             plan.insert(&PAIR).unwrap();
         }
-        plan.execute(Acquisition::Slow, |held| {
+        plan.acquire(TurnMode::Slow, |held| {
             let count = *held.access(&COUNT).unwrap();
             let pair = held.access(&PAIR).unwrap();
             assert_eq!(*pair, [count, !count]);

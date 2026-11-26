@@ -6,10 +6,10 @@ use crate::{
         RamPurpose::Metadata, Request, Retired, ReturnId, Search,
     },
     describe, image,
+    metal::sync::TurnMode::{Fast, Slow},
     organization::retired,
     range,
     regions::{Region, RegionSource, Regions},
-    sync::Acquisition::{Fast, Slow},
 };
 use core::mem::MaybeUninit;
 use limen_treaty::model::{Alignment, ByteLength};
@@ -107,8 +107,8 @@ fn begin_return(source: &Allocator, material: Retired) -> ReturnId {
 fn initial_pend_limits_and_revalidates_the_original_spender() {
     use crate::{
         allocator::{Construction, RamPurpose},
+        metal::sync::TurnWorkspace,
         pend::{Error as PendError, Initial as InitialPend, PendSpace},
-        sync::Work,
     };
     use std::{sync::mpsc::sync_channel, thread};
 
@@ -217,10 +217,10 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
         let (release, released) = sync_channel(0);
         thread::scope(|scope| {
             scope.spawn(move || {
-                let mut work = Work::<1>::new();
+                let mut work = TurnWorkspace::<1>::new();
                 let mut plan = work.plan();
                 cancelled.plan(&mut plan).unwrap();
-                plan.execute(Fast, |_| {
+                plan.acquire(Fast, |_| {
                     entered.send(()).unwrap();
                     released.recv().unwrap();
                 })
@@ -463,7 +463,7 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
 fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     use crate::{
         allocator::Construction,
-        sync::{AcquisitionError, TurnLock, Work},
+        metal::sync::{TurnAcquireError, TurnLock, TurnWorkspace},
     };
     use std::{sync::mpsc::sync_channel, thread};
 
@@ -492,35 +492,35 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     let (release, released) = sync_channel(0);
     thread::scope(|scope| {
         scope.spawn(move || {
-            let mut work = Work::<1>::new();
+            let mut work = TurnWorkspace::<1>::new();
             let mut plan = work.plan();
             construction.plan(&mut plan).unwrap();
-            plan.execute(Fast, |_| {
+            plan.acquire(Fast, |_| {
                 hold.send(()).unwrap();
                 released.recv().unwrap();
             })
             .unwrap();
         });
         held.recv().unwrap();
-        let mut work = Work::<4>::new();
+        let mut work = TurnWorkspace::<4>::new();
         let mut plan = work.plan();
         source
             .plan_construction(&mut plan, candidate.region(), id, construction)
             .unwrap();
         plan.insert(&spending).unwrap();
-        let result = plan.execute(Fast, |_| panic!("partially held commit"));
+        let result = plan.acquire(Fast, |_| panic!("partially held commit"));
         release.send(()).unwrap();
-        assert_eq!(result, Err::<(), _>(AcquisitionError::Busy));
+        assert_eq!(result, Err::<(), _>(TurnAcquireError::Busy));
         assert_eq!(allowance.balance().unwrap().reserved, 0);
     });
 
-    let mut work = Work::<4>::new();
+    let mut work = TurnWorkspace::<4>::new();
     let mut plan = work.plan();
     source
         .plan_construction(&mut plan, candidate.region(), id, construction)
         .unwrap();
     plan.insert(&spending).unwrap();
-    plan.execute(Slow, |locks| {
+    plan.acquire(Slow, |locks| {
         assert_eq!(*locks.access(&spending).unwrap(), Some(id));
         assert_eq!(candidate.request().length(), ByteLength::new(PAGE));
         assert_eq!(
@@ -538,7 +538,7 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
         .plan_construction(&mut plan, candidate.region(), id, construction)
         .unwrap();
     plan.insert(&spending).unwrap();
-    plan.execute(Slow, |locks| {
+    plan.acquire(Slow, |locks| {
         assert_eq!(
             source
                 .reserved_candidate(locks, construction)
@@ -558,7 +558,7 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
 
 #[test]
 fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
-    use crate::sync::Work;
+    use crate::metal::sync::TurnWorkspace;
     let mut initial = None;
     let (source, allowance) = source(&mut initial, 3 * PAGE);
     let original = allowance.id();
@@ -570,10 +570,10 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
 
     let mut receiver = None;
     let index = source.allowance_candidate().unwrap();
-    let mut work = Work::<5>::new();
+    let mut work = TurnWorkspace::<5>::new();
     let mut plan = work.plan();
     source.plan_allowance(&mut plan, index, &debits).unwrap();
-    plan.execute(Slow, |held| {
+    plan.acquire(Slow, |held| {
         // This fixture is the exclusive source assignment owner and keeps
         // each close responsibility in its exact receiving position.
         unsafe { source.open_allowance(held, index, &debits, &mut receiver) }
@@ -593,7 +593,7 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
     let index = source.allowance_candidate().unwrap();
     let mut plan = work.plan();
     source.plan_allowance(&mut plan, index, &debits).unwrap();
-    plan.execute(Fast, |held| unsafe {
+    plan.acquire(Fast, |held| unsafe {
         source.open_allowance(held, index, &debits, &mut receiver)
     })
     .unwrap()
@@ -606,7 +606,7 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
         .plan_transfer(&mut plan, original, second.id())
         .unwrap();
     assert_eq!(
-        plan.execute(Fast, |held| {
+        plan.acquire(Fast, |held| {
             // A stale role must fail the live Allowance check before either debit.
             unsafe { source.transfer_allowance(held, original, second.id(), PAGE) }
         }),
@@ -624,7 +624,7 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
 fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation() {
     use crate::{
         allocator::Construction,
-        sync::{TurnLock, Work},
+        metal::sync::{TurnLock, TurnWorkspace},
     };
 
     let mut initial = None;
@@ -672,13 +672,13 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
             panic!("exact grain was not refunded");
         };
         let construction = &*Box::leak(Box::new(Construction::new()));
-        let mut work = Work::<4>::new();
+        let mut work = TurnWorkspace::<4>::new();
         let mut plan = work.plan();
         source
             .plan_construction(&mut plan, candidate.region(), id, construction)
             .unwrap();
         plan.insert(&authority).unwrap();
-        plan.execute(Slow, |held| {
+        plan.acquire(Slow, |held| {
             assert_eq!(*held.access(&authority).unwrap(), id);
             assert_eq!(candidate.request().purpose(), Metadata);
             let reserved =
@@ -713,14 +713,14 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
         panic!("metadata saturation cannot rule out a physical range");
     };
     let construction = &*Box::leak(Box::new(Construction::new()));
-    let mut work = Work::<4>::new();
+    let mut work = TurnWorkspace::<4>::new();
     let mut plan = work.plan();
     source
         .plan_construction(&mut plan, candidate.region(), id, construction)
         .unwrap();
     plan.insert(&authority).unwrap();
     assert_eq!(
-        plan.execute(Fast, |held| {
+        plan.acquire(Fast, |held| {
             assert_eq!(*held.access(&authority).unwrap(), id);
             assert_eq!(candidate.request().purpose(), Metadata);
             unsafe { source.reserve(held, candidate, id, construction, None) }
@@ -735,7 +735,7 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
         .plan_construction(&mut plan, candidate.region(), id, construction)
         .unwrap();
     plan.insert(&authority).unwrap();
-    plan.execute(Slow, |held| {
+    plan.acquire(Slow, |held| {
         assert_eq!(*held.access(&authority).unwrap(), id);
         unsafe {
             source

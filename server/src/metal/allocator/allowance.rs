@@ -2,10 +2,10 @@ use core::{ptr, sync::atomic::Ordering::Acquire};
 
 use crate::{
     address::length,
-    sync::{Acquisition, HeldLockSet, LockPlan, TurnLock, Work},
+    metal::sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
 };
 
-use super::{Allocator, Error, REGION_LIMIT, RegionId, with_turn};
+use super::{Allocator, Error, REGION_LIMIT, RegionId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AllowanceId {
@@ -112,12 +112,12 @@ impl Allowance {
         self.id
     }
 
-    pub(crate) fn plan_spender<'a>(&self, plan: &mut LockPlan<'a, '_>) -> Result<(), Error> {
+    pub(crate) fn plan_spender<'a>(&self, plan: &mut TurnPlan<'a, '_>) -> Result<(), Error> {
         plan.insert(self.source.slot(self.id)?)
             .map_err(|_| Error::Capacity)
     }
 
-    pub(crate) fn check_spender(&self, held: &mut HeldLockSet<'_>) -> Result<(), Error> {
+    pub(crate) fn check_spender(&self, held: &mut TurnAccess<'_>) -> Result<(), Error> {
         held.access(self.source.slot(self.id)?)
             .ok_or(Error::Protection)?
             .open(self.id)?;
@@ -125,24 +125,24 @@ impl Allowance {
     }
 
     pub fn balance(&self) -> Result<Balance, Error> {
-        with_turn(self.source.slot(self.id)?, |slot| {
-            slot.live(self.id).map(|pair| pair.0)
-        })?
+        self.source
+            .slot(self.id)?
+            .acquire(|slot| slot.live(self.id).map(|pair| pair.0))?
     }
 
     /// Close spending and immediately refund the currently unused amount to
     /// a published Region. Existing records still refund to their own Regions.
-    pub fn shut(&self, credit: Option<RegionId>, mode: Acquisition) -> Result<(), Error> {
+    pub fn shut(&self, credit: Option<RegionId>, mode: TurnMode) -> Result<(), Error> {
         let source = self.source;
         let slot = source.slot(self.id)?;
         let region = credit.map(|id| source.region(id)).transpose()?;
-        let mut work = Work::<2>::new();
+        let mut work = TurnWorkspace::<2>::new();
         let mut plan = work.plan();
         plan.insert(slot).expect("Allowance");
         if let Some(region) = region {
             plan.insert(&region.state).expect("credit Region");
         }
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             let state = held.access(slot).expect("Allowance");
             let (balance, open) = state.live(self.id)?;
             if !open {
@@ -164,7 +164,7 @@ impl Allowance {
 
     /// Release an exact closed slot after its final original refund.
     /// Failure leaves the close responsibility with its owner.
-    pub fn reclaim(self, mode: Acquisition) -> Result<(), (Self, Error)> {
+    pub fn reclaim(self, mode: TurnMode) -> Result<(), (Self, Error)> {
         let source = self.source;
         let id = self.id;
         let result = source.finish_shut(id, mode);
@@ -182,15 +182,15 @@ impl Allocator {
 
     /// Coherent managed RAM and unassigned budget. The trusted kernel's
     /// observation of the exact source uses the complete Region set.
-    pub fn budget(&self, mode: Acquisition) -> Result<(u64, u64), Error> {
-        let count = with_turn(&self.directory, |_| self.published.load(Acquire))?;
-        let mut work = Work::<{ REGION_LIMIT + 1 }>::new();
+    pub fn budget(&self, mode: TurnMode) -> Result<(u64, u64), Error> {
+        let count = self.directory.acquire(|_| self.published.load(Acquire))?;
+        let mut work = TurnWorkspace::<{ REGION_LIMIT + 1 }>::new();
         let mut plan = work.plan();
         plan.insert(&self.directory).expect("directory");
         for region in &self.regions[..count] {
             plan.insert(&region.state).expect("published Region");
         }
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             if count != self.published.load(Acquire) {
                 return Err(Error::Changed);
             }
@@ -212,7 +212,7 @@ impl Allocator {
 
     /// Observe the free-chain head before constructing the complete plan.
     pub fn allowance_candidate(&self) -> Result<usize, Error> {
-        with_turn(&self.free, |free| {
+        self.free.acquire(|free| {
             free.head.ok_or(if free.retired == self.allowances.len() {
                 Error::IdentityExhausted
             } else {
@@ -223,7 +223,7 @@ impl Allocator {
 
     pub fn plan_allowance<'a>(
         &'a self,
-        plan: &mut LockPlan<'a, '_>,
+        plan: &mut TurnPlan<'a, '_>,
         index: usize,
         debits: &[(RegionId, u64)],
     ) -> Result<(), Error> {
@@ -250,7 +250,7 @@ impl Allocator {
     /// at the supplied receiver. The index is only a transient candidate.
     pub unsafe fn open_allowance(
         &'static self,
-        held: &mut HeldLockSet<'_>,
+        held: &mut TurnAccess<'_>,
         index: usize,
         debits: &[(RegionId, u64)],
         receiver: &mut Option<Allowance>,
@@ -316,7 +316,7 @@ impl Allocator {
 
     pub fn plan_transfer<'a>(
         &'a self,
-        plan: &mut LockPlan<'a, '_>,
+        plan: &mut TurnPlan<'a, '_>,
         from: AllowanceId,
         to: AllowanceId,
     ) -> Result<(), Error> {
@@ -332,7 +332,7 @@ impl Allocator {
     /// transferring unused capacity between two live Allowances.
     pub unsafe fn transfer_allowance(
         &self,
-        held: &mut HeldLockSet<'_>,
+        held: &mut TurnAccess<'_>,
         from: AllowanceId,
         to: AllowanceId,
         amount: u64,
@@ -354,13 +354,13 @@ impl Allocator {
         Ok(())
     }
 
-    fn finish_shut(&self, id: AllowanceId, mode: Acquisition) -> Result<(), Error> {
+    fn finish_shut(&self, id: AllowanceId, mode: TurnMode) -> Result<(), Error> {
         let slot = self.slot(id)?;
-        let mut work = Work::<2>::new();
+        let mut work = TurnWorkspace::<2>::new();
         let mut plan = work.plan();
         plan.insert(&self.free).expect("free index");
         plan.insert(slot).expect("Allowance");
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             let entry = held.access(slot).expect("Allowance");
             let (balance, open) = entry.live(id)?;
             if open || balance.capacity != 0 {

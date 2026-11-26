@@ -11,8 +11,10 @@ use crate::{
     access::MappedRange,
     address::{PhysicalRange, length},
     entry::boot::{RegionError, Regions, RootStorage},
-    metal::identity::Entry,
-    sync::TurnLock,
+    metal::{
+        identity::Entry,
+        sync::{TURN_CAPACITY, TurnLock},
+    },
 };
 
 use super::{
@@ -44,7 +46,11 @@ impl Config {
         if !alignment.is_aligned(self.maximum) {
             return Err(Error::Layout);
         }
+        // No authorization ancestors are traversed here. Opening an
+        // Allowance takes at most Q Region locks, the slot and the free
+        // index. Source inspection takes Q Region locks and the directory.
         if !(1..=REGION_LIMIT).contains(&self.regions)
+            || self.regions + 2 > TURN_CAPACITY
             || self.roots == 0
             || self.grains == 0
             || self.allocations == 0

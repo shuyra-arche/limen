@@ -1,6 +1,7 @@
 use core::{
     cell::UnsafeCell,
     marker::PhantomData,
+    mem::DropGuard,
     ptr::{self, null_mut},
     sync::atomic::Ordering::Relaxed,
 };
@@ -9,7 +10,7 @@ use crate::metal::hart::{self, TurnParticipation};
 
 use super::queue::Queue;
 
-/// FIFO protection for ordinary shared state, acquired through a complete plan.
+/// FIFO protection for ordinary shared state.
 ///
 /// The lock must have one canonical address for as long as any reference
 /// exists. Placing it behind another virtual alias requires external exclusion
@@ -33,20 +34,31 @@ impl<T> TurnLock<T> {
             value: UnsafeCell::new(value),
         }
     }
+
+    /// Queue for this lock and borrow its value for one ordinary operation.
+    pub fn acquire<R>(
+        &self,
+        operation: impl for<'held> FnOnce(&'held mut T) -> R,
+    ) -> Result<R, TurnAcquireError> {
+        acquire(&[Some(&self.queue)], TurnMode::Fast, || {
+            // The queue is exclusively held until the scoped callback ends.
+            operation(unsafe { &mut *self.value.get() })
+        })
+    }
 }
 
 /// Caller-owned storage for the unique physical locks of one acquisition.
-pub struct Work<'object, const N: usize> {
+pub struct TurnWorkspace<'object, const N: usize> {
     queues: [Option<&'object Queue>; N],
 }
 
-impl<'object, const N: usize> Work<'object, N> {
+impl<'object, const N: usize> TurnWorkspace<'object, N> {
     pub const fn new() -> Self {
         Self { queues: [None; N] }
     }
 
-    pub fn plan(&mut self) -> LockPlan<'object, '_> {
-        LockPlan {
+    pub fn plan(&mut self) -> TurnPlan<'object, '_> {
+        TurnPlan {
             queues: &mut self.queues,
             length: 0,
             overflowed: false,
@@ -55,19 +67,19 @@ impl<'object, const N: usize> Work<'object, N> {
 }
 
 /// A plan borrows the actual lock instances until the attempt is settled.
-pub struct LockPlan<'object, 'work> {
+pub struct TurnPlan<'object, 'work> {
     queues: &'work mut [Option<&'object Queue>],
     length: usize,
     overflowed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PlanError {
+pub enum TurnPlanError {
     Capacity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Acquisition {
+pub enum TurnMode {
     /// Queue for the first member and attempt each remaining member once.
     Fast,
     /// Queue for each member in ascending canonical address order.
@@ -75,16 +87,16 @@ pub enum Acquisition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AcquisitionError {
+pub enum TurnAcquireError {
     Empty,
     Capacity,
     Context,
     Busy,
 }
 
-impl<'object> LockPlan<'object, '_> {
+impl<'object> TurnPlan<'object, '_> {
     /// A physical lock that is already present retains its original position.
-    pub fn insert<T>(&mut self, lock: &'object TurnLock<T>) -> Result<(), PlanError> {
+    pub fn insert<T>(&mut self, lock: &'object TurnLock<T>) -> Result<(), TurnPlanError> {
         if self.queues[..self.length]
             .iter()
             .any(|queue| ptr::eq(member(*queue), &lock.queue))
@@ -93,7 +105,7 @@ impl<'object> LockPlan<'object, '_> {
         }
         let Some(slot) = self.queues.get_mut(self.length) else {
             self.overflowed = true;
-            return Err(PlanError::Capacity);
+            return Err(TurnPlanError::Capacity);
         };
         *slot = Some(&lock.queue);
         self.length += 1;
@@ -105,55 +117,75 @@ impl<'object> LockPlan<'object, '_> {
     ///
     /// An operation must finish its shared-state changes before returning and
     /// move work that may wait or reacquire a Turn to the outside of the closure.
-    pub fn execute<R>(
+    pub fn acquire<R>(
         self,
-        acquisition: Acquisition,
-        operation: impl for<'held> FnOnce(&mut HeldLockSet<'held>) -> R,
-    ) -> Result<R, AcquisitionError> {
+        mode: TurnMode,
+        operation: impl for<'held> FnOnce(&mut TurnAccess<'held>) -> R,
+    ) -> Result<R, TurnAcquireError> {
         if self.overflowed {
-            return Err(AcquisitionError::Capacity);
+            return Err(TurnAcquireError::Capacity);
         }
         if self.length == 0 {
-            return Err(AcquisitionError::Empty);
+            return Err(TurnAcquireError::Empty);
         }
         let queues = &mut self.queues[..self.length];
-        if acquisition == Acquisition::Slow {
+        if mode == TurnMode::Slow {
             queues.sort_unstable_by_key(|queue| ptr::from_ref(member(*queue)).addr());
         }
-        let local = hart::begin_turn(queues.len()).map_err(|error| match error {
-            hart::Error::Capacity => AcquisitionError::Capacity,
-            hart::Error::Context => AcquisitionError::Context,
-        })?;
+        acquire(queues, mode, || {
+            operation(&mut TurnAccess {
+                queues,
+                local: PhantomData,
+            })
+        })
+    }
+}
 
-        // Every node is available and initialized before the first publication.
-        for index in 0..queues.len() {
-            let node = local.node(index);
-            node.next.store(null_mut(), Relaxed);
-            node.waiting.store(true, Relaxed);
-        }
-        let mut held = Held {
+impl Drop for TurnPlan<'_, '_> {
+    fn drop(&mut self) {
+        // An abandoned or settled plan leaves no stored member references.
+        self.queues[..self.length].fill(None);
+    }
+}
+
+fn acquire<R>(
+    queues: &[Option<&Queue>],
+    mode: TurnMode,
+    operation: impl FnOnce() -> R,
+) -> Result<R, TurnAcquireError> {
+    let local = hart::begin_turn(queues.len()).map_err(|error| match error {
+        hart::Error::Capacity => TurnAcquireError::Capacity,
+        hart::Error::Context => TurnAcquireError::Context,
+    })?;
+    let mut held = DropGuard::new(
+        Held {
             queues,
             local,
             acquired: 0,
-        };
-        for (index, queue) in queues.iter().enumerate() {
-            let queue = member(*queue);
-            let node = held.local.node(index);
-            if index == 0 || acquisition == Acquisition::Slow {
-                queue.acquire(node);
-            } else if !queue.attempt(node) {
-                return Err(AcquisitionError::Busy);
-            }
-            held.acquired += 1;
-        }
-        held.local.held();
-        let result = operation(&mut HeldLockSet {
-            queues,
-            local: PhantomData,
-        });
-        drop(held);
-        Ok(result)
+        },
+        Held::release,
+    );
+
+    // Every node is initialized before the first publication.
+    for index in 0..queues.len() {
+        let node = held.local.node(index);
+        node.next.store(null_mut(), Relaxed);
+        node.waiting.store(true, Relaxed);
     }
+    for (index, queue) in queues.iter().enumerate() {
+        let queue = member(*queue);
+        let node = held.local.node(index);
+        if index == 0 || mode == TurnMode::Slow {
+            queue.acquire(node);
+        } else if !queue.attempt(node) {
+            return Err(TurnAcquireError::Busy);
+        }
+        held.acquired += 1;
+    }
+    held.local.held();
+    let result = operation();
+    drop(held);
+    Ok(result)
 }
 
 fn member(queue: Option<&Queue>) -> &Queue {
@@ -162,12 +194,12 @@ fn member(queue: Option<&Queue>) -> &Queue {
 
 /// Access to the complete set. Reborrowing this value serializes access even
 /// when different roles name the same lock.
-pub struct HeldLockSet<'held> {
+pub struct TurnAccess<'held> {
     queues: &'held [Option<&'held Queue>],
     local: PhantomData<*mut ()>,
 }
 
-impl HeldLockSet<'_> {
+impl TurnAccess<'_> {
     fn contains<T>(&self, lock: &TurnLock<T>) -> bool {
         self.queues
             .iter()
@@ -209,8 +241,8 @@ struct Held<'object> {
     acquired: usize,
 }
 
-impl Drop for Held<'_> {
-    fn drop(&mut self) {
+impl Held<'_> {
+    fn release(self) {
         self.local.releasing();
         for index in (0..self.acquired).rev() {
             member(self.queues[index]).release(self.local.node(index));

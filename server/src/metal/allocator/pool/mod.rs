@@ -5,9 +5,9 @@ mod place;
 mod reference;
 mod retirement;
 
-use crate::sync::{HeldLockSet, LockPlan, PlanError, TurnLock};
+use crate::metal::sync::{TurnAccess, TurnAcquireError, TurnLock, TurnPlan, TurnPlanError};
 
-use super::{AllocationId, Error as SourceError, MappedStorage, with_turn};
+use super::{AllocationId, Error as SourceError, MappedStorage};
 use group::{Chain, Completion, Group, Links, State};
 
 pub use group::{Geometry, Supply};
@@ -38,6 +38,12 @@ pub enum Error {
 impl From<SourceError> for Error {
     fn from(error: SourceError) -> Self {
         Self::Source(error)
+    }
+}
+
+impl From<TurnAcquireError> for Error {
+    fn from(error: TurnAcquireError) -> Self {
+        Self::Source(error.into())
     }
 }
 
@@ -164,7 +170,7 @@ impl<'storage, T> Pool<'storage, T> {
     }
 
     pub fn capacity(&self) -> Result<Capacity, Error> {
-        Ok(with_turn(&self.state, |state| Capacity {
+        Ok(self.state.acquire(|state| Capacity {
             groups: state.open,
             bytes: state.bytes,
             slots: state.capacity,
@@ -173,14 +179,14 @@ impl<'storage, T> Pool<'storage, T> {
     }
 
     pub fn supply(&self, id: GroupId) -> Result<Supply, Error> {
-        with_turn(&self.state, |state| match state.entry(id)? {
+        self.state.acquire(|state| match state.entry(id)? {
             GroupRecord::Open(group) => Ok(group.supply()),
             _ => Err(Error::Stale),
         })?
     }
 
     /// Include this Pool in the complete plan for a shared handoff.
-    pub fn plan<'pool>(&'pool self, plan: &mut LockPlan<'pool, '_>) -> Result<(), PlanError> {
+    pub fn plan<'pool>(&'pool self, plan: &mut TurnPlan<'pool, '_>) -> Result<(), TurnPlanError> {
         plan.insert(&self.state)
     }
 
@@ -193,7 +199,8 @@ impl<'storage, T> Pool<'storage, T> {
         if receiver.is_some() {
             return Err(Error::Receiver);
         }
-        with_turn(&self.state, |state| self.reserve_to(state, receiver))?
+        self.state
+            .acquire(|state| self.reserve_to(state, receiver))?
     }
 
     /// Commit a reservation and its protected preparation record together.
@@ -201,7 +208,7 @@ impl<'storage, T> Pool<'storage, T> {
     /// of the response. The selector runs with both locks held.
     pub fn reserve_held<'pool, R>(
         &'pool self,
-        held: &mut HeldLockSet<'_>,
+        held: &mut TurnAccess<'_>,
         receiver: &TurnLock<R>,
         select: impl FnOnce(&mut R) -> &mut Option<Reservation<'pool, 'storage, T>>,
     ) -> Result<(), Error> {

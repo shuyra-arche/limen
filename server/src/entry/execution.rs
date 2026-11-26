@@ -19,12 +19,12 @@ use crate::{
     basis::{
         nest::{KernelNest, Storage},
         room::{self, Destination, Room},
-        sync::{Acquisition, AcquisitionError, TurnLock, Work},
         unit::{self, Units},
     },
     metal::{
         execution::{Hart, LeaveReceipt, LocalHart},
         hart,
+        sync::{TurnAcquireError, TurnLock},
     },
 };
 
@@ -64,12 +64,12 @@ impl From<room::Error> for Error {
     }
 }
 
-impl From<AcquisitionError> for Error {
-    fn from(error: AcquisitionError) -> Self {
+impl From<TurnAcquireError> for Error {
+    fn from(error: TurnAcquireError) -> Self {
         match error {
-            AcquisitionError::Busy => Self::Busy,
-            AcquisitionError::Capacity => Self::Capacity,
-            AcquisitionError::Context | AcquisitionError::Empty => Self::State,
+            TurnAcquireError::Busy => Self::Busy,
+            TurnAcquireError::Capacity => Self::Capacity,
+            TurnAcquireError::Context | TurnAcquireError::Empty => Self::State,
         }
     }
 }
@@ -172,12 +172,7 @@ impl Execution {
         &self,
         operation: impl FnOnce(&mut Control) -> Result<R, Error>,
     ) -> Result<R, Error> {
-        let mut work = Work::<1>::new();
-        let mut plan = work.plan();
-        plan.insert(&self.control).expect("one control lock");
-        plan.execute(Acquisition::Fast, |held| {
-            operation(held.access(&self.control).expect("held control lock"))
-        })?
+        self.control.acquire(operation)?
     }
 
     fn local(&self) -> Result<(usize, LocalHart<'_>), Error> {

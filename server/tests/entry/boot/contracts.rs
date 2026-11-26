@@ -3,12 +3,12 @@
 use kernel::{
     allocator::{self, Construction},
     pend::{self, Revoker},
-    sync::Acquisition,
+    sync::TurnMode,
 };
 
 pub fn cancel(receiver: &'static Construction) -> Result<(), allocator::Error> {
     receiver.close()?;
-    receiver.cancel(Acquisition::Fast)
+    receiver.cancel(TurnMode::Fast)
 }
 
 pub fn revoke(revoker: &Revoker) -> Result<bool, pend::Error> {

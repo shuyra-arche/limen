@@ -6,9 +6,9 @@ use limen_treaty::model::{Alignment, ByteLength};
 use crate::{
     allocator::{
         self, AllocationId, Allocator, Allowance, AllowanceId, Candidate, Construction, RamPurpose,
-        Spender, with_turn,
+        Spender,
     },
-    sync::{Acquisition, HeldLockSet, TurnLock, Work},
+    metal::sync::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,6 +24,12 @@ pub enum Error {
 impl From<allocator::Error> for Error {
     fn from(error: allocator::Error) -> Self {
         Self::Source(error)
+    }
+}
+
+impl From<TurnAcquireError> for Error {
+    fn from(error: TurnAcquireError) -> Self {
+        Self::Source(error.into())
     }
 }
 
@@ -117,7 +123,7 @@ impl PendSpace {
         maximum: ByteLength,
         alignment: Alignment,
         roles: Initial<'_>,
-        mode: Acquisition,
+        mode: TurnMode,
     ) -> Result<(), Error> {
         if maximum.get() == 0 {
             return Err(Error::Limit);
@@ -125,11 +131,11 @@ impl PendSpace {
         if roles.spending.is_some() || roles.closing.is_some() {
             return Err(Error::Receiver);
         }
-        let mut work = Work::<2>::new();
+        let mut work = TurnWorkspace::<2>::new();
         let mut plan = work.plan();
         plan.insert(&self.state).expect("initial PendSpace");
         allowance.plan_spender(&mut plan)?;
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             allowance.check_spender(held)?;
             let receiver = held.access(&self.state).expect("initial PendSpace");
             if let State::Published(pend) = receiver {
@@ -169,15 +175,16 @@ pub struct Revoker {
 
 impl Revoker {
     pub fn revoke(&self) -> Result<(), Error> {
-        Ok(with_turn(&self.space.state, |state| {
+        Ok(self.space.state.acquire(|state| {
             state.published().branch = Admission::Shut;
         })?)
     }
 
     pub fn revoked(&self) -> Result<bool, Error> {
-        Ok(with_turn(&self.space.state, |state| {
-            matches!(state.published().branch, Admission::Shut)
-        })?)
+        Ok(self
+            .space
+            .state
+            .acquire(|state| matches!(state.published().branch, Admission::Shut))?)
     }
 }
 
@@ -193,7 +200,7 @@ impl Handle {
         Spender(ptr::from_ref(&self.space.state).addr())
     }
 
-    fn resolve(self, held: &mut HeldLockSet<'_>) -> Result<AllocationPermit, Error> {
+    fn resolve(self, held: &mut TurnAccess<'_>) -> Result<AllocationPermit, Error> {
         held.access(&self.space.state)
             .ok_or(allocator::Error::Protection)?
             .resolve()
@@ -203,10 +210,10 @@ impl Handle {
         self,
         candidate: Candidate,
         receiver: &'static Construction,
-        mode: Acquisition,
+        mode: TurnMode,
     ) -> Result<AllocationId, Error> {
-        let permit = with_turn(&self.space.state, |state| state.resolve())??;
-        let mut work = Work::<4>::new();
+        let permit = self.space.state.acquire(|state| state.resolve())??;
+        let mut work = TurnWorkspace::<4>::new();
         let mut plan = work.plan();
         plan.insert(&self.space.state).expect("original PendSpace");
         permit.source.plan_construction(
@@ -215,7 +222,7 @@ impl Handle {
             permit.allowance,
             receiver,
         )?;
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             let permit = self.resolve(held)?;
             permit.check(candidate)?;
             // The original holding, its root branch, source and receiver are
@@ -236,20 +243,20 @@ impl Handle {
     pub fn issue(
         self,
         receiver: &'static Construction,
-        mode: Acquisition,
+        mode: TurnMode,
     ) -> Result<AllocationId, Error> {
-        let permit = with_turn(&self.space.state, |state| state.resolve())??;
+        let permit = self.space.state.acquire(|state| state.resolve())??;
         let (region, allowance) = receiver.reservation()?;
         if allowance != permit.allowance {
             return Err(allocator::Error::Protection.into());
         }
-        let mut work = Work::<4>::new();
+        let mut work = TurnWorkspace::<4>::new();
         let mut plan = work.plan();
         plan.insert(&self.space.state).expect("original PendSpace");
         permit
             .source
             .plan_construction(&mut plan, region, allowance, receiver)?;
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             let permit = self.resolve(held)?;
             let candidate = permit.source.reserved_candidate(held, receiver)?;
             permit.check(candidate)?;
@@ -263,7 +270,7 @@ impl Handle {
     /// End the one external holding. Existing Allocator obligations remain
     /// in their original construction and source records.
     pub fn release(self) -> Result<(), Error> {
-        with_turn(&self.space.state, |state| {
+        self.space.state.acquire(|state| {
             state.published().holding.take().ok_or(Error::Exhausted)?;
             Ok(())
         })?
