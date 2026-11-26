@@ -7,6 +7,7 @@ pub(crate) mod firmware;
 pub(crate) mod hart;
 pub(crate) mod identity;
 pub(crate) mod mmu;
+pub mod module;
 pub mod sync;
 #[cfg(target_arch = "riscv64")]
 pub(crate) mod time;

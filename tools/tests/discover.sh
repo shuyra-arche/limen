@@ -40,6 +40,7 @@ while IFS= read -r -d '' file; do
         and (if .run.kind == "board-boot" then
             (.run.boards | length > 0 and all(.[]; . == "q35" or . == "virt"))
             and (((.run.board_sources // {}) | keys) - .run.boards == [])
+            and (.run.harts | if . == null then true else type == "number" and . == floor and . >= 1 and . <= 255 end)
         else .run.kind == "qemu" or .run.kind == "cargo-test" end)' "$file" >/dev/null
     mapfile -t common < <(jq -r '.sources[], (.run.imports[]? | "server/tests/" + . + "/**")' "$file")
     mapfile -t scoped < <(jq -r '.run.board_sources[]?[]' "$file")

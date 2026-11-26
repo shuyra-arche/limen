@@ -34,6 +34,23 @@ fn projects_own_their_manifests_and_verdicts() {
 }
 
 #[test]
+fn board_boot_accepts_a_single_hart_and_rejects_zero() {
+    let manifest = |harts| {
+        serde_json::json!({
+            "kind": "board-boot",
+            "boards": ["q35"],
+            "harts": harts,
+        })
+    };
+    let run = serde_json::from_value::<suite::Run>(manifest(1)).unwrap();
+    assert!(matches!(
+        run,
+        suite::Run::BoardBoot { harts: Some(count), .. } if count.get() == 1
+    ));
+    assert!(serde_json::from_value::<suite::Run>(manifest(0)).is_err());
+}
+
+#[test]
 fn runner_accepts_project_paths_without_named_commands() {
     use clap::Parser;
     #[derive(Parser)]
