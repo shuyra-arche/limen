@@ -12,17 +12,17 @@ use core::{
 
 pub use crate::basis::{
     nest::Stacks,
-    room::Occupancy,
+    room::{AdmissionId, Occupancy},
     unit::{End, Lifecycle, UnitId},
 };
 use crate::{
     basis::{
-        nest::{KernelNest, Storage},
-        room::{self, Destination, Room},
+        nest::{KernelNest, STACK_CAPACITY, StackBinding},
+        room::{self, LeaveDestination, Room},
         unit::{self, Units},
     },
     metal::{
-        execution::{Hart, LeaveReceipt, LocalHart},
+        execution::{Hart, LeaveReceipt, LocalHart, extensions_off},
         hart,
         sync::{TurnAcquireError, TurnLock},
     },
@@ -87,20 +87,21 @@ pub struct EstablishFailure<'a> {
     pub reason: EstablishError,
 }
 
-struct Binding {
-    storage: &'static Storage,
+struct ExecutionBinding {
+    stack: StackBinding,
     entry: Entry,
     affinity: Option<usize>,
 }
 
 struct Control {
-    units: Units<Binding>,
-    room: Room,
-    launch: Option<Launch>,
+    units: Units<ExecutionBinding, STACK_CAPACITY>,
+    room: Room<STACK_CAPACITY>,
+    nest: KernelNest,
+    launch: Option<MinorLaunch>,
 }
 
 #[derive(Clone, Copy)]
-struct Launch {
+struct MinorLaunch {
     hart: usize,
     entry: fn(&'static Execution) -> !,
 }
@@ -108,10 +109,9 @@ struct Launch {
 /// Cooperative execution on the Boot Hart and one optional minor Hart.
 pub struct Execution {
     control: TurnLock<Control>,
-    nest: KernelNest,
-    major: Hart,
+    major: Hart<Occupancy>,
     major_id: usize,
-    minor: Hart,
+    minor: Hart<Occupancy>,
     minor_id: AtomicUsize,
     minor_boot: Option<&'static Minor>,
 }
@@ -146,7 +146,7 @@ impl Execution {
                 reason: EstablishError::WrongHart,
             });
         }
-        if !Hart::supported() {
+        if !supported() {
             return Err(EstablishFailure {
                 boot,
                 stacks,
@@ -157,9 +157,9 @@ impl Execution {
             control: TurnLock::new(Control {
                 units: Units::new(),
                 room: Room::new(boot.hart()),
+                nest: KernelNest::bare(stacks),
                 launch: None,
             }),
-            nest: KernelNest::bare(stacks),
             major: Hart::new(),
             major_id: boot.hart(),
             minor: Hart::new(),
@@ -175,7 +175,7 @@ impl Execution {
         self.control.acquire(operation)?
     }
 
-    fn local(&self) -> Result<(usize, LocalHart<'_>), Error> {
+    fn local(&self) -> Result<(usize, LocalHart<'_, Occupancy>), Error> {
         let id = hart::current_hart();
         if id == self.major_id {
             return Ok((id, unsafe { self.major.local() }));
@@ -204,7 +204,7 @@ impl Execution {
         entry: fn(&'static Execution) -> !,
     ) -> Result<(), Error> {
         let minor = self.minor_boot.ok_or(Error::Unsupported)?;
-        if hart::current_hart() != self.major_id || !Hart::supported() {
+        if hart::current_hart() != self.major_id || !supported() {
             return Err(Error::Unsupported);
         }
         if hart == self.major_id {
@@ -212,10 +212,10 @@ impl Execution {
         }
         hart.checked_add(1).ok_or(Error::Unsupported)?;
         self.control(|control| {
-            if control.launch.is_some() {
+            if control.launch.is_some() || self.minor_id.load(Acquire) != 0 {
                 return Err(Error::Busy);
             }
-            control.launch = Some(Launch { hart, entry });
+            control.launch = Some(MinorLaunch { hart, entry });
             Ok(())
         })?;
         let argument = ptr::from_ref(self).expose_provenance();
@@ -263,13 +263,14 @@ impl Execution {
     fn create_unit(&self, entry: Entry, affinity: Option<usize>) -> Result<UnitId, Error> {
         self.control(|control| {
             let unit = control.units.vacant()?;
-            let storage = self.nest.bind(unit.slot());
-            // The vacant generation excludes every prior stack user.
+            let stack = control.nest.bind().ok_or(Error::Capacity)?;
+            let storage = stack.storage();
+            // The binding grants exclusive initialization of this frame.
             unsafe { storage.context().prepare(storage.stack_top(), start) };
             control.units.publish(
                 unit,
-                Binding {
-                    storage,
+                ExecutionBinding {
+                    stack,
                     entry,
                     affinity,
                 },
@@ -278,7 +279,7 @@ impl Execution {
         })
     }
 
-    pub fn submit(&self, unit: UnitId) -> Result<(), Error> {
+    pub fn submit(&self, unit: UnitId) -> Result<AdmissionId, Error> {
         self.local()?;
         self.control(|control| {
             let affinity = control.units.live(unit)?.affinity;
@@ -306,7 +307,7 @@ impl Execution {
     /// The original admission remains occupied until `vacate`.
     pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
         let (id, hart) = self.local()?;
-        if !Hart::supported() {
+        if !supported() {
             return Err(Error::Unsupported);
         }
         if !hart::can_switch() {
@@ -317,7 +318,7 @@ impl Execution {
                 return Ok(None);
             };
             let binding = control.units.live(unit)?;
-            let (storage, entry) = (binding.storage, binding.entry);
+            let (storage, entry) = (binding.stack.storage(), binding.entry);
             Ok(Some((control.room.occupy(id, unit)?, storage, entry)))
         })?
         else {
@@ -366,7 +367,7 @@ impl Execution {
             if let Some(binding) = control.units.finish_end(unit)? {
                 // Clear the old frame before another Hart can observe Ended
                 // and initialize the slot for a different generation.
-                unsafe { binding.storage.context().retire() };
+                unsafe { control.nest.unbind(binding.stack) };
             }
             Ok(())
         })
@@ -379,7 +380,7 @@ impl Execution {
 
     fn leave(&self, unit: UnitId, end: Option<u64>) -> Result<(), Error> {
         let (_, hart) = self.local()?;
-        if !Hart::supported() {
+        if !supported() {
             return Err(Error::Unsupported);
         }
         if !hart::can_switch() {
@@ -390,11 +391,11 @@ impl Execution {
             .filter(|active| active.unit() == unit)
             .ok_or(Error::Gone)?;
         let storage = self.control(|control| {
-            let storage = control.units.live(unit)?.storage;
+            let storage = control.units.live(unit)?.stack.storage();
             let destination = if end.is_some() {
-                Destination::Release
+                LeaveDestination::Release
             } else {
-                Destination::Ready
+                LeaveDestination::Ready
             };
             control.room.request_leave(occupancy, destination)?;
             if let Some(value) = end {
@@ -468,15 +469,20 @@ fn admit_minor(hart: usize, argument: usize) -> ! {
     // The firmware launch holds a resident Execution for this callback.
     let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
     assert_eq!(hart::current_hart(), hart);
-    assert!(Hart::supported());
+    assert!(supported());
     let entry = execution
         .control(|control| {
             let launch = control.launch.expect("reserved minor launch");
             assert_eq!(launch.hart, hart);
             control.room.attach(hart)?;
+            control.launch = None;
+            execution.minor_id.store(hart + 1, Release);
             Ok(launch.entry)
         })
         .expect("reserved Room participation");
-    execution.minor_id.store(hart + 1, Release);
     entry(execution)
+}
+
+fn supported() -> bool {
+    crate::metal::boot::established() && extensions_off()
 }

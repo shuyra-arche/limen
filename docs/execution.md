@@ -4,7 +4,8 @@
 
 On RV64, the trusted image consumes the Boot handoff to establish cooperative execution
 on the Boot Hart. It supplies two resident 16 KiB stacks in the shared Bare
-Kernel Nest. Each Unit reserves one stack and a generational identity.
+Kernel Nest. Each Unit reserves a generational identity and independently
+borrows an exclusive stack and saved continuation from the Nest's supply.
 If `Execution::new` or `Execution::with_minor` rejects the environment before
 establishment, `EstablishFailure` returns the original `Boot`, the exclusive
 stack supply and the reason. The trusted image can correct the environment and
@@ -23,25 +24,28 @@ on either Hart and yields without retaining Hart-local resources.
 
 ## Dispatch and settlement
 
-Room admits a Unit and reserves an exact occupancy. Metal enters through the
-Unit's stack and saves its integer continuation at the call boundary on Yield.
+Room's `submit` establishes one admission and returns its `AdmissionId`.
+Ready and Hart indices locate that admission's authoritative placement. Each
+dispatch establishes a fresh occupancy for the same admission, identifying
+the Unit, Hart and original participation. Metal enters through the Unit's
+stack and saves its integer continuation at the call boundary on Yield.
 A normal return from the Unit's entry records its sole end value. The terminal
 handoff returns to the dispatcher and the Unit's continuation is no longer
 eligible to run. A successful Yield returns `Ok(())` when a later dispatch
 resumes the Unit. Metal issues the leave receipt after the dispatcher resumes
-on its own stack. `pending_leave` reports absence for a participating Hart
-without a stopped occupancy, and an error for an unattached Hart. Room
-consumes the receipt to make the Unit ready again or release the admission.
-One MCS Turn protects the shared Room and Unit state at publication and
-settlement. Execution uses a one-member plan, which queues in FIFO order
-under the current Hart's local protection. Metal rejects a switch while
-the Hart has active synchronization participation. The plan ends its
+on its own stack. `pending_leave` reports the stopped occupancy to its owning
+dispatcher. Room matches the private Metal receipt to the exact current
+occupancy before making the Unit ready again or releasing the admission.
+One MCS Turn orders changes to Room placement, Unit state and Nest bindings
+at publication and settlement. Metal rejects a switch while the Hart has
+active synchronization participation. The Turn ends its
 borrows, settles all queue nodes and restores the original interrupt state
 before a continuation can be entered or handed off.
 A yielded continuation becomes available to the
 other Hart only after settlement. An Ending Unit keeps its binding until the
-admission is released. Reaping the Ended Unit allows the slot and stack to be
-reused with a new generation.
+admission is released. `finish_end` clears the retired continuation and returns
+the backing to the Nest before the Ended result becomes visible. The result
+and its generational identity persist until `reap`.
 
 ## Cancellation
 
@@ -54,3 +58,7 @@ This execution path covers cooperative supervisor Units on up to two
 resident Harts. The [verification guide](../server/tests/README.md) describes
 the RV64 target scenarios. Hart detachment, preemption, hardware translation,
 user traps and calls require separate implementation and verification.
+
+See [Room](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/basis/room/README.md)
+and [cooperative switching](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/execution/cooperative.md)
+for the broader contracts.

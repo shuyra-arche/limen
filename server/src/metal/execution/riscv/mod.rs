@@ -7,10 +7,14 @@ use core::{
     mem::offset_of,
 };
 
-use crate::{
-    basis::room::Occupancy,
-    metal::{boot, hart},
-};
+use crate::metal::hart;
+
+pub(crate) fn extensions_off() -> bool {
+    let status: usize;
+    unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nomem, nostack)) };
+    const EXTENSIONS: usize = (3 << 13) | (3 << 9);
+    status & EXTENSIONS == 0
+}
 
 #[repr(C)]
 struct Registers {
@@ -73,36 +77,36 @@ impl Context {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct LeaveReceipt(Occupancy);
+pub(crate) struct LeaveReceipt<Occupancy>(Occupancy);
 
-impl LeaveReceipt {
+impl<Occupancy> LeaveReceipt<Occupancy> {
     pub(crate) fn occupancy(self) -> Occupancy {
         self.0
     }
 }
 
 #[derive(Clone, Copy)]
-enum State {
+enum State<Occupancy> {
     Idle,
     Running(Occupancy),
-    Stopped(LeaveReceipt),
+    Stopped(LeaveReceipt<Occupancy>),
 }
 
-pub(crate) struct Hart {
+pub(crate) struct Hart<Occupancy> {
     dispatcher: Context,
-    state: Cell<State>,
+    state: Cell<State<Occupancy>>,
 }
 
 // Only the LocalHart for the corresponding physical Hart accesses the
 // dispatcher and state. A suspended Unit never uses its old LocalHart again.
-unsafe impl Sync for Hart {}
+unsafe impl<Occupancy: Send> Sync for Hart<Occupancy> {}
 
-pub(crate) struct LocalHart<'a> {
-    hart: &'a Hart,
+pub(crate) struct LocalHart<'a, Occupancy> {
+    hart: &'a Hart<Occupancy>,
     local: PhantomData<*mut ()>,
 }
 
-impl Hart {
+impl<Occupancy> Hart<Occupancy> {
     pub(crate) const fn new() -> Self {
         Self {
             dispatcher: Context::new(),
@@ -110,15 +114,8 @@ impl Hart {
         }
     }
 
-    pub(crate) fn supported() -> bool {
-        let status: usize;
-        unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nomem, nostack)) };
-        const EXTENSIONS: usize = (3 << 13) | (3 << 9);
-        boot::established() && status & EXTENSIONS == 0
-    }
-
     /// The caller has established that this is the current physical Hart.
-    pub(crate) unsafe fn local(&self) -> LocalHart<'_> {
+    pub(crate) unsafe fn local(&self) -> LocalHart<'_, Occupancy> {
         LocalHart {
             hart: self,
             local: PhantomData,
@@ -126,7 +123,7 @@ impl Hart {
     }
 }
 
-impl LocalHart<'_> {
+impl<Occupancy: Copy + Eq> LocalHart<'_, Occupancy> {
     pub(crate) fn running(&self) -> Option<Occupancy> {
         match self.hart.state.get() {
             State::Running(occupancy) => Some(occupancy),
@@ -134,8 +131,8 @@ impl LocalHart<'_> {
         }
     }
 
-    /// The Room has authorized this exact occupancy. Its live kernel stack
-    /// and continuation must persist until the Room settles the receipt.
+    /// The caller holds the exact execution occupancy. Its live kernel stack
+    /// and continuation must persist until the caller settles the receipt.
     pub(crate) unsafe fn enter(
         &self,
         occupancy: Occupancy,
@@ -148,7 +145,7 @@ impl LocalHart<'_> {
         unsafe { self.hart.dispatcher.switch(context, argument) };
         // The dispatcher is executing on its original stack again. The old
         // instruction and stack are saved but cannot execute without a new
-        // Room occupancy.
+        // occupancy.
         self.hart.state.set(State::Stopped(LeaveReceipt(occupancy)));
     }
 
@@ -159,14 +156,14 @@ impl LocalHart<'_> {
         unsafe { context.switch(&self.hart.dispatcher, core::ptr::null()) };
     }
 
-    pub(crate) fn stopped(&self) -> Option<LeaveReceipt> {
+    pub(crate) fn stopped(&self) -> Option<LeaveReceipt<Occupancy>> {
         match self.hart.state.get() {
             State::Stopped(receipt) => Some(receipt),
             _ => None,
         }
     }
 
-    pub(crate) fn settle(&self, receipt: LeaveReceipt) {
+    pub(crate) fn settle(&self, receipt: LeaveReceipt<Occupancy>) {
         assert!(self.stopped().map(LeaveReceipt::occupancy) == Some(receipt.occupancy()));
         self.hart.state.set(State::Idle);
     }
