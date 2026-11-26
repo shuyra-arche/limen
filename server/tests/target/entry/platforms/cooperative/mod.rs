@@ -115,13 +115,21 @@ fn finish(execution: &Execution, unit: UnitId, receipt: Occupancy, value: u64) {
     assert_eq!(receipt.unit(), unit);
     assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Ending));
     assert_eq!(execution.finish_end(unit), Err(Error::Busy));
-    execution.vacate(receipt).expect("matching terminal departure");
+    execution
+        .vacate(receipt)
+        .expect("matching terminal departure");
     execution.finish_end(unit).expect("closed admission");
     assert_eq!(execution.reap(unit), Ok(End::Returned { value }));
     assert_eq!(execution.lifecycle(unit), Err(Error::Gone));
 }
 
-pub(super) fn run(boot: Boot<'_>, major: usize, target: usize, startup: Startup) {
+pub(super) fn run(
+    boot: Boot<'_>,
+    major: usize,
+    target: usize,
+    startup: Startup,
+    started: impl FnOnce(),
+) {
     MAJOR.store(major, Relaxed);
     let runtime = Execution::with_minor(boot, unsafe { &mut *(&raw mut STACKS) }, &super::MINOR)
         .map_err(|failure| failure.reason)
@@ -137,6 +145,7 @@ pub(super) fn run(boot: Boot<'_>, major: usize, target: usize, startup: Startup)
         spin_loop();
     }
     assert!(super::MINOR.ready());
+    started();
     assert_eq!(
         unsafe { execution.start_minor(target, minor, startup) },
         Err(Error::Busy)
@@ -144,7 +153,9 @@ pub(super) fn run(boot: Boot<'_>, major: usize, target: usize, startup: Startup)
 
     let unit = unsafe { execution.create_migratable(migratable) }.expect("migratable Unit");
     let dormant = unsafe { execution.create(never) }.expect("dormant Unit");
-    execution.stop_dormant(dormant).expect("cancel before admission");
+    execution
+        .stop_dormant(dormant)
+        .expect("cancel before admission");
     assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
     execution.finish_end(dormant).unwrap();
     assert_eq!(execution.reap(dormant), Ok(End::Cancelled));

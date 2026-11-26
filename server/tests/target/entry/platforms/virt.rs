@@ -198,8 +198,8 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
     assert_eq!(psci.conduit(), conduit());
     unsafe {
         psci.verify().expect("live PSCI version and calls");
-        psci.verify_affinity(target, true)
-            .expect("live minor affinity");
+        psci.verify_affinity(target, false)
+            .expect("minor affinity before startup");
     }
 
     let timer = GenericTimer::read(tree)
@@ -222,4 +222,15 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
     );
     assert!(unsafe { GicV3::cpu_interface_available() });
     let _frequency = unsafe { timer.counter_frequency() }.expect("live generic timer frequency");
+}
+
+/// Recheck the original PSCI target only after the minor has entered.
+pub(super) fn inspect_started(tree: &DeviceTree<'_>, target: usize) {
+    let psci = PsciDescription::read(tree)
+        .unwrap()
+        .expect("PSCI declaration");
+    unsafe {
+        psci.verify_affinity(target, true)
+            .expect("live minor affinity");
+    }
 }

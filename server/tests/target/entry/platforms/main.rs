@@ -246,7 +246,12 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     let startup = board::startup();
     let major = boot.hart();
     board::inspect(&boot, &view);
-    cooperative::run(boot, major, target, startup);
+    #[cfg(target_arch = "aarch64")]
+    let tree = boot.device_tree_description().expect("retained native DTB");
+    cooperative::run(boot, major, target, startup, || {
+        #[cfg(target_arch = "aarch64")]
+        board::inspect_started(&tree, target);
+    });
     synchronization::check();
     boot::write("PASS synchronization\n");
     writeln!(
