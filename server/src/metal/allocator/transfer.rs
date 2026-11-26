@@ -6,8 +6,10 @@ use core::ptr;
 
 use crate::{
     address::{PhysicalAddress, PhysicalRange, length},
-    metal::identity::{GenerationTable, Key, ReserveError},
-    metal::sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
+    metal::{
+        identity::{GenerationTable, Key, Reservation as SlotReservation, ReserveError},
+        sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
+    },
 };
 
 use super::{
@@ -15,21 +17,31 @@ use super::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct AllocationScope(pub(super) usize, pub(super) usize);
+pub(super) struct AllocationScope(pub(super) RegionId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct ReturnScope(pub(super) usize, pub(super) usize);
+pub(super) struct ReturnScope(pub(super) RegionId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AllocationId {
-    region: RegionId,
     key: Key<AllocationScope>,
+}
+
+impl AllocationId {
+    fn region(self) -> RegionId {
+        self.key.scope().0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReturnId {
-    region: RegionId,
     key: Key<ReturnScope>,
+}
+
+impl ReturnId {
+    fn region(self) -> RegionId {
+        self.key.scope().0
+    }
 }
 
 #[must_use]
@@ -61,7 +73,7 @@ impl Allocation {
     }
 
     pub fn region(&self) -> RegionId {
-        self.id.region
+        self.id.region()
     }
 
     pub fn physical(&self) -> PhysicalRange {
@@ -75,7 +87,7 @@ impl Allocation {
     /// The prepaid Return location belongs to the upstream source's table.
     /// Learning its identity does not authorize handoff or completion.
     pub(super) fn return_position(&self) -> Result<ReturnId, Error> {
-        let region = self.source.region(self.id.region)?;
+        let region = self.source.region(self.id.region())?;
         region
             .state
             .acquire(|state| state.active(self).map(|record| record.retirement))?
@@ -238,7 +250,7 @@ impl Construction {
     pub(crate) fn reservation(&self) -> Result<(RegionId, AllowanceId), Error> {
         self.state.acquire(|state| match state {
             Preparation::Reserved(reservation) => {
-                Ok((reservation.id.region, reservation.allowance))
+                Ok((reservation.id.region(), reservation.allowance))
             }
             _ => Err(Error::Receiver),
         })?
@@ -270,7 +282,7 @@ impl Construction {
         let mut plan = work.plan();
         source.plan_construction(
             &mut plan,
-            reservation.id.region,
+            reservation.id.region(),
             reservation.allowance,
             self,
         )?;
@@ -321,7 +333,6 @@ impl State {
 
     pub(super) fn record(
         &mut self,
-        region: RegionId,
         physical: PhysicalRange,
         allowance: AllowanceId,
         phase: Phase,
@@ -332,12 +343,21 @@ impl State {
             .reserve()
             .expect("Allocation slot preflighted");
         let retirement = self.returns.reserve().expect("Return slot preflighted");
+        self.publish_record(allocation, retirement, physical, allowance, phase)
+    }
+
+    fn publish_record(
+        &mut self,
+        allocation: SlotReservation<AllocationScope>,
+        retirement: SlotReservation<ReturnScope>,
+        physical: PhysicalRange,
+        allowance: AllowanceId,
+        phase: Phase,
+    ) -> AllocationId {
         let id = AllocationId {
-            region,
             key: allocation.key(),
         };
         let return_id = ReturnId {
-            region,
             key: retirement.key(),
         };
         self.returns
@@ -374,7 +394,7 @@ impl State {
     }
 }
 
-fn remove<Scope: Copy + Eq, T>(table: &mut GenerationTable<'_, Scope, T>, key: Key<Scope>) {
+fn remove<Scope: Copy + Eq, T: Copy>(table: &mut GenerationTable<'_, Scope, T>, key: Key<Scope>) {
     table.detach(key).expect("exact published identity");
     let (reclamation, _) = table.reclaim(key).expect("exact detached identity");
     table
@@ -426,16 +446,13 @@ impl Allocator {
         construction: &'static Construction,
         spender: Option<Spender>,
     ) -> Result<AllocationId, Error> {
-        if !ptr::eq(self, candidate.source) {
-            return Err(Error::Stale);
-        }
+        let region = self.region(candidate.region)?;
         if !matches!(
             held.access(&construction.state).ok_or(Error::Protection)?,
             Preparation::Open
         ) {
             return Err(Error::Receiver);
         }
-        let region = self.region(candidate.region)?;
         let slot = self.slot(allowance)?;
         let amount = length(candidate.physical).get();
         let mut balance = held
@@ -451,12 +468,7 @@ impl Allocator {
             .buddy()
             .occupy(candidate.physical)
             .map_err(|_| Error::Changed)?;
-        let id = state.record(
-            candidate.region,
-            candidate.physical,
-            allowance,
-            Phase::Reserved(construction),
-        );
+        let id = state.record(candidate.physical, allowance, Phase::Reserved(construction));
         balance.reserved += amount;
         held.access(slot).expect("Allowance").state = SlotState::Open(balance);
         *held.access(&construction.state).expect("receiver") = Preparation::Reserved(Reservation {
@@ -484,7 +496,7 @@ impl Allocator {
         if reservation.spender != spender {
             return Err(Error::Protection);
         }
-        let region = self.region(reservation.id.region)?;
+        let region = self.region(reservation.id.region())?;
         let slot = self.slot(reservation.allowance)?;
         let mut balance = held
             .access(slot)
@@ -533,7 +545,7 @@ impl Allocator {
         if !ptr::eq(self, reservation.source) {
             return Err(Error::Stale);
         }
-        let region = self.region(reservation.id.region)?;
+        let region = self.region(reservation.id.region())?;
         let slot = self.slot(reservation.allowance)?;
         let (_, open) = held
             .access(slot)
@@ -563,7 +575,7 @@ impl Allocator {
     }
 
     pub(super) fn return_state(&self, id: ReturnId) -> Result<&TurnLock<State>, Error> {
-        Ok(&self.region(id.region)?.state)
+        Ok(&self.region(id.region())?.state)
     }
 
     /// Move the exact retired input to its prepaid Return slot and record that
@@ -594,7 +606,7 @@ impl Allocator {
             if !ptr::eq(self, allocation.source) {
                 return Err(Error::Stale);
             }
-            let region = self.region(allocation.id.region)?;
+            let region = self.region(allocation.id.region())?;
             region.state.acquire(|state| {
                 // The original Retired input certifies all prior uses ended.
                 record(unsafe { state.begin_retired(allocation, owner) }?);
@@ -607,7 +619,7 @@ impl Allocator {
     /// Finish a prepaid return once. Done can be replayed independently of
     /// the active slot and the original Allowance.
     pub fn finish_return(&self, id: ReturnId, mode: TurnMode) -> Result<Returned, Error> {
-        let region = self.region(id.region)?;
+        let region = self.region(id.region())?;
         let allowance = match region
             .state
             .acquire(|state| state.returns.get(id.key).copied())?
@@ -687,7 +699,7 @@ impl Allocator {
                 *cursor += 1;
                 if let Some((key, ReturnRecord::Pending(..))) = state.returns.published_at(current)
                 {
-                    return Pending::Found(ReturnId { region: id, key });
+                    return Pending::Found(ReturnId { key });
                 }
             }
             if *cursor >= end {
@@ -788,7 +800,7 @@ impl Allocator {
         mode: TurnMode,
     ) -> Result<(), (Retired, Retired, Error)> {
         let fits = left.physical().end() == right.physical().start()
-            && left.0.id.region == right.0.id.region;
+            && left.0.id.region() == right.0.id.region();
         if !fits {
             return Err((left, right, Error::Range));
         }
@@ -818,8 +830,7 @@ impl Allocator {
         if inputs.iter().any(|input| !ptr::eq(self, input.0.source)) {
             return Err(Error::Stale);
         }
-        let id = inputs[0].0.id.region;
-        let region = self.region(id)?;
+        let region = self.region(inputs[0].0.id.region())?;
         let allowance = region
             .state
             .acquire(|state| state.active(&inputs[0].0))??
@@ -864,30 +875,13 @@ impl Allocator {
             {
                 let allocation = allocation.expect("output allocation reservation");
                 let retirement = retirement.expect("output return reservation");
-                let allocation_id = AllocationId {
-                    region: id,
-                    key: allocation.key(),
-                };
-                let return_id = ReturnId {
-                    region: id,
-                    key: retirement.key(),
-                };
-                state
-                    .returns
-                    .publish(retirement, ReturnRecord::Reserved(allocation_id))
-                    .unwrap_or_else(|_| unreachable!("new Return reservation"));
-                state
-                    .allocations
-                    .publish(
-                        allocation,
-                        AllocationRecord {
-                            physical,
-                            allowance,
-                            retirement: return_id,
-                            phase: Phase::Issued,
-                        },
-                    )
-                    .unwrap_or_else(|_| unreachable!("new Allocation reservation"));
+                let allocation_id = state.publish_record(
+                    allocation,
+                    retirement,
+                    physical,
+                    allowance,
+                    Phase::Issued,
+                );
                 *receiver = Some(Allocation::issued(self, allocation_id, physical));
             }
             for (input, record) in inputs.into_iter().zip(records) {

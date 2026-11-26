@@ -53,6 +53,9 @@ change server/src/metal/sync/turn.rs
 bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/sync/host/Cargo.toml"]' >/dev/null
 change server/src/metal/execution/mod.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts"]' >/dev/null
+change server/src/metal/identity/mod.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/identity/host/Cargo.toml"]' >/dev/null
 
 change server/tests/target/entry/platforms/io.rs
 [[ $(boards) == q35 ]]

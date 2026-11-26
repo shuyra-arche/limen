@@ -12,14 +12,14 @@ use crate::{
     address::{PhysicalRange, length},
     entry::boot::{RegionError, Regions, RootStorage},
     metal::{
-        identity::Entry,
+        identity::{Entry, Generation, Slot},
         sync::{TURN_CAPACITY, TurnLock},
     },
 };
 
 use super::{
-    Allocator, Description, Error, REGION_LIMIT, Region, RegionId,
-    allowance::{Allowance, Balance, Free, Slot, SlotState},
+    Allocator, AllowanceId, Description, Error, REGION_LIMIT, Region, RegionId, SourceId,
+    allowance::{Allowance, AllowanceSlot, Balance, Free},
     buddy::{Geometry, Root},
     bump::Bump,
     region::Backing,
@@ -56,8 +56,9 @@ impl Config {
             || self.allocations == 0
             || self.returns < self.allocations
             || self.allowances == 0
-            || u32::try_from(self.allocations - 1).is_err()
-            || u32::try_from(self.returns - 1).is_err()
+            || Slot::new(self.allocations - 1).is_none()
+            || Slot::new(self.returns - 1).is_none()
+            || Slot::new(self.allowances - 1).is_none()
         {
             return Err(Error::Capacity);
         }
@@ -78,7 +79,7 @@ impl Config {
         let mut root = Layout::new::<Allocator>();
         for element in [
             array::<Region>(self.regions)?,
-            array::<TurnLock<Slot>>(self.allowances)?,
+            array::<TurnLock<AllowanceSlot>>(self.allowances)?,
         ] {
             root = root.extend(element).map_err(|_| Error::Layout)?.0;
         }
@@ -340,26 +341,22 @@ fn initialize(
         cursor: Bump::new(0..bytes.len()).expect("nonempty root"),
     };
     let place = &mut carve.take::<Allocator>(1)[0];
-    let address = ptr::from_mut(place).addr();
+    let source_id = SourceId(ptr::from_mut(place).addr());
     let regions = carve.take::<Region>(config.regions);
-    let allowances = carve.take::<TurnLock<Slot>>(config.allowances);
+    let allowances = carve.take::<TurnLock<AllowanceSlot>>(config.allowances);
     for (index, slot) in allowances.iter_mut().enumerate() {
-        let (generation, state) = if index == 0 {
-            (
-                1,
-                SlotState::Open(Balance {
-                    capacity,
-                    reserved: 0,
-                    occupied: committed,
-                }),
-            )
+        let entry = if index == 0 {
+            AllowanceSlot::initial(Balance {
+                capacity,
+                reserved: 0,
+                occupied: committed,
+            })
         } else {
-            (
-                0,
-                SlotState::Free((index + 1 < config.allowances).then_some(index + 1)),
-            )
+            let next = (index + 1 < config.allowances)
+                .then(|| Slot::new(index + 1).expect("checked Allowance capacity"));
+            AllowanceSlot::free(next)
         };
-        slot.write(TurnLock::new(Slot { generation, state }));
+        slot.write(TurnLock::new(entry));
     }
 
     for (index, region) in regions.iter_mut().enumerate() {
@@ -377,17 +374,13 @@ fn initialize(
             },
             filled(allocations),
             filled(returns),
-            address,
-            index,
+            RegionId::new(source_id, index),
         ));
     }
 
     let regions = filled(regions);
-    let allowance = super::AllowanceId {
-        source: address,
-        index: 0,
-        generation: 1,
-    };
+    let initial_slot = Slot::new(0).expect("initial Allowance slot");
+    let allowance = AllowanceId::new(source_id, initial_slot, Generation::FIRST);
     let mut charged = capacity;
     let mut published = 0;
     for (index, description) in descriptions.enumerate() {
@@ -406,8 +399,7 @@ fn initialize(
                 .buddy()
                 .occupy(item.physical)
                 .expect("initial ranges preflighted");
-            item.staged =
-                Some(state.record(RegionId(index), item.physical, allowance, Phase::Issued));
+            item.staged = Some(state.record(item.physical, allowance, Phase::Issued));
         }
         published += 1;
     }
@@ -420,7 +412,7 @@ fn initialize(
         regions,
         allowances: filled(allowances),
         free: TurnLock::new(Free {
-            head: (config.allowances > 1).then_some(1),
+            head: (config.allowances > 1).then(|| Slot::new(1).expect("second Allowance slot")),
             retired: 0,
         }),
     });

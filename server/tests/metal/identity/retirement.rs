@@ -7,8 +7,9 @@ fn maximum_generation_can_settle_while_the_rest_of_the_table_is_full() {
     let mut entries = [const { Entry::EMPTY }; 2];
     let mut table = GenerationTable::new((), &mut entries).unwrap();
     // Start two legitimate free slots immediately below their last issue.
-    table.entries[0].generation = u32::MAX - 1;
-    table.entries[1].generation = u32::MAX - 1;
+    let previous = Some(Generation(NonZeroU32::new(u32::MAX - 1).unwrap()));
+    table.entries[0].generation = previous;
+    table.entries[1].generation = previous;
     let first = table.reserve().unwrap();
     let second = table.reserve().unwrap();
     assert_eq!(first.key().generation.0.get(), u32::MAX);

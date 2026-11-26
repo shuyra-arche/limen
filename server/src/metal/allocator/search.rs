@@ -72,7 +72,6 @@ impl Request {
 /// Physical observation only. The candidate is rechecked during occupation.
 #[derive(Clone, Copy)]
 pub struct Candidate {
-    pub(super) source: &'static Allocator,
     pub(super) region: RegionId,
     pub(super) physical: PhysicalRange,
     pub(super) request: Request,
@@ -134,9 +133,15 @@ impl Allocator {
         if !self.config.granule_alignment().is_aligned(request.length()) {
             return Err(Error::Layout);
         }
+        if start.is_some_and(|id| id.source != self.source_id()) {
+            return Err(Error::Stale);
+        }
         // This is the first directory observation for a possible NoRange.
         let count = self.directory.acquire(|_| self.published.load(Acquire))?;
-        let first = start.filter(|id| id.0 < count).map_or(0, |id| id.0);
+        let first = start.map_or(0, RegionId::index);
+        if start.is_some() && first >= count {
+            return Err(Error::Stale);
+        }
         Ok(Lookup {
             source: self,
             request,
@@ -207,8 +212,7 @@ impl Lookup {
 
     fn candidate(&self, physical: PhysicalRange) -> Search {
         Search::Candidate(Candidate {
-            source: self.source,
-            region: RegionId(self.index()),
+            region: RegionId::new(self.source.source_id(), self.index()),
             physical,
             request: self.request,
         })

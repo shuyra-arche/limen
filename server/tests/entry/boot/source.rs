@@ -42,8 +42,15 @@ struct Descriptors([u8; 40]);
 pub(super) fn bootstrap(
     operation: impl FnOnce(&mut Regions<'_>, &mut Option<MappedRange<'static>>),
 ) {
+    bootstrap_at(BASE, operation);
+}
+
+fn bootstrap_at(
+    base: u64,
+    operation: impl FnOnce(&mut Regions<'_>, &mut Option<MappedRange<'static>>),
+) {
     let mut descriptors = Descriptors([0; 40]);
-    let scope = pages(0, 13);
+    let scope = range(base, base + 13 * PAGE);
     describe(&mut descriptors.0, 7, scope.start().get(), 13, 8);
     let map = FirmwareMap::new(&descriptors.0, 40, 1, 1).unwrap();
     let boot = Boot::from_uefi(0, image(), None, map, None);
@@ -59,7 +66,8 @@ pub(super) fn bootstrap(
     )
     .unwrap();
     let backing = Box::leak(Box::new(Mapped([MaybeUninit::uninit(); 2 * PAGE as usize])));
-    let mut mapping = Some(unsafe { MappedRange::new(pages(4, 6), &mut backing.0) }.unwrap());
+    let physical = range(base + 4 * PAGE, base + 6 * PAGE);
+    let mut mapping = Some(unsafe { MappedRange::new(physical, &mut backing.0) }.unwrap());
     operation(&mut regions, &mut mapping);
 }
 
@@ -101,6 +109,88 @@ fn begin_return(source: &Allocator, material: Retired) -> ReturnId {
     let mut receiver = None;
     source.begin_return(material, &mut receiver).ok().unwrap();
     receiver.unwrap()
+}
+
+fn initial_capacity(source: &Allocator) -> u64 {
+    let root_pages = CONFIG.layout().unwrap().size().div_ceil(PAGE as usize) as u64;
+    assert_eq!(source.root(), pages(4, 4 + root_pages));
+    (13 - root_pages) * PAGE
+}
+
+#[test]
+fn only_the_original_source_can_resolve_region_and_allowance_slots() {
+    use crate::metal::sync::TurnWorkspace;
+
+    let mut original = None;
+    let (source, allowance) = source(&mut original, 4 * PAGE);
+    let original = original.unwrap();
+    let region = original.region();
+    let candidate = source.allowance_candidate().unwrap();
+    let mut other_allowance = None;
+    let other_base = BASE + 32 * PAGE;
+    bootstrap_at(other_base, |regions, mapping| {
+        unsafe { regions.allocator(mapping, CONFIG, PAGE, &mut other_allowance, &mut []) }
+            .unwrap()
+            .unwrap();
+    });
+    let other_allowance = other_allowance.unwrap();
+    let other = other_allowance.source();
+    let other_region = other.regions().next().unwrap().0;
+    let other_candidate = other.allowance_candidate().unwrap();
+    assert_ne!(region, other_region);
+    assert_ne!(allowance.id(), other_allowance.id());
+    assert_ne!(candidate, other_candidate);
+
+    let budget = source.budget(Fast).unwrap();
+    let other_budget = other.budget(Fast).unwrap();
+    let mut work = TurnWorkspace::<4>::new();
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(PAGE).unwrap(),
+        range(other_base, other_base + 13 * PAGE),
+        None,
+        Metadata,
+    )
+    .unwrap();
+    assert!(matches!(
+        other.lookup(request, Some(region)),
+        Err(Error::Stale)
+    ));
+    assert_eq!(
+        other.plan_allowance(&mut work.plan(), candidate, &[(other_region, PAGE)]),
+        Err(Error::Stale)
+    );
+    assert_eq!(
+        other.plan_allowance(&mut work.plan(), other_candidate, &[(region, PAGE)]),
+        Err(Error::Stale)
+    );
+    assert_eq!(
+        other.plan_transfer(&mut work.plan(), allowance.id(), other_allowance.id()),
+        Err(Error::Stale)
+    );
+    assert_eq!(allowance.shut(Some(other_region), Fast), Err(Error::Stale));
+    assert_eq!(source.budget(Fast), Ok(budget));
+    assert_eq!(other.budget(Fast), Ok(other_budget));
+
+    allowance.shut(Some(region), Fast).unwrap();
+    let (allowance, failure) = allowance.reclaim(Fast).err().unwrap();
+    assert_eq!(failure, Error::Balance);
+    let receipt = begin_return(source, unsafe { original.retire() });
+    let mut cursor = 0;
+    assert_eq!(other.pending(region, &mut cursor, 1), Err(Error::Stale));
+    assert_eq!(cursor, 0);
+    assert_eq!(other.finish_return(receipt, Fast), Err(Error::Stale));
+    assert_eq!(
+        source.pending(region, &mut cursor, 1),
+        Ok(Pending::Found(receipt))
+    );
+    source.finish_return(receipt, Fast).unwrap();
+    allowance.reclaim(Fast).ok().unwrap();
+    source.acknowledge(receipt).unwrap();
+    assert_eq!(other.budget(Fast), Ok(other_budget));
+
+    other_allowance.shut(Some(other_region), Fast).unwrap();
+    other_allowance.reclaim(Fast).ok().unwrap();
 }
 
 #[test]
@@ -329,8 +419,8 @@ fn rejects_invalid_geometry_and_receivers_before_consuming_the_root() {
 fn independent_history_survives_new_generations_and_refunds_after_shut() {
     let mut initial = None;
     let (source, allowance) = source(&mut initial, 10 * PAGE);
-    assert_eq!(source.root(), pages(4, 6));
-    assert_eq!(source.budget(Slow), Ok((11 * PAGE, PAGE)));
+    let capacity = initial_capacity(source);
+    assert_eq!(source.budget(Slow), Ok((capacity, capacity - 10 * PAGE)));
     let mut halves = [None, None];
     let original = initial.take().unwrap();
     let original_id = original.id();
@@ -374,11 +464,68 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
     allowance.shut(Some(credit), Fast).unwrap();
     let done = source.finish_return(receipt, Slow).unwrap();
     assert_eq!(done.physical, pages(0, 3));
-    assert_eq!(source.budget(Fast), Ok((11 * PAGE, 11 * PAGE)));
+    assert_eq!(source.budget(Fast), Ok((capacity, capacity)));
     allowance.reclaim(Slow).ok().unwrap();
     assert_eq!(source.finish_return(receipt, Fast), Ok(done));
     source.acknowledge(receipt).unwrap();
     assert_eq!(source.finish_return(receipt, Fast), Err(Error::Stale));
+}
+
+#[test]
+fn a_split_without_two_return_slots_keeps_the_original_material() {
+    let mut initial = None;
+    let mut allowance = None;
+    provision(
+        Config {
+            allocations: 3,
+            returns: 3,
+            ..CONFIG
+        },
+        3 * PAGE,
+        &mut initial,
+        &mut allowance,
+    );
+    let allowance = allowance.unwrap();
+    let source = allowance.source();
+    let original = unsafe { initial.unwrap().retire() };
+    let mut receivers = [None, None];
+    unsafe { source.split(original, pages(0, 2).end(), &mut receivers, Fast) }
+        .ok()
+        .unwrap();
+    let [material, returned] = receivers.map(Option::unwrap);
+    let receipt = begin_return(source, unsafe { returned.retire() });
+    let result = source.finish_return(receipt, Fast).unwrap();
+    let before = allowance.balance().unwrap();
+    assert_eq!(before.occupied, 2 * PAGE);
+
+    let original = unsafe { material.retire() };
+    let mut receivers = [None, None];
+    let (original, failure) =
+        unsafe { source.split(original, pages(0, 1).end(), &mut receivers, Fast) }
+            .err()
+            .unwrap();
+    assert_eq!(failure, Error::ReturnCapacity);
+    assert_eq!(original.physical(), pages(0, 2));
+    assert!(receivers.iter().all(Option::is_none));
+    assert_eq!(allowance.balance(), Ok(before));
+    assert_eq!(source.finish_return(receipt, Fast), Ok(result));
+
+    source.acknowledge(receipt).unwrap();
+    unsafe { source.split(original, pages(0, 1).end(), &mut receivers, Fast) }
+        .ok()
+        .unwrap();
+    let [left, right] = receivers.map(Option::unwrap);
+    assert_eq!(
+        [left.physical(), right.physical()],
+        [pages(0, 1), pages(1, 2)]
+    );
+    allowance.shut(Some(left.region()), Fast).unwrap();
+    for material in [left, right] {
+        let receipt = begin_return(source, unsafe { material.retire() });
+        source.finish_return(receipt, Fast).unwrap();
+        source.acknowledge(receipt).unwrap();
+    }
+    allowance.reclaim(Fast).ok().unwrap();
 }
 
 #[test]
@@ -455,7 +602,8 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
             _ => panic!("missed a new published Region"),
         }
     }
-    assert_eq!(source.budget(Fast), Ok((15 * PAGE, 12 * PAGE)));
+    let capacity = initial_capacity(source) + 4 * PAGE;
+    assert_eq!(source.budget(Fast), Ok((capacity, capacity - 3 * PAGE)));
     assert_eq!(allowance.balance().unwrap().occupied, 0);
 }
 
@@ -553,7 +701,8 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     allowance.shut(Some(candidate.region()), Fast).unwrap();
     construction.cancel(Slow).unwrap();
     assert_eq!(allowance.balance().unwrap().reserved, 0);
-    assert_eq!(source.budget(Fast), Ok((11 * PAGE, 8 * PAGE)));
+    let capacity = initial_capacity(source);
+    assert_eq!(source.budget(Fast), Ok((capacity, capacity - 3 * PAGE)));
 }
 
 #[test]
@@ -561,10 +710,12 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
     use crate::metal::sync::TurnWorkspace;
     let mut initial = None;
     let (source, allowance) = source(&mut initial, 3 * PAGE);
+    let capacity = initial_capacity(source);
     let original = allowance.id();
     let region = initial.as_ref().unwrap().region();
     let (_, credit) = source.regions().nth(1).unwrap();
-    assert_eq!(credit.physical, pages(6, 13));
+    assert_eq!(credit.physical.start(), source.root().end());
+    assert_eq!(credit.physical.end(), pages(0, 13).end());
     let other = source.regions().nth(1).unwrap().0;
     let debits = [(region, PAGE), (other, 2 * PAGE)];
 
@@ -583,7 +734,7 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
     let second = receiver.take().unwrap();
     assert_eq!(second.balance().unwrap().capacity, 3 * PAGE);
     assert_eq!(source.allowance_candidate(), Err(Error::AllowanceCapacity));
-    assert_eq!(source.budget(Fast), Ok((11 * PAGE, 5 * PAGE)));
+    assert_eq!(source.budget(Fast), Ok((capacity, capacity - 6 * PAGE)));
 
     allowance.shut(None, Slow).unwrap();
     let material = initial.take().unwrap();
