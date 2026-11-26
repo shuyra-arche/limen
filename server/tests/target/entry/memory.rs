@@ -1,11 +1,14 @@
 use core::{mem::MaybeUninit, ptr, slice};
 
-use kernel::entry::boot::{Boot, Condition, Physical, Retirement};
+use kernel::entry::boot::Physical;
+#[cfg(target_arch = "riscv64")]
+use kernel::entry::boot::{Boot, Condition, Retirement};
 
 // The boot guest reserves this test-only RAM window in the bare virt fixture.
 // It is outside the image, both startup stacks, OpenSBI and the retained DTB.
 // No minor or DMA-capable guest driver has run and satp is still zero. The
 // resident stack is permanent for this guest and stays excluded.
+#[cfg(target_arch = "riscv64")]
 pub(super) fn retirement(boot: &Boot<'_>, physical: Physical) -> Retirement {
     let exclusions = boot.exclusions();
     assert!(exclusions.entries().all(|entry| {
@@ -31,7 +34,7 @@ pub(super) fn retirement(boot: &Boot<'_>, physical: Physical) -> Retirement {
     retirement
 }
 
-/// The caller owns the entire bare, identity-mapped extent and keeps all
+/// The caller owns the entire identity-mapped extent and keeps all
 /// other software and devices excluded for the returned slice's lifetime.
 pub(super) unsafe fn mapped(physical: Physical) -> &'static mut [MaybeUninit<u8>] {
     let base = ptr::with_exposed_provenance_mut(physical.start as usize);

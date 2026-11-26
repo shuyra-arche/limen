@@ -191,17 +191,31 @@ leave the source unpublished. The Host boot suite additionally exercises
 joint lock contention, cancellation, allowance reuse and independent
 return history.
 
-The RV64 guest also composes the Allocator, initial PendSpace, and typed Pool
-on the same source. The initial Allocation backs the permanent PendSpace.
-Its spending Handle issues a mapped page group for a stable object. A counted
-reference keeps that object alive after detachment. Once the reference ends,
-the consumer can reclaim the object and hand the group back. The recovery
-step finds the return in the original Pool directory and refunds the original
-Allowance. The PendSpace occupies one of two Allocation slots, so reissuing
-the same page exercises reuse of the other slot with a new generation.
-Replaying the Pool's retained result leaves the replacement's charge in
-place. The consumer takes the replacement from its original Construction
-after the spending authority is revoked and released, then performs a
-volatile write and read through the bare mapping. The guest checks that the
-old upstream receipt is stale both while the new receipt can settle its
-refund and while the new receipt can replay the completed result.
+## Foundation acceptance
+
+RV64 virt, x86_64 q35 and AArch64 virt run the same foundation assertions in
+Debug and Release. Each source covers six checked RAM pages. The UEFI fixtures
+take and release a private unused grant from the firmware map before
+ExitBootServices. After exit, they require the entire grant to remain
+conventional and disjoint from every boot exclusion. AArch64 also requires
+DTB corroboration. The major retains the original identity view and the
+fixtures leave all firmware buffers and tables outside the grant. Before
+recording its final scoped condition, each UEFI guest checks that incomplete
+evidence still prevents RAM admission.
+
+| Scenario | Required observation |
+| --- | --- |
+| Root preflight | An invalid capacity leaves the mapping, region description and receiver fields intact. Successful publication accounts for all root and managed bytes. |
+| Fragmentation and active identities | Two free single-page runs cannot satisfy a contiguous two-page request. An available page cannot be reserved when both Allocation slots are occupied, and the charge is unchanged. |
+| Full typed Pool | A detached stable object stays readable through its counted reference. Reclamation is denied until the last reference ends. The existing reclaim and release path can free a slot while all other slots are held. |
+| Pending return and full history | Recovery finds the original return by scanning the bounded source. The retained result blocks a new reservation even after physical refund until the owner acknowledges it. The Pool separately demonstrates recovery from its own directory. |
+| Same-address reuse and closure | The replacement receives a new generation and is taken and accessed after spending revocation. Old receipts cannot charge or refund it. Closing the Allowance moves the subsequent refund to the original Region and preserves the permanent PendSpace charge. |
+
+The Boot Host suite checks `Busy` on the production Pend reserve plan and
+verifies unchanged accounting before retry. The Identity Host suite checks
+the maximum-generation boundary. The RV64 cross-Hart execution suite checks
+joint Turn acquisition, node capacity and reuse, and rejection of a yield
+with active protection. These are separate from the target foundation runs.
+The boot scenarios cover their own RAM windows and do not exercise retiring
+firmware-owned translations or device DMA, switching to a successor Kernel
+Nest, or the full Kernel/User handoff and Seal.

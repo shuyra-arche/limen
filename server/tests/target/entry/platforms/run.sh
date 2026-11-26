@@ -71,6 +71,8 @@ printf '%s\n' "$status" >"$out/exit.status"
 grep -Fxq "$marker" "$out/guest.log"
 grep -Fxq 'PASS early physical exclusions regions=0 roots=0' "$out/guest.log"
 grep -Fxq 'PASS allocator retained without retirement or mapping' "$out/guest.log"
+grep -Fxq 'PASS bootstrap-foundation pend=1 pool=1 retained=1 refund=1 generation=1 stale=1 revoked=1' "$out/guest.log"
+grep -Fxq 'PASS foundation-pressure preflight=1 fragments=1 allocation=1 pool=1 history=1 rediscover=1 shut=1' "$out/guest.log"
 grep -Fxq 'PASS synchronization' "$out/guest.log"
 jq -es 'all(.[]; has("error") | not)
     and any(.[]; .id == "capabilities" and has("return"))

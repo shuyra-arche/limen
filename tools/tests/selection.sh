@@ -66,7 +66,9 @@ bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and .man
 [[ $(bash "$discover" . "$base") == '[]' ]]
 change server/src/basis/pend.rs
 bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
-bash "$discover" . "$base" | jq -e 'map(select(.id == "boot-handoff") | .profile) | sort == ["debug","release"]' >/dev/null
+bash "$discover" . "$base" | jq -e 'map(select(.id == "boot-handoff" or .id == "platform-boot") | [.platform, .profile]) | sort == [["q35","debug"],["q35","release"],["rv64","debug"],["rv64","release"],["virt","debug"],["virt","release"]]' >/dev/null
+change server/tests/target/entry/foundation.rs
+[[ $(boards) == 'q35 rv64 virt' ]]
 change server/tests/entry/boot/contracts.rs
 bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
 change server/src/entry/boot/mod.rs

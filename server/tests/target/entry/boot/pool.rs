@@ -3,13 +3,16 @@ use core::{mem::MaybeUninit, ptr};
 use kernel::{
     allocator::{
         Allocation, Allowance, Error as SourceError,
-        pool::{Error, GroupSlot, Pool, Reference, ReleaseCursor, ReleaseProgress, Retirement, Stable, StableOwner},
+        pool::{Error, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement, Stable},
     },
     entry::boot::{self, Boot},
     sync::{Acquisition::Fast, TurnLock, Work},
 };
 
-use super::pool_material::{GROUP, PAGE, install};
+use super::{
+    foundation::reference,
+    pool_material::{GROUP, PAGE, install},
+};
 
 type Entry = Stable<TurnLock<usize>>;
 
@@ -17,17 +20,6 @@ static mut GROUPS: [GroupSlot<'static, Entry>; 1] = [GroupSlot::EMPTY];
 static mut TYPED: MaybeUninit<Pool<'static, Entry>> = MaybeUninit::uninit();
 static mut ALLOCATION: Option<Allocation> = None;
 static mut ALLOWANCE: Option<Allowance> = None;
-
-pub(super) fn reference<'pool, T: Sync>(owner: &StableOwner<'pool, '_, T>) -> Reference<'pool, T> {
-    for _ in 0..16 {
-        match owner.reference() {
-            Ok(reference) => return reference,
-            Err(Error::Busy) => {}
-            Err(error) => panic!("unexpected retain error: {error:?}"),
-        }
-    }
-    panic!("retain stayed Busy for 16 attempts");
-}
 
 pub(super) fn check(boot: &Boot<'_>) {
     let allocation = unsafe { &mut *(&raw mut ALLOCATION) };
@@ -126,12 +118,18 @@ pub(super) fn check(boot: &Boot<'_>) {
         panic!("returning group missing from the Pool directory");
     };
     let result = source.finish_return(supply.retirement, Fast).unwrap();
-    assert_eq!(source.acknowledge(supply.retirement), Err(SourceError::Protection));
+    assert_eq!(
+        source.acknowledge(supply.retirement),
+        Err(SourceError::Protection)
+    );
     assert_eq!(pool.finish_return(group, Fast), Ok(result));
     assert_eq!(result.allocation, supply.allocation);
     assert_eq!(result.physical, GROUP);
     assert_eq!(pool.finish_return(group, Fast), Ok(result));
-    assert_eq!(source.acknowledge(supply.retirement), Err(SourceError::Stale));
+    assert_eq!(
+        source.acknowledge(supply.retirement),
+        Err(SourceError::Stale)
+    );
     assert_eq!(owner.balance().unwrap().occupied, 0);
     assert_eq!(pool.capacity().unwrap().bytes, 0);
     boot::write("PASS typed-pool mapped=1 slots=1 reuse=1 joint=1 stable=1 refund=1\n");
