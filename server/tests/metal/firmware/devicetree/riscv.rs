@@ -3,7 +3,10 @@ use super::{DeviceTree, Error, Fixture};
 use kernel::metal::{
     execution::riscv::description::{RiscvExtension, RiscvIsa},
     hart::description::RiscvCpus,
-    mmu::internal::riscv::description::{RiscvMmu, RiscvMmuMode},
+    mmu::internal::riscv::{
+        Mode,
+        description::{RiscvMmu, RiscvMmuMode},
+    },
     time::RiscvTimebase,
 };
 
@@ -25,6 +28,31 @@ fn read_scope(bytes: &[u8]) -> RiscvCpus<'_> {
     RiscvCpus::new(DeviceTree::new(bytes).unwrap())
         .unwrap()
         .unwrap()
+}
+
+#[test]
+fn rv64_mmu_description_bounds_the_supported_paged_modes() {
+    for (property, maximum, supported) in [
+        (b"riscv,none\0", RiscvMmuMode::Bare, [false, false, false]),
+        (b"riscv,sv39\0", RiscvMmuMode::Sv39, [true, false, false]),
+        (b"riscv,sv48\0", RiscvMmuMode::Sv48, [true, true, false]),
+        (b"riscv,sv57\0", RiscvMmuMode::Sv57, [true, true, true]),
+    ] {
+        let mut fixture = cpu_scope();
+        start_cpu(&mut fixture, b"cpu@0", &[0, 0]);
+        fixture.property(b"mmu-type", property);
+        fixture.end();
+        fixture.end();
+        let bytes = fixture.finish();
+        let scope = read_scope(&bytes);
+        let cpu = scope.cpu(0).unwrap().unwrap();
+        let mmu = RiscvMmu::describe(&cpu).unwrap().unwrap();
+        assert_eq!(mmu.maximum(), maximum);
+        assert_eq!(
+            [Mode::Sv39, Mode::Sv48, Mode::Sv57].map(|mode| maximum.supports(mode)),
+            supported
+        );
+    }
 }
 
 #[test]

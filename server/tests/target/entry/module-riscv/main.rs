@@ -12,7 +12,7 @@ use kernel::{
         mmu::internal::access::MappedRange,
         mmu::internal::{
             GEOMETRY,
-            riscv::sv39::{self, ROOT, Sv39Encoding},
+            riscv::{Mode, context::Context, root},
         },
         module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, Permissions, UseError},
     },
@@ -21,7 +21,12 @@ use limen_treaty::model::PageSize;
 use mapping::PAGE;
 
 const IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/module.elf"));
-const ROOT_IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sv39-root.elf"));
+const MODES: [Mode; 3] = [Mode::Sv39, Mode::Sv48, Mode::Sv57];
+const ROOT_IMAGES: [&[u8]; 3] = [
+    include_bytes!(concat!(env!("OUT_DIR"), "/sv39-root.elf")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/sv48-root.elf")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/sv57-root.elf")),
+];
 const MAX_PAGES: usize = 16;
 
 #[repr(C, align(4096))]
@@ -92,7 +97,7 @@ impl Resident {
             tree,
         };
 
-        for image in [IMAGE, ROOT_IMAGE] {
+        for image in core::iter::once(IMAGE).chain(ROOT_IMAGES) {
             let source = image.as_ptr_range();
             assert!(covers(
                 &resident.read_only,
@@ -214,11 +219,12 @@ impl ImagePages {
 }
 
 fn prepare(
+    root_image: &'static [u8],
     contract: Contract<'_>,
     storage: NonNull<MaybeUninit<u8>>,
 ) -> (Layout<'static>, ReservedPages, ImagePages) {
     let image = ModuleImage::select(
-        &[IMAGE, ROOT_IMAGE],
+        &[IMAGE, root_image],
         Machine::Riscv64,
         PageSize::new(PAGE).unwrap(),
         contract,
@@ -264,11 +270,68 @@ fn prepare(
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
-    let peer = harts::check(&boot);
+    let peer = harts::check(&boot, &MODES);
     let storage = NonNull::new((&raw mut STORAGE).cast::<Storage>()).unwrap();
     let start = storage.addr().get() as u64;
     let resident = Resident::from_boot(&boot, start..start + size_of::<[Storage; 2]>() as u64);
-    let mut initial = mapping::Root::new();
+    for (mode, image) in MODES.into_iter().zip(ROOT_IMAGES) {
+        prove_geometry(mode, &resident);
+        exercise(mode, image, peer, &resident, storage);
+    }
+    boot::write(
+        "PASS riscv-module-execution virt modes=sv39,sv48,sv57 high-leaves=12 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2\n",
+    );
+    boot::shutdown(true)
+}
+
+fn prove_geometry(mode: Mode, resident: &Resident) {
+    static PROBE: u64 = 0x46c8_ce4b_34d7_985e;
+    let physical = (&raw const PROBE).addr() as u64;
+    assert!(covers(&resident.read_only, &(physical..physical + 8)));
+
+    let mut root = mapping::Root::new(mode);
+    for (range, permission) in resident.ranges() {
+        root.map(range, permission);
+    }
+    root.verify_private(resident.page_count(), |page| resident.permission(page));
+
+    let high = u64::MAX << (mode.virtual_bits() - 1);
+    let stride = mode.leaf_size(mode.levels() - 1).unwrap();
+    let mut probes = [0; 5];
+    for (level, probe) in probes[..mode.levels()].iter_mut().enumerate() {
+        let size = mode.leaf_size(level).unwrap();
+        let virtual_base = high + level as u64 * stride;
+        let offset = physical % size;
+        root.map_probe(virtual_base, PhysicalAddress::new(physical - offset), level);
+        *probe = virtual_base + offset;
+    }
+
+    // The identity mapping is still complete. The minor remains stopped,
+    // and neither module has been staged or installed.
+    unsafe { root.activate() };
+    for &address in &probes[..mode.levels()] {
+        let value: u64;
+        unsafe {
+            asm!("ld {value}, 0({address})", value = out(reg) value, address = in(reg) address, options(nostack, readonly));
+        }
+        assert_eq!(value, PROBE);
+    }
+    unsafe {
+        mapping::switch_context(root.context(), Context::BARE);
+        root.clear_inactive();
+    }
+    root.release();
+}
+
+fn exercise(
+    mode: Mode,
+    image: &'static [u8],
+    peer: usize,
+    resident: &Resident,
+    storage: NonNull<Storage>,
+) {
+    let contract = root::contract(mode);
+    let mut initial = mapping::Root::new(mode);
     for (range, permission) in resident.ranges() {
         initial.map(range, permission);
     }
@@ -279,10 +342,12 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     unsafe { initial.activate() };
     initial.verify_active(total, |page| resident.permission(page));
 
-    let (geometry_layout, geometry_material, geometry_pages) = prepare(GEOMETRY, storage.cast());
-    let (root_layout, root_material, root_pages) = prepare(ROOT, unsafe { storage.add(1) }.cast());
+    let (geometry_layout, geometry_material, geometry_pages) =
+        prepare(image, GEOMETRY, storage.cast());
+    let (root_layout, root_material, root_pages) =
+        prepare(image, contract, unsafe { storage.add(1) }.cast());
     let geometry_entry = geometry_layout.entry(GEOMETRY).unwrap();
-    let root_entry = root_layout.entry(ROOT).unwrap();
+    let root_entry = root_layout.entry(contract).unwrap();
     let images = [&geometry_pages, &root_pages];
     let reserved = total - geometry_pages.count() - root_pages.count();
     let outside_images = |page| {
@@ -314,35 +379,45 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
         .unwrap();
     let provider = geometry.acquire(GEOMETRY).unwrap();
     let retained = geometry.acquire(GEOMETRY).unwrap();
-    sv39::check(&root_layout, core::slice::from_ref(&retained)).unwrap();
+    root::check(mode, &root_layout, core::slice::from_ref(&retained)).unwrap();
     let backend = unsafe { slots.publish(root_layout, root_material, [retained]) }
         .ok()
         .unwrap();
-    let encoder = sv39::bind(&backend).unwrap();
+    let encoder = root::bind(mode, &backend).unwrap();
     let mut successor = initial.successor();
 
     for (range, _) in resident.ranges() {
         for page in range.step_by(PAGE as usize) {
             if let Some(permission) = placed(page) {
                 successor.map_with(page..page + PAGE, permission, |address, value| {
-                    let kind = match value {
-                        None => Sv39Encoding::Branch,
-                        Some(Permissions::ReadOnly) => Sv39Encoding::ReadOnly,
-                        Some(Permissions::ReadWrite) => Sv39Encoding::ReadWrite,
-                        Some(Permissions::ReadExecute) => Sv39Encoding::ReadExecute,
-                    };
-                    unsafe { encoder.encode(PhysicalAddress::new(address), kind) }.unwrap()
+                    let address = PhysicalAddress::new(address);
+                    unsafe {
+                        match value {
+                            None => encoder.branch(address),
+                            Some(permission) => encoder.leaf(address, 0, permission),
+                        }
+                    }
+                    .unwrap_or_else(|| panic!("{mode:?} encoder rejected {value:?} at {address:?}"))
                 });
             }
         }
     }
     successor.verify_inactive(published, placed);
     let root_physical = PhysicalAddress::new(successor.storage().start);
-    let context = unsafe { encoder.encode(root_physical, Sv39Encoding::Context) }.unwrap();
+    let context = unsafe { encoder.context(root_physical) }.unwrap();
     assert_eq!(context, successor.context());
     assert_ne!(context, initial.context());
+    assert_eq!(context.mode(), Some(mode));
+    for level in 0..mode.levels() {
+        let boundary = mode.leaf_size(level).unwrap();
+        let address = PhysicalAddress::new(boundary);
+        assert_eq!(
+            unsafe { encoder.leaf(address, level, Permissions::ReadOnly) },
+            Some((boundary >> 2) | 0x43)
+        );
+    }
     let misaligned = PhysicalAddress::new(root_physical.get() + 1);
-    assert!(unsafe { encoder.encode(misaligned, Sv39Encoding::Context) }.is_none());
+    assert!(unsafe { encoder.context(misaligned) }.is_none());
 
     let replies = unsafe {
         harts::exercise(
@@ -355,12 +430,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
                 // while retaining both table sets and both callable instances.
                 mapping::switch_context(initial.context(), context);
                 successor.verify_active(published, placed);
-                assert_eq!(
-                    encoder
-                        .encode(root_physical, Sv39Encoding::Context)
-                        .unwrap(),
-                    context,
-                );
+                assert_eq!(encoder.context(root_physical).unwrap(), context);
             },
         )
     };
@@ -409,8 +479,12 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     root_pages.restore(&successor, returned_root, root_entry);
     geometry_pages.restore(&successor, returned_geometry, geometry_entry);
     successor.verify_active(total, |page| resident.permission(page));
-    boot::write(
-        "PASS riscv-module-execution virt sv39=1 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2\n",
-    );
-    boot::shutdown(true)
+    // Follow the minor's departure with the major's own local completion.
+    // The two dormant banks are clear before the next mode can claim them.
+    unsafe {
+        mapping::switch_context(context, Context::BARE);
+        successor.clear_inactive();
+    }
+    initial.release();
+    successor.release();
 }

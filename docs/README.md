@@ -26,11 +26,12 @@ its backing and the uses of already published providers. Each consumer
 keeps an exact ModuleUse through its calls and cleanup. Shut closes new uses.
 The mapping owner settles old mapping and instruction effects before
 reclaim returns the original backing. Internal MMU defines MmuGeometry v1
-and its RV64 backend validates the Sv39Root v1 offer and binds the retained
-geometry provider. It encodes branches, base-page leaves
-and a SATP context using a synchronous call through that provider's versioned
-import table. The mapping owner checks the returned encodings, supplies the
-page tables and installs the verified root. See the [formal Module contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/module/README.md).
+and binds an exact RV64 Sv39, Sv48 or Sv57 root contract to the geometry
+provider retained by its module. The shared RV64 mechanism checks canonical
+addresses, level geometry, physical alignment and the encoder's branch,
+leaf and SATP results. The mapping owner supplies the tables. Each Hart
+checks the installed ASID-zero context and synchronizes its own translations.
+The firmware's per-Hart maximum limits candidate modes. See the [formal Module contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/module/README.md).
 
 For build commands see the [repository README](../README.md). The architecture
 and Treaty contracts are maintained in [Document Limen](https://github.com/shuyra-arche/document-limen).

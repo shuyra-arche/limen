@@ -9,16 +9,12 @@ use core::{
         Ordering::{Acquire, Relaxed, Release},
     },
 };
-use kernel::metal::{
-    execution::riscv::description::RiscvExtension, execution::riscv::description::RiscvIsa,
-    hart::description::RiscvCpus, mmu::internal::riscv::description::RiscvMmu,
-    mmu::internal::riscv::description::RiscvMmuMode,
-};
 use kernel::{
     entry::boot::{Boot, Minor, Startup},
     metal::{
-        address::PhysicalAddress,
-        mmu::internal::riscv::sv39::{Sv39Encoding, Sv39Root},
+        execution::riscv::description::{RiscvExtension, RiscvIsa},
+        hart::description::RiscvCpus,
+        mmu::internal::riscv::{Mode, context::Context, description::RiscvMmu, root::Root},
         module::ModuleUse,
     },
 };
@@ -31,7 +27,6 @@ const HART_STATUS: usize = 2;
 const STARTED: usize = 0;
 const STOPPED: usize = 1;
 const STOP_PENDING: usize = 3;
-const SATP_PPN: u64 = (1 << 44) - 1;
 
 #[repr(u8)]
 #[derive(Clone, Copy)]
@@ -43,14 +38,14 @@ enum Phase {
     Departed,
 }
 
-static MINOR: Minor = Minor::new();
+static MINORS: [Minor; 3] = [const { Minor::new() }; 3];
 static PHASE: AtomicU8 = AtomicU8::new(Phase::Idle as u8);
 static ROOTS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 static ENTRY: AtomicU64 = AtomicU64::new(0);
 static ENCODER: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static RETURNS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 
-pub fn check(boot: &Boot<'_>) -> usize {
+pub fn check(boot: &Boot<'_>, modes: &[Mode]) -> usize {
     let major = boot.hart();
     assert!(major < 2);
     let minor = 1 - major;
@@ -68,10 +63,7 @@ pub fn check(boot: &Boot<'_>) -> usize {
         let cpu = cpus.cpu(hart as u64).unwrap().unwrap();
         assert!(cpu.enabled());
         let mmu = RiscvMmu::describe(&cpu).unwrap().unwrap();
-        assert!(matches!(
-            mmu.maximum(),
-            RiscvMmuMode::Sv39 | RiscvMmuMode::Sv48 | RiscvMmuMode::Sv57
-        ));
+        assert!(modes.iter().all(|&mode| mmu.maximum().supports(mode)));
         let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
         assert!(isa.has(RiscvExtension::InstructionFence));
     }
@@ -104,23 +96,25 @@ fn wait(phase: Phase) {
 /// the stop receipt. The held interface has the scalar geometry entry ABI.
 pub unsafe fn exercise(
     peer: usize,
-    roots: [u64; 2],
+    roots: [Context; 2],
     held: &ModuleUse<'_>,
-    encoder: &Sv39Root<'_>,
+    encoder: &Root<'_>,
     first_returned: impl FnOnce(),
 ) -> [u64; 2] {
     assert_eq!(PHASE.load(Relaxed), Phase::Idle as u8);
     assert_ne!(roots[0], roots[1]);
-    assert!(roots.iter().all(|root| root >> 60 == 8));
+    let mode = roots[0].mode().unwrap();
+    assert_eq!(roots[1].mode(), Some(mode));
+    let minor = &MINORS[mode.levels() - 3];
     for (place, root) in ROOTS.iter().zip(roots) {
-        place.store(root, Relaxed);
+        place.store(root.bits(), Relaxed);
     }
     ENTRY.store(held.entry(), Relaxed);
     ENCODER.store(shared_pointer(encoder), Relaxed);
     advance(Phase::Initial);
-    unsafe { MINOR.start(peer, run, peer, Startup::Sbi) }.unwrap();
+    unsafe { minor.start(peer, run, peer, Startup::Sbi) }.unwrap();
     wait(Phase::FirstReturned);
-    assert!(MINOR.ready());
+    assert!(minor.ready());
     assert_eq!(status(peer), STARTED);
     first_returned();
     advance(Phase::Successor);
@@ -133,6 +127,7 @@ pub unsafe fn exercise(
         }
     }
     ENCODER.store(ptr::null_mut(), Relaxed);
+    advance(Phase::Idle);
     RETURNS.each_ref().map(|value| value.load(Relaxed))
 }
 
@@ -143,34 +138,30 @@ fn shared_pointer<T: Sync>(value: &T) -> *mut () {
 fn run(hart: usize, expected: usize) -> ! {
     assert_eq!(hart, expected);
     wait(Phase::Initial);
-    let [initial, successor] = ROOTS.each_ref().map(|root| root.load(Relaxed));
+    let [initial, successor] = ROOTS
+        .each_ref()
+        .map(|root| Context::from_bits(root.load(Relaxed)).unwrap());
     let entry = ENTRY.load(Relaxed);
     // The two checked contexts preserve this stack, this code and the
     // published modules. Each switch synchronizes this Hart's own fetch.
-    unsafe { mapping::switch_context(0, initial) };
+    unsafe { mapping::switch_context(Context::BARE, initial) };
     let query = unsafe { core::mem::transmute::<u64, unsafe extern "C" fn() -> u64>(entry) };
     RETURNS[0].store(unsafe { query() }, Relaxed);
-    let pointer = ENCODER.load(Relaxed).cast::<Sv39Root<'_>>();
+    let pointer = ENCODER.load(Relaxed).cast::<Root<'_>>();
     assert!(!pointer.is_null());
     // The launcher owns the shared borrow until HSM confirms our departure.
     let encoder = unsafe { &*pointer };
-    let physical = PhysicalAddress::new((successor & SATP_PPN) * mapping::PAGE);
-    assert_eq!(
-        unsafe { encoder.encode(physical, Sv39Encoding::Context) },
-        Some(successor)
-    );
+    let physical = successor.root().unwrap();
+    assert_eq!(unsafe { encoder.context(physical) }, Some(successor));
     advance(Phase::FirstReturned);
 
     wait(Phase::Successor);
     unsafe { mapping::switch_context(initial, successor) };
     RETURNS[1].store(unsafe { query() }, Relaxed);
-    assert_eq!(
-        unsafe { encoder.encode(physical, Sv39Encoding::Context) },
-        Some(successor)
-    );
+    assert_eq!(unsafe { encoder.context(physical) }, Some(successor));
     // Leave the shared address spaces and close prior translation and fetch
     // effects locally, before the major may edit either root.
-    unsafe { mapping::switch_context(successor, 0) };
+    unsafe { mapping::switch_context(successor, Context::BARE) };
     advance(Phase::Departed);
     let (error, _) = hsm(HART_STOP, 0);
     panic!("minor HSM stop returned {error}");

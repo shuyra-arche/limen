@@ -11,9 +11,7 @@
     "server/src/metal/mmu/mod.rs",
     "server/src/metal/mmu/internal/mod.rs",
     "server/src/metal/mmu/internal/access.rs",
-    "server/src/metal/mmu/internal/riscv/mod.rs",
-    "server/src/metal/mmu/internal/riscv/description.rs",
-    "server/src/metal/mmu/internal/riscv/sv39/**",
+    "server/src/metal/mmu/internal/riscv/**",
     "server/src/metal/boot/mod.rs",
     "server/src/metal/boot/console.rs",
     "server/src/metal/boot/major.rs",
@@ -40,14 +38,15 @@
     "server/link.x",
     "server/tests/metal/module/fixture.rs",
     "server/tests/metal/module/probe.rs",
-    "server/tests/metal/module/sv39_root.rs"
+    "server/tests/metal/module/riscv_fixture.rs",
+    "server/tests/metal/module/riscv_root.rs"
   ],
   "run": {
     "kind": "qemu",
     "kernel": "module-riscv",
     "harts": 2,
     "expects": [
-      "PASS riscv-module-execution virt sv39=1 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2"
+      "PASS riscv-module-execution virt modes=sv39,sv48,sv57 high-leaves=12 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2"
     ]
   }
 }

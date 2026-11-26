@@ -250,14 +250,16 @@ retains the mapped pages because the inherited root cannot be withdrawn
 by this guest.
 
 The [RV64 module guest](target/entry/module-riscv/) starts two Harts through
-Limen on OpenSBI virt. The major prepares two independent ELF images under
-a private initial Sv39 root. It revokes the staging writes before making
-either image executable. The Sv39 encoder calls the geometry provider
-through its retained import and produces the page table entries and SATP
-value of a separate successor root. Both Harts switch with local translation
-and instruction synchronization. After the firmware confirms the minor has
-stopped, the major withdraws both images in dependency order, clears the
-inactive root and reuses the returned code pages as RW/NX.
+Limen on OpenSBI virt and checks the firmware descriptions of both Harts.
+For each of Sv39, Sv48 and Sv57, a private root first verifies a high-half
+load at every supported leaf level. Then the major prepares two independent
+ELF images and revokes the staging writes before either becomes executable.
+The selected encoder calls its retained geometry provider to produce page
+table entries and the SATP context of a separate successor root. Both Harts
+switch with local translation and instruction synchronization. Once firmware
+confirms that the minor has stopped, the major withdraws both images in
+dependency order, clears the inactive root and reuses the returned code pages
+as RW/NX. Both roots are cleared before either table bank is reused.
 
 Each guest requires the entry to return 4096 and QEMU to report a successful
 exit or guest shutdown. Run the suites in either profile. The UEFI suite
