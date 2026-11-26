@@ -68,9 +68,10 @@ impl<'a> Boot<'a> {
     /// descriptions. Live storage and access retirement still need checking.
     /// An empty iterator means the two descriptions yield no such pages.
     pub fn conventional_ram(&self) -> Option<impl Iterator<Item = FirmwareRegion> + '_> {
-        Some(
-            super::regions::conventional_ram(self.firmware_map.as_ref()?, self.dtb_memory()?),
-        )
+        Some(super::regions::conventional_ram(
+            self.firmware_map.as_ref()?,
+            self.dtb_memory()?,
+        ))
     }
 
     pub(crate) fn new(

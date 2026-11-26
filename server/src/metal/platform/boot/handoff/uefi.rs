@@ -41,9 +41,12 @@ pub(crate) fn trap_services() -> &'static Services {
     Services::active()
 }
 
-pub(crate) fn describe<'a, 'b>(loader: &Loader<'a>, descriptions: &mut Descriptions<'b>) -> Option<Facts<'b>>
+pub(crate) fn describe<'a, 'b>(
+    loader: &Loader<'a>,
+    descriptions: &mut Descriptions<'b>,
+) -> Option<Facts<'b>>
 where
-'a: 'b,
+    'a: 'b,
 {
     let map = FirmwareMap::new(
         loader.descriptors,

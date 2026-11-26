@@ -1,11 +1,14 @@
 //! Trusted SBI boot input and service installation.
 
 #[cfg(limen_firmware = "sbi")]
-use super::{Descriptions, Facts};
-#[cfg(limen_firmware = "sbi")]
 use super::super::services::Services;
+#[cfg(limen_firmware = "sbi")]
+use super::{Descriptions, Facts};
 use crate::devicetree::{ALIGNMENT, HEADER_SIZE, MAX_BLOCK_BYTES, header_layout};
-use crate::metal::platform::description::devicetree::{DeviceTree, Error, memory::{self, DtbMemory}};
+use crate::metal::platform::description::devicetree::{
+    DeviceTree, Error,
+    memory::{self, DtbMemory},
+};
 #[cfg(limen_firmware = "sbi")]
 use crate::metal::{
     platform::firmware::sbi::{extensions, hart_started, platform_services, reset, write_byte},
@@ -58,14 +61,7 @@ pub(crate) unsafe fn admit<'a>(
     }
     let window = (&raw const DTB_WINDOW_START).addr()..(&raw const DTB_WINDOW_END).addr();
     let image = crate::metal::platform::boot::image();
-    let parsed = unsafe {
-        read(
-            input,
-            window,
-            image.clone(),
-            &mut descriptions.memory,
-        )
-    };
+    let parsed = unsafe { read(input, window, image.clone(), &mut descriptions.memory) };
     let tree = match parsed {
         Ok(tree) => tree,
         Err(error) => Services::active().reject(format_args!("FAIL Limen boot: DTB {error:?}\n")),
@@ -87,9 +83,7 @@ pub(crate) unsafe fn admit<'a>(
     }
     // The entry ABI supplies the current Hart identity in a0. HSM can also
     // report the state of that named Hart when the extension is available.
-    if platform_services().hart_state_management()
-        && !hart_started(hart)
-    {
+    if platform_services().hart_state_management() && !hart_started(hart) {
         Services::active().reject(format_args!("FAIL Limen boot: SBI Hart status mismatch\n"));
     }
     descriptions.device_tree = Some(tree);

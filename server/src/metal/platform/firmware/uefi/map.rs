@@ -6,7 +6,8 @@ use limen_treaty::model::{Alignment, PageCount, PageSize, PhysicalAddress, Physi
 const PREFIX: usize = 40;
 const ALIGNMENT: usize = 8;
 const PAGE_SIZE: PageSize = PageSize::new(4096).expect("UEFI page size");
-pub(crate) const PAGE_ALIGNMENT: Alignment = Alignment::new(PAGE_SIZE.get()).expect("UEFI page alignment");
+pub(crate) const PAGE_ALIGNMENT: Alignment =
+    Alignment::new(PAGE_SIZE.get()).expect("UEFI page alignment");
 const CONVENTIONAL_MEMORY: u32 = 7;
 const RUNTIME: u64 = 1 << 63;
 
@@ -100,7 +101,6 @@ impl<'a> FirmwareMap<'a> {
         self.regions()
             .filter(|region| region.kind == CONVENTIONAL_MEMORY && region.attributes & RUNTIME == 0)
     }
-
 }
 
 fn decode(entry: &[u8]) -> Option<FirmwareRegion> {

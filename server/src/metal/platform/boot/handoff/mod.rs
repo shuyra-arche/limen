@@ -6,7 +6,10 @@ pub(crate) mod sbi;
 pub(crate) mod uefi;
 
 use crate::metal::platform::{
-    description::{acpi::Acpi, devicetree::{self, memory::DtbMemory}},
+    description::{
+        acpi::Acpi,
+        devicetree::{self, memory::DtbMemory},
+    },
     firmware::uefi::map::FirmwareMap,
 };
 use limen_treaty::model::PhysicalRange;

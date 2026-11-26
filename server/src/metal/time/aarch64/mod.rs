@@ -3,7 +3,10 @@
 use core::num::NonZeroU32;
 
 use crate::metal::{
-    interrupt::{gic::GicV3, internal::gic::{Trigger, ppi}},
+    interrupt::{
+        gic::GicV3,
+        internal::gic::{Trigger, ppi},
+    },
     platform::description::devicetree::{DeviceTree, Error, Node, NodeId, cell},
 };
 
