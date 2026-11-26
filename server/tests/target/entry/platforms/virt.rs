@@ -4,7 +4,7 @@ use kernel::metal::{
     firmware::arm::{GenericTimer, GicV3, Trigger},
     firmware::devicetree::{DeviceTree, Error as TreeError},
     firmware::psci::{Conduit, PsciDescription},
-    hart::Aarch64Cpus,
+    hart::aarch64::description::Aarch64Cpus,
 };
 use uefi::{
     Status,

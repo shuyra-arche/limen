@@ -3,7 +3,7 @@ use super::STACK_BYTES;
 use crate::metal::{
     boot,
     firmware::facts::{Descriptions, Facts},
-    hart::{self, HartLocal, stack::Stack},
+    hart::local::{self, HartLocal, stack::Stack},
 };
 use core::ops::Range;
 
@@ -26,7 +26,7 @@ pub(crate) unsafe fn admit<'a>(
     descriptions: &mut Descriptions<'a>,
 ) -> Facts<'a> {
     let services = boot::firmware::services_on_entry();
-    if !stack_range().contains(&hart::stack_pointer()) || !boot::established() {
+    if !stack_range().contains(&local::stack_pointer()) || !boot::established() {
         services.reject(format_args!(
             "FAIL Limen boot: invalid CPU or firmware handoff\n"
         ));
@@ -36,5 +36,8 @@ pub(crate) unsafe fn admit<'a>(
         services.reject(format_args!("FAIL Limen boot: invalid firmware input\n"));
     };
     unsafe { LOCAL.install(hart) };
+    if !local::can_switch() {
+        services.reject(format_args!("FAIL Limen boot: local protection is not idle\n"));
+    }
     facts
 }

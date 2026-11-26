@@ -75,12 +75,12 @@ impl<'a> MappedRange<'a> {
         self.bytes
     }
 
-    #[cfg(any(test, target_os = "none", target_os = "uefi"))]
+    #[cfg(any(limen_target, test))]
     pub(crate) fn address(&self) -> usize {
         self.bytes.as_ptr().addr()
     }
 
-    #[cfg(any(test, target_os = "none", target_os = "uefi"))]
+    #[cfg(any(limen_target, test))]
     pub(crate) fn into_bytes(self) -> &'a mut [MaybeUninit<u8>] {
         self.bytes
     }

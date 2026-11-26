@@ -4,7 +4,7 @@ use core::num::NonZeroU32;
 
 use crate::metal::{
     firmware::devicetree::{Error, NodeId},
-    hart::description::RiscvCpus,
+    hart::riscv::description::RiscvCpus,
 };
 
 #[derive(Clone, Copy)]

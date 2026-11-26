@@ -4,7 +4,7 @@ use crate::metal::{
         facts::{Descriptions, Facts},
         uefi,
     },
-    hart,
+    hart::x86_64,
 };
 mod major;
 pub(crate) use major::major as enter_major;
@@ -50,9 +50,9 @@ pub(crate) unsafe fn admit<'a>(
     input: *const (),
     descriptions: &mut Descriptions<'a>,
 ) -> Option<Facts<'a>> {
-    let facts = unsafe { uefi::admit(hart, input, descriptions) }?;
+    let facts = unsafe { uefi::admit(hart, x86_64::boot_identity(), input, descriptions) }?;
     if let Some(acpi) = descriptions.acpi.as_ref()
-        && !hart::matches_madt(hart, acpi.madt()?)
+        && !x86_64::matches_madt(hart, acpi.madt()?)
     {
         return None;
     }

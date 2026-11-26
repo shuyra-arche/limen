@@ -15,4 +15,4 @@ pub use turn::{
 };
 
 /// Maximum number of unique Turn locks in a complete plan on one Hart.
-pub const TURN_CAPACITY: usize = crate::metal::hart::TURN_CAPACITY;
+pub const TURN_CAPACITY: usize = crate::metal::hart::local::TURN_CAPACITY;

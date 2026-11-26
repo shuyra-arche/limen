@@ -23,10 +23,7 @@
     "server/src/metal/firmware/facts.rs",
     "server/src/metal/firmware/uefi/**",
     "server/src/metal/hart/mod.rs",
-    "server/src/metal/hart/hardware.rs",
-    "server/src/metal/hart/node.rs",
-    "server/src/metal/hart/protection.rs",
-    "server/src/metal/hart/stack.rs",
+    "server/src/metal/hart/local/**",
     "server/src/metal/sync/**",
     "server/tests/metal/module/fixture.rs",
     "server/tests/metal/module/probe.rs"
@@ -46,8 +43,8 @@
       "virt": [
         "server/src/metal/boot/aarch64/major.rs",
         "server/src/metal/boot/aarch64/mod.rs",
-        "server/src/metal/firmware/psci.rs",
-        "server/src/metal/hart/aarch64.rs",
+        "server/src/metal/firmware/psci/**",
+        "server/src/metal/hart/aarch64/**",
         "server/tests/target/entry/module/arm_mapping.rs",
         "server/tests/target/entry/module/board/aarch64.rs",
         "server/tests/target/entry/platforms/devicetree.rs",

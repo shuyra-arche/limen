@@ -37,16 +37,16 @@ bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/nul
 change server/src/metal/hart/x86_64.rs
 [[ $(boards) == q35 ]]
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
-change server/src/metal/hart/aarch64.rs
+change server/src/metal/hart/aarch64/native.rs
 [[ $(boards) == virt ]]
-change server/src/metal/hart/riscv.rs
+change server/src/metal/hart/riscv/native.rs
 [[ $(boards) == rv64 ]]
 change server/src/metal/hart/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/hart/node.rs
+change server/src/metal/hart/local/node.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
-change server/src/metal/hart/protection.rs
+change server/src/metal/hart/local/protection.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/sync/turn.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
@@ -105,9 +105,21 @@ change server/src/metal/boot/minor.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution-harts","platform-boot","riscv-module-execution"]' >/dev/null
 change server/src/metal/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/firmware/psci.rs
-[[ $(boards) == virt ]]
-bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
+for source in server/src/metal/firmware/psci/native.rs server/src/metal/firmware/arm/native.rs; do
+    change "$source"
+    [[ $(boards) == virt ]]
+    bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
+done
+for source in server/src/metal/hart/aarch64/description.rs \
+              server/src/metal/firmware/psci/mod.rs \
+              server/src/metal/firmware/arm/mod.rs; do
+    change "$source"
+    [[ $(boards) == virt ]]
+    bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
+done
+change server/tests/metal/mmu/internal/riscv/activity/mod.rs
+[[ $(bash "$discover" . "$base") == '[]' ]]
+bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/firmware/sbi/probe.rs
 [[ $(boards) == rv64 ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
@@ -119,7 +131,7 @@ change server/src/metal/boot/services.rs
 change server/src/metal/firmware/devicetree/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
-for source in server/src/metal/hart/description.rs \
+for source in server/src/metal/hart/riscv/description.rs \
               server/src/metal/execution/riscv/description.rs \
               server/src/metal/time/mod.rs; do
     change "$source"
@@ -134,7 +146,7 @@ for source in treaty/src/model/address.rs treaty/src/model/geometry.rs; do
     [[ $(bash "$discover" . "$base") == "$full" ]]
     bash "$checks" . "$base" | jq -e '.host and .runner and .rv64' >/dev/null
 done
-change server/src/metal/hart/stack.rs
+change server/src/metal/hart/local/stack.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/qemu.version
 [[ $(bash "$discover" . "$base") == "$full" ]]
@@ -185,7 +197,7 @@ git commit -qm rename
 change server/src/metal/fdt.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
-change server/src/metal/hart/hardware.rs
+change server/src/metal/hart/local/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/metal/allocator/source.rs
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null

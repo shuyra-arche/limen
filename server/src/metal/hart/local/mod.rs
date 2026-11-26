@@ -1,51 +1,38 @@
 //! Trusted local CPU facts and fixed storage.
-#[cfg(limen_target)]
-use super::HartId;
+
 #[cfg(limen_target)]
 use core::cell::Cell;
 use core::ptr;
 
-#[path = "node.rs"]
 mod node;
-#[path = "protection.rs"]
 mod protection;
 #[cfg(limen_target)]
-#[path = "stack.rs"]
 pub(in crate::metal) mod stack;
 
-#[cfg(all(limen_target, target_arch = "riscv64"))]
-#[path = "riscv.rs"]
-mod backend;
-#[cfg(all(limen_target, target_arch = "x86_64"))]
-#[path = "x86_64.rs"]
-mod backend;
 #[cfg(all(limen_target, target_arch = "aarch64"))]
-#[path = "aarch64.rs"]
-mod backend;
-
-#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "x86_64")))]
-pub(in crate::metal) use backend::boot_identity;
+use super::aarch64::native as backend;
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+use super::riscv::native as backend;
 #[cfg(all(limen_target, target_arch = "x86_64"))]
-pub(in crate::metal) use backend::matches_madt;
+use super::x86_64 as backend;
+
 #[cfg(limen_target)]
 pub(in crate::metal) use backend::stack_pointer;
-#[cfg(all(limen_target, target_arch = "aarch64"))]
-pub use backend::{Aarch64Cpus, CpuCandidate};
 pub(crate) use node::QueueNode;
-#[cfg(any(limen_cooperative, test))]
-pub(crate) use protection::can_switch;
-pub(crate) use protection::{Error, TURN_CAPACITY, TurnParticipation, begin_leaf, begin_turn};
+pub(crate) use protection::{
+    Error, TURN_CAPACITY, TurnParticipation, begin_leaf, begin_turn, can_switch,
+};
 
-/// Fixed storage belonging to the verified physical CPU that took this entry.
 #[cfg(limen_target)]
 use crate::metal::boot::ordinary_entry;
 
 #[cfg(all(test, not(limen_target)))]
-#[path = "../../../tests/metal/hart/mod.rs"]
+#[path = "../../../../tests/metal/hart/mod.rs"]
 mod backend;
 #[cfg(all(test, not(limen_target)))]
 use backend::ordinary_entry;
 
+/// Fixed storage belonging to the verified physical CPU that took this entry.
 pub(in crate::metal) struct HartLocal {
     #[cfg(limen_target)]
     identity: Cell<usize>,
@@ -80,13 +67,23 @@ fn installed() -> Option<&'static HartLocal> {
     unsafe { ptr::with_exposed_provenance::<HartLocal>(backend::local_address()).as_ref() }
 }
 
-#[cfg(all(limen_target, target_arch = "x86_64"))]
-pub(in crate::metal) unsafe fn clear_local() {
-    unsafe { backend::install_local(0) };
-}
-
 #[cfg(limen_target)]
 pub(crate) fn current_hart() -> HartId {
     assert!(ordinary_entry(), "ordinary Hart entry required");
     HartId::new(installed().expect("Hart installed at Boot").identity.get())
+}
+
+#[cfg(limen_target)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HartId(usize);
+
+#[cfg(limen_target)]
+impl HartId {
+    pub(crate) const fn new(value: usize) -> Self {
+        Self(value)
+    }
+
+    pub(crate) const fn get(self) -> usize {
+        self.0
+    }
 }

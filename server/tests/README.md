@@ -3,7 +3,10 @@
 Host suites under `entry/boot/` and `metal/` exercise bounded Device Tree
 traversal, original node scope, address translation, ACPI source and table
 validation, UEFI descriptor geometry, SBI extension discovery, the bounded allocation
-cursor, fixed identity slots and RV64 page-table entry operations. The Identity
+cursor, fixed identity slots and portable Arm CPU/firmware descriptions. The
+RV64 PTE activity experiments under `metal/mmu/internal/riscv/activity/`
+exercise an independent candidate atomic-word model, not a production table
+or actual hardware A/D and translation retirement. The Identity
 suite exercises the table implementation with owner-supplied slot storage,
 distinct scopes and separate allocation and return tables. Its compiler tests
 cover token ownership, table categories and the lifetime of a lookup borrow.
@@ -35,8 +38,12 @@ cargo test --locked -p kernel --test contracts -- metal::firmware::devicetree
 Keep independent build fixtures, compiler contracts and target guests separate
 only when they require their own compilation or execution boundary.
 
-The Metal Sync Host suite exercises the production MCS queue with controlled
-publication and release interleavings. Host Allocator tests use the
+The Metal Sync Host suite executes the production MCS queue with the same
+spin hint and atomic operations as the target. Tests arrange a real tail
+exchange before linking, inspect the private departure decision, then finish
+that decision; separate complete acquisitions verify linked FIFO handoff
+and node reuse. Test coordination does not prove hardware wait bounds or
+replace production ordering. Host Allocator tests use the
 production Turn and Hart participation with a per-thread local address
 and saved interrupt bit. The target tests cover machine entry and IRQ behavior. The compiler checks use the actual
 target library to verify scoped single-lock and heterogeneous access. They

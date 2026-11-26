@@ -30,7 +30,7 @@ pub(super) unsafe fn restore_interrupts(saved: usize) {
 #[test]
 fn cooperative_switch_requires_no_local_participation() {
     use crate::metal::{
-        hart::can_switch,
+        hart::local::can_switch,
         sync::{LeafLock, TurnLock},
     };
 

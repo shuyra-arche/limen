@@ -1,0 +1,133 @@
+//! Interpret Arm platform descriptions on the ordinary Host, without native calls.
+use super::fixture::Fixture;
+use kernel::metal::{
+    firmware::{
+        arm::{GenericTimer, Trigger},
+        devicetree::{DeviceTree, Error},
+        psci::{Conduit, PsciDescription, PsciVersion},
+    },
+    hart::aarch64::description::Aarch64Cpus,
+};
+
+fn cpus(affinities: &[u64]) -> Vec<u8> {
+    let mut fixture = Fixture::root();
+    fixture.node(b"cpus");
+    fixture.cells(b"#address-cells", &[2]);
+    fixture.cells(b"#size-cells", &[0]);
+    for (index, affinity) in affinities.iter().enumerate() {
+        let name = format!("cpu@{index}");
+        fixture.node(name.as_bytes());
+        fixture.property(b"device_type", b"cpu\0");
+        fixture.cells(b"reg", &[(*affinity >> 32) as u32, *affinity as u32]);
+        fixture.property(b"enable-method", b"psci\0");
+        if index != 0 {
+            fixture.property(b"status", b"disabled\0");
+        }
+        fixture.end();
+    }
+    fixture.end();
+    fixture.finish()
+}
+
+#[test]
+fn affinity_descriptions_keep_their_original_scope() {
+    let bytes = cpus(&[0, 0x1_0000_0001]);
+    let tree = DeviceTree::new(&bytes).unwrap();
+    let scope = Aarch64Cpus::read(&tree).unwrap().unwrap();
+    let candidates: Vec<_> = scope.candidates().collect();
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0].affinity, 0);
+    assert!(candidates[0].enabled);
+    assert!(candidates[0].starts_with_psci);
+    assert_eq!(candidates[1].affinity, 0x1_0000_0001);
+    assert!(!candidates[1].enabled);
+    assert_ne!(candidates[0].source, candidates[1].source);
+
+    for (affinities, error) in [
+        ([0, 0], Error::Conflict),
+        ([0, 1 << 24], Error::Range),
+    ] {
+        let bytes = cpus(&affinities);
+        let tree = DeviceTree::new(&bytes).unwrap();
+        assert_eq!(Aarch64Cpus::read(&tree).err(), Some(error));
+    }
+}
+
+fn psci(compatible: &[u8], method: &[u8], duplicate: bool) -> Vec<u8> {
+    let mut fixture = Fixture::root();
+    for name in [b"psci".as_slice(), b"psci-other".as_slice()]
+        .into_iter()
+        .take(if duplicate { 2 } else { 1 })
+    {
+        fixture.node(name);
+        fixture.property(b"compatible", compatible);
+        fixture.property(b"method", method);
+        fixture.end();
+    }
+    fixture.finish()
+}
+
+#[test]
+fn psci_description_is_not_a_live_conduit_probe() {
+    let bytes = psci(b"arm,psci-1.0\0", b"hvc\0", false);
+    let tree = DeviceTree::new(&bytes).unwrap();
+    let description = PsciDescription::read(&tree).unwrap().unwrap();
+    assert_eq!(description.conduit(), Conduit::Hvc);
+    assert_eq!(description.minimum_version(), PsciVersion { major: 1, minor: 0 });
+    let bytes = psci(b"arm,psci-0.2\0", b"smc\0", false);
+    let tree = DeviceTree::new(&bytes).unwrap();
+    let description = PsciDescription::read(&tree).unwrap().unwrap();
+    assert_eq!(description.conduit(), Conduit::Smc);
+    assert_eq!(description.minimum_version(), PsciVersion { major: 0, minor: 2 });
+
+    for (method, duplicate, error) in [
+        (b"unsupported\0".as_slice(), false, Error::Unsupported),
+        (b"hvc\0".as_slice(), true, Error::Conflict),
+    ] {
+        let bytes = psci(b"arm,psci-1.0\0", method, duplicate);
+        let tree = DeviceTree::new(&bytes).unwrap();
+        assert_eq!(PsciDescription::read(&tree).err(), Some(error));
+    }
+}
+
+fn timer(virtual_ppi: u32) -> Vec<u8> {
+    let mut fixture = Fixture::root();
+    fixture.node(b"gic@8000000");
+    fixture.property(b"compatible", b"arm,gic-v3\0");
+    fixture.property(b"interrupt-controller", b"");
+    fixture.cells(b"#interrupt-cells", &[3]);
+    fixture.cells(b"phandle", &[7]);
+    fixture.cells(b"reg", &[0x0800_0000, 0x1_0000, 0x080a_0000, 0x2_0000]);
+    fixture.end();
+    fixture.node(b"timer");
+    fixture.property(b"compatible", b"arm,armv8-timer\0");
+    fixture.cells(b"interrupt-parent", &[7]);
+    fixture.cells(b"interrupts", &[1, 13, 4, 1, 14, 4, 1, virtual_ppi, 4, 1, 10, 4]);
+    fixture.cells(b"clock-frequency", &[62_500_000]);
+    fixture.property(b"always-on", b"");
+    fixture.end();
+    fixture.finish()
+}
+
+#[test]
+fn timer_description_resolves_its_actual_interrupt_domain() {
+    let bytes = timer(11);
+    let tree = DeviceTree::new(&bytes).unwrap();
+    let timer = GenericTimer::read(&tree).unwrap().unwrap();
+    assert_eq!(timer.virtual_intid, 27);
+    assert_eq!(timer.virtual_trigger, Trigger::LevelHigh);
+    assert_eq!(timer.controller.distributor.start().get(), 0x0800_0000);
+    assert_eq!(timer.controller.redistributor.length().get(), 0x2_0000);
+    assert_eq!(timer.described_frequency().unwrap().get(), 62_500_000);
+    assert!(timer.always_on);
+    assert_eq!(timer.controller.source, tree.phandle(7).unwrap().unwrap().id());
+}
+
+#[test]
+fn timer_rejects_out_of_range_or_duplicate_ppi() {
+    for (ppi, error) in [(16, Error::Range), (13, Error::Conflict)] {
+        let bytes = timer(ppi);
+        let tree = DeviceTree::new(&bytes).unwrap();
+        assert_eq!(GenericTimer::read(&tree).err(), Some(error));
+    }
+}

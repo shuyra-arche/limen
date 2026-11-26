@@ -4,6 +4,3 @@ mod mode;
 pub mod root;
 
 pub use mode::{Mode, PAGE_BYTES, TABLE_ENTRIES};
-
-#[cfg(test)]
-mod table;
