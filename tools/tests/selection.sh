@@ -165,7 +165,7 @@ change server/src/metal/memory/mmu/internal/access.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 
-for source in server/src/metal/module/elf.rs server/tests/metal/module/probe.rs; do
+for source in server/src/metal/module/image/elf.rs server/tests/metal/module/probe.rs; do
     change "$source"
     bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
         [["module-execution", "q35", "debug"], ["module-execution", "q35", "release"],

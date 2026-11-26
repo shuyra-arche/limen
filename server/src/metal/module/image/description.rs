@@ -1,7 +1,8 @@
 //! Versioned module declarations carried in a bounded ELF note.
 
 use super::{ImageAddress, elf::Elf};
-use crate::devicetree::{DeviceTree, Error as TreeError, Node, NodeId};
+use super::super::{Contract, Interface};
+use crate::devicetree::{DeviceTree, Error as TreeError, Node};
 
 const NOTE_OWNER: &[u8] = b"SHUYRA\0";
 const NOTE_TYPE: u32 = 1;
@@ -27,64 +28,6 @@ impl From<TreeError> for DescriptionError {
             TreeError::Conflict => Self::Duplicate,
             TreeError::Missing => Self::Missing,
         }
-    }
-}
-
-/// Exact interface declaration to match. The consumer defines what the
-/// interface and calling ABI mean.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Contract<'a> {
-    compatible: &'a [u8],
-    abi: u32,
-    version: u32,
-}
-
-impl<'a> Contract<'a> {
-    pub const fn new(compatible: &'a [u8], abi: u32, version: u32) -> Self {
-        Self {
-            compatible,
-            abi,
-            version,
-        }
-    }
-
-    pub const fn compatible(self) -> &'a [u8] {
-        self.compatible
-    }
-
-    pub const fn abi(self) -> u32 {
-        self.abi
-    }
-
-    pub const fn version(self) -> u32 {
-        self.version
-    }
-}
-
-/// An entry declaration tied to the original immutable note.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Interface<'a> {
-    contract: Contract<'a>,
-    entry: ImageAddress,
-    source: NodeId<'a>,
-}
-
-impl<'a> Interface<'a> {
-    pub const fn contract(self) -> Contract<'a> {
-        self.contract
-    }
-
-    pub const fn version(self) -> u32 {
-        self.contract.version()
-    }
-
-    /// Link-time virtual address in the file-backed executable segment.
-    pub const fn entry(self) -> ImageAddress {
-        self.entry
-    }
-
-    pub const fn source(self) -> NodeId<'a> {
-        self.source
     }
 }
 
@@ -129,11 +72,11 @@ impl<'a> Description<'a> {
     }
 
     pub const fn abi(&self) -> u32 {
-        self.interface.contract.abi()
+        self.interface.contract().abi()
     }
 
     pub fn interface(&self, contract: Contract<'_>) -> Option<Interface<'a>> {
-        (self.interface.contract == contract).then_some(self.interface)
+        (self.interface.contract() == contract).then_some(self.interface)
     }
 
     pub fn interfaces(&self) -> impl ExactSizeIterator<Item = Interface<'a>> {
@@ -192,11 +135,11 @@ fn read_interface<'a>(
     if !elf.is_file_executable(entry) {
         return Err(DescriptionError::Entry);
     }
-    Ok(Interface {
-        contract: Contract::new(compatible, abi, version),
+    Ok(Interface::new(
+        Contract::new(compatible, abi, version),
         entry,
-        source: node.id(),
-    })
+        node.id(),
+    ))
 }
 
 fn word(node: &Node<'_, '_>, property: &[u8]) -> Result<u32, DescriptionError> {
