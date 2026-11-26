@@ -33,7 +33,9 @@
     "server/tests/target/entry/synchronization.rs",
     "server/tests/target/entry/memory.rs",
     "server/tests/target/entry/foundation.rs",
-    "server/src/basis/pend.rs"
+    "server/src/basis/**",
+    "server/src/metal/execution/mod.rs",
+    "server/src/metal/execution/cooperative/mod.rs"
   ],
   "run": {
     "kind": "board-boot",
@@ -46,7 +48,9 @@
         "server/src/metal/boot/x86_64/**",
         "server/tests/target/entry/platforms/q35.rs",
         "server/tests/target/entry/platforms/io.rs",
-        "server/src/metal/hart/x86_64.rs"
+        "server/src/metal/hart/x86_64.rs",
+        "server/src/metal/execution/cooperative/x86_64/**",
+        "server/tests/target/entry/platforms/cooperative/x86_64.rs"
       ],
       "virt": [
         "server/src/metal/boot/aarch64/**",
@@ -57,7 +61,9 @@
         "server/src/metal/interrupt/**",
         "server/src/metal/time/mod.rs",
         "server/src/metal/time/aarch64/**",
-        "server/src/metal/hart/aarch64/**"
+        "server/src/metal/hart/aarch64/**",
+        "server/src/metal/execution/cooperative/aarch64/**",
+        "server/tests/target/entry/platforms/cooperative/aarch64.rs"
       ]
     }
   }

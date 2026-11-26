@@ -1,6 +1,9 @@
 {
   "id": "module-execution",
-  "profiles": ["debug", "release"],
+  "profiles": [
+    "debug",
+    "release"
+  ],
   "sources": [
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
@@ -30,7 +33,10 @@
   ],
   "run": {
     "kind": "board-boot",
-    "boards": ["q35", "virt"],
+    "boards": [
+      "q35",
+      "virt"
+    ],
     "harts": 1,
     "board_sources": {
       "q35": [

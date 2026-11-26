@@ -3,7 +3,7 @@
 use core::num::NonZeroU64;
 
 mod stack;
-use crate::metal::execution::Context;
+use crate::metal::execution::cooperative::Context;
 pub(super) use stack::STACK_CAPACITY;
 pub use stack::Stacks;
 use stack::{StackLease, StackPool};

@@ -12,7 +12,7 @@ use core::{
 use kernel::{
     entry::boot::{Boot, Minor, Startup},
     metal::{
-        execution::riscv::description::{RiscvExtension, RiscvIsa},
+        execution::description::riscv::{RiscvExtension, RiscvIsa},
         hart::riscv::description::RiscvCpus,
         mmu::internal::riscv::{Mode, context::Context, description::RiscvMmu, encoder::Encoder},
         module::ModuleUse,

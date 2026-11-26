@@ -1,0 +1,196 @@
+//! End-to-end Win64 nonvolatile register and control checks through Yield.
+
+use core::arch::{asm, naked_asm};
+use kernel::basis::execution::Current;
+
+pub(super) fn control() -> u64 {
+    let (mut x87, mut mxcsr) = (0u16, 0u32);
+    unsafe {
+        asm!("fnstcw [{}]", "stmxcsr [{}]", in(reg) &mut x87, in(reg) &mut mxcsr,
+            options(nostack, preserves_flags));
+    }
+    u64::from(x87) | (u64::from(mxcsr & !0x3f) << 32)
+}
+
+pub(super) fn rounding(value: u64) -> u64 {
+    value ^ ((1 << 10) | (1 << 45))
+}
+
+pub(super) fn install(value: u64) {
+    let x87 = value as u16;
+    let mxcsr = (value >> 32) as u32;
+    unsafe {
+        asm!("fldcw [{}]", "ldmxcsr [{}]", in(reg) &x87, in(reg) &mxcsr,
+            options(nostack, preserves_flags));
+    }
+}
+
+pub(super) fn verify(current: &mut Current) {
+    unsafe { probe(current) };
+}
+
+extern "win64" fn yield_now(current: *mut Current) {
+    unsafe { &mut *current }.yield_now().expect("Win64 yield");
+}
+
+#[unsafe(naked)]
+unsafe extern "win64" fn probe(current: *mut Current) {
+    naked_asm!(
+        "push rbx",
+        "push rbp",
+        "push rdi",
+        "push rsi",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        "sub rsp, 200",
+        "movdqu [rsp + 32], xmm6",
+        "movdqu [rsp + 48], xmm7",
+        "movdqu [rsp + 64], xmm8",
+        "movdqu [rsp + 80], xmm9",
+        "movdqu [rsp + 96], xmm10",
+        "movdqu [rsp + 112], xmm11",
+        "movdqu [rsp + 128], xmm12",
+        "movdqu [rsp + 144], xmm13",
+        "movdqu [rsp + 160], xmm14",
+        "movdqu [rsp + 176], xmm15",
+        "mov rbx, 101",
+        "mov rbp, 102",
+        "mov rdi, 103",
+        "mov rsi, 104",
+        "mov r12, 105",
+        "mov r13, 106",
+        "mov r14, 107",
+        "mov r15, 108",
+        "pcmpeqd xmm6, xmm6",
+        "psllq xmm6, 1",
+        "pcmpeqd xmm7, xmm7",
+        "psllq xmm7, 2",
+        "pcmpeqd xmm8, xmm8",
+        "psllq xmm8, 3",
+        "pcmpeqd xmm9, xmm9",
+        "psllq xmm9, 4",
+        "pcmpeqd xmm10, xmm10",
+        "psllq xmm10, 5",
+        "pcmpeqd xmm11, xmm11",
+        "psllq xmm11, 6",
+        "pcmpeqd xmm12, xmm12",
+        "psllq xmm12, 7",
+        "pcmpeqd xmm13, xmm13",
+        "psllq xmm13, 8",
+        "pcmpeqd xmm14, xmm14",
+        "psllq xmm14, 9",
+        "pcmpeqd xmm15, xmm15",
+        "psllq xmm15, 10",
+        "call {yield_now}",
+        "cmp rbx, 101",
+        "jne 2f",
+        "cmp rbp, 102",
+        "jne 2f",
+        "cmp rdi, 103",
+        "jne 2f",
+        "cmp rsi, 104",
+        "jne 2f",
+        "cmp r12, 105",
+        "jne 2f",
+        "cmp r13, 106",
+        "jne 2f",
+        "cmp r14, 107",
+        "jne 2f",
+        "cmp r15, 108",
+        "jne 2f",
+        "movq rax, xmm6",
+        "cmp rax, -2",
+        "jne 2f",
+        "psrldq xmm6, 8",
+        "movq rax, xmm6",
+        "cmp rax, -2",
+        "jne 2f",
+        "movq rax, xmm7",
+        "cmp rax, -4",
+        "jne 2f",
+        "psrldq xmm7, 8",
+        "movq rax, xmm7",
+        "cmp rax, -4",
+        "jne 2f",
+        "movq rax, xmm8",
+        "cmp rax, -8",
+        "jne 2f",
+        "psrldq xmm8, 8",
+        "movq rax, xmm8",
+        "cmp rax, -8",
+        "jne 2f",
+        "movq rax, xmm9",
+        "cmp rax, -16",
+        "jne 2f",
+        "psrldq xmm9, 8",
+        "movq rax, xmm9",
+        "cmp rax, -16",
+        "jne 2f",
+        "movq rax, xmm10",
+        "cmp rax, -32",
+        "jne 2f",
+        "psrldq xmm10, 8",
+        "movq rax, xmm10",
+        "cmp rax, -32",
+        "jne 2f",
+        "movq rax, xmm11",
+        "cmp rax, -64",
+        "jne 2f",
+        "psrldq xmm11, 8",
+        "movq rax, xmm11",
+        "cmp rax, -64",
+        "jne 2f",
+        "movq rax, xmm12",
+        "cmp rax, -128",
+        "jne 2f",
+        "psrldq xmm12, 8",
+        "movq rax, xmm12",
+        "cmp rax, -128",
+        "jne 2f",
+        "movq rax, xmm13",
+        "cmp rax, -256",
+        "jne 2f",
+        "psrldq xmm13, 8",
+        "movq rax, xmm13",
+        "cmp rax, -256",
+        "jne 2f",
+        "movq rax, xmm14",
+        "cmp rax, -512",
+        "jne 2f",
+        "psrldq xmm14, 8",
+        "movq rax, xmm14",
+        "cmp rax, -512",
+        "jne 2f",
+        "movq rax, xmm15",
+        "cmp rax, -1024",
+        "jne 2f",
+        "psrldq xmm15, 8",
+        "movq rax, xmm15",
+        "cmp rax, -1024",
+        "jne 2f",
+        "movdqu xmm6, [rsp + 32]",
+        "movdqu xmm7, [rsp + 48]",
+        "movdqu xmm8, [rsp + 64]",
+        "movdqu xmm9, [rsp + 80]",
+        "movdqu xmm10, [rsp + 96]",
+        "movdqu xmm11, [rsp + 112]",
+        "movdqu xmm12, [rsp + 128]",
+        "movdqu xmm13, [rsp + 144]",
+        "movdqu xmm14, [rsp + 160]",
+        "movdqu xmm15, [rsp + 176]",
+        "add rsp, 200",
+        "pop r15",
+        "pop r14",
+        "pop r13",
+        "pop r12",
+        "pop rsi",
+        "pop rdi",
+        "pop rbp",
+        "pop rbx",
+        "ret",
+        "2: ud2",
+        yield_now = sym yield_now,
+    )
+}

@@ -16,7 +16,7 @@ use crate::{
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, Units},
     },
     metal::{
-        execution::{Hart, LeaveReceipt, LocalHart, cooperative_ready},
+        execution::cooperative::{Hart, LeaveReceipt, LocalHart, cooperative_ready},
         hart::local::{self, HartId},
         sync::{TurnAcquireError, TurnLock},
     },
@@ -39,6 +39,8 @@ pub enum Error {
     State,
     Unsupported,
     Firmware(isize),
+    /// Startup may have reached hardware; the original launch stays reserved.
+    StartUnconfirmed,
 }
 
 impl From<unit::Error> for Error {
@@ -192,7 +194,7 @@ impl Execution {
     ///
     /// # Safety
     ///
-    /// The entry must be trusted supervisor code built for the Bare Nest.
+    /// The entry must be trusted supervisor code built for the established kernel mappings.
     /// It must preserve the selected machine calling convention and verified
     /// execution environment. The 32 KiB dispatcher stack is shared by the
     /// live Limen startup frames, the entry and all dispatcher-side callees.
@@ -224,11 +226,13 @@ impl Execution {
         })??;
         let argument = ptr::from_ref(self).expose_provenance();
         if let Err(error) = unsafe { minor.start(hart, admit_minor, argument, method) } {
-            self.launch.acquire(|launch| *launch = None)?;
-            return Err(match error {
+            let rejected = match error {
+                boot::StartError::Unconfirmed(_) => return Err(Error::StartUnconfirmed),
                 boot::StartError::Busy => Error::Busy,
                 boot::StartError::Rejected(code) => Error::Firmware(code),
-            });
+            };
+            self.launch.acquire(|launch| *launch = None)?;
+            return Err(rejected);
         }
         Ok(())
     }
@@ -238,7 +242,7 @@ impl Execution {
     /// # Safety
     ///
     /// The caller supplies a trusted supervisor entry whose compiler and
-    /// callees fit the 16 KiB stack, preserve the established Bare and trap
+    /// callees fit the 16 KiB stack, preserve the established translation and trap
     /// configuration, Hart-local registers, and the selected backend's
     /// interrupt and extension restrictions. Any local borrow must allow suspension at
     /// `yield_now`. The Unit stays on the constructing Hart.

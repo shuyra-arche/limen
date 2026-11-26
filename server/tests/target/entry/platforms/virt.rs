@@ -111,7 +111,7 @@ pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
     devicetree::copy(discover).map(Some)
 }
 
-pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
+pub(super) fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) {
     let (el, daif, sp, vectors, spsel): (usize, usize, usize, usize, usize);
     unsafe {
         asm!("mrs {}, CurrentEL", "mrs {}, DAIF", "mov {}, sp", "mrs {}, VBAR_EL1",
@@ -169,6 +169,10 @@ pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
     console
         .write_str("PASS firmware-discovery virt dtb=1 psci=1 affinity=1 gic=1 timer=1\n")
         .expect("firmware discovery output");
+}
+
+pub(super) fn report() -> ! {
+    let mut console = boot::console().expect("board console");
     console
         .write_str("PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1 ram=1 reconciled=1\n")
         .expect("diagnostic output");

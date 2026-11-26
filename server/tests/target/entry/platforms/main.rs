@@ -11,6 +11,7 @@ use kernel::metal::firmware::uefi::{DeviceTree as LoaderTree, Loader};
 use limen_treaty::model::PhysicalRange;
 use limen_treaty::model::{ByteLength, PhysicalAddress};
 
+mod cooperative;
 #[path = "../foundation.rs"]
 mod foundation;
 #[path = "../memory.rs"]
@@ -23,10 +24,10 @@ static MINOR: boot::Minor = boot::Minor::new();
 static TARGET: AtomicUsize = AtomicUsize::new(usize::MAX);
 static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
-fn minor_ready(hart: usize, expected: usize) -> ! {
+fn observe_minor(hart: usize) {
     assert_eq!(MINOR.stack_range().len(), boot::stack_range().len());
     assert_eq!(boot::stack_range().len(), 32 * 1024);
-    assert_eq!(hart, expected);
+    assert_eq!(hart, TARGET.load(Ordering::Relaxed));
     assert_eq!(hart, board::hart());
     let sp: usize;
     unsafe {
@@ -40,9 +41,6 @@ fn minor_ready(hart: usize, expected: usize) -> ! {
     );
     synchronization::check();
     OBSERVED.store(hart, Ordering::Release);
-    loop {
-        core::hint::spin_loop();
-    }
 }
 
 use uefi::{
@@ -246,23 +244,20 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     #[cfg(target_arch = "x86_64")]
     board::check_discovery(&boot, target);
     let startup = board::startup();
-    assert!(unsafe { MINOR.start(boot.hart(), minor_ready, target, startup) }.is_err());
-    unsafe { MINOR.start(target, minor_ready, target, startup) }.expect("minor startup request");
-    while OBSERVED.load(Ordering::Acquire) != target {
-        core::hint::spin_loop();
-    }
-    assert!(MINOR.ready() && unsafe { MINOR.start(target, minor_ready, target, startup) }.is_err());
+    let major = boot.hart();
+    board::inspect(&boot, &view);
+    cooperative::run(boot, major, target, startup);
     synchronization::check();
     boot::write("PASS synchronization\n");
     writeln!(
         boot::console().expect("console"),
         "OBSERVED major={} minor={}",
-        boot.hart(),
+        major,
         OBSERVED.load(Ordering::Acquire)
     )
     .unwrap();
     boot::write("PASS early physical exclusions regions=0 roots=0\n");
-    board::inspect(boot, &view)
+    board::report()
 }
 
 #[panic_handler]

@@ -27,7 +27,8 @@
     "server/src/metal/identity/**",
     "server/tests/target/entry/memory.rs",
     "server/tests/target/entry/pool.rs",
-    "server/src/metal/execution/riscv/**",
+    "server/src/metal/execution/description/**",
+    "server/src/metal/execution/cooperative/riscv/**",
     "server/src/metal/boot/console.rs",
     "server/src/metal/boot/services.rs",
     "server/src/metal/firmware/devicetree/**",
@@ -39,7 +40,7 @@
     "server/src/metal/hart/riscv/mod.rs",
     "server/src/metal/hart/riscv/native.rs",
     "server/src/metal/execution/mod.rs",
-    "server/src/metal/execution/cooperative.rs"
+    "server/src/metal/execution/cooperative/mod.rs"
   ],
   "run": {
     "kind": "qemu",

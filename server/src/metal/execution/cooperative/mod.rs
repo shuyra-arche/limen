@@ -1,9 +1,54 @@
 //! Common cooperative occupancy and actual machine handoff.
 
-use core::{cell::Cell, marker::PhantomData};
+use core::{
+    cell::{Cell, UnsafeCell},
+    marker::PhantomData,
+};
 
-use super::Context;
 use crate::metal::hart::local;
+
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+#[cfg(target_arch = "riscv64")]
+mod riscv;
+#[cfg(target_arch = "x86_64")]
+mod x86_64;
+
+#[cfg(target_arch = "aarch64")]
+use aarch64 as native;
+#[cfg(target_arch = "riscv64")]
+use riscv as native;
+#[cfg(target_arch = "x86_64")]
+use x86_64 as native;
+
+pub(crate) fn cooperative_ready() -> bool {
+    crate::metal::boot::established() && native::ready()
+}
+
+/// One continuation in the actual linked machine's native save shape.
+/// Its consumer owns every access and keeps its stack alive until departure.
+pub(crate) struct Context(UnsafeCell<native::Saved>);
+
+impl Context {
+    pub(crate) const fn new() -> Self {
+        Self(UnsafeCell::new(native::Saved::EMPTY))
+    }
+
+    /// Requires exclusive use of an inactive context and a live stack extent.
+    pub(crate) unsafe fn prepare(&self, stack: usize, entry: extern "C" fn(*const ()) -> !) {
+        assert!(stack.is_multiple_of(16));
+        unsafe { self.0.get().write(native::Saved::initial(stack, entry)) };
+    }
+
+    /// Requires an inactive context with no permitted future entry.
+    pub(crate) unsafe fn retire(&self) {
+        unsafe { self.0.get().write(native::Saved::EMPTY) };
+    }
+
+    unsafe fn switch(&self, incoming: &Self, argument: *const ()) {
+        unsafe { native::switch(self.0.get(), incoming.0.get(), argument) };
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct LeaveReceipt<Occupancy>(Occupancy);

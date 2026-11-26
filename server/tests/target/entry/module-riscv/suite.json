@@ -1,6 +1,9 @@
 {
   "id": "riscv-module-execution",
-  "profiles": ["debug", "release"],
+  "profiles": [
+    "debug",
+    "release"
+  ],
   "sources": [
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
@@ -18,7 +21,10 @@
     "server/src/metal/boot/services.rs",
     "server/src/metal/boot/trap.rs",
     "server/src/metal/boot/riscv/**",
-    "server/src/metal/execution/**",
+    "server/src/metal/execution/mod.rs",
+    "server/src/metal/execution/description/**",
+    "server/src/metal/execution/cooperative/mod.rs",
+    "server/src/metal/execution/cooperative/riscv/**",
     "server/src/metal/firmware/mod.rs",
     "server/src/metal/firmware/map.rs",
     "server/src/metal/firmware/acpi/**",

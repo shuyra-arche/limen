@@ -1,7 +1,7 @@
 use super::{DeviceTree, Error, Fixture};
 
 use kernel::metal::{
-    execution::riscv::description::{RiscvExtension, RiscvIsa},
+    execution::description::riscv::{RiscvExtension, RiscvIsa},
     hart::riscv::description::RiscvCpus,
     mmu::internal::riscv::{
         Mode,

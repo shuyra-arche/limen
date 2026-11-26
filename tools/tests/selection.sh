@@ -51,10 +51,16 @@ change server/src/metal/hart/local/protection.rs
 change server/src/metal/sync/turn/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
-for source in server/src/metal/execution/mod.rs server/src/metal/execution/cooperative.rs; do
+for source in server/src/metal/execution/mod.rs server/src/metal/execution/cooperative/mod.rs; do
     change "$source"
-    bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["boot-handoff","kernel-execution","kernel-execution-harts","riscv-module-execution"]' >/dev/null
+    bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["boot-handoff","kernel-execution","kernel-execution-harts","platform-boot","riscv-module-execution"]' >/dev/null
 done
+change server/src/metal/execution/cooperative/x86_64/mod.rs
+[[ $(boards) == q35 ]]
+bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
+change server/src/metal/execution/cooperative/aarch64/mod.rs
+[[ $(boards) == virt ]]
+bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 change server/src/metal/identity/mod.rs
 [[ $(bash "$discover" . "$base") == "$(jq -c 'map(select(.id != "module-execution" and .id != "riscv-module-execution"))' <<<"$full")" ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
@@ -68,7 +74,7 @@ change server/tests/target/entry/platforms/q35.rs server/src/metal/boot/aarch64/
 change server/tests/target/entry/platforms/main.rs
 [[ $(boards) == 'q35 virt' ]]
 change server/src/basis/execution.rs
-bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts"]' >/dev/null
+bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts","platform-boot"]' >/dev/null
 change server/tests/metal/sync/contracts.rs
 bash "$checks" . "$base" | jq -e '.rv64 and ((.host or .runner) | not)' >/dev/null
 [[ $(bash "$discover" . "$base") == '[]' ]]
@@ -134,7 +140,7 @@ change server/src/metal/firmware/devicetree/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 for source in server/src/metal/hart/riscv/description.rs \
-              server/src/metal/execution/riscv/description.rs \
+              server/src/metal/execution/description/riscv.rs \
               server/src/metal/time/riscv/mod.rs; do
     change "$source"
     [[ $(boards) == rv64 ]]
