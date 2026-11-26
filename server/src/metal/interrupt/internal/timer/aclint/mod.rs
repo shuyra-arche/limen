@@ -46,6 +46,7 @@ impl<'a> Description<'a> {
             if !counter.start().get().is_multiple_of(8)
                 || counter.length().get() != 8
                 || !comparators.start().get().is_multiple_of(8)
+                || !comparators.length().get().is_multiple_of(8)
                 || comparators.length().get() < (count * 8) as u64
                 || counter.overlaps(comparators)
             {

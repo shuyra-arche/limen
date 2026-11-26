@@ -103,8 +103,15 @@ impl<'a> Timer<'a> {
         }
         self.state = State::Uncertain;
         set_timer(count).map_err(Failure::Firmware)?;
+        let enabled: usize;
+        unsafe {
+            asm!("csrs sie, {mask}", "csrr {enabled}, sie",
+                mask = in(reg) TIMER, enabled = out(reg) enabled, options(nostack));
+        }
+        if enabled & TIMER == 0 {
+            return Err(Failure::Unconfirmed);
+        }
         self.state = State::Armed(count);
-        unsafe { asm!("csrs sie, {}", in(reg) TIMER, options(nostack)) };
         Ok(())
     }
 

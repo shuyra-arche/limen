@@ -39,7 +39,10 @@
     "server/src/metal/interrupt/internal/timer/mod.rs",
     "server/src/metal/interrupt/internal/timer/aclint/**",
     "server/src/metal/chrono/mod.rs",
-    "server/src/metal/chrono/riscv/**"
+    "server/src/metal/chrono/riscv/**",
+    "server/src/metal/sync/**",
+    "server/src/metal/identity/**",
+    "server/src/metal/memory/mod.rs"
   ],
   "run": {
     "kind": "qemu",

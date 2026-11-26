@@ -30,23 +30,38 @@ pub enum Failure {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Claim {
+struct Record {
     round: u64,
     source: u32,
     priority: u8,
 }
 
-impl Claim {
-    pub fn source(self) -> u32 {
-        self.source
+/// A borrow of this exact domain and reception round, not a reusable token.
+/// Releasing the borrow never clears the owner's persistent claim record.
+#[must_use]
+pub struct Claim<'owner, 'description> {
+    owner: &'owner mut Direct<'description>,
+    record: Record,
+}
+
+impl Claim<'_, '_> {
+    pub fn source(&self) -> u32 {
+        self.record.source
     }
 
-    pub fn priority(self) -> u8 {
-        self.priority
+    pub fn priority(&self) -> u8 {
+        self.record.priority
     }
 
-    pub fn round(self) -> u64 {
-        self.round
+    pub fn round(&self) -> u64 {
+        self.record.round
+    }
+
+    /// # Safety
+    /// Settle or durably hand off this exact software obligation. For a
+    /// level interrupt, clear the device's original cause before settlement.
+    pub unsafe fn settle(&mut self) -> Result<(), Failure> {
+        self.owner.settle(self.record)
     }
 }
 
@@ -54,7 +69,7 @@ impl Claim {
 enum Reception {
     Empty,
     Receiving(u64),
-    Claimed(Claim),
+    Claimed(Record),
     Uncertain(u64, u32),
 }
 
@@ -227,20 +242,27 @@ impl<'a> Direct<'a> {
         self.write(self.idc(THRESHOLD), 0);
         self.write(self.idc(DELIVERY), 1);
         self.write(DOMAIN, ENABLED);
-        if self.read(DOMAIN) != DIRECT | ENABLED
+        if self.read(DOMAIN) != (DIRECT | ENABLED)
             || self.read(self.idc(DELIVERY)) != 1
             || self.read(self.idc(THRESHOLD)) != 0
         {
             return Err(self.unconfirmed());
         }
         self.opened = true;
-        unsafe { asm!("csrs sie, {}", in(reg) EXTERNAL, options(nostack)) };
+        let enabled: usize;
+        unsafe {
+            asm!("csrs sie, {mask}", "csrr {enabled}, sie",
+                mask = in(reg) EXTERNAL, enabled = out(reg) enabled, options(nostack));
+        }
+        if enabled & EXTERNAL == 0 {
+            return Err(self.unconfirmed());
+        }
         Ok(())
     }
 
     /// Reserve the only reception slot before the destructive claimi read.
     /// A nonempty claim remains recorded until explicitly settled.
-    pub fn claim(&mut self) -> Result<Option<Claim>, Failure> {
+    pub fn claim(&mut self) -> Result<Option<Claim<'_, 'a>>, Failure> {
         self.available()?;
         if !self.opened {
             return Err(Failure::Busy);
@@ -259,7 +281,7 @@ impl<'a> Direct<'a> {
             self.reception = Reception::Uncertain(round, raw);
             return Err(self.unconfirmed());
         }
-        let claim = Claim {
+        let claim = Record {
             round,
             source,
             priority,
@@ -269,13 +291,16 @@ impl<'a> Direct<'a> {
         if self.bit(ENABLE, source) {
             return Err(self.unconfirmed());
         }
-        Ok(Some(claim))
+        Ok(Some(Claim {
+            owner: self,
+            record: claim,
+        }))
     }
 
-    /// Observe the exact unclosed claim. No destructive read.
-    pub fn current(&self) -> Option<Claim> {
+    /// Reborrow the original unclosed claim, without another destructive read.
+    pub fn current(&mut self) -> Option<Claim<'_, 'a>> {
         match self.reception {
-            Reception::Claimed(claim) => Some(claim),
+            Reception::Claimed(record) => Some(Claim { owner: self, record }),
             _ => None,
         }
     }
@@ -289,14 +314,13 @@ impl<'a> Direct<'a> {
         }
     }
 
-    /// # Safety
-    /// The caller has settled or durably handed off the original software
-    /// delivery obligation, and for a level source the actual device cause
-    /// was cleared. APLIC direct delivery has no Complete write.
-    /// Do not clear pending edges: they can represent later events.
-    pub unsafe fn settle(&mut self, claim: Claim) -> Result<(), Failure> {
+    // Only the original scoped Claim can invoke this operation.
+    // Direct delivery has no Complete write; preserve later pending edges.
+    fn settle(&mut self, claim: Record) -> Result<(), Failure> {
         self.context()?;
-        if self.uncertain || self.current() != Some(claim) {
+        if self.uncertain
+            || !matches!(self.reception, Reception::Claimed(record) if record == claim)
+        {
             return Err(Failure::Busy);
         }
         if self.bit(ENABLE, claim.source) {
