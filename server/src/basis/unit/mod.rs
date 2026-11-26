@@ -11,7 +11,11 @@ use stack::{StackLease, StackPool};
 use crate::metal::identity::Slot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Scope(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnitId {
+    scope: Scope,
     slot: Slot,
     generation: NonZeroU64,
 }
@@ -46,15 +50,24 @@ pub(crate) enum Error {
 }
 
 enum State<Binding> {
-    Vacant,
+    Vacant(Option<Slot>),
+    Retired,
     Live(Binding),
     Ending { end: End, binding: Binding },
     Ended(End),
 }
 
-struct Record<Binding> {
+/// Actual resident Unit record storage, supplied independently of stacks.
+pub struct UnitRecord<Binding> {
     generation: Option<NonZeroU64>,
-    state: State<Binding>,
+    state: State<Bound<Binding>>,
+}
+
+impl<Binding> UnitRecord<Binding> {
+    pub const EMPTY: Self = Self {
+        generation: None,
+        state: State::Vacant(None),
+    };
 }
 
 struct Bound<Binding> {
@@ -62,55 +75,78 @@ struct Bound<Binding> {
     stack: StackLease,
 }
 
-pub(super) struct Units<Binding> {
-    records: [Record<Bound<Binding>>; STACK_CAPACITY],
+pub(super) struct Units<Binding: 'static> {
+    scope: Scope,
+    records: &'static mut [UnitRecord<Binding>],
+    free: Option<Slot>,
+    retired: usize,
     stacks: StackPool,
 }
 
-impl<Binding> Units<Binding> {
-    pub(super) fn new(stacks: &'static mut Stacks) -> Self {
+impl<Binding: 'static> Units<Binding> {
+    pub(super) fn accepts(records: &[UnitRecord<Binding>]) -> bool {
+        !records.is_empty()
+            && Slot::new(records.len() - 1).is_some()
+            && records.iter().all(|record| {
+                record.generation.is_none() && matches!(record.state, State::Vacant(None))
+            })
+    }
+
+    pub(super) fn new(
+        stacks: &'static mut Stacks,
+        records: &'static mut [UnitRecord<Binding>],
+    ) -> Self {
+        assert!(Self::accepts(records));
+        let scope = Scope(records.as_ptr().addr());
+        let mut free = None;
+        for (index, record) in records.iter_mut().enumerate().rev() {
+            record.state = State::Vacant(free);
+            free = Slot::new(index);
+        }
         Self {
-            records: [const {
-                Record {
-                    generation: None,
-                    state: State::Vacant,
-                }
-            }; STACK_CAPACITY],
+            scope,
+            records,
+            free,
+            retired: 0,
             stacks: StackPool::new(stacks),
         }
     }
 
     pub(crate) fn vacant(&self) -> Result<UnitId, Error> {
-        let mut reusable = false;
-        for (index, record) in self.records.iter().enumerate() {
-            let Some(slot) = Slot::new(index) else { break };
-            let generation = match record.generation {
-                Some(previous) => previous.checked_add(1),
-                None => Some(NonZeroU64::MIN),
-            };
-            if let Some(generation) = generation {
-                if matches!(record.state, State::Vacant) {
-                    return Ok(UnitId { slot, generation });
-                }
-                reusable = true;
+        let slot = self.free.ok_or_else(|| {
+            if self.retired == self.records.len() {
+                Error::IdentityExhausted
+            } else {
+                Error::Capacity
             }
-        }
-        Err(if reusable {
-            Error::Capacity
-        } else {
-            Error::IdentityExhausted
+        })?;
+        let record = &self.records[slot.index()];
+        assert!(matches!(record.state, State::Vacant(_)));
+        let generation = match record.generation {
+            Some(previous) => previous.checked_add(1).expect("free record can issue"),
+            None => NonZeroU64::MIN,
+        };
+        Ok(UnitId {
+            scope: self.scope,
+            slot,
+            generation,
         })
     }
 
-    /// Commit the slot reserved by `vacant` in the same protected scope.
+    /// Commit the observed free position in the same protected scope.
     pub(super) fn publish(
         &mut self,
         id: UnitId,
         binding: Binding,
         start: extern "C" fn(*const ()) -> !,
     ) -> Result<(), Error> {
+        assert_eq!(self.vacant()?, id);
+        let State::Vacant(next) = self.records[id.slot()].state else {
+            unreachable!("validated free record");
+        };
         let stack = self.stacks.claim(start).ok_or(Error::Capacity)?;
-        self.records[id.slot()] = Record {
+        self.free = next;
+        self.records[id.slot()] = UnitRecord {
             generation: Some(id.generation),
             state: State::Live(Bound { binding, stack }),
         };
@@ -118,8 +154,13 @@ impl<Binding> Units<Binding> {
     }
 
     fn record(&mut self, id: UnitId) -> Result<&mut State<Bound<Binding>>, Error> {
+        if self.scope != id.scope {
+            return Err(Error::Gone);
+        }
         let slot = self.records.get_mut(id.slot()).ok_or(Error::Gone)?;
-        if slot.generation != Some(id.generation) || matches!(slot.state, State::Vacant) {
+        if slot.generation != Some(id.generation)
+            || matches!(slot.state, State::Vacant(_) | State::Retired)
+        {
             return Err(Error::Gone);
         }
         Ok(&mut slot.state)
@@ -130,7 +171,7 @@ impl<Binding> Units<Binding> {
             State::Live(_) => Lifecycle::Live,
             State::Ending { .. } => Lifecycle::Ending,
             State::Ended(end) => Lifecycle::Ended(*end),
-            State::Vacant => unreachable!(),
+            State::Vacant(_) | State::Retired => unreachable!(),
         })
     }
 
@@ -150,7 +191,7 @@ impl<Binding> Units<Binding> {
             }
             _ => return Err(Error::NotLive),
         }
-        let State::Live(binding) = core::mem::replace(state, State::Vacant) else {
+        let State::Live(binding) = core::mem::replace(state, State::Vacant(None)) else {
             unreachable!()
         };
         *state = State::Ending { end, binding };
@@ -177,11 +218,18 @@ impl<Binding> Units<Binding> {
     }
 
     pub(crate) fn reap(&mut self, id: UnitId) -> Result<End, Error> {
+        let free = self.free;
         let state = self.record(id)?;
         let State::Ended(end) = *state else {
             return Err(Error::NotEnded);
         };
-        *state = State::Vacant;
+        if id.generation.get() == u64::MAX {
+            *state = State::Retired;
+            self.retired += 1;
+        } else {
+            *state = State::Vacant(free);
+            self.free = Some(id.slot);
+        }
         Ok(end)
     }
 }
