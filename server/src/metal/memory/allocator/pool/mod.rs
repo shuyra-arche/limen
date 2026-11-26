@@ -121,7 +121,9 @@ impl<'storage, T> Pool<'storage, T> {
     /// Establish the fixed group directory outside all supplied group mappings.
     pub fn new(groups: &'storage mut [GroupSlot<'storage, T>]) -> Result<Self, Error> {
         if groups.is_empty()
-            || groups.iter().any(|entry| entry.record.is_some() || entry.next.is_some())
+            || groups
+                .iter()
+                .any(|entry| entry.record.is_some() || entry.next.is_some())
         {
             return Err(Error::Directory);
         }
@@ -176,9 +178,8 @@ impl<'storage, T> Pool<'storage, T> {
             return Err(Error::Layout);
         }
         let retirement = supplied.allocation().return_position()?;
-        self.state.acquire(|state| {
-            state.free_group.ok_or(Error::Directory).map(|_| ())
-        })??;
+        self.state
+            .acquire(|state| state.free_group.ok_or(Error::Directory).map(|_| ()))??;
 
         // No Pool protection is held during the full private slot walk.
         Group::<T>::prepare(
