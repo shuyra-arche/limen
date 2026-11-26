@@ -8,24 +8,6 @@ use core::{
 use super::{Alignment, ByteLength, PageCount, Range};
 
 /// A byte coordinate of one kind. The kind is not an actual address-space identity.
-///
-/// Different coordinate kinds cannot be compared or substituted:
-///
-/// ```compile_fail
-/// use limen_treaty::model::{InternalAddress, PhysicalAddress};
-/// let _ = InternalAddress::new(1) == PhysicalAddress::new(1);
-/// ```
-///
-/// ```compile_fail
-/// use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress};
-/// fn takes_internal(_: InternalAddress) {}
-/// takes_internal(PhysicalAddress::new(1).advance(ByteLength::new(2)).unwrap());
-/// ```
-///
-/// ```compile_fail
-/// use limen_treaty::model::{InternalAddress, PageCount};
-/// let _ = InternalAddress::new(0).advance(PageCount::new(1));
-/// ```
 #[repr(transparent)]
 pub struct ByteCoordinate<Kind> {
     value: u64,

@@ -306,7 +306,9 @@ Nest, or the full Kernel/User handoff and Seal.
 
 The Treaty Model tests cover checked byte-coordinate kinds, marker-independent
 value semantics, byte/page range lengths, overflow and compile-time rejection
-of mixed coordinates or measures. The existing firmware and module contracts
+of mixed coordinates or measures. Run `bash treaty/tests/compiler/check.sh`
+to verify the standalone compiler contracts without enabling source doctests.
+The existing firmware and module contracts
 also verify nested bus translation, typed placements and unchanged storage
 on rejected placement. RV64 mode tests check complete canonical intervals,
 including the low-half exclusive endpoint and the noncanonical hole.
