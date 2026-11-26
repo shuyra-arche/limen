@@ -44,11 +44,7 @@ global_asm!(
 );
 
 unsafe extern "C" {
-    fn limen_switch_context(
-        outgoing: *mut Saved,
-        incoming: *const Saved,
-        argument: *const (),
-    );
+    fn limen_switch_context(outgoing: *mut Saved, incoming: *const Saved, argument: *const ());
 }
 
 /// The real psABI call boundary; gp and tp remain Hart-local.
