@@ -1,6 +1,6 @@
 //! RISC-V supervisor local reception lines, independent of their producers.
 
-use crate::metal::processor::hart::local::current_hart;
+use crate::metal::processor::hart::local::try_current_hart;
 use core::{arch::asm, marker::PhantomData};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,7 +63,7 @@ impl Reception {
     pub(crate) fn valid(&self) -> bool {
         let status: usize;
         unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nostack, nomem)) };
-        current_hart().get() as u64 == self.hart && status & 2 == 0
+        try_current_hart().is_some_and(|hart| hart.get() as u64 == self.hart) && status & 2 == 0
     }
 
     pub(crate) fn enabled(&self) -> bool {

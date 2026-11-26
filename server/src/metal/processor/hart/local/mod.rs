@@ -69,8 +69,16 @@ fn installed() -> Option<&'static HartLocal> {
 
 #[cfg(limen_target)]
 pub(crate) fn current_hart() -> HartId {
-    assert!(ordinary_entry(), "ordinary Hart entry required");
-    HartId::new(installed().expect("Hart installed at Boot").identity.get())
+    try_current_hart().expect("ordinary Hart entry with installed local storage required")
+}
+
+/// Fallible admission check for hardware consumers at their local boundary.
+#[cfg(limen_target)]
+pub(crate) fn try_current_hart() -> Option<HartId> {
+    if !ordinary_entry() {
+        return None;
+    }
+    Some(HartId::new(installed()?.identity.get()))
 }
 
 #[cfg(limen_target)]

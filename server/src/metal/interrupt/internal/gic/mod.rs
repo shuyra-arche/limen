@@ -10,12 +10,27 @@ mod native;
 /// This description confers no register access or external routing authority.
 #[derive(Clone, Copy, Debug)]
 pub struct GicV3<'a> {
-    pub source: NodeId<'a>,
-    pub distributor: PhysicalRange,
-    pub redistributor: PhysicalRange,
+    source: NodeId<'a>,
+    distributor: PhysicalRange,
+    redistributor: PhysicalRange,
 }
 
 impl<'a> GicV3<'a> {
+    /// Select the unique enabled GICv3 of this description profile.
+    pub fn read(tree: &DeviceTree<'a>) -> Result<Option<Self>, Error> {
+        let mut found = None;
+        for node in tree.nodes() {
+            if !node.compatible(b"arm,gic-v3")? || !node.enabled()? {
+                continue;
+            }
+            if found.is_some() {
+                return Err(Error::Conflict);
+            }
+            found = Some(Self::describe(node)?);
+        }
+        Ok(found)
+    }
+
     fn describe(node: Node<'_, 'a>) -> Result<Self, Error> {
         if !node.compatible(b"arm,gic-v3")?
             || !node.enabled()?
@@ -42,6 +57,18 @@ impl<'a> GicV3<'a> {
             distributor,
             redistributor,
         })
+    }
+
+    pub fn source(self) -> NodeId<'a> {
+        self.source
+    }
+
+    pub fn distributor(self) -> PhysicalRange {
+        self.distributor
+    }
+
+    pub fn redistributor(self) -> PhysicalRange {
+        self.redistributor
     }
 }
 
@@ -84,7 +111,11 @@ pub struct PrivateInterrupts<'a> {
 }
 
 impl<'a> PrivateInterrupts<'a> {
-    pub fn read(tree: &DeviceTree<'a>, source: NodeId<'a>) -> Result<Self, Error> {
+    pub fn read(
+        tree: &DeviceTree<'a>,
+        source: NodeId<'a>,
+        controller: GicV3<'a>,
+    ) -> Result<Self, Error> {
         let node = tree.node(source).ok_or(Error::Missing)?;
         let extended = node.property(b"interrupts-extended")?;
         let interrupts = node.property(b"interrupts")?;
@@ -108,7 +139,9 @@ impl<'a> PrivateInterrupts<'a> {
             Some(handle) => tree.phandle(handle)?.ok_or(Error::Missing)?,
             None => interrupt_parent(tree, node)?,
         };
-        let controller = GicV3::describe(domain)?;
+        if domain.id() != controller.source() {
+            return Err(Error::Conflict);
+        }
         let mut entries = [PrivateInterrupt {
             intid: 0,
             trigger: Trigger::LevelHigh,

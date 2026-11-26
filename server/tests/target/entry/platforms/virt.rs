@@ -212,19 +212,20 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
         .unwrap()
         .expect("generic counter declaration");
     assert_eq!(tree.node(counter.source()).unwrap().name(), b"timer");
+    let controller = GicV3::read(tree).unwrap().expect("GIC description");
     let interrupts =
-        PrivateInterrupts::read(tree, counter.source()).expect("GIC private interrupts");
+        PrivateInterrupts::read(tree, counter.source(), controller).expect("GIC private interrupts");
     let timer = GenericTimer::describe(tree, &interrupts).expect("virtual timer role");
     let controller = interrupts.controller();
     assert_eq!(timer.source(), counter.source());
-    assert_eq!(timer.domain(), controller.source);
+    assert_eq!(timer.domain(), controller.source());
     let interrupt = timer.virtual_interrupt();
     assert_eq!(interrupt.intid, 27);
     assert_eq!(interrupt.trigger, Trigger::LevelHigh);
     assert!(timer.always_on());
-    assert!(tree.node(controller.source).is_some());
+    assert!(tree.node(controller.source()).is_some());
     assert_eq!(
-        controller.distributor,
+        controller.distributor(),
         memory::extent(0x0800_0000, 0x0801_0000)
     );
     assert!(
