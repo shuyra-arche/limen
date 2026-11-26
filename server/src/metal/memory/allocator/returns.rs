@@ -1,7 +1,5 @@
 //! Independently prepaid Return positions and retained settlement history.
 
-use core::ptr;
-
 use crate::metal::{
     identity::Key,
     sync::{TurnLock, TurnMode, TurnWorkspace},
@@ -73,10 +71,18 @@ impl Retired {
         if receipt.is_some() {
             return Err((self, Error::Receiver));
         }
-        let source = self.0.source();
-        source.accept_return(self, ReceiptOwner::Receiver, |id| {
-            *receipt = Some(ReturnReceipt { source, id });
-        })
+        let allocation = &self.0;
+        let source = allocation.source();
+        let result = (|| {
+            let region = source.region(allocation.id.region())?;
+            region.state.acquire(|state| {
+                // The original Retired input certifies all prior uses ended.
+                let id = unsafe { state.begin_retired(allocation, ReceiptOwner::Receiver) }?;
+                *receipt = Some(ReturnReceipt { source, id });
+                Ok(())
+            })?
+        })();
+        result.map_err(|error| (self, error))
     }
 }
 
@@ -135,27 +141,6 @@ pub enum Pending {
 impl Allocator {
     pub(super) fn return_state(&self, id: ReturnId) -> Result<&TurnLock<State>, Error> {
         Ok(&self.region(id.region())?.state)
-    }
-
-    fn accept_return(
-        &self,
-        retired: Retired,
-        owner: ReceiptOwner,
-        record: impl FnOnce(ReturnId),
-    ) -> Result<(), (Retired, Error)> {
-        let allocation = &retired.0;
-        let result = (|| {
-            if !ptr::eq(self, allocation.source()) {
-                return Err(Error::Stale);
-            }
-            let region = self.region(allocation.id.region())?;
-            region.state.acquire(|state| {
-                // The original Retired input certifies all prior uses ended.
-                record(unsafe { state.begin_retired(allocation, owner) }?);
-                Ok(())
-            })?
-        })();
-        result.map_err(|error| (retired, error))
     }
 
     /// Finish a prepaid return once. Done can be replayed independently of
