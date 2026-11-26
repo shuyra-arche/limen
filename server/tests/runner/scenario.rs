@@ -253,7 +253,7 @@ pub fn run(args: Inputs) -> Result<()> {
     )?;
     if let Some(board) = args.board {
         require(
-            matches!(&suite.run, Run::BoardBoot { boards } if boards.contains(&board)),
+            matches!(&suite.run, Run::BoardBoot { boards, .. } if boards.contains(&board)),
             "board not supported by this suite",
         )?;
     }
@@ -262,7 +262,8 @@ pub fn run(args: Inputs) -> Result<()> {
     fresh(&args.output)?;
     args.output = args.output.canonicalize()?;
     match &suite.run {
-        Run::BoardBoot { boards } => {
+        Run::BoardBoot { boards, harts } => {
+            let harts = harts.map_or(GUEST_CPUS, |count| count.get());
             require(!boards.is_empty(), "expected boot boards")?;
             let source = revision(&args.kernel)?;
             let provider = args.output.join("provider");
@@ -272,7 +273,7 @@ pub fn run(args: Inputs) -> Result<()> {
                 &serde_json::json!({
                     "source": source,
                     "profile": args.profile,
-                    "harts": GUEST_CPUS,
+                    "harts": harts,
                     "rustc": output(Command::new("rustc").current_dir(&provider).arg("-Vv"))?,
                     "cargo": output(Command::new("cargo").current_dir(&provider).arg("-V"))?,
                 }),
@@ -291,7 +292,7 @@ pub fn run(args: Inputs) -> Result<()> {
                         .arg(board.name())
                         .arg(&args.profile)
                         .arg(args.output.join(&label))
-                        .arg(GUEST_CPUS.to_string());
+                        .arg(harts.to_string());
                     let result = process::run(
                         &mut command,
                         &args.output.join(format!("{label}-runner")),

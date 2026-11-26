@@ -200,6 +200,32 @@ leave the source unpublished. The Host boot suite additionally exercises
 joint lock contention, cancellation, allowance reuse and independent
 return history.
 
+## Module loading
+
+The Host module suite generates independent ELF64 images for RV64, x86_64
+and AArch64 using the pinned compiler and linker. It checks bounded format
+admission, candidate selection, file-backed entries, R/RX/RW layout, BSS
+zeroing and relative relocation into private mapped storage.
+
+```sh
+RUSTFLAGS=-Dwarnings cargo test --locked -p kernel-host-module --target x86_64-unknown-linux-gnu
+```
+
+The [q35 module guest](target/entry/module/) uses the Debian OVMF strict-NX
+variant with one Hart. It prepares an independent x86_64 module in private
+RW/NX pages, closes write access before enabling execution, and checks
+effective permissions and aliases in the active root. After EBS and the
+normal Limen major handoff, it rechecks the retained mapping and invokes the
+module's MMU geometry entry using SysV64. The result must be 4096 and QEMU
+must exit with the success status. Run the guest through the owner-local
+runner with either profile.
+
+```sh
+server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
+    --suite server/tests/target/entry/module --kernel "$PWD" \
+    --board q35 --profile debug --output /tmp/limen-module
+```
+
 ## Foundation acceptance
 
 RV64 virt, x86_64 q35 and AArch64 virt run the same foundation assertions in

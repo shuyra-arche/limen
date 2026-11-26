@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::{
     collections::BTreeMap,
     fs,
+    num::NonZeroU8,
     path::{Component, Path, PathBuf},
 };
 
@@ -31,6 +32,8 @@ pub enum Run {
     },
     BoardBoot {
         boards: Vec<Board>,
+        #[serde(default)]
+        harts: Option<NonZeroU8>,
     },
     CargoTest {
         package: Option<String>,

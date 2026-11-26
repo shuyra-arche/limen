@@ -31,7 +31,7 @@ boards() {
 }
 change server/src/metal/boot/x86_64/mod.rs
 [[ $(boards) == q35 ]]
-bash "$discover" . "$base" | jq -e 'map(.profile) | sort == ["debug","release"]' >/dev/null
+bash "$discover" . "$base" | jq -e 'map(select(.id == "platform-boot").profile) | sort == ["debug","release"]' >/dev/null
 bash "$checks" . "$base" | jq -e '(.full or .runner or .rv64) == false and .manifests == []' >/dev/null
 
 change server/src/metal/hart/x86_64.rs
@@ -54,7 +54,7 @@ bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and (.ma
 change server/src/metal/execution/mod.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["boot-handoff","kernel-execution","kernel-execution-harts"]' >/dev/null
 change server/src/metal/identity/mod.rs
-[[ $(bash "$discover" . "$base") == "$full" ]]
+[[ $(bash "$discover" . "$base") == "$(jq -c 'map(select(.id != "module-execution"))' <<<"$full")" ]]
 bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/identity/host/Cargo.toml"]' >/dev/null
 
 change server/tests/target/entry/platforms/io.rs
@@ -116,7 +116,7 @@ change server/src/metal/boot/services.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/firmware/devicetree/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/firmware/devicetree/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/firmware/devicetree/host/Cargo.toml","server/tests/metal/module/host/Cargo.toml"]' >/dev/null
 for source in server/src/metal/hart/description.rs \
               server/src/metal/execution/riscv/description.rs \
               server/src/metal/time/mod.rs; do
@@ -129,7 +129,7 @@ change server/src/metal/mmu/internal/riscv/description.rs
 bash "$checks" . "$base" | jq -e '.rv64 and (.manifests | sort) == ["server/tests/metal/firmware/devicetree/host/Cargo.toml","server/tests/metal/mmu/internal/riscv/host/Cargo.toml"]' >/dev/null
 change server/src/metal/address.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/allocator/host/Cargo.toml","server/tests/metal/firmware/acpi/host/Cargo.toml","server/tests/metal/firmware/devicetree/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/allocator/host/Cargo.toml","server/tests/metal/firmware/acpi/host/Cargo.toml","server/tests/metal/firmware/devicetree/host/Cargo.toml","server/tests/metal/module/host/Cargo.toml"]' >/dev/null
 change server/src/metal/hart/stack.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/qemu.version
@@ -139,7 +139,14 @@ change rust-toolchain.toml
 bash "$checks" . "$base" | jq -e '.full and .runner and .rv64' >/dev/null
 change server/src/metal/mmu/internal/access.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
-bash "$checks" . "$base" | jq -e '.rv64 and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.rv64 and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/module/host/Cargo.toml"]' >/dev/null
+
+for source in server/src/metal/module/elf.rs server/tests/metal/module/probe.rs; do
+    change "$source"
+    bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
+        [["module-execution", "q35", "debug"], ["module-execution", "q35", "release"]]' >/dev/null
+    bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/module/host/Cargo.toml"]' >/dev/null
+done
 change server/src/metal/allocator/storage.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null

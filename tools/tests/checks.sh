@@ -23,12 +23,15 @@ while IFS= read -r -d '' manifest; do
         if [[ $path == "$owner/"* || $path == "${owner/server\/tests/server\/src}/"* ||
               ( $owner == server/tests/entry/boot && ( $path == server/src/metal/firmware/map.rs || $path == server/src/metal/firmware/uefi/loader.rs || $path == server/src/metal/firmware/devicetree/* || $path == server/src/metal/boot/console.rs || $path == server/src/metal/allocator/* || $path == server/src/metal/mmu/internal/access.rs || $path == server/src/metal/identity/* || $path == server/src/basis/pend.rs || $path == server/src/metal/sync/queue.rs || $path == server/src/metal/sync/turn.rs || $path == server/src/metal/hart/node.rs ) ) ||
               ( $owner == server/tests/entry/boot && $path == server/src/metal/firmware/acpi/* ) ||
-              ( $path == server/src/metal/address.rs && ( $owner == server/tests/entry/boot || $owner == server/tests/metal/allocator || $owner == server/tests/metal/firmware/acpi || $owner == server/tests/metal/firmware/devicetree ) ) ||
+              ( $path == server/src/metal/address.rs && ( $owner == server/tests/entry/boot || $owner == server/tests/metal/allocator || $owner == server/tests/metal/firmware/acpi || $owner == server/tests/metal/firmware/devicetree || $owner == server/tests/metal/module ) ) ||
               ( $owner == server/tests/metal/firmware/devicetree &&
                 ( $path == server/src/metal/hart/description.rs ||
                   $path == server/src/metal/execution/riscv/description.rs ||
                   $path == server/src/metal/mmu/internal/riscv/description.rs ||
                   $path == server/src/metal/time/* ) ) ||
+              ( $owner == server/tests/metal/module &&
+                ( $path == server/src/metal/mmu/internal/access.rs ||
+                  $path == server/src/metal/firmware/devicetree/* ) ) ||
               ( $owner == server/tests/metal/sync && $path == server/src/metal/hart/node.rs ) ]]; then
             manifests+=("$manifest")
             break

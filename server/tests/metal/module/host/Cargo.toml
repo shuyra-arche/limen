@@ -1,0 +1,14 @@
+[package]
+name = "kernel-host-module"
+version.workspace = true
+edition.workspace = true
+publish = false
+autotests = false
+build = "../build.rs"
+
+[[test]]
+name = "module"
+path = "../mod.rs"
+
+[dependencies]
+limen-treaty = { path = "../../../../../treaty" }
