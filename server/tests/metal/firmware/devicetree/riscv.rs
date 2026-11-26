@@ -34,9 +34,21 @@ fn read_scope(bytes: &[u8]) -> RiscvCpus<'_> {
 fn rv64_mmu_description_bounds_the_supported_paged_modes() {
     for (property, maximum, supported) in [
         (b"riscv,none\0", MaximumMode::Bare, [false, false, false]),
-        (b"riscv,sv39\0", MaximumMode::Paged(Mode::Sv39), [true, false, false]),
-        (b"riscv,sv48\0", MaximumMode::Paged(Mode::Sv48), [true, true, false]),
-        (b"riscv,sv57\0", MaximumMode::Paged(Mode::Sv57), [true, true, true]),
+        (
+            b"riscv,sv39\0",
+            MaximumMode::Paged(Mode::Sv39),
+            [true, false, false],
+        ),
+        (
+            b"riscv,sv48\0",
+            MaximumMode::Paged(Mode::Sv48),
+            [true, true, false],
+        ),
+        (
+            b"riscv,sv57\0",
+            MaximumMode::Paged(Mode::Sv57),
+            [true, true, true],
+        ),
     ] {
         let mut fixture = cpu_scope();
         start_cpu(&mut fixture, b"cpu@0", &[0, 0]);
