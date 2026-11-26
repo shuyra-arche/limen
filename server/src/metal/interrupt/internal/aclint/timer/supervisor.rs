@@ -21,15 +21,38 @@ pub enum Failure {
     Unconfirmed,
 }
 
+/// One synchronous replacement of the actual comparator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum State {
+pub struct Write {
+    pub previous: Option<u64>,
+    pub requested: u64,
+}
+
+/// The original comparison facts that a clearing operation must retain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Prior {
+    Inherited,
     Idle,
     Armed(u64),
-    Uncertain {
-        previous: Option<u64>,
-        requested: Option<u64>,
-        clearing: bool,
-    },
+    Programming(Write),
+}
+
+/// The specific operation that returned without confirmation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Effect {
+    Programming(Write),
+    Clearing(Prior),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum State {
+    Inherited,
+    Idle,
+    Programming(Write),
+    Armed(u64),
+    Clearing(Prior),
+    AwaitingClear(Prior),
+    Uncertain(Effect),
 }
 
 /// One actual Hart's exclusive timer programming responsibility.
@@ -62,11 +85,7 @@ impl<'a> Timer<'a> {
         let timer = Self {
             description,
             timebase,
-            state: State::Uncertain {
-                previous: None,
-                requested: None,
-                clearing: false,
-            },
+            state: State::Inherited,
             local: PhantomData,
         };
         timer.context()?;
@@ -123,18 +142,22 @@ impl<'a> Timer<'a> {
         if count == u64::MAX || count <= self.counter()? {
             return Err(Failure::Range);
         }
-        self.state = State::Uncertain {
+        let write = Write {
             previous,
-            requested: Some(count),
-            clearing: false,
+            requested: count,
         };
-        set_timer(count).map_err(Failure::Firmware)?;
+        self.state = State::Programming(write);
+        if let Err(error) = set_timer(count) {
+            self.state = State::Uncertain(Effect::Programming(write));
+            return Err(Failure::Firmware(error));
+        }
         let enabled: usize;
         unsafe {
             asm!("csrs sie, {mask}", "csrr {enabled}, sie",
                 mask = in(reg) TIMER, enabled = out(reg) enabled, options(nostack));
         }
         if enabled & TIMER == 0 {
+            self.state = State::Uncertain(Effect::Programming(write));
             return Err(Failure::Unconfirmed);
         }
         self.state = State::Armed(count);
@@ -157,29 +180,44 @@ impl<'a> Timer<'a> {
     /// stop/wake obligations. This does not shut down the counter itself.
     pub fn shut(&mut self) -> Result<(), Failure> {
         self.context()?;
-        let (previous, requested) = match self.state {
-            State::Idle => (None, None),
-            State::Armed(count) => (Some(count), None),
-            State::Uncertain {
-                previous,
-                requested,
-                ..
-            } => (previous, requested),
+        let prior = match self.state {
+            State::Inherited => Prior::Inherited,
+            State::Idle => Prior::Idle,
+            State::Armed(count) => Prior::Armed(count),
+            State::Uncertain(Effect::Programming(write)) => Prior::Programming(write),
+            State::Uncertain(Effect::Clearing(prior)) => prior,
+            State::AwaitingClear(prior) => return self.observe_clear(prior),
+            // An actual operation must return to this exclusive owner first.
+            State::Programming(_) | State::Clearing(_) => return Err(Failure::Busy),
         };
-        self.state = State::Uncertain {
-            previous,
-            requested,
-            clearing: true,
-        };
+        self.state = State::Clearing(prior);
         let enabled: usize;
         unsafe {
             asm!("csrc sie, {mask}", "csrr {enabled}, sie",
                 mask = in(reg) TIMER, enabled = out(reg) enabled, options(nostack));
         }
         if enabled & TIMER != 0 {
+            self.state = State::Uncertain(Effect::Clearing(prior));
             return Err(Failure::Unconfirmed);
         }
-        set_timer(u64::MAX).map_err(Failure::Firmware)?;
+        // SBI TIME is synchronous. Once the original call has returned,
+        // this confirmed replacement covers the previous possible values.
+        if let Err(error) = set_timer(u64::MAX) {
+            self.state = State::Uncertain(Effect::Clearing(prior));
+            return Err(Failure::Firmware(error));
+        }
+        self.state = State::AwaitingClear(prior);
+        self.observe_clear(prior)
+    }
+
+    fn observe_clear(&mut self, prior: Prior) -> Result<(), Failure> {
+        // A retry after confirmed TIME only observes, never reissues the write.
+        let enabled: usize;
+        unsafe { asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem)) };
+        if enabled & TIMER != 0 {
+            self.state = State::Uncertain(Effect::Clearing(prior));
+            return Err(Failure::Unconfirmed);
+        }
         for _ in 0..OBSERVATIONS {
             if !self.pending()? {
                 self.state = State::Idle;
@@ -187,6 +225,8 @@ impl<'a> Timer<'a> {
             }
             core::hint::spin_loop();
         }
+        // The write was confirmed. Preserve that fact even if the observation
+        // allowance is exhausted; the next shut continues at this boundary.
         Err(Failure::Unconfirmed)
     }
 }

@@ -74,10 +74,20 @@ fn timer_test(boot: &Boot<'_>) {
     // OpenSBI owns the machine comparator; the guest never maps or writes it.
     let services = platform_services();
     let mut timer = unsafe { Timer::admit(description, timebase, services) }.unwrap();
+    assert_eq!(timer.state(), State::Inherited);
+    assert_eq!(timer.arm(1), Err(timer::Failure::Busy));
+    assert_eq!(timer.rearm(1), Err(timer::Failure::Busy));
+    assert_eq!(timer.due(), Err(timer::Failure::Busy));
+    assert_eq!(timer.state(), State::Inherited);
     timer.shut().unwrap();
     assert_eq!(timer.state(), State::Idle);
     assert!(!timer.pending().unwrap());
     let hertz = u64::from(timebase.hertz());
+    let now = timer.counter().unwrap();
+    assert_eq!(timer.arm(now), Err(timer::Failure::Range));
+    assert_eq!(timer.arm(u64::MAX), Err(timer::Failure::Range));
+    assert_eq!(timer.rearm(now + hertz), Err(timer::Failure::Busy));
+    assert_eq!(timer.state(), State::Idle);
     for round in 0..2 {
         let now = timer.counter().unwrap();
         let target = now.checked_add(hertz / 20).unwrap();
@@ -85,7 +95,11 @@ fn timer_test(boot: &Boot<'_>) {
         if round == 0 {
             let later = limit.checked_add(hertz).unwrap();
             timer.arm(later).unwrap();
+            assert_eq!(timer.state(), State::Armed(later));
+            assert!(!timer.due().unwrap());
             assert!(matches!(timer.arm(target), Err(timer::Failure::Busy)));
+            assert_eq!(timer.rearm(now), Err(timer::Failure::Range));
+            assert_eq!(timer.state(), State::Armed(later));
         }
         // Replace the old comparison directly. In round two this also clears
         // the pending interrupt from round one without an intervening shut.
@@ -99,7 +113,10 @@ fn timer_test(boot: &Boot<'_>) {
     timer.shut().unwrap();
     assert_eq!(timer.state(), State::Idle);
     assert!(!timer.pending().unwrap());
-    boot::write("PASS aclint-timer received=2 cleared=2\n");
+    assert_eq!(timer.due(), Err(timer::Failure::Busy));
+    timer.shut().unwrap();
+    assert_eq!(timer.state(), State::Idle);
+    boot::write("PASS aclint-timer received=2 cleared=2 states=1 rejected=1\n");
 }
 
 fn uart_read(base: usize, register: usize) -> u8 {
@@ -138,12 +155,24 @@ fn external_test(boot: &Boot<'_>) {
     // The single-Hart QEMU board, initial bare mapping, quiet device and
     // supervisor domain delegated by OpenSBI establish this test's ownership.
     let mut direct = unsafe { Direct::admit(description, base) }.unwrap();
+    assert_eq!(core::mem::size_of::<aplic::Source>(), 2);
+    assert_eq!(direct.state(), aplic::State::Prepared);
+    assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Vacant);
+    assert_eq!(direct.source(0), Err(aplic::Failure::Range));
     unsafe { direct.configure(route) }.unwrap();
+    assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Masked(route.mode()));
+    assert_eq!(direct.enable(route.id()), Err(aplic::Failure::Busy));
+    assert!(matches!(direct.claim(), Err(aplic::Failure::Busy)));
+    assert_eq!(unsafe { direct.configure(route) }, Err(aplic::Failure::Busy));
     unsafe { direct.open() }.unwrap();
+    assert_eq!(direct.state(), aplic::State::Open);
+    assert_eq!(unsafe { direct.open() }, Err(aplic::Failure::Busy));
     assert!(direct.claim().unwrap().is_none());
     let mut previous = 0;
     for _ in 0..2 {
         direct.enable(route.id()).unwrap();
+        assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Enabled(route.mode()));
+        assert_eq!(direct.enable(route.id()), Err(aplic::Failure::Busy));
         // Enable the actual device's transmitter-empty interrupt; no APLIC
         // software pending injection and no SBI console calls in this window.
         uart_write(serial, 1, 2);
@@ -161,6 +190,7 @@ fn external_test(boot: &Boot<'_>) {
             // Borrow ends here, but the persistent hardware obligation remains.
         }
         assert!(matches!(direct.claim(), Err(aplic::Failure::Busy)));
+        assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Masked(route.mode()));
         let mut claim = direct.current().expect("retained original claim");
         assert_eq!(claim.round(), previous);
         assert_eq!(uart_read(serial, 2) & 0x0f, 2, "UART THRE cause");
@@ -173,8 +203,16 @@ fn external_test(boot: &Boot<'_>) {
     assert!(direct.current().is_none());
     assert!(direct.claim().unwrap().is_none());
     unsafe { direct.shut() }.unwrap();
+    assert_eq!(direct.state(), aplic::State::Shut);
+    assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Vacant);
+    assert_eq!(unsafe { direct.open() }, Err(aplic::Failure::Busy));
+    assert_eq!(unsafe { direct.configure(route) }, Err(aplic::Failure::Busy));
+    assert_eq!(direct.enable(route.id()), Err(aplic::Failure::Busy));
+    assert!(matches!(direct.claim(), Err(aplic::Failure::Busy)));
+    unsafe { direct.shut() }.unwrap();
+    assert_eq!(direct.state(), aplic::State::Shut);
     assert_eq!(uart_read(serial, 1), 0);
-    boot::write("\nPASS aplic-direct received=2 cleared=2 stale=1 shutdown=1\n");
+    boot::write("\nPASS aplic-direct received=2 cleared=2 stale=1 shutdown=1 states=1 rejected=1\n");
 }
 
 #[unsafe(no_mangle)]

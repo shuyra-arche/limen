@@ -29,6 +29,43 @@ pub enum Failure {
     Exhausted,
 }
 
+/// The actual domain lifecycle. A partial shut cannot be reopened.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum State {
+    Prepared,
+    Opening,
+    Open,
+    Shutting,
+    Shut,
+    Uncertain(Effect),
+}
+
+/// The exact operation whose original hardware effect was not confirmed.
+/// Source and reception records retain the corresponding mode or claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Effect {
+    Opening,
+    Configure(u32),
+    Enable(u32),
+    Receive,
+    Mask(u32),
+    ShutDelivery,
+    Retire(u32),
+}
+
+/// A source's locally owned programming state, indexed by its hardware ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum Source {
+    Vacant,
+    Configuring(Mode),
+    Masked(Mode),
+    Enabling(Mode),
+    Enabled(Mode),
+    Masking(Mode),
+    Retiring(Mode),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Record {
     round: u64,
@@ -69,7 +106,7 @@ impl Claim<'_, '_> {
 enum Reception {
     Empty,
     Receiving(u64),
-    Claimed(Record),
+    Received(Record),
     Uncertain(u64, u32),
 }
 
@@ -80,11 +117,10 @@ enum Reception {
 pub struct Direct<'a> {
     description: Description<'a>,
     base: usize,
-    modes: [Option<Mode>; SOURCE_LIMIT as usize + 1],
+    sources: [Source; SOURCE_LIMIT as usize + 1],
     reception: Reception,
     next: u64,
-    opened: bool,
-    uncertain: bool,
+    state: State,
     local: PhantomData<*mut ()>,
 }
 
@@ -96,6 +132,7 @@ impl<'a> Direct<'a> {
     /// and access rights for this lifetime. Old delivery, programming and
     /// device obligations are settled; no independent agent writes this
     /// domain. Preserve the original owner through shutdown and retirement.
+    /// No old source may remain configured, enabled or pending.
     /// This first profile admits a single destination context and never
     /// accesses the machine-level parent domain.
     pub unsafe fn admit(description: Description<'a>, base: usize) -> Result<Self, Failure> {
@@ -114,22 +151,25 @@ impl<'a> Direct<'a> {
         let instance = Self {
             description,
             base,
-            modes: [None; SOURCE_LIMIT as usize + 1],
+            sources: [Source::Vacant; SOURCE_LIMIT as usize + 1],
             reception: Reception::Empty,
             next: 1,
-            opened: false,
-            uncertain: false,
+            state: State::Prepared,
             local: PhantomData,
         };
         instance.context()?;
         if instance.read(DOMAIN) != DIRECT
             || instance.read(instance.idc(DELIVERY)) != 0
             || instance.read(instance.idc(FORCE)) != 0
+            || instance.local_enabled()
         {
             return Err(Failure::Busy);
         }
         for source in 1..=description.sources() {
-            if instance.bit(ENABLE, source) || instance.bit(PENDING, source) {
+            if instance.read(source as usize * 4) != 0
+                || instance.bit(ENABLE, source)
+                || instance.bit(PENDING, source)
+            {
                 return Err(Failure::Busy);
             }
         }
@@ -145,12 +185,39 @@ impl<'a> Direct<'a> {
         Ok(())
     }
 
-    fn available(&self) -> Result<(), Failure> {
+    pub fn state(&self) -> State {
+        self.state
+    }
+
+    pub fn source(&self, source: u32) -> Result<Source, Failure> {
+        if !(1..=self.description.sources()).contains(&source) {
+            return Err(Failure::Range);
+        }
+        Ok(self.sources[source as usize])
+    }
+
+    fn quiet(&self) -> Result<(), Failure> {
         self.context()?;
-        if self.uncertain || !matches!(self.reception, Reception::Empty) {
+        if !matches!(self.reception, Reception::Empty) {
             return Err(Failure::Busy);
         }
         Ok(())
+    }
+
+    fn local_enabled(&self) -> bool {
+        let enabled: usize;
+        unsafe { asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem)) };
+        enabled & EXTERNAL != 0
+    }
+
+    fn set_local(&mut self, enabled: bool) {
+        unsafe {
+            if enabled {
+                asm!("csrs sie, {}", in(reg) EXTERNAL, options(nostack));
+            } else {
+                asm!("csrc sie, {}", in(reg) EXTERNAL, options(nostack));
+            }
+        }
     }
 
     fn idc(&self, register: usize) -> usize {
@@ -179,10 +246,11 @@ impl<'a> Direct<'a> {
         self.read(register + (source as usize / 32) * 4) & (1 << (source % 32)) != 0
     }
 
-    fn unconfirmed(&mut self) -> Failure {
-        // Retain the original owner and all possibly issued writes.
-        self.uncertain = true;
-        unsafe { asm!("csrc sie, {}", in(reg) EXTERNAL, options(nostack)) };
+    fn unconfirmed(&mut self, effect: Effect) -> Failure {
+        // Preserve the original operation and any source or claim transition.
+        // Attempt to stop local delivery; this is not proof of isolation.
+        self.state = State::Uncertain(effect);
+        self.set_local(false);
         Failure::Unconfirmed
     }
 
@@ -191,52 +259,72 @@ impl<'a> Direct<'a> {
     /// and this is its sole legitimate programming owner. No pending input is
     /// discarded. Actual sourcecfg/target support is checked by readback.
     pub unsafe fn configure(&mut self, route: Route<'a>) -> Result<(), Failure> {
-        self.available()?;
-        if route.domain() != self.description.source() || route.id > self.description.sources() {
-            return Err(Failure::Scope);
-        }
-        let source = route.id;
-        let index = source as usize;
-        if self.modes[index].is_some() || self.bit(ENABLE, source) || self.bit(PENDING, source) {
+        self.quiet()?;
+        if !matches!(self.state, State::Prepared | State::Open) {
             return Err(Failure::Busy);
         }
-        let target = ((self.description.index() as u32) << 18) | 1;
-        self.modes[index] = Some(route.mode);
-        self.write(index * 4, route.mode as u32);
-        self.write(TARGET + index * 4, target);
-        if self.read(index * 4) != route.mode as u32 || self.read(TARGET + index * 4) != target {
-            return Err(self.unconfirmed());
+        if route.domain() != self.description.source() {
+            return Err(Failure::Scope);
         }
+        let source = route.id();
+        let index = source as usize;
+        if self.source(source)? != Source::Vacant
+            || self.bit(ENABLE, source)
+            || self.bit(PENDING, source)
+        {
+            return Err(Failure::Busy);
+        }
+        let mode = route.mode();
+        let target = ((self.description.index() as u32) << 18) | 1;
+        self.sources[index] = Source::Configuring(mode);
+        self.write(index * 4, mode as u32);
+        self.write(TARGET + index * 4, target);
+        if self.read(index * 4) != mode as u32 || self.read(TARGET + index * 4) != target {
+            return Err(self.unconfirmed(Effect::Configure(source)));
+        }
+        self.sources[index] = Source::Masked(mode);
         Ok(())
     }
 
     /// Enable an already prepared route, retaining all original pending bits.
     pub fn enable(&mut self, source: u32) -> Result<(), Failure> {
-        self.available()?;
-        self.mode(source)?;
+        self.quiet()?;
+        if self.state != State::Open {
+            return Err(Failure::Busy);
+        }
+        self.next.checked_add(1).ok_or(Failure::Exhausted)?;
+        let Source::Masked(mode) = self.source(source)? else {
+            return Err(Failure::Busy);
+        };
+        self.sources[source as usize] = Source::Enabling(mode);
         self.write(SET_ENABLE, source);
         if !self.bit(ENABLE, source) {
-            return Err(self.unconfirmed());
+            return Err(self.unconfirmed(Effect::Enable(source)));
         }
+        self.sources[source as usize] = Source::Enabled(mode);
         Ok(())
     }
 
-    fn mode(&self, source: u32) -> Result<Mode, Failure> {
-        self.modes
-            .get(source as usize)
-            .copied()
-            .flatten()
-            .ok_or(Failure::Range)
+    // The source's original mode survives a failed or unconfirmed mask.
+    fn mask(&mut self, source: u32, mode: Mode) -> Result<(), Failure> {
+        self.sources[source as usize] = Source::Masking(mode);
+        self.write(CLEAR_ENABLE, source);
+        if self.bit(ENABLE, source) {
+            return Err(self.unconfirmed(Effect::Mask(source)));
+        }
+        self.sources[source as usize] = Source::Masked(mode);
+        Ok(())
     }
 
     /// # Safety
     /// Before global SIE is enabled, the caller installs a trusted reception
     /// path with enough capacity. This domain has one exclusive claim slot.
     pub unsafe fn open(&mut self) -> Result<(), Failure> {
-        self.available()?;
-        if self.opened {
+        self.quiet()?;
+        if self.state != State::Prepared {
             return Err(Failure::Busy);
         }
+        self.state = State::Opening;
         self.write(self.idc(THRESHOLD), 0);
         self.write(self.idc(DELIVERY), 1);
         self.write(DOMAIN, ENABLED);
@@ -244,25 +332,22 @@ impl<'a> Direct<'a> {
             || self.read(self.idc(DELIVERY)) != 1
             || self.read(self.idc(THRESHOLD)) != 0
         {
-            return Err(self.unconfirmed());
+            return Err(self.unconfirmed(Effect::Opening));
         }
-        self.opened = true;
-        let enabled: usize;
-        unsafe {
-            asm!("csrs sie, {mask}", "csrr {enabled}, sie",
-                mask = in(reg) EXTERNAL, enabled = out(reg) enabled, options(nostack));
+        self.set_local(true);
+        if !self.local_enabled() {
+            return Err(self.unconfirmed(Effect::Opening));
         }
-        if enabled & EXTERNAL == 0 {
-            return Err(self.unconfirmed());
-        }
+        self.state = State::Open;
         Ok(())
     }
 
     /// Reserve the only reception slot before the destructive claimi read.
-    /// A nonempty claim remains recorded until explicitly settled.
+    /// A nonempty claim remains recorded until explicitly settled. On identity
+    /// exhaustion the caller must not open another reception window.
     pub fn claim(&mut self) -> Result<Option<Claim<'_, 'a>>, Failure> {
-        self.available()?;
-        if !self.opened {
+        self.quiet()?;
+        if self.state != State::Open {
             return Err(Failure::Busy);
         }
         let round = self.next;
@@ -275,33 +360,39 @@ impl<'a> Direct<'a> {
         }
         let source = (raw >> 16) & 0x3ff;
         let priority = raw as u8;
-        if raw & !0x03ff_00ff != 0 || priority == 0 || self.mode(source).is_err() {
-            self.reception = Reception::Uncertain(round, raw);
-            return Err(self.unconfirmed());
-        }
-        let claim = Record {
+        let mode = match self.source(source) {
+            Ok(Source::Enabled(mode)) if raw & !0x03ff_00ff == 0 && priority == 1 => mode,
+            _ => {
+                self.reception = Reception::Uncertain(round, raw);
+                return Err(self.unconfirmed(Effect::Receive));
+            }
+        };
+        let record = Record {
             round,
             source,
             priority,
         };
-        self.reception = Reception::Claimed(claim);
-        self.write(CLEAR_ENABLE, source);
-        if self.bit(ENABLE, source) {
-            return Err(self.unconfirmed());
-        }
+        // Keep the original result before the next hardware effect (mask).
+        self.reception = Reception::Received(record);
+        self.mask(source, mode)?;
         Ok(Some(Claim {
             owner: self,
-            record: claim,
+            record,
         }))
     }
 
-    /// Reborrow the original unclosed claim, without another destructive read.
+    /// Reborrow the original confirmed claim without another destructive read.
     pub fn current(&mut self) -> Option<Claim<'_, 'a>> {
         match self.reception {
-            Reception::Claimed(record) => Some(Claim {
-                owner: self,
-                record,
-            }),
+            Reception::Received(record)
+                if self.state == State::Open
+                    && matches!(self.source(record.source), Ok(Source::Masked(_))) =>
+            {
+                Some(Claim {
+                    owner: self,
+                    record,
+                })
+            }
             _ => None,
         }
     }
@@ -311,6 +402,9 @@ impl<'a> Direct<'a> {
         match self.reception {
             Reception::Uncertain(round, raw) => Some((round, raw)),
             Reception::Receiving(round) => Some((round, 0)),
+            Reception::Received(record) if matches!(self.state, State::Uncertain(_)) => {
+                Some((record.round, (record.source << 16) | u32::from(record.priority)))
+            }
             _ => None,
         }
     }
@@ -319,15 +413,19 @@ impl<'a> Direct<'a> {
     // Direct delivery has no Complete write; preserve later pending edges.
     fn settle(&mut self, claim: Record) -> Result<(), Failure> {
         self.context()?;
-        if self.uncertain
-            || !matches!(self.reception, Reception::Claimed(record) if record == claim)
+        if self.state != State::Open
+            || !matches!(self.reception, Reception::Received(record) if record == claim)
         {
             return Err(Failure::Busy);
         }
+        let Source::Masked(mode) = self.source(claim.source)? else {
+            return Err(Failure::Busy);
+        };
         if self.bit(ENABLE, claim.source) {
-            return Err(self.unconfirmed());
+            self.sources[claim.source as usize] = Source::Masking(mode);
+            return Err(self.unconfirmed(Effect::Mask(claim.source)));
         }
-        if matches!(self.mode(claim.source)?, Mode::LevelHigh | Mode::LevelLow)
+        if matches!(mode, Mode::LevelHigh | Mode::LevelLow)
             && (self.bit(INPUT, claim.source) || self.bit(PENDING, claim.source))
         {
             return Err(Failure::Busy);
@@ -341,34 +439,61 @@ impl<'a> Direct<'a> {
     /// caller has excluded all in-flight old programming and delivery.
     /// There is no generic device stop or DMA retirement implied here.
     pub unsafe fn shut(&mut self) -> Result<(), Failure> {
-        self.available()?;
-        unsafe { asm!("csrc sie, {}", in(reg) EXTERNAL, options(nostack)) };
-        self.write(DOMAIN, 0);
-        self.write(self.idc(DELIVERY), 0);
-        self.opened = false;
-        if self.read(DOMAIN) != DIRECT || self.read(self.idc(DELIVERY)) != 0 {
-            return Err(self.unconfirmed());
-        }
-        for source in 1..=self.description.sources() {
-            if self.mode(source).is_ok() {
-                self.write(CLEAR_ENABLE, source);
-                if self.bit(ENABLE, source) {
-                    return Err(self.unconfirmed());
+        self.quiet()?;
+        match self.state {
+            State::Shut => return Ok(()),
+            State::Prepared | State::Open => {
+                self.state = State::Shutting;
+                self.set_local(false);
+                self.write(DOMAIN, 0);
+                self.write(self.idc(DELIVERY), 0);
+                if self.local_enabled()
+                    || self.read(DOMAIN) != DIRECT
+                    || self.read(self.idc(DELIVERY)) != 0
+                {
+                    return Err(self.unconfirmed(Effect::ShutDelivery));
                 }
-                if self.bit(PENDING, source) {
+            }
+            State::Shutting => {}
+            _ => return Err(Failure::Busy),
+        }
+
+        // First mask every enabled source. A pending source must not leave
+        // a later source enabled when the operation returns Busy.
+        for source in 1..=self.description.sources() {
+            if let Source::Enabled(mode) = self.source(source)? {
+                self.mask(source, mode)?;
+            }
+        }
+        // No source is retired until the entire closing domain is drained.
+        // Level inputs and edge pending are separate hardware evidence.
+        for source in 1..=self.description.sources() {
+            if let Source::Masked(mode) = self.source(source)? {
+                if self.bit(ENABLE, source) {
+                    self.sources[source as usize] = Source::Masking(mode);
+                    return Err(self.unconfirmed(Effect::Mask(source)));
+                }
+                if self.bit(PENDING, source)
+                    || (matches!(mode, Mode::LevelHigh | Mode::LevelLow) && self.bit(INPUT, source))
+                {
                     return Err(Failure::Busy);
                 }
+            } else if self.source(source)? != Source::Vacant {
+                return Err(Failure::Busy);
             }
         }
         for source in 1..=self.description.sources() {
-            if self.mode(source).is_ok() {
-                self.write(source as usize * 4, 0);
-                if self.read(source as usize * 4) != 0 {
-                    return Err(self.unconfirmed());
+            if let Source::Masked(mode) = self.source(source)? {
+                let index = source as usize;
+                self.sources[index] = Source::Retiring(mode);
+                self.write(index * 4, 0);
+                if self.read(index * 4) != 0 {
+                    return Err(self.unconfirmed(Effect::Retire(source)));
                 }
-                self.modes[source as usize] = None;
+                self.sources[index] = Source::Vacant;
             }
         }
+        self.state = State::Shut;
         Ok(())
     }
 }

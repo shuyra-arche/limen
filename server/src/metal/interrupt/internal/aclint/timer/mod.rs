@@ -9,7 +9,7 @@ use limen_treaty::model::{ByteLength, PhysicalRange};
 #[cfg(limen_firmware = "sbi")]
 mod supervisor;
 #[cfg(limen_firmware = "sbi")]
-pub use supervisor::{Failure, State, Timer};
+pub use supervisor::{Effect, Failure, Prior, State, Timer, Write};
 
 /// MTIMER's original machine-level storage and the exact Hart comparator.
 /// Neither range grants S-mode access.

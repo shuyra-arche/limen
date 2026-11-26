@@ -64,6 +64,26 @@ handoff. Runtime admission of a Buddy region requires the Allocator source.
 RUSTFLAGS=-Dwarnings cargo test --locked -p kernel --lib --target x86_64-unknown-linux-gnu metal::allocator
 ```
 
+## RV64 interrupt backends
+
+[The interrupt target](target/entry/interrupt/) selects the exact single-Hart
+QEMU machine profile `virt,aia=aplic,aclint=on` with `rv64,sstc=false`.
+It exercises real supervisor timer and UART external traps, original claim
+retention, explicit state admission, rearm, shutdown and rejected operations.
+The guest temporarily installs its own bounded reception window; this is not
+ordinary runtime Trap or Interrupt Server integration.
+
+```sh
+server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
+  --suite server/tests/target/entry/interrupt --kernel "$PWD" \
+  --output /tmp/limen-interrupt --profile debug
+```
+
+Repeat with `--profile release`. The [Quint state contracts](https://github.com/shuyra-arche/document-limen/tree/master/tests/interrupt)
+also cover unknown readbacks, retained pending edges during shutdown, and
+finite identity exhaustion. Their abstract evidence inputs are not hardware
+fault-injection tests.
+
 ## RV64 boot
 
 The Boot owner keeps its platform image and assertions in [target/entry/boot/](target/entry/boot/).
