@@ -9,11 +9,11 @@
 | [Verification](../server/tests/README.md) | Host checks, QEMU guests and their expected observations |
 | [Source history](history.md) | Upstream checkpoints and notices |
 
-Metal follows actual mechanisms: Boot, Firmware, Hart and Execution are
-separate owners with local machine backends. The checked bootstrap cursor and
-RV64 page-table entry algorithms are tested at their Allocator and Internal MMU
-locations; this layout change does not yet enable ordinary allocation or MMU
-operations. See the [formal Metal organization](https://github.com/shuyra-arche/document-limen/blob/246170c626ee2b5e316753e95f50f1669e8f47dd/server/metal/README.md).
+Metal separates Boot, Firmware, Hart, Sync and Execution by mechanism. The boot
+handoff can establish an Allocator from admitted RAM and an exclusive mapped
+root. Allocator owns exact physical allocation and return, while Internal MMU
+validates mapped storage and its Host tests exercise the RV64 page-table entry
+algorithms. See the [formal Metal organization](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/README.md).
 
 For build commands see the [repository README](../README.md). The architecture
 and Treaty contracts are maintained in [Document Limen](https://github.com/shuyra-arche/document-limen).
