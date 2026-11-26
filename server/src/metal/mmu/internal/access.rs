@@ -2,7 +2,7 @@
 
 use core::mem::MaybeUninit;
 
-use crate::entry::boot::Physical;
+use crate::metal::firmware::devicetree::memory::Physical;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -29,10 +29,7 @@ impl<'a> MappedRange<'a> {
     /// compatible attributes and the backing material until all derived
     /// borrows and typed objects have ended. A numeric address or a
     /// successfully checked physical extent does not establish these facts.
-    pub unsafe fn new(
-        physical: Physical,
-        bytes: &'a mut [MaybeUninit<u8>],
-    ) -> Result<Self, Error> {
+    pub unsafe fn new(physical: Physical, bytes: &'a mut [MaybeUninit<u8>]) -> Result<Self, Error> {
         let length = physical.end.checked_sub(physical.start);
         if bytes.is_empty() || length.and_then(|n| usize::try_from(n).ok()) != Some(bytes.len()) {
             return Err(Error::Range);

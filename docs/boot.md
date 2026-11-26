@@ -53,3 +53,28 @@ cursor is under `metal/allocator/` and is not a runtime allocator. Each
 function selects its own machine backend; Boot uses the firmware adapter
 for the chosen entry protocol. The platform image supplies board discovery, device
 addresses and startup resources. [Platform contracts](platforms.md) · [Early exceptions](exceptions.md)
+
+## Mapped storage
+
+A physical extent is a coordinate, not a Rust pointer or an access grant.
+The actual mapping owner supplies an exclusive `access::MappedRange` with
+valid storage and physical correspondence for the entire borrow. Splitting
+it consumes the original borrow, produces disjoint subranges, and does not
+split an Allocation or issue a new refund right. Root reservation retains
+the actual selected mapping and accounts for its whole reserved granules.
+
+For ordinary issued material, `allocator::MappedStorage::prepare` combines
+the unique Allocation and its exclusive mapping. The complete physical
+ranges must match; equal ranges or lengths alone do not prove the original
+allocation generation or the real mapping. Its unsafe boundary requires
+that independent evidence from the actual owner. A failed pair returns
+both original inputs. Pool installation consumes the pair only after all
+directory, layout, capacity and original Return checks succeed. It retains
+the actual source and mapping lifetime, and does not treat software closure
+or an address as proof of retirement. No arbitrary slice or implicit global
+heap is accepted by the Pool.
+
+The existing boot fixtures use their actual reserved/issued RAM and the
+initial machine mapping. This does not establish dynamic map/unmap,
+successor-root installation or complete firmware CPU/DMA retirement. Those
+require their own target evidence.

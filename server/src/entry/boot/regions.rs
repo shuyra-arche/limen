@@ -41,15 +41,14 @@ pub struct Regions<'a> {
 /// Storage reserved for a root layout. Its entire backing granules have
 /// already been removed from the geometry.
 pub struct RootStorage<'a> {
-    physical: Physical,
+    mapping: MappedRange<'a>,
     reserved: Physical,
     source: RegionSource,
-    bytes: &'a mut [MaybeUninit<u8>],
 }
 
 impl<'a> RootStorage<'a> {
     pub fn physical(&self) -> Physical {
-        self.physical
+        self.mapping.physical()
     }
 
     pub fn reserved(&self) -> Physical {
@@ -61,11 +60,11 @@ impl<'a> RootStorage<'a> {
     }
 
     pub(crate) fn into_bytes(self) -> &'a mut [MaybeUninit<u8>] {
-        self.bytes
+        self.mapping.into_bytes()
     }
 
     pub fn bytes(&mut self) -> &mut [MaybeUninit<u8>] {
-        self.bytes
+        self.mapping.bytes()
     }
 }
 
@@ -346,8 +345,20 @@ impl<'a> Regions<'a> {
             reserved,
             offset,
         } = plan;
-        let mapped = mapping.take().expect("checked mapping");
-        let storage = &mut mapped.into_bytes()[offset];
+        let mut storage = mapping.take().expect("checked mapping");
+        let length = offset.end - offset.start;
+        if offset.start != 0 {
+            let (_, suffix) = storage
+                .split(offset.start)
+                .ok()
+                .expect("checked root start");
+            storage = suffix;
+        }
+        if length != storage.length() {
+            let (prefix, _) = storage.split(length).ok().expect("checked root end");
+            storage = prefix;
+        }
+        assert_eq!(storage.physical(), physical);
         match (left, right) {
             (Some(left), Some(right)) => {
                 self.entries.copy_within(index + 1..self.length, index + 2);
@@ -365,10 +376,9 @@ impl<'a> Regions<'a> {
             }
         }
         RootStorage {
-            physical,
+            mapping: storage,
             reserved,
             source: region.source,
-            bytes: storage,
         }
     }
 }

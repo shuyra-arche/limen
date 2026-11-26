@@ -248,6 +248,10 @@ mod sync {
 mod metal {
     pub(crate) use crate::identity;
 
+    pub(crate) mod firmware {
+        pub(crate) use crate::devicetree;
+    }
+
     pub mod hart {
         include!("../../../src/metal/hart/node.rs");
 

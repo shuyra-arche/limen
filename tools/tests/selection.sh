@@ -115,6 +115,9 @@ change server/tests/qemu.version
 change rust-toolchain.toml
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.full and .runner and .rv64' >/dev/null
+change server/src/metal/mmu/internal/access.rs
+[[ $(boards) == 'q35 rv64 virt' ]]
+bash "$checks" . "$base" | jq -e '.rv64 and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
 change server/src/metal/allocator/storage.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null
