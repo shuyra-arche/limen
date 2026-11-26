@@ -13,7 +13,6 @@ use kernel::{
     entry::boot::{Boot, Minor, Startup},
     metal::{
         processor::execution::description::riscv::{RiscvExtension, RiscvIsa},
-        processor::hart::riscv::description::RiscvCpus,
         memory::mmu::internal::riscv::{Mode, context::Context, description::RiscvMmu, encoder::Encoder},
         module::ModuleUse,
     },
@@ -50,7 +49,7 @@ pub fn check(boot: &Boot<'_>, modes: &[Mode]) -> usize {
     assert!(major < 2);
     let minor = 1 - major;
     let tree = boot.device_tree_description().unwrap();
-    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+    let cpus = boot.riscv_cpus();
     let count = tree
         .nodes()
         .filter(|node| {
@@ -67,7 +66,7 @@ pub fn check(boot: &Boot<'_>, modes: &[Mode]) -> usize {
         let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
         assert!(isa.has(RiscvExtension::InstructionFence));
     }
-    assert!(kernel::metal::platform::firmware::sbi::platform_services().hart_state_management());
+    assert!(boot.sbi_services().hart_state_management());
     assert_eq!(status(major), STARTED);
     assert_eq!(status(minor), STOPPED);
     minor

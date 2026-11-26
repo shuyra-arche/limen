@@ -47,6 +47,17 @@ impl<'a> Boot<'a> {
         self.descriptions.device_tree
     }
 
+    /// CPU scope already checked at the SBI handoff.
+    #[cfg(limen_firmware = "sbi")]
+    pub fn riscv_cpus(&self) -> &crate::metal::processor::hart::riscv::description::RiscvCpus<'a> {
+        self.descriptions.cpus.as_ref().expect("admitted SBI CPU scope")
+    }
+
+    #[cfg(limen_firmware = "sbi")]
+    pub fn sbi_services(&self) -> crate::metal::platform::firmware::sbi::SbiServices {
+        self.descriptions.sbi.expect("admitted SBI services")
+    }
+
     pub fn acpi(&self) -> Option<&Acpi<'a>> {
         self.descriptions.acpi.as_ref()
     }

@@ -66,13 +66,11 @@ pub(crate) unsafe fn admit<'a>(
         Ok(tree) => tree,
         Err(error) => Services::active().reject(format_args!("FAIL Limen boot: DTB {error:?}\n")),
     };
-    let cpus = RiscvCpus::new(tree).and_then(|cpus| {
-        cpus.as_ref().map_or(Ok(false), |cpus| {
-            cpus.cpu(hart as u64)
-                .map(|cpu| cpu.is_some_and(|cpu| cpu.enabled()))
-        })
-    });
-    match cpus {
+    let cpus = match RiscvCpus::new(tree) {
+        Ok(Some(cpus)) => cpus,
+        _ => Services::active().reject(format_args!("FAIL Limen boot: missing CPU scope\n")),
+    };
+    match cpus.cpu(hart as u64).map(|cpu| cpu.is_some_and(|cpu| cpu.enabled())) {
         Ok(true) => {}
         Ok(false) => Services::active().reject(format_args!(
             "FAIL Limen boot: firmware Hart missing or disabled in DTB\n"
@@ -83,9 +81,12 @@ pub(crate) unsafe fn admit<'a>(
     }
     // The entry ABI supplies the current Hart identity in a0. HSM can also
     // report the state of that named Hart when the extension is available.
-    if platform_services().hart_state_management() && !hart_started(hart) {
+    let sbi = platform_services();
+    if sbi.hart_state_management() && !hart_started(hart) {
         Services::active().reject(format_args!("FAIL Limen boot: SBI Hart status mismatch\n"));
     }
+    descriptions.cpus = Some(cpus);
+    descriptions.sbi = Some(sbi);
     descriptions.device_tree = Some(tree);
     let image = PhysicalRange::new(
         PhysicalAddress::new(image.start as u64),

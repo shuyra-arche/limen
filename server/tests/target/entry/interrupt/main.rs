@@ -10,8 +10,6 @@ use kernel::{
             external::aplic::{self, Direct, Mode},
             internal::aclint::timer::{self, State, Timer},
         },
-        platform::firmware::sbi::platform_services,
-        processor::hart::riscv::description::RiscvCpus,
     },
 };
 
@@ -61,9 +59,9 @@ unsafe extern "C" fn receive(until: u64) -> usize {
 
 fn timer_test(boot: &Boot<'_>) {
     let tree = boot.device_tree_description().expect("trusted RV64 DTB");
-    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
-    let timebase = RiscvTimebase::describe(&cpus).unwrap().unwrap();
-    let description = timer::Description::read(&tree, boot.hart() as u64)
+    let cpus = boot.riscv_cpus();
+    let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();
+    let description = timer::Description::read(&tree, cpus, boot.hart() as u64)
         .unwrap()
         .expect("ACLINT machine timer");
     assert_eq!(description.clock_scope(), timebase.source());
@@ -72,7 +70,7 @@ fn timer_test(boot: &Boot<'_>) {
     assert_eq!(description.hart(), boot.hart() as u64);
     // The runner's exact machine configuration has ACLINT and disables Sstc.
     // OpenSBI owns the machine comparator; the guest never maps or writes it.
-    let services = platform_services();
+    let services = boot.sbi_services();
     let mut timer = unsafe { Timer::admit(description, timebase, services) }.unwrap();
     assert_eq!(timer.state(), State::Inherited);
     assert_eq!(timer.arm(1), Err(timer::Failure::Busy));
@@ -133,9 +131,9 @@ fn uart_write(base: usize, register: usize, value: u8) {
 
 fn external_test(boot: &Boot<'_>) {
     let tree = boot.device_tree_description().unwrap();
-    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
-    let timebase = RiscvTimebase::describe(&cpus).unwrap().unwrap();
-    let description = aplic::Description::read(&tree, boot.hart() as u64)
+    let cpus = boot.riscv_cpus();
+    let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();
+    let description = aplic::Description::read(&tree, cpus, boot.hart() as u64)
         .unwrap()
         .expect("supervisor direct APLIC");
     assert_eq!(description.contexts(), 1);

@@ -1,4 +1,5 @@
 //! Physical target indices, source scope and machine timer geometry.
+use crate::metal::processor::hart::riscv::description::RiscvCpus;
 use super::Fixture;
 use kernel::metal::{
     interrupt::{external::aplic, internal::aclint::timer},
@@ -70,7 +71,8 @@ fn fixture(
 fn sparse_hart_ids_follow_the_actual_controller_order() {
     let bytes = fixture(&[2, 9, 1, 9], &[2, 7, 1, 7], 10, 5, 0x8000);
     let tree = DeviceTree::new(&bytes).unwrap();
-    let aplic = aplic::Description::read(&tree, 3).unwrap().unwrap();
+    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+    let aplic = aplic::Description::read(&tree, &cpus, 3).unwrap().unwrap();
     assert_eq!(aplic.hart(), 3);
     assert_eq!(aplic.index(), 1);
     assert_eq!(aplic.contexts(), 2);
@@ -80,7 +82,7 @@ fn sparse_hart_ids_follow_the_actual_controller_order() {
     assert_eq!(route.domain(), aplic.source());
     assert_eq!(route.id(), 10);
     assert_eq!(route.mode(), aplic::Mode::LevelHigh);
-    let timer = timer::Description::read(&tree, 3).unwrap().unwrap();
+    let timer = timer::Description::read(&tree, &cpus, 3).unwrap().unwrap();
     assert_eq!(timer.counter().start().get(), 0x0200_bff8);
     assert_eq!(timer.comparator().start().get(), 0x0200_4008);
     assert_eq!(timer.comparator().length().get(), 8);
@@ -100,7 +102,8 @@ fn malformed_or_mixed_targets_are_not_admitted() {
     ] {
         let bytes = fixture(targets, &[2, 7, 1, 7], 10, 5, 0x8000);
         let tree = DeviceTree::new(&bytes).unwrap();
-        assert_eq!(aplic::Description::read(&tree, 3).err(), Some(error));
+    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+        assert_eq!(aplic::Description::read(&tree, &cpus, 3).err(), Some(error));
     }
     for (targets, error) in [
         (&[1, 7, 1, 7][..], Error::Conflict),
@@ -109,7 +112,8 @@ fn malformed_or_mixed_targets_are_not_admitted() {
     ] {
         let bytes = fixture(&[2, 9, 1, 9], targets, 10, 5, 0x8000);
         let tree = DeviceTree::new(&bytes).unwrap();
-        assert_eq!(timer::Description::read(&tree, 3).err(), Some(error));
+    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+        assert_eq!(timer::Description::read(&tree, &cpus, 3).err(), Some(error));
     }
 }
 
@@ -122,11 +126,13 @@ fn routes_and_windows_are_checked_before_native_access() {
     ] {
         let bytes = fixture(&[2, 9, 1, 9], &[2, 7, 1, 7], source, parent, 0x8000);
         let tree = DeviceTree::new(&bytes).unwrap();
-        let description = aplic::Description::read(&tree, 3).unwrap().unwrap();
+    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+        let description = aplic::Description::read(&tree, &cpus, 3).unwrap().unwrap();
         let device = tree.find_path(b"/device").unwrap().unwrap();
         assert_eq!(description.route(&tree, device).err(), Some(error));
     }
     let bytes = fixture(&[2, 9, 1, 9], &[2, 7, 1, 7], 10, 5, 0x4000);
     let tree = DeviceTree::new(&bytes).unwrap();
-    assert_eq!(aplic::Description::read(&tree, 3).err(), Some(Error::Range));
+    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+    assert_eq!(aplic::Description::read(&tree, &cpus, 3).err(), Some(Error::Range));
 }

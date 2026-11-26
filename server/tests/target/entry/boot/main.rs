@@ -7,7 +7,7 @@ use core::panic::PanicInfo;
 use kernel::metal::{
     chrono::riscv::RiscvTimebase,
     processor::execution::description::riscv::RiscvExtension, processor::execution::description::riscv::RiscvIsa,
-    platform::description::devicetree::memory::Source, processor::hart::riscv::description::RiscvCpus,
+    platform::description::devicetree::memory::Source,
     memory::mmu::internal::riscv::description::{MaximumMode, RiscvMmu},
 };
 use kernel::entry::boot::{Boot, shutdown, stack_range, write};
@@ -60,7 +60,7 @@ global_asm!(
 
 fn check_discovery(boot: &Boot<'_>) {
     let tree = boot.device_tree_description().expect("OpenSBI source tree");
-    let cpus = RiscvCpus::new(tree).unwrap().expect("QEMU CPU scope");
+    let cpus = boot.riscv_cpus();
     let hart = boot.hart() as u64;
     let cpu = cpus.cpu(hart).unwrap().expect("actual Hart description");
     assert_eq!(cpu.id(), hart);
@@ -87,13 +87,13 @@ fn check_discovery(boot: &Boot<'_>) {
         assert!(isa.has(extension));
     }
 
-    let timebase = RiscvTimebase::describe(&cpus)
+    let timebase = RiscvTimebase::describe(cpus)
         .unwrap()
         .expect("QEMU timebase");
     assert_eq!(timebase.source(), cpus.node().id());
     assert_eq!(timebase.hertz(), 10_000_000);
     assert!(boot.acpi().is_none(), "SBI supplied a DTB, not ACPI");
-    let sbi = kernel::metal::platform::firmware::sbi::platform_services();
+    let sbi = boot.sbi_services();
     assert!(sbi.hart_state_management() && sbi.timer() && sbi.inter_processor_interrupt());
     write("PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1\n");
 }
