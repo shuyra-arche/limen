@@ -109,6 +109,18 @@ impl Allowance {
         self.id
     }
 
+    pub(crate) fn plan_spender<'a>(&self, plan: &mut LockPlan<'a, '_>) -> Result<(), Error> {
+        plan.insert(self.source.slot(self.id)?)
+            .map_err(|_| Error::Capacity)
+    }
+
+    pub(crate) fn check_spender(&self, held: &mut HeldLockSet<'_>) -> Result<(), Error> {
+        held.access(self.source.slot(self.id)?)
+            .ok_or(Error::Protection)?
+            .open(self.id)?;
+        Ok(())
+    }
+
     pub fn balance(&self) -> Result<Balance, Error> {
         with_turn(self.source.slot(self.id)?, |slot| {
             slot.live(self.id).map(|pair| pair.0)

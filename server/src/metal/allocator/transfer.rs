@@ -95,11 +95,51 @@ impl Retired {
     pub fn physical(&self) -> Physical {
         self.0.physical
     }
+
+    /// Hand off to the original source and record the prepaid refund
+    /// receipt before releasing its Region Turn.
+    ///
+    /// # Safety
+    ///
+    /// The output must be the actual owner's durable receipt position.
+    pub unsafe fn begin_return(
+        self,
+        receipt: &mut Option<ReturnReceipt>,
+    ) -> Result<(), (Self, Error)> {
+        if receipt.is_some() {
+            return Err((self, Error::Receiver));
+        }
+        let source = self.0.source;
+        source.accept_return(self, ReceiptOwner::Receiver, |id| {
+            *receipt = Some(ReturnReceipt { source, id });
+        })
+    }
+}
+
+/// The original owner's prepaid refund and acknowledgement position.
+#[must_use]
+pub struct ReturnReceipt {
+    source: &'static Allocator,
+    id: ReturnId,
+}
+
+impl ReturnReceipt {
+    /// Finish the original refund or read its retained result.
+    pub fn finish(&self, mode: Acquisition) -> Result<Returned, Error> {
+        self.source.finish_return(self.id, mode)
+    }
+
+    /// Release the original owner's completed receipt position.
+    pub fn acknowledge(&self) -> Result<(), Error> {
+        with_turn(self.source.return_state(self.id)?, |state| {
+            state.acknowledge_return(self.id, ReceiptOwner::Receiver)
+        })?
+    }
 }
 
 #[derive(Clone, Copy)]
 pub(super) enum Phase {
-    Reserved(&'static TurnLock<Construction>),
+    Reserved(&'static Construction),
     Issued,
     Returning,
 }
@@ -123,6 +163,7 @@ pub(super) enum ReturnRecord {
 pub(super) enum ReceiptOwner {
     Caller,
     Pool,
+    Receiver,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -144,7 +185,12 @@ struct Reservation {
     id: AllocationId,
     allowance: AllowanceId,
     candidate: Candidate,
+    spender: Option<Spender>,
 }
+
+/// The canonical lock address of the original, permanently installed Pend.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct Spender(pub(crate) usize);
 
 enum Preparation {
     Open,
@@ -153,37 +199,79 @@ enum Preparation {
     Issued(Option<Allocation>),
 }
 
+impl Preparation {
+    fn close(&mut self) -> Result<(), Error> {
+        match *self {
+            Self::Open => *self = Self::Closed(None),
+            Self::Reserved(reservation) => *self = Self::Closed(Some(reservation)),
+            Self::Closed(_) => {}
+            Self::Issued(_) => return Err(Error::Receiver),
+        }
+        Ok(())
+    }
+
+    fn closed_reservation(&self) -> Result<Option<Reservation>, Error> {
+        match self {
+            Self::Closed(reservation) => Ok(*reservation),
+            _ => Err(Error::Receiver),
+        }
+    }
+}
+
 /// An actual consumer's persistent, single-use preparation and receiving
-/// position. The consumer keeps the canonical Turn lock stable and can
-/// inspect its original responsibility after a failed attempt.
+/// position. The private Turn keeps an accepted reservation or material in
+/// place until the original owner settles or hands it off.
 pub struct Construction {
-    preparation: Preparation,
+    state: TurnLock<Preparation>,
 }
 
 impl Construction {
     pub const fn new() -> Self {
         Self {
-            preparation: Preparation::Open,
+            state: TurnLock::new(Preparation::Open),
         }
     }
 
-    pub fn reservation(&self) -> Option<(RegionId, AllowanceId)> {
-        match self.preparation {
-            Preparation::Reserved(reservation) | Preparation::Closed(Some(reservation)) => {
-                Some((reservation.id.region, reservation.allowance))
-            }
-            _ => None,
-        }
-    }
-
-    pub fn close(&mut self) {
-        match self.preparation {
-            Preparation::Open => self.preparation = Preparation::Closed(None),
+    pub(crate) fn reservation(&self) -> Result<(RegionId, AllowanceId), Error> {
+        with_turn(&self.state, |state| match state {
             Preparation::Reserved(reservation) => {
-                self.preparation = Preparation::Closed(Some(reservation));
+                Ok((reservation.id.region, reservation.allowance))
             }
-            _ => {}
-        }
+            _ => Err(Error::Receiver),
+        })?
+    }
+
+    /// Include this receiver in a joint operation without exposing its state.
+    pub fn plan<'a>(&'a self, plan: &mut LockPlan<'a, '_>) -> Result<(), Error> {
+        plan.insert(&self.state).map_err(|_| Error::Capacity)
+    }
+
+    /// Close the original preparation to issuance.
+    pub fn close(&self) -> Result<(), Error> {
+        with_turn(&self.state, Preparation::close)?
+    }
+
+    /// Close the original preparation inside the consumer's complete plan.
+    pub fn close_held(&self, held: &mut HeldLockSet<'_>) -> Result<(), Error> {
+        held.access(&self.state).ok_or(Error::Protection)?.close()
+    }
+
+    /// Cancel a closed preparation through its original Region and Allowance.
+    /// A settled cancellation can be replayed from the same receiver.
+    pub fn cancel(&'static self, mode: Acquisition) -> Result<(), Error> {
+        let Some(reservation) = with_turn(&self.state, |state| state.closed_reservation())?? else {
+            return Ok(());
+        };
+        let source = reservation.source;
+        let mut work = Work::<3>::new();
+        let mut plan = work.plan();
+        source.plan_construction(
+            &mut plan,
+            reservation.id.region,
+            reservation.allowance,
+            self,
+        )?;
+        plan.execute(mode, |held| source.cancel(held, self))?
     }
 
     /// The owner either keeps the issued material here or moves it to the
@@ -193,11 +281,17 @@ impl Construction {
     ///
     /// The original receiver must guarantee the next exact receiving position
     /// and preserve the obligation through failure and recovery.
-    pub unsafe fn take(&mut self) -> Option<Allocation> {
-        match &mut self.preparation {
-            Preparation::Issued(allocation) => allocation.take(),
-            _ => None,
+    pub unsafe fn take(&self, receiver: &mut Option<Allocation>) -> Result<(), Error> {
+        if receiver.is_some() {
+            return Err(Error::Receiver);
         }
+        with_turn(&self.state, |state| {
+            let Preparation::Issued(allocation) = state else {
+                return Err(Error::Receiver);
+            };
+            *receiver = Some(allocation.take().ok_or(Error::Receiver)?);
+            Ok(())
+        })?
     }
 }
 
@@ -288,14 +382,11 @@ fn remove<Scope: Copy + Eq, T>(table: &mut GenerationTable<'_, Scope, T>, key: K
 fn reservation(
     source: &Allocator,
     held: &mut HeldLockSet<'_>,
-    construction: &'static TurnLock<Construction>,
-    closed: bool,
+    construction: &'static Construction,
 ) -> Result<Reservation, Error> {
-    let receiver = held.access(construction).ok_or(Error::Protection)?;
-    let reservation = match (closed, &receiver.preparation) {
-        (false, Preparation::Reserved(reservation))
-        | (true, Preparation::Closed(Some(reservation))) => *reservation,
-        _ => return Err(Error::Receiver),
+    let receiver = held.access(&construction.state).ok_or(Error::Protection)?;
+    let Preparation::Reserved(reservation) = *receiver else {
+        return Err(Error::Receiver);
     };
     if !ptr::eq(source, reservation.source) {
         return Err(Error::Stale);
@@ -309,14 +400,13 @@ impl Allocator {
         plan: &mut LockPlan<'a, '_>,
         region: RegionId,
         allowance: AllowanceId,
-        construction: &'static TurnLock<Construction>,
+        construction: &'static Construction,
     ) -> Result<(), Error> {
         let region = self.region(region)?;
         let allowance = self.slot(allowance)?;
         plan.insert(&region.state).map_err(|_| Error::Capacity)?;
         plan.insert(allowance).map_err(|_| Error::Capacity)?;
-        plan.insert(construction).map_err(|_| Error::Capacity)?;
-        Ok(())
+        construction.plan(plan)
     }
 
     /// # Safety
@@ -325,20 +415,19 @@ impl Allocator {
     /// caller must revalidate its live role, ancestry, requested purpose and
     /// the exact candidate's layout and Allowance against that authorization.
     /// The construction is the real durable original request and receiver.
-    pub unsafe fn reserve(
+    pub(crate) unsafe fn reserve(
         &'static self,
         held: &mut HeldLockSet<'_>,
         candidate: Candidate,
         allowance: AllowanceId,
-        construction: &'static TurnLock<Construction>,
+        construction: &'static Construction,
+        spender: Option<Spender>,
     ) -> Result<AllocationId, Error> {
         if !ptr::eq(self, candidate.source) {
             return Err(Error::Stale);
         }
         if !matches!(
-            held.access(construction)
-                .ok_or(Error::Protection)?
-                .preparation,
+            held.access(&construction.state).ok_or(Error::Protection)?,
             Preparation::Open
         ) {
             return Err(Error::Receiver);
@@ -367,13 +456,13 @@ impl Allocator {
         );
         balance.reserved += amount;
         held.access(slot).expect("Allowance").state = SlotState::Open(balance);
-        held.access(construction).expect("receiver").preparation =
-            Preparation::Reserved(Reservation {
-                source: self,
-                id,
-                allowance,
-                candidate,
-            });
+        *held.access(&construction.state).expect("receiver") = Preparation::Reserved(Reservation {
+            source: self,
+            id,
+            allowance,
+            candidate,
+            spender,
+        });
         Ok(id)
     }
 
@@ -382,12 +471,16 @@ impl Allocator {
     /// Revalidate the same actual spending authority, purpose, layout and
     /// receiving responsibility under the complete live plan. Issuance may
     /// take place only in the still open original construction.
-    pub unsafe fn issue(
+    pub(crate) unsafe fn issue(
         &'static self,
         held: &mut HeldLockSet<'_>,
-        construction: &'static TurnLock<Construction>,
+        construction: &'static Construction,
+        spender: Option<Spender>,
     ) -> Result<AllocationId, Error> {
-        let reservation = reservation(self, held, construction, false)?;
+        let reservation = reservation(self, held, construction)?;
+        if reservation.spender != spender {
+            return Err(Error::Protection);
+        }
         let region = self.region(reservation.id.region)?;
         let slot = self.slot(reservation.allowance)?;
         let mut balance = held
@@ -409,28 +502,34 @@ impl Allocator {
         balance.reserved -= amount;
         balance.occupied += amount;
         held.access(slot).expect("Allowance").state = SlotState::Open(balance);
-        held.access(construction).expect("receiver").preparation =
+        *held.access(&construction.state).expect("receiver") =
             Preparation::Issued(Some(Allocation::issued(self, reservation.id, physical)));
         Ok(reservation.id)
     }
 
     /// Read the immutable request of the actual reserved construction under
     /// its lock for the final authorization check before Issue.
-    pub fn reserved_candidate(
+    pub(crate) fn reserved_candidate(
         &self,
         held: &mut HeldLockSet<'_>,
-        construction: &'static TurnLock<Construction>,
+        construction: &'static Construction,
     ) -> Result<Candidate, Error> {
-        Ok(reservation(self, held, construction, false)?.candidate)
+        Ok(reservation(self, held, construction)?.candidate)
     }
 
     /// Cancelling a closed preparation needs no new spending authority.
-    pub fn cancel(
+    fn cancel(
         &self,
         held: &mut HeldLockSet<'_>,
-        construction: &'static TurnLock<Construction>,
+        construction: &'static Construction,
     ) -> Result<(), Error> {
-        let reservation = reservation(self, held, construction, true)?;
+        let receiver = held.access(&construction.state).ok_or(Error::Protection)?;
+        let Some(reservation) = receiver.closed_reservation()? else {
+            return Ok(());
+        };
+        if !ptr::eq(self, reservation.source) {
+            return Err(Error::Stale);
+        }
         let region = self.region(reservation.id.region)?;
         let slot = self.slot(reservation.allowance)?;
         let (_, open) = held
@@ -456,7 +555,7 @@ impl Allocator {
         state.unassigned = unassigned;
         let refund = held.access(slot).expect("Allowance").refund(amount, false);
         debug_assert_eq!(refund, credit);
-        held.access(construction).expect("receiver").preparation = Preparation::Closed(None);
+        *held.access(&construction.state).expect("receiver") = Preparation::Closed(None);
         Ok(())
     }
 
@@ -473,18 +572,29 @@ impl Allocator {
         retired: Retired,
         receipt: &mut Option<ReturnId>,
     ) -> Result<(), (Retired, Error)> {
+        if receipt.is_some() {
+            return Err((retired, Error::Receiver));
+        }
+        self.accept_return(retired, ReceiptOwner::Caller, |id| {
+            *receipt = Some(id);
+        })
+    }
+
+    fn accept_return(
+        &self,
+        retired: Retired,
+        owner: ReceiptOwner,
+        record: impl FnOnce(ReturnId),
+    ) -> Result<(), (Retired, Error)> {
         let allocation = &retired.0;
         let result = (|| {
-            if receipt.is_some() {
-                return Err(Error::Receiver);
-            }
             if !ptr::eq(self, allocation.source) {
                 return Err(Error::Stale);
             }
             let region = self.region(allocation.id.region)?;
             with_turn(&region.state, |state| {
                 // The original Retired input certifies all prior uses ended.
-                *receipt = Some(unsafe { state.begin_retired(allocation, ReceiptOwner::Caller) }?);
+                record(unsafe { state.begin_retired(allocation, owner) }?);
                 Ok(())
             })?
         })();
@@ -585,7 +695,7 @@ impl Allocator {
     }
 
     /// The trusted original receipt owner ends the independent history.
-    /// A Pool-owned receipt can only be cleared in its joint reconciliation.
+    /// A bound receipt retains acknowledgement authority at its original owner.
     pub fn acknowledge(&self, id: ReturnId) -> Result<(), Error> {
         with_turn(self.return_state(id)?, |state| {
             state.acknowledge_return(id, ReceiptOwner::Caller)

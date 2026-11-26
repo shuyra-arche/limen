@@ -219,6 +219,8 @@ pub mod allocator;
 #[allow(dead_code)]
 #[path = "../../../src/metal/identity/mod.rs"]
 mod identity;
+#[path = "../../../src/basis/pend.rs"]
+pub mod pend;
 mod pool;
 #[path = "../../../src/basis/sync/queue.rs"]
 mod queue;
