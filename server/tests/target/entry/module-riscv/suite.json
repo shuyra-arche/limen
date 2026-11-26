@@ -39,7 +39,7 @@
     "kernel": "module-riscv",
     "harts": 1,
     "expects": [
-      "PASS riscv-module-execution virt sv39=1 private=1 revoked=1 permissions=1 aliases=0 geometry=4096"
+      "PASS riscv-module-execution virt sv39=1 private=1 revoked=1 permissions=1 aliases=0 geometry=4096 uses=2 shut=1 retired=1 reuse=1"
     ]
   }
 }

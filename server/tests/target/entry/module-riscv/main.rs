@@ -10,7 +10,7 @@ use kernel::{
     entry::boot::{
         self, Boot, Occupant, RiscvCpus, RiscvExtension, RiscvIsa, RiscvMmu, RiscvMmuMode,
     },
-    module::{Abi, Contract, Machine, ModuleImage, Permissions},
+    module::{Abi, Contract, Machine, ModuleImage, ModuleSlots, Permissions, UseError},
 };
 use limen_treaty::model::PageSize;
 use mapping::PAGE;
@@ -23,6 +23,11 @@ struct Storage([MaybeUninit<u8>; MAX_PAGES * PAGE as usize]);
 
 // The boot image keeps exclusive custody of both arenas through shutdown.
 static mut STORAGE: Storage = Storage([MaybeUninit::new(0); MAX_PAGES * PAGE as usize]);
+
+struct ReservedPages {
+    storage: NonNull<MaybeUninit<u8>>,
+    physical: PhysicalRange,
+}
 
 unsafe extern "C" {
     static limen_test_read_only: u8;
@@ -190,14 +195,18 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     .unwrap();
     assert_eq!(image.description().abi(), Abi::Scalar);
 
-    let storage = (&raw mut STORAGE).cast::<MaybeUninit<u8>>();
-    let start = storage.addr() as u64;
+    let storage = NonNull::new((&raw mut STORAGE).cast::<MaybeUninit<u8>>()).unwrap();
+    let start = storage.addr().get() as u64;
     let length = image.required_length().get();
     assert!(length != 0 && length.is_multiple_of(PAGE));
     let count = length / PAGE;
     assert!(count <= MAX_PAGES as u64);
     assert!(start.is_multiple_of(PAGE));
     let target = start..start + length;
+    let material = ReservedPages {
+        storage,
+        physical: physical(target.clone()),
+    };
     let resident = Resident::from_boot(&boot, start..start + size_of::<Storage>() as u64);
     let mut root = mapping::Root::new();
     for (range, permission) in resident.ranges() {
@@ -212,10 +221,8 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
 
     let layout = {
         // This image-owned arena has one confirmed RW/NX mapping under Sv39.
-        let mut view = unsafe {
-            MappedRange::from_identity(physical(target.clone()), NonNull::new(storage).unwrap())
-        }
-        .unwrap();
+        let mut view =
+            unsafe { MappedRange::from_identity(material.physical, material.storage) }.unwrap();
         image.prepare(&mut view, start).unwrap()
     };
     assert_eq!(layout.physical(), physical(target.clone()));
@@ -245,7 +252,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
 
     // The write borrow has ended. Revoke every staging translation and
     // complete local invalidation before making any instruction executable.
-    root.revoke_write(target.clone());
+    root.withdraw(target.clone(), |_| Some(Permissions::ReadWrite));
     root.verify_active(total - count, |page| {
         resident
             .permission(page)
@@ -261,12 +268,59 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
         }
     });
 
-    // The trusted independent fixture declares this scalar ELF entry. Its
-    // exact mapping is RX and the publishing Hart has executed FENCE.I.
-    let geometry = unsafe { core::mem::transmute::<u64, unsafe extern "C" fn() -> u64>(entry) };
-    assert_eq!(unsafe { geometry() }, PAGE);
+    let slots = ModuleSlots::<1>::new();
+    // The trusted fixture declares the scalar ELF entry. Its exact mapping
+    // is RX and this sole Hart has executed FENCE.I.
+    let module = unsafe { slots.publish(layout, material, []) }.ok().unwrap();
+    let caller = module.acquire(Contract::MmuGeometry, 1).unwrap();
+    let sibling = module.acquire(Contract::MmuGeometry, 1).unwrap();
+    assert_eq!(caller.entry(), entry);
+    assert_eq!(sibling.entry(), entry);
+    let geometry = unsafe {
+        let query = core::mem::transmute::<u64, unsafe extern "C" fn() -> u64>(caller.entry());
+        query()
+    };
+    assert_eq!(geometry, PAGE);
+    module.shut();
+    assert!(matches!(
+        module.acquire(Contract::MmuGeometry, 1),
+        Err(UseError::Closed)
+    ));
+    assert!(matches!(module.retire(), Err(UseError::Busy)));
+    drop(caller);
+    assert!(matches!(module.retire(), Err(UseError::Busy)));
+    drop(sibling);
+
+    let retirement = module.retire().ok().unwrap();
+    root.withdraw(target.clone(), |page| {
+        final_pages[((page - start) / PAGE) as usize]
+    });
+    root.verify_active(total - count, |page| {
+        resident
+            .permission(page)
+            .filter(|_| !target.contains(&page))
+    });
+    // All entry paths are closed. The only Hart has no module mapping or
+    // stale translation, and no device uses the reserved pages.
+    unsafe { retirement.complete() };
+    let returned = module.reclaim().ok().unwrap();
+    assert_eq!(returned.physical, physical(target));
+    root.publish(
+        start,
+        &[Some(Permissions::ReadWrite); MAX_PAGES][..count as usize],
+    );
+    root.verify_active(total, |page| resident.permission(page));
+    // Restore the source's writable identity mapping and reuse the returned
+    // storage only once the module and all old instruction use have ended.
+    let mut reused =
+        unsafe { MappedRange::from_identity(returned.physical, returned.storage) }.unwrap();
+    let replaced = &mut reused.bytes()[(entry - start) as usize];
+    unsafe {
+        core::ptr::write_volatile(replaced, MaybeUninit::new(0xa5));
+        assert_eq!(core::ptr::read_volatile(replaced).assume_init(), 0xa5);
+    }
     boot::write(
-        "PASS riscv-module-execution virt sv39=1 private=1 revoked=1 permissions=1 aliases=0 geometry=4096\n",
+        "PASS riscv-module-execution virt sv39=1 private=1 revoked=1 permissions=1 aliases=0 geometry=4096 uses=2 shut=1 retired=1 reuse=1\n",
     );
     boot::shutdown(true)
 }

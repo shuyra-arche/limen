@@ -2,9 +2,11 @@
 
 mod description;
 mod elf;
+mod lifetime;
 
 pub use description::{Abi, Contract, Description, DescriptionError, Interface};
 pub use elf::{Machine, Permissions};
+pub use lifetime::{Module, ModuleId, ModuleSlots, ModuleUse, Retirement, UseError};
 
 use crate::{
     access::MappedRange,
@@ -26,6 +28,7 @@ pub enum Error {
 }
 
 /// A checked, immutable image and the metadata read from that same image.
+#[derive(Clone)]
 pub struct ModuleImage<'a> {
     elf: elf::Elf<'a>,
     description: Description<'a>,
@@ -87,11 +90,11 @@ impl<'a> ModuleImage<'a> {
     /// start. Before calling any entry, the mapping owner must publish the
     /// permissions, close conflicting aliases and establish instruction
     /// visibility for the target Hart.
-    pub fn prepare<'image>(
-        &'image self,
+    pub fn prepare(
+        &self,
         storage: &mut MappedRange<'_>,
         virtual_start: u64,
-    ) -> Result<Layout<'image, 'a>, Error> {
+    ) -> Result<Layout<'a>, Error> {
         let span = self.elf.span();
         let length = self.required_length();
         let physical = storage.physical();
@@ -132,7 +135,7 @@ impl<'a> ModuleImage<'a> {
         }
 
         Ok(Layout {
-            image: self,
+            image: self.clone(),
             physical,
             virtual_range: virtual_start..end,
         })
@@ -140,13 +143,13 @@ impl<'a> ModuleImage<'a> {
 }
 
 /// The placement of prepared bytes. The backing range remains with its owner.
-pub struct Layout<'image, 'source> {
-    image: &'image ModuleImage<'source>,
+pub struct Layout<'source> {
+    image: ModuleImage<'source>,
     physical: PhysicalRange,
     virtual_range: Range<u64>,
 }
 
-impl Layout<'_, '_> {
+impl Layout<'_> {
     pub fn physical(&self) -> PhysicalRange {
         self.physical
     }
@@ -178,8 +181,12 @@ impl Layout<'_, '_> {
 
     /// A numeric entry location for the exact interface in this image.
     pub fn entry(&self, contract: Contract) -> Option<u64> {
-        let entry = self.image.description.interface(contract)?.entry();
-        Some(self.virtual_range.start + (entry - self.image.elf.span().start))
+        let interface = self.image.description.interface(contract)?;
+        Some(self.place_entry(interface))
+    }
+
+    fn place_entry(&self, interface: Interface<'_>) -> u64 {
+        self.virtual_range.start + (interface.entry() - self.image.elf.span().start)
     }
 }
 

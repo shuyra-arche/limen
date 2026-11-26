@@ -15,6 +15,8 @@ mod metal {
     }
 }
 
+mod lifecycle;
+
 use access::MappedRange;
 use address::{PhysicalAddress, PhysicalRange};
 use limen_treaty::model::{ByteLength, PageSize};
