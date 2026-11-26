@@ -7,17 +7,36 @@ use crate::metal::sync::{TurnAccess, TurnPlan};
 
 use super::{Allocator, Allowance, AllowanceId, Candidate, Error, RamPurpose};
 
+/// Access ceiling recorded by the original issuer for first publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InitialAccess {
+    ReadWrite,
+}
+
 /// Immutable purpose of one permanently supplied initial Pend receiver.
 /// Pend controls whether its single holding is installed or can still spend.
 pub(crate) struct AllocationPermitSlot {
     purpose: RamPurpose,
+    initial: Option<InitialAccess>,
 }
 
 impl AllocationPermitSlot {
     pub(crate) const fn metadata() -> Self {
         Self {
             purpose: RamPurpose::Metadata,
+            initial: None,
         }
+    }
+
+    pub(crate) const fn page_tables() -> Self {
+        Self {
+            purpose: RamPurpose::PageTable,
+            initial: Some(InitialAccess::ReadWrite),
+        }
+    }
+
+    pub(super) fn initial_access(&self) -> Option<InitialAccess> {
+        self.initial
     }
 
     pub(super) fn matches(&self, other: &Self) -> bool {

@@ -398,7 +398,7 @@ fn initialize(
     });
     for item in initial {
         let id = item.staged.take().expect("preflighted initial position");
-        *item.receiver = Some(Allocation::issued(source, id, item.physical));
+        *item.receiver = Some(Allocation::issued(source, id, item.physical, None));
     }
     *allowance_receiver = Some(Allowance::initial(source, allowance));
     source.published.store(published, Release);

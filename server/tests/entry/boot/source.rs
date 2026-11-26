@@ -415,13 +415,147 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
     let mut material = None;
     unsafe { issued.take(&mut material) }.unwrap();
     let mut receipt = None;
-    let retired = unsafe { material.unwrap().retire() };
+    let material = material.unwrap();
+    assert_eq!(material.initial_access(), None);
+    let retired = unsafe { material.retire() };
     unsafe { retired.begin_return(&mut receipt) }.ok().unwrap();
     let receipt = receipt.unwrap();
     assert_eq!(receipt.finish(Fast).unwrap().allocation, issued_id);
     assert_eq!(receipt.finish(Fast).unwrap().allocation, issued_id);
     receipt.acknowledge().unwrap();
     assert_eq!(receipt.finish(Fast), Err(Error::Stale));
+    assert_eq!(allowance.balance(), Ok(before));
+}
+
+#[test]
+fn table_page_spending_retains_its_origin_and_bounds() {
+    use crate::allocator::{AllocationConstruction, InitialAccess, RamPurpose::PageTable};
+
+    let mut initial = None;
+    let (source, allowance) = source(&mut initial, 8 * PAGE);
+    assert_eq!(initial.as_ref().unwrap().initial_access(), None);
+    let (metadata, _) = metadata_spending(&allowance);
+    let table_spending = || {
+        let space = Box::leak(Box::new(PendSpace::for_page_tables()));
+        let mut spending = None;
+        let mut closing = None;
+        unsafe {
+            space.publish_initial(
+                &allowance,
+                ByteLength::new(2 * PAGE),
+                Alignment::new(2 * PAGE).unwrap(),
+                InitialPend {
+                    spending: &mut spending,
+                    closing: &mut closing,
+                },
+                Fast,
+            )
+        }
+        .unwrap();
+        (spending.unwrap(), closing.unwrap())
+    };
+    let (spending, revoker) = table_spending();
+    let (other, other_revoker) = table_spending();
+    let candidate = |length, alignment| {
+        let request = Request::new(
+            ByteLength::new(length),
+            Alignment::new(alignment).unwrap(),
+            pages(6, 13),
+            Some(ATTRIBUTES),
+            PageTable,
+        )
+        .unwrap();
+        let mut lookup = source.lookup(request, None).unwrap();
+        loop {
+            match lookup.step().unwrap() {
+                Search::Pending => {}
+                Search::Candidate(candidate) => break candidate,
+                Search::NoRange => panic!("expected room for table-page spending"),
+            }
+        }
+    };
+
+    let before = allowance.balance().unwrap();
+    let receiver = Box::leak(Box::new(AllocationConstruction::new()));
+    let valid = candidate(2 * PAGE, 2 * PAGE);
+    assert_eq!(valid.physical().start().get() % (2 * PAGE), 0);
+    assert_eq!(
+        metadata.reserve(candidate(PAGE, PAGE), receiver, Fast),
+        Err(PendError::Source(Error::PermitLimit))
+    );
+    for invalid in [
+        metadata_candidate(source),
+        candidate(3 * PAGE, PAGE),
+        candidate(PAGE, 4 * PAGE),
+    ] {
+        assert_eq!(
+            spending.reserve(invalid, receiver, Fast),
+            Err(PendError::Source(Error::PermitLimit))
+        );
+    }
+    assert_eq!(allowance.balance(), Ok(before));
+
+    let id = spending.reserve(valid, receiver, Fast).unwrap();
+    assert_eq!(
+        other.issue(receiver, Fast),
+        Err(PendError::Source(Error::PermitOrigin))
+    );
+    assert_eq!(allowance.balance().unwrap().reserved, 2 * PAGE);
+    assert_eq!(spending.issue(receiver, Fast), Ok(id));
+    revoker.revoke().unwrap();
+    spending.release().unwrap();
+    let mut material = None;
+    unsafe { receiver.take(&mut material) }.unwrap();
+    let material = material.unwrap();
+    assert_eq!(material.id(), id);
+    assert_eq!(material.physical(), valid.physical());
+    assert_eq!(material.initial_access(), Some(InitialAccess::ReadWrite));
+
+    let receipt = begin_return(source, unsafe { material.retire() });
+    assert_eq!(source.finish_return(receipt, Fast).unwrap().allocation, id);
+    assert_eq!(
+        source.finish_return(receipt, Fast).unwrap().physical,
+        valid.physical()
+    );
+    source.acknowledge(receipt).unwrap();
+    assert_eq!(allowance.balance(), Ok(before));
+
+    let receiver = Box::leak(Box::new(AllocationConstruction::new()));
+    let id = other
+        .reserve(candidate(2 * PAGE, 2 * PAGE), receiver, Fast)
+        .unwrap();
+    assert_eq!(other.issue(receiver, Fast), Ok(id));
+    let mut material = None;
+    unsafe { receiver.take(&mut material) }.unwrap();
+    let material = material.unwrap();
+    assert_eq!(material.initial_access(), Some(InitialAccess::ReadWrite));
+    let middle = material
+        .physical()
+        .start()
+        .advance(ByteLength::new(PAGE))
+        .unwrap();
+    let mut halves = [None, None];
+    unsafe { source.split(material.retire(), middle, &mut halves, Fast) }
+        .ok()
+        .unwrap();
+    let [left, right] = halves.map(Option::unwrap);
+    assert_eq!(
+        [left.initial_access(), right.initial_access()],
+        [None, None]
+    );
+
+    let mut merged = None;
+    unsafe { source.merge(left.retire(), right.retire(), &mut merged, Fast) }
+        .ok()
+        .unwrap();
+    let merged = merged.unwrap();
+    assert_eq!(merged.initial_access(), None);
+    assert_ne!(merged.id(), id);
+    other_revoker.revoke().unwrap();
+    other.release().unwrap();
+    let receipt = begin_return(source, unsafe { merged.retire() });
+    source.finish_return(receipt, Fast).unwrap();
+    source.acknowledge(receipt).unwrap();
     assert_eq!(allowance.balance(), Ok(before));
 }
 
