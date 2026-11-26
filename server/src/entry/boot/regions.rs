@@ -5,6 +5,7 @@ use super::{
     bump::Bump,
     physical::{check, contains},
 };
+use crate::access::MappedRange;
 use core::{alloc::Layout, mem::MaybeUninit};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,32 +36,6 @@ pub struct Regions<'a> {
     entries: &'a mut [Option<Region>],
     length: usize,
     granule: u64,
-}
-
-/// Exclusive mapped storage supplied by its actual owner for early roots.
-/// A successful reservation consumes this input; a rejected one leaves it.
-pub struct MappedRange<'a> {
-    physical: Physical,
-    bytes: &'a mut [MaybeUninit<u8>],
-}
-
-impl<'a> MappedRange<'a> {
-    /// Associate a checked physical extent with exclusive writable storage.
-    ///
-    /// # Safety
-    /// Every byte in the slice must map the corresponding physical byte
-    /// throughout the borrow. The backing storage must be exclusively owned
-    /// by the caller, free of prior reservations and inaccessible by aliases.
-    pub unsafe fn new(
-        physical: Physical,
-        bytes: &'a mut [MaybeUninit<u8>],
-    ) -> Result<Self, RegionError> {
-        check(physical).map_err(|_| RegionError::Range)?;
-        if physical.end - physical.start != bytes.len() as u64 {
-            return Err(RegionError::Range);
-        }
-        Ok(Self { physical, bytes })
-    }
 }
 
 /// Storage reserved for a root layout. Its entire backing granules have
@@ -314,16 +289,16 @@ impl<'a> Regions<'a> {
         let Some((index, region)) = self
             .entries()
             .enumerate()
-            .find(|(_, region)| contains(region.physical, mapped.physical))
+            .find(|(_, region)| contains(region.physical, mapped.physical()))
         else {
             return Ok(None);
         };
-        let address = mapped.bytes.as_ptr().addr();
+        let address = mapped.address();
         let limit = address
-            .checked_add(mapped.bytes.len())
+            .checked_add(mapped.length())
             .ok_or(RegionError::Range)?;
         if layout.size() == 0
-            || mapped.physical.start % layout.align() as u64 != (address % layout.align()) as u64
+            || mapped.physical().start % layout.align() as u64 != (address % layout.align()) as u64
         {
             return Err(RegionError::Layout);
         }
@@ -333,8 +308,8 @@ impl<'a> Regions<'a> {
         // Bump proved the offsets within the slice, whose length matches
         // the checked physical extent.
         let physical = Physical {
-            start: mapped.physical.start + offset.start as u64,
-            end: mapped.physical.start + offset.end as u64,
+            start: mapped.physical().start + offset.start as u64,
+            end: mapped.physical().start + offset.end as u64,
         };
         let reserved = Physical {
             start: self.floor(physical.start),
@@ -372,7 +347,7 @@ impl<'a> Regions<'a> {
             offset,
         } = plan;
         let mapped = mapping.take().expect("checked mapping");
-        let storage = &mut mapped.bytes[offset];
+        let storage = &mut mapped.into_bytes()[offset];
         match (left, right) {
             (Some(left), Some(right)) => {
                 self.entries.copy_within(index + 1..self.length, index + 2);

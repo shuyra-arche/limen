@@ -19,7 +19,7 @@ mod transfer;
 pub use allowance::{Allowance, AllowanceId, Balance};
 pub use region::Grant;
 pub use search::{Candidate, Lookup, RamPurpose, Request, Search};
-pub use storage::{Config, Initial};
+pub use storage::{Config, Initial, MappedStorage};
 pub(crate) use transfer::Spender;
 pub use transfer::{
     Allocation, AllocationId, Construction, Pending, Retired, ReturnId, ReturnReceipt, Returned,

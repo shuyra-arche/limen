@@ -5,11 +5,9 @@ mod place;
 mod reference;
 mod retirement;
 
-use core::mem::MaybeUninit;
-
 use crate::sync::{HeldLockSet, LockPlan, PlanError, TurnLock};
 
-use super::{Allocation, AllocationId, Error as SourceError, with_turn};
+use super::{AllocationId, Error as SourceError, MappedStorage, with_turn};
 use group::{Chain, Completion, Group, Links, State};
 
 pub use group::{Geometry, Supply};
@@ -103,35 +101,29 @@ impl<'storage, T> Pool<'storage, T> {
         })
     }
 
-    /// Bring one original Allocation and its exact mapping into this fixed
-    /// source. All rejection paths leave both inputs and the directory intact.
+    /// Install the actual paired material. Every rejection preserves the
+    /// original pair and directory. The successful group retains its source,
+    /// exact mapping and independent retirement position.
     ///
     /// # Safety
-    ///
-    /// Supplied bytes must be exclusively writable with no live objects or
-    /// aliases. A slice of the Allocation's full length must be its exact
-    /// canonical mapping in byte order. Keep it under the persistent owner's
-    /// control and valid until the group has been shut. The independent
-    /// directory and root must survive all upstream return and receipt work.
+    /// Keep the independent directory and root valid outside all supplied
+    /// group mappings until all upstream return and receipt work has ended.
+    /// The actual mapped storage owner must preserve its mapping/exclusivity
+    /// obligations through the group's last use, including typed references.
     pub unsafe fn install(
         &mut self,
-        allocation: &mut Option<Allocation>,
-        mapping: &mut Option<&'storage mut [MaybeUninit<u8>]>,
+        material: &mut Option<MappedStorage<'storage>>,
     ) -> Result<GroupId, Error> {
         let state = self.state.get_mut();
         if state.count == state.groups.len() {
             return Err(Error::Directory);
         }
-        let material = allocation.as_ref().ok_or(Error::Material)?;
-        let id = GroupId(state.count, material.id());
-        let storage = mapping.as_ref().ok_or(Error::Material)?;
-        let physical = material.physical();
-        if usize::try_from(physical.end - physical.start).ok() != Some(storage.len()) {
-            return Err(Error::Material);
-        }
-        let geometry = Geometry::of::<T>(storage.len())?;
-        if !storage.as_ptr().addr().is_multiple_of(geometry.alignment)
-            || !physical.start.is_multiple_of(geometry.alignment as u64)
+        let supplied = material.as_ref().ok_or(Error::Material)?;
+        let id = GroupId(state.count, supplied.id());
+        let mapping = supplied.mapping();
+        let geometry = Geometry::of::<T>(mapping.length())?;
+        if !mapping.address().is_multiple_of(geometry.alignment)
+            || !supplied.physical().start.is_multiple_of(geometry.alignment as u64)
         {
             return Err(Error::Layout);
         }
@@ -141,19 +133,18 @@ impl<'storage, T> Pool<'storage, T> {
             .ok_or(Error::Directory)?;
         let bytes = state
             .bytes
-            .checked_add(storage.len())
+            .checked_add(mapping.length())
             .ok_or(Error::Directory)?;
-        let retirement = material.return_position()?;
+        let retirement = supplied.allocation().return_position()?;
 
-        // The original owner keeps both inputs throughout the whole slot walk.
-        // Only the short directory publication transfers either input.
-        Group::<T>::prepare(geometry, mapping.as_deref_mut().expect("checked mapping"));
-        let group = Group::new(
-            allocation.take().expect("checked Allocation"),
-            retirement,
+        // The original owner keeps the complete pair throughout the slot
+        // walk. Only the short directory publication consumes it.
+        Group::<T>::prepare(
             geometry,
-            mapping.take().expect("checked mapping"),
+            material.as_mut().expect("checked material").mapping_mut().bytes(),
         );
+        let (allocation, mapping) = material.take().expect("checked material").into_parts();
+        let group = Group::new(allocation, retirement, geometry, mapping.into_bytes());
         state.groups[id.0].0 = Some(GroupRecord::Open(group));
         state.count += 1;
         state.open += 1;

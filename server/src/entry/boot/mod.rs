@@ -17,7 +17,7 @@ pub use crate::metal::firmware::uefi::{DeviceTree, Loader, major};
 pub use handoff::Boot;
 pub use major::stack_range;
 pub use physical::{Condition, Exclusion, Exclusions, Occupant, RangeError, Retirement};
-pub use regions::{MappedRange, Region, RegionError, RegionSource, Regions, RootStorage};
+pub use regions::{Region, RegionError, RegionSource, Regions, RootStorage};
 
 /// The firmware adapter supplies a stable DTB (OpenSBI) or Loader (UEFI).
 /// All referenced storage and mappings remain reserved until the consumer is done.

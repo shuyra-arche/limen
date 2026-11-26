@@ -5,3 +5,4 @@ pub(crate) mod execution;
 pub(crate) mod firmware;
 pub(crate) mod hart;
 pub(crate) mod identity;
+pub(crate) mod mmu;

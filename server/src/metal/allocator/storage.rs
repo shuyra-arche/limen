@@ -7,7 +7,8 @@ use core::{
 };
 
 use crate::{
-    entry::boot::{MappedRange, Physical, RegionError, Regions, RootStorage},
+    access::MappedRange,
+    entry::boot::{Physical, RegionError, Regions, RootStorage},
     metal::identity::Entry,
     sync::TurnLock,
 };
@@ -97,6 +98,60 @@ impl Config {
 
 fn array<T>(count: usize) -> Result<Layout, Error> {
     Layout::array::<T>(count).map_err(|_| Error::Layout)
+}
+
+/// The unique original Allocation paired with its exact exclusive mapping.
+/// Neither a physical address nor a same-length slice can substitute for
+/// the original mapped material.
+#[must_use]
+pub struct MappedStorage<'a> {
+    allocation: Allocation,
+    mapping: MappedRange<'a>,
+}
+
+impl<'a> MappedStorage<'a> {
+    /// # Safety
+    /// The mapping must belong to this exact issued Allocation instance,
+    /// not another instance at the same physical address. The original
+    /// owner must keep all mapping and exclusive-storage guarantees valid
+    /// through the consumer's actual derived uses and their settlement.
+    /// Range equality checks geometry only; it cannot prove this identity
+    /// or the lifetime of hardware mappings.
+    pub unsafe fn prepare(
+        allocation: Allocation,
+        mapping: MappedRange<'a>,
+    ) -> Result<Self, (Allocation, MappedRange<'a>, Error)> {
+        if allocation.physical() != mapping.physical() {
+            return Err((allocation, mapping, Error::Range));
+        }
+        Ok(Self { allocation, mapping })
+    }
+
+    pub fn id(&self) -> AllocationId {
+        self.allocation.id()
+    }
+
+    pub fn physical(&self) -> Physical {
+        self.mapping.physical()
+    }
+
+    /// Recover the two original inputs from a private preparation. This
+    /// does not retire the mapping, the Allocation, or any hardware effect.
+    pub fn into_parts(self) -> (Allocation, MappedRange<'a>) {
+        (self.allocation, self.mapping)
+    }
+
+    pub(super) fn allocation(&self) -> &Allocation {
+        &self.allocation
+    }
+
+    pub(super) fn mapping(&self) -> &MappedRange<'a> {
+        &self.mapping
+    }
+
+    pub(super) fn mapping_mut(&mut self) -> &mut MappedRange<'a> {
+        &mut self.mapping
+    }
 }
 
 /// One actual initial allocation and its original receiver slot.
