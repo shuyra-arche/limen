@@ -16,8 +16,8 @@ use crate::{
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, Units},
     },
     metal::{
-        execution::cooperative::{Hart, LeaveReceipt, LocalHart, cooperative_ready},
-        hart::local::{self, HartId},
+        processor::execution::cooperative::{Hart, LeaveReceipt, LocalHart, cooperative_ready},
+        processor::hart::local::{self, HartId},
         sync::{TurnAcquireError, TurnLock},
     },
 };

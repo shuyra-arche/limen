@@ -4,7 +4,7 @@ use limen_treaty::model::PhysicalAddress;
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
-        allocator::{
+        memory::allocator::{
             Allocation,
             Allowance,
             Error as SourceError,

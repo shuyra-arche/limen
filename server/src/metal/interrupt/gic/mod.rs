@@ -1,6 +1,6 @@
 //! GICv3 description and controller-specific native capability.
 
-use crate::metal::firmware::devicetree::{Error, Node, NodeId, cell};
+use crate::metal::platform::firmware::devicetree::{Error, Node, NodeId, cell};
 use limen_treaty::model::PhysicalRange;
 
 #[cfg(all(limen_target, target_arch = "aarch64"))]

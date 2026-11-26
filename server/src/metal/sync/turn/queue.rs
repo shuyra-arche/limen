@@ -7,7 +7,7 @@ use core::{
     },
 };
 
-use crate::metal::hart::local::QueueNode;
+use crate::metal::processor::hart::local::QueueNode;
 
 #[cfg(test)]
 #[path = "../../../../tests/metal/sync/turn/queue.rs"]

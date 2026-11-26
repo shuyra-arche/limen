@@ -3,8 +3,8 @@ use super::regions::{RegionError, Regions};
 use super::{
     Boot, FirmwareMap, PhysicalAddress, PhysicalRange, Retirement, describe, image, range,
 };
-use crate::metal::allocator::{RegionDescription, RegionOrigin};
-use crate::metal::mmu::internal::access::{Error as AccessError, MappedRange};
+use crate::metal::memory::allocator::{RegionDescription, RegionOrigin};
+use crate::metal::memory::mmu::internal::access::{Error as AccessError, MappedRange};
 use core::{alloc::Layout, mem::MaybeUninit};
 use limen_treaty::model::{Alignment, ByteLength};
 

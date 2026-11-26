@@ -15,12 +15,12 @@ mod mapping;
 mod mapping;
 
 use core::fmt::{self, Write};
-use kernel::metal::{firmware::map::FirmwareMap, firmware::uefi::Loader};
+use kernel::metal::{platform::firmware::map::FirmwareMap, platform::firmware::uefi::Loader};
 use kernel::{
     entry::boot,
     metal::{
-        mmu::internal::GEOMETRY,
-        mmu::internal::access::MappedRange,
+        memory::mmu::internal::GEOMETRY,
+        memory::mmu::internal::access::MappedRange,
         module::{Layout, ModuleImage, ModuleSlots, SegmentPermissions, UseError},
     },
 };

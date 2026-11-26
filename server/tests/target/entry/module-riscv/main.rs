@@ -8,8 +8,8 @@ use core::{arch::asm, fmt::Write, mem::MaybeUninit, ops::Range, ptr::NonNull};
 use kernel::{
     entry::boot::{self, Boot, Occupant},
     metal::{
-        mmu::internal::access::MappedRange,
-        mmu::internal::{GEOMETRY, riscv::{LeafAccess, Mode, context::Context, encoder}},
+        memory::mmu::internal::access::MappedRange,
+        memory::mmu::internal::{GEOMETRY, riscv::{LeafAccess, Mode, context::Context, encoder}},
         module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, SegmentPermissions, UseError},
     },
 };

@@ -5,8 +5,8 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use kernel::entry::boot;
 #[cfg(target_arch = "x86_64")]
-use kernel::metal::firmware::uefi::AcpiInput;
-use kernel::metal::firmware::uefi::{DeviceTree as LoaderTree, Loader};
+use kernel::metal::platform::firmware::uefi::AcpiInput;
+use kernel::metal::platform::firmware::uefi::{DeviceTree as LoaderTree, Loader};
 #[cfg(target_arch = "x86_64")]
 use limen_treaty::model::PhysicalRange;
 use limen_treaty::model::{ByteLength, PhysicalAddress};
@@ -192,7 +192,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
             .unwrap()
             .is_none()
     );
-    let configuration = kernel::metal::allocator::Config {
+    let configuration = kernel::metal::memory::allocator::Config {
         granule,
         maximum: ByteLength::new(0),
         regions: 1,

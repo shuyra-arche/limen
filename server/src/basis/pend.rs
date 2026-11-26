@@ -3,7 +3,7 @@
 use limen_treaty::model::{Alignment, ByteLength};
 
 use crate::metal::{
-    allocator::{
+    memory::allocator::{
         self, AllocationConstruction, AllocationId, AllocationPermit, AllocationPermitSlot,
         Allowance, Candidate, LayoutLimit,
     },

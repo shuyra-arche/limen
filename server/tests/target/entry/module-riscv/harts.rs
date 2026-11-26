@@ -12,9 +12,9 @@ use core::{
 use kernel::{
     entry::boot::{Boot, Minor, Startup},
     metal::{
-        execution::description::riscv::{RiscvExtension, RiscvIsa},
-        hart::riscv::description::RiscvCpus,
-        mmu::internal::riscv::{Mode, context::Context, description::RiscvMmu, encoder::Encoder},
+        processor::execution::description::riscv::{RiscvExtension, RiscvIsa},
+        processor::hart::riscv::description::RiscvCpus,
+        memory::mmu::internal::riscv::{Mode, context::Context, description::RiscvMmu, encoder::Encoder},
         module::ModuleUse,
     },
 };
@@ -67,7 +67,7 @@ pub fn check(boot: &Boot<'_>, modes: &[Mode]) -> usize {
         let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
         assert!(isa.has(RiscvExtension::InstructionFence));
     }
-    assert!(kernel::metal::firmware::sbi::platform_services().hart_state_management());
+    assert!(kernel::metal::platform::firmware::sbi::platform_services().hart_state_management());
     assert_eq!(status(major), STARTED);
     assert_eq!(status(minor), STOPPED);
     minor

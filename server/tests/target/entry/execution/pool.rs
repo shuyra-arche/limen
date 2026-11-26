@@ -6,7 +6,7 @@ use core::{
 
 use kernel::{
     entry::boot::{Boot, write},
-    metal::allocator::{
+    metal::memory::allocator::{
         Allocation, Allowance,
         pool::{GroupSlot, Pool, Prepared, Reservation, VALUE_ALIGNMENT, VALUE_BYTES},
     },

@@ -6,7 +6,7 @@ use core::{
     sync::atomic::Ordering::Relaxed,
 };
 
-use crate::metal::hart::local::{self, TurnParticipation};
+use crate::metal::processor::hart::local::{self, TurnParticipation};
 
 mod queue;
 use queue::Queue;

@@ -8,7 +8,7 @@ pub use description::{Contract, Description, DescriptionError, Interface};
 pub use elf::{Machine, SegmentPermissions};
 pub use lifetime::{Module, ModuleId, ModuleSlots, ModuleUse, Retirement, UseError};
 
-use crate::metal::mmu::internal::access::MappedRange;
+use crate::metal::memory::mmu::internal::access::MappedRange;
 use core::mem::MaybeUninit;
 use limen_treaty::model::{
     Alignment, ByteCoordinate, ByteLength, InternalAddress, InternalRange, PageSize, PhysicalRange,

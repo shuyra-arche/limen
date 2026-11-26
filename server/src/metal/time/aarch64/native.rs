@@ -2,7 +2,7 @@
 use core::{arch::asm, num::NonZeroU32};
 
 use super::GenericTimer;
-use crate::metal::firmware::devicetree::Error;
+use crate::metal::platform::firmware::devicetree::Error;
 
 impl GenericTimer<'_> {
     /// Read the frequency from the current PE and compare an explicit DT value.

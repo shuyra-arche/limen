@@ -5,7 +5,7 @@ use core::{
 
 use kernel::{
     entry::boot::{Boot, Condition, Retirement},
-    metal::allocator::RegionOrigin,
+    metal::memory::allocator::RegionOrigin,
 };
 use limen_treaty::model::ByteLength;
 use uefi::{

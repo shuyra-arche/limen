@@ -8,7 +8,7 @@ use super::{
     },
     image, range,
 };
-use crate::metal::allocator::RegionOrigin;
+use crate::metal::memory::allocator::RegionOrigin;
 use limen_treaty::model::ByteLength;
 use std::vec::Vec;
 

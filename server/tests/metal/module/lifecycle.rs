@@ -1,7 +1,7 @@
 use super::{IMAGES, PAGE, ROOT, SV39_ROOT};
 use kernel::metal::{
-    mmu::internal::access::MappedRange,
-    mmu::internal::{
+    memory::mmu::internal::access::MappedRange,
+    memory::mmu::internal::{
         GEOMETRY,
         riscv::{Mode, encoder},
     },

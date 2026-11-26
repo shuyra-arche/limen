@@ -8,7 +8,7 @@ use core::{
     },
 };
 
-use crate::metal::hart::local;
+use crate::metal::processor::hart::local;
 
 /// Failure to enter a local leaf section or obtain its exclusive access.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
