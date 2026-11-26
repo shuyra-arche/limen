@@ -1,7 +1,9 @@
 //! Firmware calls required by the trusted boot prefix.
 
 use super::super::facts::{Descriptions, Facts};
-use crate::metal::{platform::boot::services::Services, processor::hart::riscv::description::RiscvCpus};
+use crate::metal::{
+    platform::boot::services::Services, processor::hart::riscv::description::RiscvCpus,
+};
 use core::arch::asm;
 use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 

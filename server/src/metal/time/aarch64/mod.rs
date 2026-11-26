@@ -3,8 +3,8 @@
 use core::num::NonZeroU32;
 
 use crate::metal::{
-    platform::firmware::devicetree::{DeviceTree, Error, Node, NodeId, cell},
     interrupt::gic::{GicV3, Trigger, ppi},
+    platform::firmware::devicetree::{DeviceTree, Error, Node, NodeId, cell},
 };
 
 #[cfg(all(limen_target, target_arch = "aarch64"))]

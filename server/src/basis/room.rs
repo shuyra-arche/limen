@@ -3,7 +3,9 @@
 use core::num::NonZeroU64;
 
 use super::unit::UnitId;
-use crate::metal::{processor::execution::cooperative::LeaveReceipt, processor::hart::local::HartId};
+use crate::metal::{
+    processor::execution::cooperative::LeaveReceipt, processor::hart::local::HartId,
+};
 
 const HART_CAPACITY: usize = 2;
 

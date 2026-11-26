@@ -429,8 +429,11 @@ fn all_unique_handles_transfer_a_send_value_between_workers() {
             let mut receiver = None;
             value.publish(&mut receiver).ok().unwrap();
             occupy.send(receiver.unwrap()).ok().unwrap();
-            let destroyed: crate::metal::memory::allocator::pool::DestructionReceipt<'_, '_, Cell<u64>> =
-                vacant.recv().unwrap();
+            let destroyed: crate::metal::memory::allocator::pool::DestructionReceipt<
+                '_,
+                '_,
+                Cell<u64>,
+            > = vacant.recv().unwrap();
             destroyed.release().ok().unwrap();
         });
         let second = scope.spawn(move || {

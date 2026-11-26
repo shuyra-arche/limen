@@ -1,12 +1,12 @@
 use super::{DeviceTree, Error, Fixture};
 
 use kernel::metal::{
-    processor::execution::description::riscv::{RiscvExtension, RiscvIsa},
-    processor::hart::riscv::description::RiscvCpus,
     memory::mmu::internal::riscv::{
         Mode,
         description::{MaximumMode, RiscvMmu},
     },
+    processor::execution::description::riscv::{RiscvExtension, RiscvIsa},
+    processor::hart::riscv::description::RiscvCpus,
     time::riscv::RiscvTimebase,
 };
 

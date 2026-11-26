@@ -70,7 +70,9 @@ impl Boot<'_> {
     fn stacks_in_image(&self) -> bool {
         let image = self.image();
         image.covers(physical::extent(stack_range()))
-            && image.covers(physical::extent(crate::metal::platform::boot::trap_stack_range()))
+            && image.covers(physical::extent(
+                crate::metal::platform::boot::trap_stack_range(),
+            ))
     }
 }
 
