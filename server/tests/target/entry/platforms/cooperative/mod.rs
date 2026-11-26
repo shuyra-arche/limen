@@ -138,8 +138,8 @@ pub(super) fn run(
         unsafe { &mut *(&raw mut RECORDS) },
         &super::MINOR,
     )
-        .map_err(|failure| failure.reason)
-        .expect("native cooperative profile");
+    .map_err(|failure| failure.reason)
+    .expect("native cooperative profile");
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
 
     assert_eq!(
