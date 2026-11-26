@@ -171,6 +171,7 @@ fn run_minor(execution: &'static Execution) -> ! {
     // The major wrote PREVIOUS once and published it in FirstStopped.
     let previous = unsafe { (&*(&raw const PREVIOUS)).assume_init_read() };
     assert_ne!(migrated, previous);
+    assert_eq!(migrated.admission(), previous.admission());
     assert_eq!(execution.vacate(previous), Err(Error::Gone));
     assert_eq!(execution.pending_leave(), Ok(Some(migrated)));
     publish(Phase::MigratedStopped);

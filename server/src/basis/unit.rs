@@ -4,8 +4,6 @@ use core::num::NonZeroU64;
 
 use crate::metal::identity::Slot;
 
-pub(crate) const CAPACITY: usize = 2;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnitId {
     slot: Slot,
@@ -13,7 +11,7 @@ pub struct UnitId {
 }
 
 impl UnitId {
-    pub(crate) fn slot(self) -> usize {
+    fn slot(self) -> usize {
         self.slot.index()
     }
 }
@@ -50,9 +48,9 @@ struct Record<Binding> {
     state: State<Binding>,
 }
 
-pub(crate) struct Units<Binding>([Record<Binding>; CAPACITY]);
+pub(crate) struct Units<Binding, const CAPACITY: usize>([Record<Binding>; CAPACITY]);
 
-impl<Binding> Units<Binding> {
+impl<Binding, const CAPACITY: usize> Units<Binding, CAPACITY> {
     pub(crate) const fn new() -> Self {
         Self(
             [const {

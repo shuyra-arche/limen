@@ -59,14 +59,20 @@ fn first(current: &mut Current) -> u64 {
 
 fn second(_: &mut Current) -> u64 {
     let turn = SEQUENCE.fetch_add(1, Relaxed);
+    assert_eq!(turn, 1);
     let stack = stack_address(&turn);
     assert!(stack.abs_diff(FIRST_STACK.load(Relaxed)) >= 8 * 1024);
-    match turn {
-        1 => SECOND_STACK.store(stack, Relaxed),
-        3 => assert_eq!(stack, SECOND_STACK.load(Relaxed)),
-        _ => panic!("unexpected ready order"),
-    }
-    40 + turn as u64
+    SECOND_STACK.store(stack, Relaxed);
+    41
+}
+
+fn run_replacement(_: &mut Current) -> u64 {
+    let turn = SEQUENCE.fetch_add(1, Relaxed);
+    assert_eq!(turn, 3);
+    let stack = stack_address(&turn);
+    assert!(stack.abs_diff(FIRST_STACK.load(Relaxed)) < 8 * 1024);
+    assert!(stack.abs_diff(SECOND_STACK.load(Relaxed)) >= 8 * 1024);
+    43
 }
 
 fn abandoned(_: &mut Current) -> u64 {
@@ -94,8 +100,6 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
     let end = End::Returned { value };
     assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Ended(end)));
     assert_eq!(execution.finish_end(unit), Ok(()));
-    assert_eq!(execution.reap(unit), Ok(end));
-    assert_eq!(execution.reap(unit), Err(Error::Gone));
 }
 
 #[unsafe(no_mangle)]
@@ -150,8 +154,9 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert_ne!(dormant, b);
     assert_eq!(execution.stop_dormant(dormant), Err(Error::Gone));
     assert_eq!(execution.submit(dormant), Err(Error::Gone));
-    execution.submit(a).expect("submit first");
-    execution.submit(b).expect("submit second");
+    let a_admission = execution.submit(a).expect("submit first");
+    let b_admission = execution.submit(b).expect("submit second");
+    assert_ne!(a_admission, b_admission);
     assert_eq!(execution.submit(a), Err(Error::Busy));
     assert_eq!(execution.stop_dormant(a), Err(Error::Busy));
 
@@ -164,31 +169,48 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert_eq!(execution.pending_leave(), Ok(None));
 
     let initial = dispatch(a);
+    assert_eq!(initial.admission(), a_admission);
     assert_eq!(execution.lifecycle(a), Ok(Lifecycle::Live));
     execution.vacate(initial).expect("return to ready");
 
     let leaving = dispatch(b);
+    assert_eq!(leaving.admission(), b_admission);
     assert_eq!(execution.vacate(initial), Err(Error::Gone));
     assert_eq!(execution.pending_leave(), Ok(Some(leaving)));
     finish(b, leaving, 41);
 
-    let replacement = unsafe { execution.create(second) }.expect("retired stack reused");
-    assert_ne!(replacement, b);
-    assert_eq!(execution.submit(b), Err(Error::Gone));
-    assert_eq!(execution.lifecycle(b), Err(Error::Gone));
-    execution.submit(replacement).expect("submit replacement");
-
     let resumed = dispatch(a);
     assert_ne!(resumed, initial);
+    assert_eq!(resumed.admission(), a_admission);
     assert_eq!(execution.vacate(initial), Err(Error::Gone));
     finish(a, resumed, 0x1234_5678);
-    finish(replacement, dispatch(replacement), 43);
+    assert_eq!(execution.reap(b), Ok(End::Returned { value: 41 }));
+    assert_eq!(execution.reap(b), Err(Error::Gone));
+    assert_eq!(execution.submit(b), Err(Error::Gone));
+
+    // Only b's Unit slot is vacant. a's End remains observable while its
+    // returned stack is selected for the replacement.
+    let replacement = unsafe { execution.create(run_replacement) }.expect("reuse returned stack");
+    assert_ne!(replacement, b);
+    let replacement_admission = execution.submit(replacement).expect("submit replacement");
+    assert_ne!(replacement_admission, a_admission);
+    assert_ne!(replacement_admission, b_admission);
+    let replaced = dispatch(replacement);
+    assert_eq!(replaced.admission(), replacement_admission);
+    assert_eq!(execution.vacate(leaving), Err(Error::Gone));
+    assert_eq!(
+        execution.lifecycle(a),
+        Ok(Lifecycle::Ended(End::Returned { value: 0x1234_5678 }))
+    );
+    finish(replacement, replaced, 43);
+    assert_eq!(execution.reap(a), Ok(End::Returned { value: 0x1234_5678 }));
+    assert_eq!(execution.reap(replacement), Ok(End::Returned { value: 43 }));
     assert_eq!(execution.enter(), Ok(None));
     assert_eq!(SEQUENCE.load(Relaxed), 4);
 
     write(concat!(
         "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1",
-        " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1\n",
+        " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1 binding_returned=1 admission=1\n",
     ));
     shutdown(true)
 }
