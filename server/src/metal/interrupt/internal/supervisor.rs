@@ -34,22 +34,12 @@ pub struct Reception {
 }
 
 impl Reception {
-    /// # Safety
-    /// The caller has exclusive control of this exact line and its existing
-    /// obligations on the actual Hart; no independent writer or borrower can
-    /// change it until this use has ended. Keep the original entry and line
-    /// ownership valid, including after failure. Dropping this value does not
-    /// mask the line or settle hardware effects.
-    pub unsafe fn admit(hart: u64, cause: Cause) -> Result<Self, Error> {
-        let reception = Self {
+    fn new(hart: u64, cause: Cause) -> Self {
+        Self {
             hart,
             cause,
             local: PhantomData,
-        };
-        if !reception.valid() {
-            return Err(Error::Context);
         }
-        Ok(reception)
     }
 
     pub fn hart(&self) -> u64 {
@@ -87,5 +77,27 @@ impl Reception {
                 asm!("csrc sie, {}", in(reg) mask, options(nostack));
             }
         }
+    }
+}
+
+/// The two independently borrowable reception lines handed off by Entry.
+/// Their ownership is not duplicated by controller admission.
+#[must_use]
+pub struct Supervisor {
+    pub timer: Reception,
+    pub external: Reception,
+}
+
+impl Supervisor {
+    /// # Safety
+    /// The trusted major entry owns this Hart's local lines and calls this
+    /// exactly once, before delivering them to any consumer.
+    pub(crate) unsafe fn admit(hart: u64) -> Result<Self, Error> {
+        let timer = Reception::new(hart, Cause::Timer);
+        let external = Reception::new(hart, Cause::External);
+        if !timer.valid() || timer.enabled() || external.enabled() {
+            return Err(Error::Context);
+        }
+        Ok(Self { timer, external })
     }
 }

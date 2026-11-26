@@ -10,6 +10,8 @@ pub struct Boot<'a> {
     image: PhysicalRange,
     descriptions: &'a Descriptions<'a>,
     firmware_map: Option<FirmwareMap<'a>>,
+    #[cfg(limen_firmware = "sbi")]
+    reception: Option<crate::metal::interrupt::internal::supervisor::Supervisor>,
 }
 
 impl<'a> Boot<'a> {
@@ -61,6 +63,14 @@ impl<'a> Boot<'a> {
         self.descriptions.sbi.expect("admitted SBI services")
     }
 
+    /// Move the major Hart's exclusive reception lines out of the handoff.
+    #[cfg(limen_firmware = "sbi")]
+    pub fn take_reception(
+        &mut self,
+    ) -> Option<crate::metal::interrupt::internal::supervisor::Supervisor> {
+        self.reception.take()
+    }
+
     pub fn acpi(&self) -> Option<&Acpi<'a>> {
         self.descriptions.acpi.as_ref()
     }
@@ -93,12 +103,15 @@ impl<'a> Boot<'a> {
         image: PhysicalRange,
         firmware_map: Option<FirmwareMap<'a>>,
         descriptions: &'a Descriptions<'a>,
+        #[cfg(limen_firmware = "sbi")] reception: crate::metal::interrupt::internal::supervisor::Supervisor,
     ) -> Self {
         Self {
             hart,
             image,
             descriptions,
             firmware_map,
+            #[cfg(limen_firmware = "sbi")]
+            reception: Some(reception),
         }
     }
 }

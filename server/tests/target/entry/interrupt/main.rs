@@ -10,7 +10,7 @@ use kernel::{
             external::aplic::{self, Direct, Mode},
             internal::{
                 aclint::timer::{self, State, Timer},
-                supervisor::{Cause, Reception},
+                supervisor::Reception,
             },
         },
         memory::mmu::internal::device::DeviceWindow,
@@ -61,7 +61,7 @@ unsafe extern "C" fn receive(until: u64) -> usize {
     )
 }
 
-fn timer_test(boot: &Boot<'_>) {
+fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     let tree = boot.device_tree_description().expect("trusted RV64 DTB");
     let cpus = boot.riscv_cpus();
     let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();
@@ -76,15 +76,12 @@ fn timer_test(boot: &Boot<'_>) {
     // OpenSBI owns the machine comparator; the guest never maps or writes it.
     let service = boot.sbi_services().timer().expect("SBI TIME");
     assert!(unsafe { Counter::admit(timebase, u64::MAX) }.is_none());
-    assert!(unsafe { Reception::admit(u64::MAX, Cause::Timer) }.is_err());
     let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
-    let mut wrong = unsafe { Reception::admit(boot.hart() as u64, Cause::External) }.unwrap();
     assert!(matches!(
-        unsafe { Timer::admit(description, &counter, service, &mut wrong) },
+        unsafe { Timer::admit(description, &counter, service, wrong) },
         Err(timer::Failure::Scope)
     ));
-    let mut local = unsafe { Reception::admit(boot.hart() as u64, Cause::Timer) }.unwrap();
-    let mut timer = unsafe { Timer::admit(description, &counter, service, &mut local) }.unwrap();
+    let mut timer = unsafe { Timer::admit(description, &counter, service, local) }.unwrap();
     assert_eq!(timer.state(), State::Inherited);
     assert_eq!(timer.arm(1), Err(timer::Failure::Busy));
     assert_eq!(timer.rearm(1), Err(timer::Failure::Busy));
@@ -142,7 +139,7 @@ fn uart_write(base: usize, register: usize, value: u8) {
     }
 }
 
-fn external_test(boot: &Boot<'_>) {
+fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     let tree = boot.device_tree_description().unwrap();
     let cpus = boot.riscv_cpus();
     let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();
@@ -172,13 +169,11 @@ fn external_test(boot: &Boot<'_>) {
     assert_eq!(mapping.word(1), None);
     assert_eq!(mapping.word(description.registers().length().as_usize().unwrap()), None);
     assert_eq!(mapping.word(usize::MAX), None);
-    let mut wrong = unsafe { Reception::admit(boot.hart() as u64, Cause::Timer) }.unwrap();
     assert!(matches!(
-        unsafe { Direct::admit(description, &mut mapping, &mut wrong) },
+        unsafe { Direct::admit(description, &mut mapping, wrong) },
         Err(aplic::Failure::Scope)
     ));
-    let mut local = unsafe { Reception::admit(boot.hart() as u64, Cause::External) }.unwrap();
-    let mut direct = unsafe { Direct::admit(description, &mut mapping, &mut local) }.unwrap();
+    let mut direct = unsafe { Direct::admit(description, &mut mapping, local) }.unwrap();
     assert_eq!(core::mem::size_of::<aplic::Source>(), 2);
     assert_eq!(direct.state(), aplic::State::Prepared);
     assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Vacant);
@@ -240,10 +235,12 @@ fn external_test(boot: &Boot<'_>) {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
+extern "Rust" fn limen_platform_ready(mut boot: Boot<'_>) -> ! {
     assert_eq!(boot.hart(), 0);
-    timer_test(&boot);
-    external_test(&boot);
+    let mut reception = boot.take_reception().expect("major reception handoff");
+    assert!(boot.take_reception().is_none());
+    timer_test(&boot, &mut reception.timer, &mut reception.external);
+    external_test(&boot, &mut reception.external, &mut reception.timer);
     let enabled: usize;
     unsafe {
         core::arch::asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem));
