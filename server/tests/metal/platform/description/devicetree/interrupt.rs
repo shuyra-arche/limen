@@ -136,3 +136,13 @@ fn routes_and_windows_are_checked_before_native_access() {
     let cpus = RiscvCpus::new(tree).unwrap().unwrap();
     assert_eq!(aplic::Description::read(&tree, &cpus, 3).err(), Some(Error::Range));
 }
+
+#[test]
+fn controller_discovery_rejects_foreign_cpu_scope() {
+    let bytes = fixture(&[2, 9, 1, 9], &[2, 7, 1, 7], 10, 5, 0x8000);
+    let other = bytes.clone();
+    let tree = DeviceTree::new(&bytes).unwrap();
+    let cpus = RiscvCpus::new(DeviceTree::new(&other).unwrap()).unwrap().unwrap();
+    assert_eq!(aplic::Description::read(&tree, &cpus, 3).err(), Some(Error::Conflict));
+    assert_eq!(timer::Description::read(&tree, &cpus, 3).err(), Some(Error::Conflict));
+}

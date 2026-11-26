@@ -75,7 +75,14 @@ fn timer_test(boot: &Boot<'_>) {
     // The runner's exact machine configuration has ACLINT and disables Sstc.
     // OpenSBI owns the machine comparator; the guest never maps or writes it.
     let service = boot.sbi_services().timer().expect("SBI TIME");
+    assert!(unsafe { Counter::admit(timebase, u64::MAX) }.is_none());
+    assert!(unsafe { Reception::admit(u64::MAX, Cause::Timer) }.is_err());
     let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
+    let mut wrong = unsafe { Reception::admit(boot.hart() as u64, Cause::External) }.unwrap();
+    assert!(matches!(
+        unsafe { Timer::admit(description, &counter, service, &mut wrong) },
+        Err(timer::Failure::Scope)
+    ));
     let mut local = unsafe { Reception::admit(boot.hart() as u64, Cause::Timer) }.unwrap();
     let mut timer = unsafe { Timer::admit(description, &counter, service, &mut local) }.unwrap();
     assert_eq!(timer.state(), State::Inherited);
@@ -160,6 +167,11 @@ fn external_test(boot: &Boot<'_>) {
     // supervisor domain delegated by OpenSBI establish this test's ownership.
     let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
     let mut mapping = unsafe { DeviceWindow::admit(description.registers(), base) }.unwrap();
+    let mut wrong = unsafe { Reception::admit(boot.hart() as u64, Cause::Timer) }.unwrap();
+    assert!(matches!(
+        unsafe { Direct::admit(description, &mut mapping, &mut wrong) },
+        Err(aplic::Failure::Scope)
+    ));
     let mut local = unsafe { Reception::admit(boot.hart() as u64, Cause::External) }.unwrap();
     let mut direct = unsafe { Direct::admit(description, &mut mapping, &mut local) }.unwrap();
     assert_eq!(core::mem::size_of::<aplic::Source>(), 2);
