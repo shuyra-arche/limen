@@ -1,11 +1,8 @@
+use limen_treaty::model::{InternalAddress, PhysicalAddress};
 use super::{IMAGES, PAGE, ROOT, SV39_ROOT};
 use kernel::metal::{
-    address::PhysicalAddress,
     mmu::internal::access::MappedRange,
-    mmu::internal::{
-        GEOMETRY,
-        riscv::{Mode, root},
-    },
+    mmu::internal::{GEOMETRY, riscv::{Mode, root}},
     module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, UseError},
 };
 use std::{mem::MaybeUninit, sync::Barrier, thread};
@@ -27,7 +24,7 @@ fn prepare(
         // The synthetic physical range represents this exclusively owned
         // simulation buffer. No target address is invoked on the Host.
         let mut mapped = unsafe { MappedRange::new(physical, &mut storage) }.unwrap();
-        image.prepare(&mut mapped, virtual_start).unwrap()
+        image.prepare(&mut mapped, InternalAddress::new(virtual_start)).unwrap()
     };
     (layout, storage)
 }
@@ -158,7 +155,7 @@ fn capacity_failure_keeps_the_layout_material_and_dependency() {
     let (layout, backing) = prepare(&image, 0x20_0000, 0x4000_0000);
     let (next_layout, next_backing) = prepare(&image, 0x21_0000, 0x4001_0000);
     let next_physical = next_layout.physical();
-    let next_virtual = next_layout.virtual_range();
+    let next_internal = next_layout.internal();
     let next_entry = next_layout.entry(GEOMETRY);
     let next_storage = next_backing.as_ptr();
     let slots = ModuleSlots::<1>::new();
@@ -169,7 +166,7 @@ fn capacity_failure_keeps_the_layout_material_and_dependency() {
             .err()
             .unwrap();
     assert_eq!(next_layout.physical(), next_physical);
-    assert_eq!(next_layout.virtual_range(), next_virtual);
+    assert_eq!(next_layout.internal(), next_internal);
     assert_eq!(next_layout.entry(GEOMETRY), next_entry);
     assert_eq!(next_backing.as_ptr(), next_storage);
     assert_eq!(held.id(), module.id());

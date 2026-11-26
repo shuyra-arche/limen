@@ -2,8 +2,8 @@
 
 use core::ptr;
 
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 use crate::metal::{
-    address::{PhysicalAddress, PhysicalRange},
     identity::{GenerationTable, Key, Reservation as SlotReservation, ReserveError},
     sync::{TurnMode, TurnWorkspace},
 };

@@ -1,6 +1,10 @@
 use super::{Error, Node};
-use crate::metal::address::{PhysicalAddress, PhysicalRange, length};
-use limen_treaty::model::ByteLength;
+use limen_treaty::model::{ByteCoordinate, ByteLength, PhysicalAddress, PhysicalRange, Range};
+
+// Each intermediate range is interpreted in the current parent bus.
+enum Bus {}
+type BusAddress = ByteCoordinate<Bus>;
+type BusRange = Range<BusAddress>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Cells {
@@ -37,9 +41,9 @@ impl Cells {
         Ok(cells)
     }
 
-    fn decode(self, tuple: &[u8]) -> Result<PhysicalRange, Error> {
+    fn decode(self, tuple: &[u8]) -> Result<BusRange, Error> {
         let (base, length) = tuple.split_at(self.address * 4);
-        let range = PhysicalAddress::new(number(base))
+        let range = BusAddress::new(number(base))
             .range(ByteLength::new(number(length)))
             .ok_or(Error::Range)?;
         within_address_cells(range, self.address)
@@ -90,7 +94,10 @@ impl<'a> Node<'_, 'a> {
                 range = translate(&bus, &parent, range)?;
                 bus = parent;
             }
-            Ok(range)
+            // The complete chain reached the physical root of this tree.
+            PhysicalAddress::new(range.start().get())
+                .range(range.length())
+                .ok_or(Error::Range)
         }))
     }
 }
@@ -98,8 +105,8 @@ impl<'a> Node<'_, 'a> {
 fn translate(
     bus: &Node<'_, '_>,
     parent: &Node<'_, '_>,
-    range: PhysicalRange,
-) -> Result<PhysicalRange, Error> {
+    range: BusRange,
+) -> Result<BusRange, Error> {
     let child = Cells::read(bus)?;
     let ranges = bus.property(b"ranges")?.ok_or(Error::Missing)?;
     let parent_address = parent.address_cells()?;
@@ -120,11 +127,11 @@ fn translate(
         let (child_base, rest) = tuple.split_at(child.address * 4);
         let (parent_base, size) = rest.split_at(parent_address * 4);
         let extent = ByteLength::new(number(size));
-        let child_range = PhysicalAddress::new(number(child_base))
+        let child_range = BusAddress::new(number(child_base))
             .range(extent)
             .ok_or(Error::Range)?;
         within_address_cells(child_range, child.address)?;
-        let parent_range = PhysicalAddress::new(number(parent_base))
+        let parent_range = BusAddress::new(number(parent_base))
             .range(extent)
             .ok_or(Error::Range)?;
         within_address_cells(parent_range, parent_address)?;
@@ -137,7 +144,7 @@ fn translate(
                 .distance(child_range.start())
                 .ok_or(Error::Range)?;
             let base = parent_range.start().advance(offset).ok_or(Error::Range)?;
-            matched = Some(base.range(length(range)).ok_or(Error::Range)?);
+            matched = Some(base.range(range.length()).ok_or(Error::Range)?);
         }
     }
     if overlaps > 1 {
@@ -151,9 +158,9 @@ fn translate(
 }
 
 fn within_address_cells(
-    range: PhysicalRange,
+    range: BusRange,
     address_cells: usize,
-) -> Result<PhysicalRange, Error> {
+) -> Result<BusRange, Error> {
     if address_cells == 1 && range.end().get() > 1_u64 << 32 {
         return Err(Error::Range);
     }

@@ -1,11 +1,13 @@
 use core::{mem::MaybeUninit, ptr};
 
+use limen_treaty::model::PhysicalAddress;
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
-        address::PhysicalAddress,
         allocator::{
-            Allocation, Allowance, Error as SourceError,
+            Allocation,
+            Allowance,
+            Error as SourceError,
             pool::{Error, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement, Stable},
         },
         sync::{TurnLock, TurnMode::Fast, TurnWorkspace},

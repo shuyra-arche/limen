@@ -4,15 +4,34 @@ use kernel::{
     basis::pend::{Error, Handle, Initial as InitialPend, PendSpace, Revoker},
     entry::boot::{self, Boot, Retirement as PhysicalRetirement},
     metal::{
-        address::{PhysicalAddress, PhysicalRange, length},
         allocator::{
-            Allocation, AllocationConstruction, AllocationId, Allocator, Allowance, Candidate,
-            Config, Error as SourceError, Initial, MappedStorage, Pending,
+            Allocation,
+            AllocationConstruction,
+            AllocationId,
+            Allocator,
+            Allowance,
+            Candidate,
+            Config,
+            Error as SourceError,
+            Initial,
+            MappedStorage,
+            Pending,
             RamPurpose::Metadata,
-            Request, ReturnId, ReturnReceipt, Returned, Search,
+            Request,
+            ReturnId,
+            ReturnReceipt,
+            Returned,
+            Search,
             pool::{
-                Error as PoolError, GroupId, GroupSlot, Occupied, Pool, Reference, Retirement,
-                Stable, StableOwner,
+                Error as PoolError,
+                GroupId,
+                GroupSlot,
+                Occupied,
+                Pool,
+                Reference,
+                Retirement,
+                Stable,
+                StableOwner,
             },
         },
         mmu::internal::access::MappedRange,
@@ -22,7 +41,7 @@ use kernel::{
 
 use super::memory::{extent, mapped};
 
-use limen_treaty::model::{Alignment, ByteLength};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
 const PAGE: u64 = 4096;
 pub(super) const PAGES: usize = 6;
@@ -285,7 +304,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     assert!(mapping.is_none() && regions.entries().next().is_none());
     assert_eq!(root.start(), backing.start());
     assert!(backing.covers(root));
-    assert_eq!(managed + length(root).get(), length(scope).get());
+    assert_eq!(managed + root.length().get(), scope.length().get());
     assert_eq!(original.occupied().get(), PAGE);
     assert_eq!(managed, unassigned + original.capacity().get());
 

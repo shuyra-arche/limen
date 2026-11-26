@@ -1,7 +1,6 @@
 use core::{mem::MaybeUninit, ops::Range};
-use limen_treaty::model::{Alignment, ByteLength};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
-use crate::metal::address::{PhysicalAddress, PhysicalRange};
 
 use crate::metal::allocator::buddy::{
     Buddy, Error, Geometry, Request, Revision, Root, Scan, Search,
@@ -140,7 +139,7 @@ fn geometries_and_fragmented_search_match_the_flat_model() {
                                     let start = found.start().get();
                                     let end = found.end().get();
                                     assert_eq!(
-                                        crate::metal::address::length(found),
+                                        found.length(),
                                         ByteLength::new(length * GRANULE)
                                     );
                                     assert_eq!(start % alignment, 0);

@@ -1,7 +1,6 @@
 use kernel::{
     entry::boot::Boot,
     metal::{
-        address::PhysicalRange,
         allocator::{
             Allocation, Allocator, Allowance, Config, Initial, MappedStorage,
             pool::{GroupId, GroupSlot, Pool},
@@ -11,7 +10,7 @@ use kernel::{
 
 use super::memory::{extent, mapped, retirement};
 
-use limen_treaty::model::ByteLength;
+use limen_treaty::model::{ByteLength, PhysicalRange};
 
 pub(super) const PAGE: usize = 4096;
 const BASE: u64 = 0x8420_0000;

@@ -2,11 +2,8 @@
 
 use core::ptr;
 
-use crate::metal::{
-    address::{PhysicalRange, length},
-    identity::Key,
-    sync::{TurnLock, TurnMode, TurnWorkspace},
-};
+use limen_treaty::model::PhysicalRange;
+use crate::metal::{identity::Key, sync::{TurnLock, TurnMode, TurnWorkspace}};
 
 use super::{
     Allocation, AllocationId, Allocator, AllowanceId, Error, RegionId,
@@ -211,7 +208,7 @@ impl Allocator {
                 .access(slot)
                 .expect("original Allowance")
                 .live(allowance)?;
-            let amount = length(record.physical).get();
+            let amount = record.physical.length().get();
             let state = held.access(&region.state).expect("return Region");
             let credit = if open { 0 } else { amount };
             let unassigned = state.unassigned.checked_add(credit).ok_or(Error::Balance)?;

@@ -1,8 +1,8 @@
 use core::ptr::{self, NonNull};
 
 #[cfg(target_arch = "riscv64")]
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 use kernel::entry::boot::{Boot, Condition, Retirement};
-use kernel::metal::address::{PhysicalAddress, PhysicalRange};
 use kernel::metal::mmu::internal::access::MappedRange;
 
 pub(super) fn extent(start: u64, end: u64) -> PhysicalRange {

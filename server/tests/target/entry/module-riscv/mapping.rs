@@ -6,14 +6,8 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use kernel::metal::{
-    address::PhysicalAddress,
-    mmu::internal::riscv::{
-        Mode,
-        context::{self, Context},
-    },
-    module::Permissions,
-};
+use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
+use kernel::metal::{mmu::internal::riscv::{Mode, context::{self, Context}}, module::Permissions};
 
 pub const PAGE: u64 = 4096;
 const ENTRIES: usize = 512;
@@ -176,6 +170,13 @@ impl Root {
     ) {
         self.check_inactive();
         assert!(range.start < range.end && range.end <= self.low_end());
+        assert!(self.mode.is_canonical_range(
+            InternalRange::new(
+                InternalAddress::new(range.start),
+                InternalAddress::new(range.end),
+            )
+            .unwrap()
+        ));
         assert!(range.start.is_multiple_of(PAGE) && range.end.is_multiple_of(PAGE));
         for address in range.step_by(PAGE as usize) {
             let entry = self.slot(address, 0, |branch| encode(branch, None));
@@ -189,7 +190,7 @@ impl Root {
     // lifecycle scenarios continue to require exact identity mappings.
     pub fn map_probe(&mut self, address: u64, physical: PhysicalAddress, level: usize) {
         self.check_inactive();
-        let bytes = self.mode.leaf_size(level).unwrap();
+        let bytes = self.mode.leaf_size(level).unwrap().get();
         assert!(address.is_multiple_of(bytes));
         let pte = self
             .mode
@@ -206,7 +207,7 @@ impl Root {
     ) -> &AtomicU64 {
         let mut table = 0;
         for level in (leaf_level + 1..self.mode.levels()).rev() {
-            let entry = &self.tables[table].0[self.mode.index(address, level).unwrap()];
+            let entry = &self.tables[table].0[self.mode.index(InternalAddress::new(address), level).unwrap()];
             let pte = read(entry);
             table = if pte == 0 {
                 let next = self.used;
@@ -220,7 +221,7 @@ impl Root {
                 self.child(pte)
             };
         }
-        let entry = &self.tables[table].0[self.mode.index(address, leaf_level).unwrap()];
+        let entry = &self.tables[table].0[self.mode.index(InternalAddress::new(address), leaf_level).unwrap()];
         assert_eq!(read(entry), 0);
         entry
     }
@@ -245,10 +246,10 @@ impl Root {
         let mut table = 0;
         for level in (1..self.mode.levels()).rev() {
             table = self.child(read(
-                &self.tables[table].0[self.mode.index(page, level).unwrap()],
+                &self.tables[table].0[self.mode.index(InternalAddress::new(page), level).unwrap()],
             ));
         }
-        &self.tables[table].0[self.mode.index(page, 0).unwrap()]
+        &self.tables[table].0[self.mode.index(InternalAddress::new(page), 0).unwrap()]
     }
 
     /// The local mapping owner withdraws after all other Harts have departed.

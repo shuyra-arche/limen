@@ -10,11 +10,8 @@ use kernel::metal::{
     mmu::internal::riscv::description::RiscvMmu, mmu::internal::riscv::description::RiscvMmuMode,
     time::RiscvTimebase,
 };
-use kernel::{
-    entry::boot::{Boot, shutdown, stack_range, write},
-    metal::address::PhysicalAddress,
-};
-use limen_treaty::model::ByteLength;
+use kernel::entry::boot::{Boot, shutdown, stack_range, write};
+use limen_treaty::model::{ByteLength, PhysicalAddress};
 
 #[path = "../synchronization.rs"]
 mod synchronization;

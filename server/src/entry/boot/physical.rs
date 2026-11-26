@@ -1,11 +1,9 @@
 //! Physical exclusions and the conditions for retiring early use.
 
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, Source};
-use crate::metal::{
-    address::{PhysicalAddress, PhysicalRange},
-    allocator::{Allocator, Error, Grant, RegionDescription},
-};
+use crate::metal::allocator::{Allocator, Error, Grant, RegionDescription};
 use core::ops::Range;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

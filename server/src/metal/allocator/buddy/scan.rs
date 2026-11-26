@@ -1,9 +1,8 @@
 //! Summary search and budgeted, revision-checked physical-order traversal.
 
 use core::ptr;
-use limen_treaty::model::{Alignment, ByteLength};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
-use crate::metal::address::{PhysicalAddress, PhysicalRange};
 
 use super::{Buddy, Error, Root, State, geometry::Block};
 

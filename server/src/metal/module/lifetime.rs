@@ -3,13 +3,12 @@
 use core::{
     fmt,
     mem::{self, ManuallyDrop},
-    ops::Range,
     ptr,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use limen_treaty::model::{InternalAddress, InternalRange, PhysicalRange};
 use super::{Contract, Layout, Machine};
-use crate::metal::address::PhysicalRange;
 
 // Closing admission and observing the final release cover the same
 // population because the phase and use count share a modification order.
@@ -140,8 +139,8 @@ impl<'slot, Material, const DEPENDENCIES: usize> Module<'slot, '_, '_, Material,
         self.layout.physical()
     }
 
-    pub fn virtual_range(&self) -> Range<u64> {
-        self.layout.virtual_range()
+    pub fn internal(&self) -> InternalRange {
+        self.layout.internal()
     }
 
     /// Borrow the exact direct uses retained by this installed image.
@@ -238,7 +237,7 @@ impl<'slot, Material, const DEPENDENCIES: usize> Module<'slot, '_, '_, Material,
 #[must_use = "keep this use while any consumer can reach the entry or its effects"]
 pub struct ModuleUse<'module> {
     state: &'module AtomicUsize,
-    entry: u64,
+    entry: InternalAddress,
     contract: Contract<'module>,
     machine: Machine,
 }
@@ -256,9 +255,9 @@ impl<'module> ModuleUse<'module> {
         self.machine
     }
 
-    /// Numeric entry for the consumer's previously validated domain ABI.
+    /// Internal entry coordinate for the consumer's previously validated domain ABI.
     /// Execution requires a live use and the corresponding execution scope.
-    pub fn entry(&self) -> u64 {
+    pub fn entry(&self) -> InternalAddress {
         self.entry
     }
 }

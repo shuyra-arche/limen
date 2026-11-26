@@ -2,9 +2,9 @@
 
 use core::mem;
 
+use limen_treaty::model::PhysicalAddress;
 use super::{Mode, contract, geometry};
 use crate::metal::{
-    address::PhysicalAddress,
     mmu::internal::riscv::context::Context,
     module::{Machine, Module, ModuleUse, Permissions, UseError},
 };
@@ -16,7 +16,7 @@ pub fn bind<'module, Material, const DEPENDENCIES: usize>(
 ) -> Result<Root<'module>, UseError> {
     let geometry = geometry(module.dependencies())?;
     let encoder = module.acquire(contract(mode))?;
-    if encoder.machine() != Machine::Riscv64 || encoder.entry() == 0 {
+    if encoder.machine() != Machine::Riscv64 || encoder.entry().get() == 0 {
         return Err(UseError::Interface);
     }
     Ok(Root::new(mode, encoder, geometry))
@@ -68,8 +68,8 @@ pub struct Root<'module> {
 impl<'module> Root<'module> {
     fn new(mode: Mode, encoder: ModuleUse<'module>, geometry: &'module ModuleUse<'module>) -> Self {
         // Bind checked both exact declarations and the native machine.
-        let query = unsafe { mem::transmute::<u64, GeometryQuery>(geometry.entry()) };
-        let entry = unsafe { mem::transmute::<u64, RootEncoder>(encoder.entry()) };
+        let query = unsafe { mem::transmute::<u64, GeometryQuery>(geometry.entry().get()) };
+        let entry = unsafe { mem::transmute::<u64, RootEncoder>(encoder.entry().get()) };
         Self {
             mode,
             _encoder_use: encoder,

@@ -4,11 +4,8 @@ use core::{
     sync::atomic::Ordering::{Acquire, Release},
 };
 
-use crate::metal::{
-    address::{PhysicalRange, length},
-    identity::{Entry, GenerationTable},
-    sync::{TurnLock, TurnMode, TurnWorkspace},
-};
+use limen_treaty::model::PhysicalRange;
+use crate::metal::{identity::{Entry, GenerationTable}, sync::{TurnLock, TurnMode, TurnWorkspace}};
 
 use super::{
     Allocator, Error, RegionId,
@@ -106,7 +103,7 @@ impl Region {
     ) {
         self.state
             .get_mut()
-            .initialize(geometry, edits, length(description.physical).get());
+            .initialize(geometry, edits, description.physical.length().get());
         self.description.get_mut().write(description);
     }
 
@@ -171,15 +168,15 @@ impl Grant {
             }
             let total = source
                 .regions()
-                .try_fold(length(physical), |sum, (_, current)| {
-                    sum.checked_add(length(current.physical))
+                .try_fold(physical.length(), |sum, (_, current)| {
+                    sum.checked_add(current.physical.length())
                         .ok_or(Error::Capacity)
                 })?;
             if total > source.config.maximum {
                 return Err(Error::Capacity);
             }
             let state = held.access(&region.state).expect("new Region");
-            state.initialize(geometry, source.config.edits, length(physical).get());
+            state.initialize(geometry, source.config.edits, physical.length().get());
             // The directory owns the only write to this unpublished slot.
             unsafe { (*region.description.get()).write(description) };
             let id = RegionId::new(source.source_id(), index);

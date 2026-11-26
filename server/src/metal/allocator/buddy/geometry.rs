@@ -1,9 +1,8 @@
 //! Checked geometry and node locations for one physical region.
 
 use core::{alloc::Layout, ops::Range};
-use limen_treaty::model::{Alignment, ByteLength};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
-use crate::metal::address::{PhysicalAddress, PhysicalRange};
 
 use super::Error;
 

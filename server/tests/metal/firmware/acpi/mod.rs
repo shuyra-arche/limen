@@ -1,4 +1,4 @@
-use kernel::metal::address::{PhysicalAddress, PhysicalRange};
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 use kernel::metal::firmware::acpi::{
     Acpi, Error, IoApic, Polarity, Processor, SourceOverride, Trigger,
 };

@@ -3,7 +3,6 @@ use limen_treaty::model::ByteLength;
 use core::sync::atomic::Ordering::Acquire;
 
 use crate::metal::{
-    address::length,
     identity::{Generation, Key, Slot},
     sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
 };
@@ -266,7 +265,7 @@ impl Allocator {
                     let state = held.access(&region.state).expect("published Region");
                     Ok((
                         total
-                            .checked_add(length(region.description().physical))
+                            .checked_add(region.description().physical.length())
                             .ok_or(Error::Balance)?,
                         unassigned
                             .checked_add(ByteLength::new(state.unassigned))

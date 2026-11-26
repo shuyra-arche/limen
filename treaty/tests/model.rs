@@ -1,6 +1,6 @@
 use limen_treaty::model::{
     Alignment, ByteLength, ByteOffset, ExternalAddress, InternalAddress, InternalRange, PageCount,
-    PageOffset, PageSize,
+    PageOffset, PageSize, PhysicalAddress,
 };
 
 #[test]
@@ -109,4 +109,30 @@ fn page_conversion_and_alignment_handle_numeric_limits() {
         Some(InternalAddress::new(8192))
     );
     assert_eq!(InternalAddress::new(u64::MAX).align_up(alignment), None);
+}
+
+#[test]
+fn coordinates_share_geometry_without_marker_traits() {
+    use limen_treaty::model::{ByteCoordinate, PageRange, PhysicalRange};
+
+    enum Local {}
+    let start = ByteCoordinate::<Local>::new(5);
+    let range = start.range(ByteLength::new(7)).unwrap();
+    assert_eq!(core::mem::size_of_val(&start), 8);
+    assert_eq!(range.length(), ByteLength::new(7));
+    assert_eq!(range.end().retreat(range.length()), Some(start));
+    assert_eq!(range.start(), start);
+    assert!(range.start() < range.end());
+    let mut index = std::collections::HashMap::new();
+    index.insert(start, range);
+    assert_eq!(index.get(&start), Some(&range));
+
+    let physical = PhysicalAddress::new(4096);
+    let range = PhysicalRange::new(physical, PhysicalAddress::new(8192)).unwrap();
+    assert_eq!(range.length(), ByteLength::new(4096));
+    assert_eq!(PhysicalAddress::new(u64::MAX).range(ByteLength::new(1)), None);
+
+    let pages = PageRange::new(PageOffset::new(2), PageOffset::new(7)).unwrap();
+    assert_eq!(pages.length(), PageCount::new(5));
+    assert_eq!(pages.start().range(pages.length()), Some(pages));
 }

@@ -2,9 +2,8 @@
 //! A descriptor is a firmware fact, not permission to allocate or access RAM.
 
 use super::devicetree::memory::DtbMemory;
-use crate::metal::address::{PhysicalAddress, PhysicalRange};
 use core::iter;
-use limen_treaty::model::{Alignment, PageCount, PageSize};
+use limen_treaty::model::{Alignment, PageCount, PageSize, PhysicalAddress, PhysicalRange};
 
 const PREFIX: usize = 40;
 const ALIGNMENT: usize = 8;

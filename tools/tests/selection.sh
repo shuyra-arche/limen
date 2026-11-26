@@ -129,9 +129,11 @@ done
 change server/src/metal/mmu/internal/riscv/description.rs
 [[ $(boards) == rv64 ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
-change server/src/metal/address.rs
-[[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '.host' >/dev/null
+for source in treaty/src/model/address.rs treaty/src/model/geometry.rs; do
+    change "$source"
+    [[ $(bash "$discover" . "$base") == "$full" ]]
+    bash "$checks" . "$base" | jq -e '.host and .runner and .rv64' >/dev/null
+done
 change server/src/metal/hart/stack.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/qemu.version

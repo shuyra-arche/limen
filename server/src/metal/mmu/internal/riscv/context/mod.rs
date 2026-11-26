@@ -5,11 +5,11 @@ mod satp;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 pub use satp::{SwitchError, switch};
 
+use limen_treaty::model::PhysicalAddress;
 use super::{
     Mode, PAGE_BYTES,
     mode::{PPN_MASK, page_number},
 };
-use crate::metal::address::PhysicalAddress;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Context(u64);

@@ -1,13 +1,12 @@
 mod lifecycle;
 
-use kernel::metal::address::{PhysicalAddress, PhysicalRange};
 use kernel::metal::mmu::internal::access::MappedRange;
 use kernel::metal::mmu::internal::{
     GEOMETRY,
     riscv::{Mode, root},
 };
 use kernel::metal::module::{Contract, Error, Machine, ModuleImage, Permissions};
-use limen_treaty::model::{ByteLength, PageSize};
+use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
 use std::mem::MaybeUninit;
 
 const PAGE: PageSize = PageSize::new(4096).unwrap();
@@ -148,15 +147,23 @@ fn prepares_independently_linked_programs_using_only_program_headers() {
         let interface = description.interface(GEOMETRY).unwrap();
         assert_eq!(interface.contract(), GEOMETRY);
         assert_eq!(interface.version(), 1);
-        assert_eq!(interface.entry(), word(&bytes, 24));
+        assert_eq!(interface.entry().get(), word(&bytes, 24));
 
         let length = image.required_length().as_usize().unwrap();
         let mut buffer = vec![MaybeUninit::new(0xa5); length];
         let mut storage = mapped(&mut buffer);
-        let plan = image.prepare(&mut storage, VIRTUAL).unwrap();
+        let plan = image.prepare(&mut storage, InternalAddress::new(VIRTUAL)).unwrap();
         assert_eq!(plan.physical(), storage.physical());
-        assert_eq!(plan.virtual_range(), VIRTUAL..VIRTUAL + length as u64);
-        assert_eq!(plan.entry(GEOMETRY), Some(VIRTUAL + interface.entry()));
+        assert_eq!(
+            plan.internal(),
+            InternalAddress::new(VIRTUAL)
+                .range(ByteLength::new(length as u64))
+                .unwrap()
+        );
+        assert_eq!(
+            plan.entry(GEOMETRY),
+            Some(InternalAddress::new(VIRTUAL + interface.entry().get()))
+        );
 
         let permissions = [
             Permissions::ReadOnly,
@@ -175,8 +182,10 @@ fn prepares_independently_linked_programs_using_only_program_headers() {
             .unwrap();
             assert_eq!(segment.physical, physical);
             assert_eq!(
-                segment.virtual_range,
-                VIRTUAL + offset..VIRTUAL + offset + PAGE.get()
+                segment.internal,
+                InternalAddress::new(VIRTUAL + offset)
+                    .range(ByteLength::new(PAGE.get()))
+                    .unwrap()
             );
         }
 
@@ -193,7 +202,7 @@ fn prepares_independently_linked_programs_using_only_program_headers() {
         assert_eq!(word(&bytes_after, target as usize), PAGE.get());
 
         let code = programs(&bytes)
-            .find(|program| program.kind == 1 && program.address == interface.entry() as usize)
+            .find(|program| program.kind == 1 && program.address == interface.entry().get() as usize)
             .unwrap();
         assert_eq!(
             bytes_after[code.address..code.address + code.file_size],
@@ -302,7 +311,7 @@ fn selects_distinct_rv64_geometry_and_root_images() {
         }
         let offered = description.interface(own).unwrap();
         assert_eq!(offered.contract(), own);
-        assert_eq!(offered.entry(), word(bytes, 24));
+        assert_eq!(offered.entry().get(), word(bytes, 24));
         assert_eq!(offered.version(), 1);
         let mut duplicate = sources.to_vec();
         duplicate.push(bytes);
@@ -395,7 +404,7 @@ fn failed_placement_preserves_the_storage() {
         let mut buffer = vec![MaybeUninit::new(0x5a); size];
         let mut storage = mapped(&mut buffer);
         assert!(matches!(
-            image.prepare(&mut storage, start),
+            image.prepare(&mut storage, InternalAddress::new(start)),
             Err(Error::Range)
         ));
         assert!(

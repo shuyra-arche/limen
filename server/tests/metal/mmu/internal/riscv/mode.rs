@@ -1,8 +1,5 @@
-use kernel::metal::{
-    address::PhysicalAddress,
-    mmu::internal::riscv::{Mode, context::Context},
-    module::Permissions,
-};
+use limen_treaty::model::{InternalAddress, InternalRange, PageSize, PhysicalAddress};
+use kernel::metal::{mmu::internal::riscv::{Mode, context::Context}, module::Permissions};
 
 #[test]
 fn indexes_both_canonical_ranges_at_every_supported_level() {
@@ -17,21 +14,21 @@ fn indexes_both_canonical_ranges_at_every_supported_level() {
         assert_eq!(mode.virtual_bits(), bits);
         assert_eq!(mode.levels(), levels);
         for (level, &size) in sizes[..levels].iter().enumerate() {
-            assert_eq!(mode.leaf_size(level), Some(size));
+            assert_eq!(mode.leaf_size(level), PageSize::new(size));
             assert_eq!(
-                mode.index(half - 1, level),
+                mode.index(InternalAddress::new(half - 1), level),
                 Some(if level == levels - 1 { 255 } else { 511 })
             );
             assert_eq!(
-                mode.index(high, level),
+                mode.index(InternalAddress::new(high), level),
                 Some(if level == levels - 1 { 256 } else { 0 })
             );
-            assert_eq!(mode.index(u64::MAX, level), Some(511));
-            assert_eq!(mode.index(half, level), None);
-            assert_eq!(mode.index(high - 1, level), None);
+            assert_eq!(mode.index(InternalAddress::new(u64::MAX), level), Some(511));
+            assert_eq!(mode.index(InternalAddress::new(half), level), None);
+            assert_eq!(mode.index(InternalAddress::new(high - 1), level), None);
         }
         assert_eq!(mode.leaf_size(levels), None);
-        assert_eq!(mode.index(0, levels), None);
+        assert_eq!(mode.index(InternalAddress::new(0), levels), None);
     }
 }
 
@@ -59,7 +56,7 @@ fn encodes_aligned_leaves_and_rejects_unrepresentable_inputs() {
         assert_eq!(Context::paged(mode, unaligned), None);
         assert_eq!(Context::from_bits(context.bits() | (1 << 44)), None);
         for level in 0..mode.levels() {
-            let size = mode.leaf_size(level).unwrap();
+            let size = mode.leaf_size(level).unwrap().get();
             for (permission, flags) in permissions {
                 let address = PhysicalAddress::new(size);
                 assert_eq!(
@@ -83,4 +80,21 @@ fn encodes_aligned_leaves_and_rejects_unrepresentable_inputs() {
     assert_eq!(Context::BARE.root(), None);
     assert_eq!(Context::from_bits(1), None);
     assert_eq!(Context::from_bits(11 << 60), None);
+}
+
+#[test]
+fn canonical_ranges_check_occupied_bytes_and_reject_the_hole() {
+    for mode in [Mode::Sv39, Mode::Sv48, Mode::Sv57] {
+        let half = 1_u64 << (mode.virtual_bits() - 1);
+        let high = u64::MAX - (half - 1);
+        let range = |first, end| {
+            InternalRange::new(InternalAddress::new(first), InternalAddress::new(end)).unwrap()
+        };
+        assert!(mode.is_canonical_range(range(0, half)));
+        assert!(mode.is_canonical_range(range(high, u64::MAX)));
+        assert!(!mode.is_canonical_range(range(0, half + 1)));
+        assert!(!mode.is_canonical_range(range(half, high)));
+        assert!(!mode.is_canonical_range(range(half - 1, high + 1)));
+        assert!(!mode.is_canonical_range(range(high - 1, high + 1)));
+    }
 }

@@ -1,5 +1,7 @@
 use core::num::NonZeroU64;
 
+use super::{ByteCoordinate, PageOffset};
+
 macro_rules! measure {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
@@ -164,5 +166,17 @@ impl<C: Copy + Ord> Range<C> {
             start: self.start.min(other.start),
             end: self.end.max(other.end),
         })
+    }
+}
+
+impl<Kind> Range<ByteCoordinate<Kind>> {
+    pub const fn length(self) -> ByteLength {
+        ByteLength::new(self.end.get() - self.start.get())
+    }
+}
+
+impl Range<PageOffset> {
+    pub const fn length(self) -> PageCount {
+        PageCount::new(self.end.get() - self.start.get())
     }
 }

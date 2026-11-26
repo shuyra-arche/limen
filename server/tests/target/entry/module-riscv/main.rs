@@ -8,16 +8,12 @@ use core::{arch::asm, fmt::Write, mem::MaybeUninit, ops::Range, ptr::NonNull};
 use kernel::{
     entry::boot::{self, Boot, Occupant},
     metal::{
-        address::{PhysicalAddress, PhysicalRange},
         mmu::internal::access::MappedRange,
-        mmu::internal::{
-            GEOMETRY,
-            riscv::{Mode, context::Context, root},
-        },
+        mmu::internal::{GEOMETRY, riscv::{Mode, context::Context, root}},
         module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, Permissions, UseError},
     },
 };
-use limen_treaty::model::PageSize;
+use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
 use mapping::PAGE;
 
 const IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/module.elf"));
@@ -244,16 +240,24 @@ fn prepare(
         // This reserved arena has one verified writable, nonexecuting view.
         let mut view =
             unsafe { MappedRange::from_identity(material.physical, material.storage) }.unwrap();
-        image.prepare(&mut view, start).unwrap()
+        image.prepare(&mut view, InternalAddress::new(start)).unwrap()
     };
     assert_eq!(layout.physical(), material.physical);
-    assert_eq!(layout.virtual_range(), range);
+    assert_eq!(
+        layout.internal(),
+        InternalAddress::new(start).range(ByteLength::new(length)).unwrap()
+    );
     let mut permissions = [None; MAX_PAGES];
     for segment in layout.segments() {
         let first = segment.physical.start().get();
         let last = segment.physical.end().get();
-        assert_eq!(segment.virtual_range, first..last);
-        assert!(covers(&range, &segment.virtual_range));
+        assert_eq!(
+            segment.internal,
+            InternalAddress::new(first)
+                .range(ByteLength::new(last - first))
+                .unwrap()
+        );
+        assert!(layout.internal().covers(segment.internal));
         assert!(first.is_multiple_of(PAGE) && last.is_multiple_of(PAGE));
         for page in
             &mut permissions[((first - start) / PAGE) as usize..((last - start) / PAGE) as usize]
@@ -261,7 +265,7 @@ fn prepare(
             assert!(page.replace(segment.permissions).is_none());
         }
     }
-    let entry = layout.entry(contract).unwrap();
+    let entry = layout.entry(contract).unwrap().get();
     let pages = ImagePages { range, permissions };
     assert!(pages.range.contains(&entry));
     assert_eq!(pages.permission(entry), Some(Permissions::ReadExecute));
@@ -296,10 +300,10 @@ fn prove_geometry(mode: Mode, resident: &Resident) {
     root.verify_private(resident.page_count(), |page| resident.permission(page));
 
     let high = u64::MAX << (mode.virtual_bits() - 1);
-    let stride = mode.leaf_size(mode.levels() - 1).unwrap();
+    let stride = mode.leaf_size(mode.levels() - 1).unwrap().get();
     let mut probes = [0; 5];
     for (level, probe) in probes[..mode.levels()].iter_mut().enumerate() {
-        let size = mode.leaf_size(level).unwrap();
+        let size = mode.leaf_size(level).unwrap().get();
         let virtual_base = high + level as u64 * stride;
         let offset = physical % size;
         root.map_probe(virtual_base, PhysicalAddress::new(physical - offset), level);
@@ -346,8 +350,8 @@ fn exercise(
         prepare(image, GEOMETRY, storage.cast());
     let (root_layout, root_material, root_pages) =
         prepare(image, contract, unsafe { storage.add(1) }.cast());
-    let geometry_entry = geometry_layout.entry(GEOMETRY).unwrap();
-    let root_entry = root_layout.entry(contract).unwrap();
+    let geometry_entry = geometry_layout.entry(GEOMETRY).unwrap().get();
+    let root_entry = root_layout.entry(contract).unwrap().get();
     let images = [&geometry_pages, &root_pages];
     let reserved = total - geometry_pages.count() - root_pages.count();
     let outside_images = |page| {
@@ -409,7 +413,7 @@ fn exercise(
     assert_ne!(context, initial.context());
     assert_eq!(context.mode(), Some(mode));
     for level in 0..mode.levels() {
-        let boundary = mode.leaf_size(level).unwrap();
+        let boundary = mode.leaf_size(level).unwrap().get();
         let address = PhysicalAddress::new(boundary);
         assert_eq!(
             unsafe { encoder.leaf(address, level, Permissions::ReadOnly) },

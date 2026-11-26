@@ -1,7 +1,6 @@
 //! Static ACPI descriptions under an independently retained physical read scope.
 
-use crate::metal::address::{PhysicalAddress, PhysicalRange};
-use limen_treaty::model::ByteLength;
+use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 mod madt;
 pub use madt::{IoApic, Madt, Polarity, Processor, Record, SourceOverride, Trigger};
@@ -98,7 +97,7 @@ impl<'a> Acpi<'a> {
             entries: [&[]; TABLE_LIMIT],
             madt: None,
         };
-        let root_bytes = rsdp.end().get() - rsdp.start().get();
+        let root_bytes = rsdp.length().get();
         let mut remaining = TOTAL_BYTES - root_bytes as usize - xsdt.bytes.len();
         for (index, start) in addresses(xsdt).enumerate() {
             let table = read_table(
@@ -235,7 +234,7 @@ fn read_exact<'a>(
     range: PhysicalRange,
     read: &mut impl FnMut(PhysicalRange) -> Option<&'a [u8]>,
 ) -> Result<&'a [u8], Error> {
-    let count = range.end().get() - range.start().get();
+    let count = range.length().get();
     read(range)
         .filter(|bytes| bytes.len() as u64 == count)
         .ok_or(Error::Unreadable(range))

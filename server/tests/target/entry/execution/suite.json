@@ -8,7 +8,6 @@
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
     "server/src/metal/mod.rs",
-    "server/src/metal/address.rs",
     "server/src/metal/boot/mod.rs",
     "server/src/metal/boot/major.rs",
     "server/src/metal/boot/trap.rs",

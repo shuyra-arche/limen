@@ -1,6 +1,6 @@
+use limen_treaty::model::PhysicalRange;
 use crate::metal::sync::{TurnMode, TurnWorkspace};
 
-use crate::metal::address::{PhysicalRange, length};
 
 use super::super::{
     Allocation, AllocationId, Allocator, ReturnId, Returned, returns::ReceiptOwner,
@@ -209,7 +209,7 @@ impl<T> Pool<'_, T> {
             }
             region.acknowledge_return(receipt.retirement, ReceiptOwner::Pool)?;
             *entry = GroupRecord::Retired(done);
-            state.bytes -= length(done.physical)
+            state.bytes -= done.physical.length()
                 .as_usize()
                 .expect("installed group size");
             Ok(done)

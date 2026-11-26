@@ -1,6 +1,6 @@
 //! Versioned module declarations carried in a bounded ELF note.
 
-use super::elf::Elf;
+use super::{ImageAddress, elf::Elf};
 use crate::metal::fdt::{DeviceTree, Error as TreeError, Node, NodeId};
 
 const NOTE_OWNER: &[u8] = b"SHUYRA\0";
@@ -65,7 +65,7 @@ impl<'a> Contract<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Interface<'a> {
     contract: Contract<'a>,
-    entry: u64,
+    entry: ImageAddress,
     source: NodeId<'a>,
 }
 
@@ -79,7 +79,7 @@ impl<'a> Interface<'a> {
     }
 
     /// Link-time virtual address in the file-backed executable segment.
-    pub const fn entry(self) -> u64 {
+    pub const fn entry(self) -> ImageAddress {
         self.entry
     }
 
@@ -188,7 +188,7 @@ fn read_interface<'a>(
     if compatible.is_empty() || version == 0 {
         return Err(DescriptionError::Format);
     }
-    let entry = u64::from_be_bytes(field(node, b"entry")?);
+    let entry = ImageAddress::new(u64::from_be_bytes(field(node, b"entry")?));
     if !elf.is_file_executable(entry) {
         return Err(DescriptionError::Entry);
     }

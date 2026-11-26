@@ -1,4 +1,4 @@
-use crate::metal::address::{PhysicalAddress, PhysicalRange};
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 use crate::metal::firmware::{
     acpi, devicetree,
     facts::{Descriptions, Facts},
