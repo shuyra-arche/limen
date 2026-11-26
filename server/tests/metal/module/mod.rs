@@ -240,6 +240,25 @@ fn rejects_malformed_permissions_note_and_relative_record() {
 }
 
 #[test]
+fn rv64_entry_needs_the_file_bytes_for_its_instruction_width() {
+    let (machine, source) = IMAGES[0];
+    let mut bytes = source.to_vec();
+    let text = programs(source)
+        .find(|program| program.kind == 1 && program.address == word(source, 24) as usize)
+        .unwrap();
+    bytes[48] |= 1;
+    bytes[text.header + 32..text.header + 40].copy_from_slice(&2u64.to_le_bytes());
+    bytes[text.offset..text.offset + 2].copy_from_slice(&[0x01, 0]);
+    assert!(ModuleImage::read(&bytes, machine, PAGE).is_ok());
+
+    bytes[text.offset] = 0x13;
+    assert!(matches!(
+        ModuleImage::read(&bytes, machine, PAGE),
+        Err(Error::Range)
+    ));
+}
+
+#[test]
 fn selects_a_unique_provider_from_the_original_images() {
     let (machine, bytes) = IMAGES[1];
     let select = |source: &[&'static [u8]]| {

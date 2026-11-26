@@ -81,6 +81,9 @@ impl Root {
         if Self::current()? != self {
             return Err(Error::Context);
         }
+        // Invalidate global as well as non-global translations before
+        // excluding aliases from a walk of the active root.
+        unsafe { self.flush() };
         let mut walk = Walk {
             map,
             physical,
@@ -99,6 +102,23 @@ impl Root {
             return Err(Error::Incomplete);
         }
         Ok(())
+    }
+
+    unsafe fn flush(self) {
+        const GLOBAL_PAGES: u64 = 1 << 7;
+        let cr4: u64;
+        unsafe { asm!("mov {}, cr4", out(reg) cr4, options(nostack, preserves_flags)) };
+        if cr4 & GLOBAL_PAGES != 0 {
+            unsafe {
+                asm!("mov cr4, {}", "mov cr4, {}",
+                    in(reg) cr4 & !GLOBAL_PAGES, in(reg) cr4, options(nostack, preserves_flags))
+            };
+        } else {
+            unsafe {
+                asm!("mov cr3, {}", in(reg) self.register, options(nostack, preserves_flags))
+            };
+        }
+        let _ = __cpuid(0);
     }
 }
 
@@ -225,12 +245,4 @@ pub fn without_interrupts<T>(inspect: impl FnOnce() -> T) -> T {
         unsafe { asm!("sti", options(nomem, nostack, preserves_flags)) };
     }
     result
-}
-
-pub fn synchronize(physical: PhysicalRange) {
-    for address in (physical.start().get()..physical.end().get()).step_by(PAGE as usize) {
-        unsafe { asm!("invlpg [{}]", in(reg) address, options(nostack, preserves_flags)) };
-    }
-    // CPUID is serializing on the sole executing logical CPU of this guest.
-    let _ = __cpuid(0);
 }

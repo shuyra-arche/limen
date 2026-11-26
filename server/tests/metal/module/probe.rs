@@ -25,9 +25,16 @@ global_asm!(
 .hidden module_geometry
 .type module_geometry, %function
 module_geometry:
+    csrr a0, satp
+    srli a0, a0, 60
+    li t0, 8
+    bne a0, t0, 1f
     lla a0, geometry_pointer
     ld a0, 0(a0)
     ld a0, 0(a0)
+    ret
+1:
+    li a0, 0
     ret
 .size module_geometry, . - module_geometry
 "#
@@ -67,9 +74,17 @@ global_asm!(
 .hidden module_geometry
 .type module_geometry, %function
 module_geometry:
+    mrs x0, SCTLR_EL1
+    tbz x0, 0, 1f
+    mrs x0, TCR_EL1
+    tbnz x0, 14, 1f
+    tbnz x0, 15, 1f
     adrp x0, geometry_pointer
     ldr x0, [x0, :lo12:geometry_pointer]
     ldr x0, [x0]
+    ret
+1:
+    mov x0, #0
     ret
 .size module_geometry, . - module_geometry
 "#

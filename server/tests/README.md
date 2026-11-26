@@ -211,19 +211,30 @@ zeroing and relative relocation into private mapped storage.
 RUSTFLAGS=-Dwarnings cargo test --locked -p kernel-host-module --target x86_64-unknown-linux-gnu
 ```
 
-The [q35 module guest](target/entry/module/) uses the Debian OVMF strict-NX
-variant with one Hart. It prepares an independent x86_64 module in private
-RW/NX pages, closes write access before enabling execution, and checks
-effective permissions and aliases in the active root. After EBS and the
-normal Limen major handoff, it rechecks the retained mapping and invokes the
-module's MMU geometry entry using SysV64. The result must be 4096 and QEMU
-must exit with the success status. Run the guest through the owner-local
-runner with either profile.
+The [UEFI module guest](target/entry/module/) runs on x86_64 q35 with OVMF
+strict-NX and on AArch64 virt with AAVMF strict-NX. Each guest uses one Hart,
+prepares an independent module in private RW/NX pages, closes write access
+before enabling execution, and checks effective permissions and aliases in
+the active root. After ExitBootServices and the Limen major handoff, it
+rechecks the retained mapping and calls the module's MMU geometry entry.
+
+The [RV64 module guest](target/entry/module-riscv/) uses one Hart on OpenSBI
+virt. After the Limen major handoff in Bare mode, it activates an Sv39 root
+from image-owned storage, checks private RW/NX staging pages and invalidates
+their writable translations before publishing the module. It then
+synchronizes the instruction stream and calls the same geometry entry.
+
+Each guest requires the entry to return 4096 and QEMU to report a successful
+exit or guest shutdown. Run the suites in either profile. The UEFI suite
+accepts `q35` or `virt` for `--board`.
 
 ```sh
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
     --suite server/tests/target/entry/module --kernel "$PWD" \
     --board q35 --profile debug --output /tmp/limen-module
+server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
+    --suite server/tests/target/entry/module-riscv --kernel "$PWD" \
+    --profile debug --output /tmp/limen-riscv-module
 ```
 
 ## Foundation acceptance

@@ -52,9 +52,9 @@ change server/src/metal/sync/turn.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/sync/host/Cargo.toml"]' >/dev/null
 change server/src/metal/execution/mod.rs
-bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["boot-handoff","kernel-execution","kernel-execution-harts"]' >/dev/null
+bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["boot-handoff","kernel-execution","kernel-execution-harts","riscv-module-execution"]' >/dev/null
 change server/src/metal/identity/mod.rs
-[[ $(bash "$discover" . "$base") == "$(jq -c 'map(select(.id != "module-execution"))' <<<"$full")" ]]
+[[ $(bash "$discover" . "$base") == "$(jq -c 'map(select(.id != "module-execution" and .id != "riscv-module-execution"))' <<<"$full")" ]]
 bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/identity/host/Cargo.toml"]' >/dev/null
 
 change server/tests/target/entry/platforms/io.rs
@@ -144,9 +144,14 @@ bash "$checks" . "$base" | jq -e '.rv64 and (.manifests | sort) == ["server/test
 for source in server/src/metal/module/elf.rs server/tests/metal/module/probe.rs; do
     change "$source"
     bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
-        [["module-execution", "q35", "debug"], ["module-execution", "q35", "release"]]' >/dev/null
+        [["module-execution", "q35", "debug"], ["module-execution", "q35", "release"],
+         ["module-execution", "virt", "debug"], ["module-execution", "virt", "release"],
+         ["riscv-module-execution", "rv64", "debug"], ["riscv-module-execution", "rv64", "release"]]' >/dev/null
     bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/module/host/Cargo.toml"]' >/dev/null
 done
+change server/tests/target/entry/module/arm_mapping.rs
+bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
+    [["module-execution", "virt", "debug"], ["module-execution", "virt", "release"]]' >/dev/null
 change server/src/metal/allocator/storage.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null

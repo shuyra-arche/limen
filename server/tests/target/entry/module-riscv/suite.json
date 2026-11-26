@@ -1,0 +1,45 @@
+{
+  "id": "riscv-module-execution",
+  "profiles": ["debug", "release"],
+  "sources": [
+    "server/src/lib.rs",
+    "server/src/entry/mod.rs",
+    "server/src/entry/boot/**",
+    "server/src/metal/mod.rs",
+    "server/src/metal/address.rs",
+    "server/src/metal/module/**",
+    "server/src/metal/mmu/mod.rs",
+    "server/src/metal/mmu/internal/mod.rs",
+    "server/src/metal/mmu/internal/access.rs",
+    "server/src/metal/mmu/internal/riscv/description.rs",
+    "server/src/metal/boot/mod.rs",
+    "server/src/metal/boot/console.rs",
+    "server/src/metal/boot/major.rs",
+    "server/src/metal/boot/services.rs",
+    "server/src/metal/boot/trap.rs",
+    "server/src/metal/boot/riscv/**",
+    "server/src/metal/execution/**",
+    "server/src/metal/firmware/mod.rs",
+    "server/src/metal/firmware/map.rs",
+    "server/src/metal/firmware/devicetree/**",
+    "server/src/metal/firmware/sbi/**",
+    "server/src/metal/hart/description.rs",
+    "server/src/metal/hart/mod.rs",
+    "server/src/metal/hart/node.rs",
+    "server/src/metal/hart/protection.rs",
+    "server/src/metal/hart/stack.rs",
+    "server/src/metal/hart/riscv.rs",
+    "server/src/metal/sync/**",
+    "server/link.x",
+    "server/tests/metal/module/fixture.rs",
+    "server/tests/metal/module/probe.rs"
+  ],
+  "run": {
+    "kind": "qemu",
+    "kernel": "module-riscv",
+    "harts": 1,
+    "expects": [
+      "PASS riscv-module-execution virt sv39=1 private=1 revoked=1 permissions=1 aliases=0 geometry=4096"
+    ]
+  }
+}

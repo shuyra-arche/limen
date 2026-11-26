@@ -16,8 +16,6 @@
     "server/src/metal/boot/major.rs",
     "server/src/metal/boot/services.rs",
     "server/src/metal/boot/trap.rs",
-    "server/src/metal/boot/x86_64/major.rs",
-    "server/src/metal/boot/x86_64/mod.rs",
     "server/src/metal/firmware/mod.rs",
     "server/src/metal/firmware/map.rs",
     "server/src/metal/firmware/acpi/**",
@@ -27,14 +25,32 @@
     "server/src/metal/hart/node.rs",
     "server/src/metal/hart/protection.rs",
     "server/src/metal/hart/stack.rs",
-    "server/src/metal/hart/x86_64.rs",
     "server/src/metal/sync/**",
     "server/tests/metal/module/fixture.rs",
     "server/tests/metal/module/probe.rs"
   ],
   "run": {
     "kind": "board-boot",
-    "boards": ["q35"],
-    "harts": 1
+    "boards": ["q35", "virt"],
+    "harts": 1,
+    "board_sources": {
+      "q35": [
+        "server/src/metal/boot/x86_64/major.rs",
+        "server/src/metal/boot/x86_64/mod.rs",
+        "server/src/metal/hart/x86_64.rs",
+        "server/tests/target/entry/module/board/x86_64.rs",
+        "server/tests/target/entry/module/x86_mapping.rs"
+      ],
+      "virt": [
+        "server/src/metal/boot/aarch64/major.rs",
+        "server/src/metal/boot/aarch64/mod.rs",
+        "server/src/metal/firmware/psci.rs",
+        "server/src/metal/hart/aarch64.rs",
+        "server/tests/target/entry/module/arm_mapping.rs",
+        "server/tests/target/entry/module/board/aarch64.rs",
+        "server/tests/target/entry/platforms/devicetree.rs",
+        "server/tests/target/entry/platforms/pl011.rs"
+      ]
+    }
   }
 }
