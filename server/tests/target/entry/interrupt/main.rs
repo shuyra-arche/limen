@@ -78,20 +78,27 @@ fn timer_test(boot: &Boot<'_>) {
     assert_eq!(timer.state(), State::Idle);
     assert!(!timer.pending().unwrap());
     let hertz = u64::from(timebase.hertz());
-    for _ in 0..2 {
+    for round in 0..2 {
         let now = timer.counter().unwrap();
-        let target = now.checked_add(hertz / 100).unwrap();
-        timer.arm(target).unwrap();
+        let target = now.checked_add(hertz / 20).unwrap();
+        let limit = now.checked_add(hertz).unwrap();
+        if round == 0 {
+            let later = limit.checked_add(hertz).unwrap();
+            timer.arm(later).unwrap();
+            assert!(matches!(timer.arm(target), Err(aclint::Failure::Busy)));
+        }
+        // Replace the old comparison directly. In round two this also clears
+        // the pending interrupt from round one without an intervening shut.
+        timer.rearm(target).unwrap();
         assert_eq!(timer.state(), State::Armed(target));
-        assert!(matches!(timer.arm(target), Err(aclint::Failure::Busy)));
-        let limit = target.checked_add(hertz.checked_mul(2).unwrap()).unwrap();
+        assert!(!timer.pending().unwrap());
         assert_eq!(unsafe { receive(limit) }, TIMER, "supervisor timer trap");
         assert!(timer.pending().unwrap());
         assert!(timer.due().unwrap());
-        timer.shut().unwrap();
-        assert_eq!(timer.state(), State::Idle);
-        assert!(!timer.pending().unwrap());
     }
+    timer.shut().unwrap();
+    assert_eq!(timer.state(), State::Idle);
+    assert!(!timer.pending().unwrap());
     boot::write("PASS aclint-timer received=2 cleared=2\n");
 }
 

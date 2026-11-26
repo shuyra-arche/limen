@@ -25,7 +25,11 @@ pub enum Failure {
 pub enum State {
     Idle,
     Armed(u64),
-    Uncertain,
+    Uncertain {
+        previous: Option<u64>,
+        requested: Option<u64>,
+        clearing: bool,
+    },
 }
 
 /// One actual Hart's exclusive timer programming responsibility.
@@ -58,7 +62,11 @@ impl<'a> Timer<'a> {
         let timer = Self {
             description,
             timebase,
-            state: State::Uncertain,
+            state: State::Uncertain {
+                previous: None,
+                requested: None,
+                clearing: false,
+            },
             local: PhantomData,
         };
         timer.context()?;
@@ -98,10 +106,28 @@ impl<'a> Timer<'a> {
         if self.state != State::Idle {
             return Err(Failure::Busy);
         }
+        self.program(None, count)
+    }
+
+    /// Replace the current comparison without first masking or cancelling it.
+    /// The caller must preserve every outstanding stop/wake requirement.
+    pub fn rearm(&mut self, count: u64) -> Result<(), Failure> {
+        self.context()?;
+        let State::Armed(previous) = self.state else {
+            return Err(Failure::Busy);
+        };
+        self.program(Some(previous), count)
+    }
+
+    fn program(&mut self, previous: Option<u64>, count: u64) -> Result<(), Failure> {
         if count == u64::MAX || count <= self.counter()? {
             return Err(Failure::Range);
         }
-        self.state = State::Uncertain;
+        self.state = State::Uncertain {
+            previous,
+            requested: Some(count),
+            clearing: false,
+        };
         set_timer(count).map_err(Failure::Firmware)?;
         let enabled: usize;
         unsafe {
@@ -131,8 +157,28 @@ impl<'a> Timer<'a> {
     /// stop/wake obligations. This does not shut down the counter itself.
     pub fn shut(&mut self) -> Result<(), Failure> {
         self.context()?;
-        unsafe { asm!("csrc sie, {}", in(reg) TIMER, options(nostack)) };
-        self.state = State::Uncertain;
+        let (previous, requested) = match self.state {
+            State::Idle => (None, None),
+            State::Armed(count) => (Some(count), None),
+            State::Uncertain {
+                previous,
+                requested,
+                ..
+            } => (previous, requested),
+        };
+        self.state = State::Uncertain {
+            previous,
+            requested,
+            clearing: true,
+        };
+        let enabled: usize;
+        unsafe {
+            asm!("csrc sie, {mask}", "csrr {enabled}, sie",
+                mask = in(reg) TIMER, enabled = out(reg) enabled, options(nostack));
+        }
+        if enabled & TIMER != 0 {
+            return Err(Failure::Unconfirmed);
+        }
         set_timer(u64::MAX).map_err(Failure::Firmware)?;
         for _ in 0..OBSERVATIONS {
             if !self.pending()? {
