@@ -18,13 +18,10 @@ use crate::{
         Boot, Regions, Retirement,
         tests::{describe, image, organization::retired, range},
     },
-    metal::{
-        address::PhysicalRange,
-        firmware::{facts::Descriptions, map::FirmwareMap},
-    },
+    metal::firmware::{facts::Descriptions, map::FirmwareMap},
 };
 use core::mem::MaybeUninit;
-use limen_treaty::model::{Alignment, ByteLength};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 use std::{boxed::Box, vec::Vec};
 
 const PAGE: u64 = 4096;

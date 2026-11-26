@@ -9,7 +9,7 @@ use super::{
     Mode, PAGE_BYTES,
     mode::{PPN_MASK, page_number},
 };
-use crate::metal::address::PhysicalAddress;
+use limen_treaty::model::PhysicalAddress;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Context(u64);

@@ -8,8 +8,7 @@ mod geometry;
 mod scan;
 
 use core::{mem::MaybeUninit, ops::Range, slice};
-
-use crate::metal::address::PhysicalRange;
+use limen_treaty::model::PhysicalRange;
 
 pub use geometry::{Geometry, Root};
 pub use scan::{Request, Revision, Scan, Search};

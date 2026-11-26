@@ -7,7 +7,6 @@
     "server/src/entry/boot/**",
     "server/src/metal/mod.rs",
     "server/src/metal/module/**",
-    "server/src/metal/address.rs",
     "server/src/metal/mmu/mod.rs",
     "server/src/metal/mmu/internal/mod.rs",
     "server/src/metal/mmu/internal/access.rs",

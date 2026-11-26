@@ -35,7 +35,7 @@ pub fn raw_material(material: &kernel::metal::allocator::MappedStorage<'_>) {
 #[cfg(contract = "mapping-move")]
 pub fn reuse_mapping(mapping: kernel::metal::mmu::internal::access::MappedRange<'_>) {
     let physical = mapping.physical();
-    let offset = physical.end().distance(physical.start()).unwrap();
+    let offset = physical.length();
     let _ = mapping.split(offset);
     let _ = mapping.physical();
 }

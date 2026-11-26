@@ -1,7 +1,8 @@
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, FirmwareRegion, devicetree, physical::Exclusions};
-use crate::metal::{address::PhysicalRange, firmware::facts::Descriptions};
+use crate::metal::firmware::facts::Descriptions;
 use core::ops::Range;
+use limen_treaty::model::PhysicalRange;
 
 /// Facts admitted on the major CPU. These carry no allocation authority.
 pub struct Boot<'a> {

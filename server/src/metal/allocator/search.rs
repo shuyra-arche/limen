@@ -1,7 +1,5 @@
 use core::sync::atomic::Ordering::Acquire;
-use limen_treaty::model::{Alignment, ByteLength};
-
-use crate::metal::address::{PhysicalRange, length};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
 use super::{
     Allocator, Error, REGION_LIMIT, RegionDescription, RegionId, RegionOrigin,
@@ -224,7 +222,7 @@ impl Lookup {
         let region = &self.source.regions[index];
         let description = region.description();
         if !self.request.accepts(description)
-            || length(description.physical) < self.request.length()
+            || description.physical.length() < self.request.length()
         {
             self.visited += 1;
             return Ok(Search::Pending);

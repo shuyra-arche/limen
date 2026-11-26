@@ -150,6 +150,18 @@ fn translates_nested_windows_and_requires_each_parent_mapping() {
 }
 
 #[test]
+fn permits_the_exclusive_end_of_a_scalar_32_bit_bus() {
+    assert_eq!(
+        translated(&bus(Some(&[]), Some(&[]), &[u32::MAX, 1])),
+        Ok((u64::from(u32::MAX), 1_u64 << 32))
+    );
+    assert_eq!(
+        translated(&bus(Some(&[]), Some(&[]), &[u32::MAX, 2])),
+        Err(Error::Range)
+    );
+}
+
+#[test]
 fn rejects_registers_in_an_unsupported_address_domain() {
     let mut fixture = Fixture::root();
     fixture.node(b"isa");

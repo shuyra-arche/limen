@@ -6,10 +6,10 @@ use core::{
 };
 
 use crate::metal::{
-    address::PhysicalRange,
     identity::Slot,
     sync::{TurnAcquireError, TurnLock},
 };
+use limen_treaty::model::PhysicalRange;
 
 mod allocation;
 mod allowance;

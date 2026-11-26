@@ -2,11 +2,9 @@
 
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, Source};
-use crate::metal::{
-    address::{PhysicalAddress, PhysicalRange},
-    allocator::{Allocator, Error, Grant, RegionDescription},
-};
+use crate::metal::allocator::{Allocator, Error, Grant, RegionDescription};
 use core::ops::Range;
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Occupant {

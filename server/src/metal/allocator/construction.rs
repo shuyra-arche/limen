@@ -2,10 +2,7 @@
 
 use core::ptr;
 
-use crate::metal::{
-    address::length,
-    sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
-};
+use crate::metal::sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace};
 
 use super::{
     Allocation, AllocationId, Allocator, AllowanceId, Candidate, Error, RegionId,
@@ -185,7 +182,7 @@ impl Allocator {
             return Err(Error::Receiver);
         }
         let slot = self.slot(allowance)?;
-        let amount = length(candidate.physical).get();
+        let amount = candidate.physical.length().get();
         let mut balance = held
             .access(slot)
             .ok_or(Error::Protection)?
@@ -247,7 +244,7 @@ impl Allocator {
         assert_eq!(record.physical, reservation.candidate.physical);
         let physical = record.physical;
         record.phase = Phase::Issued;
-        let amount = length(physical).get();
+        let amount = physical.length().get();
         balance.issue(amount);
         held.access(slot).expect("Allowance").state = SlotState::Open(balance);
         *held.access(&construction.state).expect("receiver") =
@@ -282,7 +279,7 @@ impl Allocator {
         if !matches!(record.phase, Phase::Reserved(owner) if ptr::eq(owner, construction)) {
             return Err(Error::Stale);
         }
-        let amount = length(record.physical).get();
+        let amount = record.physical.length().get();
         let credit = if open { 0 } else { amount };
         let unassigned = state.unassigned.checked_add(credit).ok_or(Error::Balance)?;
         state

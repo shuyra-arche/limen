@@ -2,7 +2,6 @@
 
 use super::{Boot, Exclusions, Retirement, bump::Bump};
 use crate::metal::{
-    address::{PhysicalRange, length},
     allocator::{
         Allocator, Allowance, Config, Error, Initial, RegionDescription, RegionOrigin,
         RootInitialization, RootStorage,
@@ -10,7 +9,7 @@ use crate::metal::{
     mmu::internal::access::MappedRange,
 };
 use core::alloc::Layout;
-use limen_treaty::model::{Alignment, ByteLength};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegionError {
@@ -348,7 +347,7 @@ impl<'a> Regions<'a> {
         }
         if physical.end() != storage.physical().end() {
             let (prefix, _) = storage
-                .split(length(physical))
+                .split(physical.length())
                 .ok()
                 .expect("checked root end");
             storage = prefix;

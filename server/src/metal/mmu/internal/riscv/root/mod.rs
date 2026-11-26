@@ -32,7 +32,7 @@ pub fn check(
     if layout.machine() != Machine::Riscv64
         || layout
             .entry(contract(mode))
-            .filter(|&entry| entry != 0)
+            .filter(|entry| entry.get() != 0)
             .is_none()
     {
         return Err(UseError::Interface);
@@ -49,7 +49,7 @@ fn geometry<'borrow, 'provider>(
     };
     (geometry.contract() == GEOMETRY
         && geometry.machine() == Machine::Riscv64
-        && geometry.entry() != 0)
+        && geometry.entry().get() != 0)
         .then_some(geometry)
         .ok_or(UseError::Interface)
 }

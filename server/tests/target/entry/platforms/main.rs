@@ -3,11 +3,13 @@
 
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use kernel::entry::boot;
 #[cfg(target_arch = "x86_64")]
 use kernel::metal::firmware::uefi::AcpiInput;
 use kernel::metal::firmware::uefi::{DeviceTree as LoaderTree, Loader};
-use kernel::{entry::boot, metal::address::PhysicalAddress};
-use limen_treaty::model::ByteLength;
+#[cfg(target_arch = "x86_64")]
+use limen_treaty::model::PhysicalRange;
+use limen_treaty::model::{ByteLength, PhysicalAddress};
 
 #[path = "../foundation.rs"]
 mod foundation;
@@ -91,7 +93,7 @@ fn main() -> Status {
     };
     let map = unsafe { uefi::boot::exit_boot_services(None) };
     #[cfg(target_arch = "x86_64")]
-    let read_acpi = |physical: kernel::metal::address::PhysicalRange| {
+    let read_acpi = |physical: PhysicalRange| {
         use uefi::mem::memory_map::MemoryType;
         // This loader keeps ACPI Reclaim and NVS pages identity-mapped and
         // unmodified. Nothing in that window is freed or handed to Limen RAM.

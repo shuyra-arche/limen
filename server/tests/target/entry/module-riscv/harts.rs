@@ -109,7 +109,7 @@ pub unsafe fn exercise(
     for (place, root) in ROOTS.iter().zip(roots) {
         place.store(root.bits(), Relaxed);
     }
-    ENTRY.store(held.entry(), Relaxed);
+    ENTRY.store(held.entry().get(), Relaxed);
     ENCODER.store(shared_pointer(encoder), Relaxed);
     advance(Phase::Initial);
     unsafe { minor.start(peer, run, peer, Startup::Sbi) }.unwrap();

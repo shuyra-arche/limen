@@ -1,4 +1,3 @@
-pub mod address;
 #[cfg(any(limen_target, test))]
 pub mod allocator;
 #[cfg(any(limen_target, test))]

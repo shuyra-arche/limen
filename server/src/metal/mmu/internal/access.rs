@@ -2,8 +2,7 @@
 
 use core::{mem::MaybeUninit, ptr::NonNull, slice};
 
-use crate::metal::address::{PhysicalRange, length};
-use limen_treaty::model::ByteLength;
+use limen_treaty::model::{ByteLength, PhysicalRange};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -34,7 +33,7 @@ impl<'a> MappedRange<'a> {
         physical: PhysicalRange,
         bytes: &'a mut [MaybeUninit<u8>],
     ) -> Result<Self, Error> {
-        if length(physical).as_usize() != Some(bytes.len()) {
+        if physical.length().as_usize() != Some(bytes.len()) {
             return Err(Error::Range);
         }
         Ok(Self { physical, bytes })

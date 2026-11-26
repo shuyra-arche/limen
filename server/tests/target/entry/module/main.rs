@@ -17,15 +17,14 @@ mod mapping;
 use core::fmt::{self, Write};
 use kernel::metal::{firmware::map::FirmwareMap, firmware::uefi::Loader};
 use kernel::{
-    entry::boot::{self},
+    entry::boot,
     metal::{
-        address::{PhysicalAddress, PhysicalRange},
         mmu::internal::GEOMETRY,
         mmu::internal::access::MappedRange,
         module::{Layout, ModuleImage, ModuleSlots, Permissions, UseError},
     },
 };
-use limen_treaty::model::{ByteLength, PageSize};
+use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
 use uefi::{
     mem::memory_map::{MemoryAttribute, MemoryMap, MemoryType},
     prelude::*,
@@ -128,7 +127,7 @@ fn prepare() -> Placement {
         // AllocatePages owns this fresh RAM. The actual mapping now permits
         // one writable NX view, with no device or second CPU using these pages.
         let mut view = unsafe { MappedRange::from_identity(physical, storage.cast()) }.unwrap();
-        image.prepare(&mut view, start).unwrap()
+        image.prepare(&mut view, InternalAddress::new(start)).unwrap()
     });
 
     #[cfg(target_arch = "aarch64")]
@@ -138,11 +137,16 @@ fn prepare() -> Placement {
     for segment in layout.segments() {
         let first = segment.physical.start().get();
         let last = segment.physical.end().get();
-        assert_eq!(segment.virtual_range, first..last);
+        assert_eq!(
+            segment.internal,
+            InternalAddress::new(first)
+                .range(ByteLength::new(last - first))
+                .unwrap()
+        );
         pages[((first - start) / PAGE) as usize..((last - start) / PAGE) as usize]
             .fill(segment.permissions);
     }
-    let entry = layout.entry(GEOMETRY).unwrap();
+    let entry = layout.entry(GEOMETRY).unwrap().get();
     assert!(entry >= start && entry < physical.end().get());
     assert_eq!(
         pages[((entry - start) / PAGE) as usize],
@@ -266,7 +270,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         let caller = module.acquire(GEOMETRY).unwrap();
         let sibling = module.acquire(GEOMETRY).unwrap();
         assert_eq!(caller.entry(), sibling.entry());
-        let geometry = unsafe { board::query(caller.entry() as usize) };
+        let geometry = unsafe { board::query(caller.entry().get() as usize) };
         module.shut();
         assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Shut)));
         assert!(matches!(module.retire(), Err(UseError::Busy)));

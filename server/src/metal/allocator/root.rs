@@ -5,10 +5,9 @@ use core::{
     ptr, slice,
     sync::atomic::{AtomicUsize, Ordering::Release},
 };
-use limen_treaty::model::{Alignment, ByteLength};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
 use crate::metal::{
-    address::{PhysicalRange, length},
     identity::{Entry, Generation, Slot},
     mmu::internal::access::MappedRange,
     sync::{TURN_CAPACITY, TurnLock},
@@ -99,7 +98,7 @@ impl Config {
     pub(super) fn geometry(self, description: RegionDescription) -> Result<Geometry, Error> {
         let geometry =
             Geometry::new(description.physical, self.granule).map_err(|_| Error::Range)?;
-        if length(description.physical).get() / self.granule.get() > self.grains as u64
+        if description.physical.length().get() / self.granule.get() > self.grains as u64
             || geometry.root_count() > self.roots
             || geometry.edit_bound() > self.edits
         {
@@ -211,7 +210,7 @@ impl<'r, 'a> RootInitialization<'r, 'a> {
             prepared[index] = Some(description);
             config.geometry(description)?;
             total = total
-                .checked_add(length(description.physical))
+                .checked_add(description.physical.length())
                 .ok_or(Error::Capacity)?;
             let mut count = 0;
             for (index, item) in initial.iter().enumerate() {
@@ -231,7 +230,7 @@ impl<'r, 'a> RootInitialization<'r, 'a> {
                     return Err(Error::Overlap);
                 }
                 committed = committed
-                    .checked_add(length(item.physical).get())
+                    .checked_add(item.physical.length().get())
                     .ok_or(Error::Capacity)?;
                 count += 1;
             }

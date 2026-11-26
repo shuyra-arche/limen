@@ -5,7 +5,7 @@ use super::{
     devicetree::{self, memory::DtbMemory},
     map::FirmwareMap,
 };
-use crate::metal::address::PhysicalRange;
+use limen_treaty::model::PhysicalRange;
 
 pub(crate) struct Facts<'a> {
     pub(crate) image: PhysicalRange,

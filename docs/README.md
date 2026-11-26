@@ -33,5 +33,12 @@ leaf and SATP results. The mapping owner supplies the tables. Each Hart
 checks the installed ASID-zero context and synchronizes its own translations.
 The firmware's per-Hart maximum limits candidate modes. See the [formal Module contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/module/README.md).
 
+Common physical, Internal, External and relative byte coordinates and their
+checked geometry are defined directly in Treaty Model. A byte coordinate's
+kind carries no runtime space identity or access authority. Firmware bus and
+module image coordinates remain local to their owners; installed module
+placements and MMU inputs use the corresponding common coordinate kinds.
+See the [coordinate contract](https://github.com/shuyra-arche/document-limen/blob/e880dd329171d4631dcfbb3e4da917c4a057a0b1/treaty/model/address.md).
+
 For build commands see the [repository README](../README.md). The architecture
 and Treaty contracts are maintained in [Document Limen](https://github.com/shuyra-arche/document-limen).

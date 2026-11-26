@@ -1,13 +1,11 @@
 use super::{Boot, Retirement, physical, regions};
-use crate::metal::{
-    address::{PhysicalAddress, PhysicalRange},
-    firmware::{
-        devicetree::{self, memory::DtbMemory},
-        facts::Descriptions,
-        map::{FirmwareMap, FirmwareRegion, MapError},
-        uefi::{AcpiInput, DeviceTree, Loader},
-    },
+use crate::metal::firmware::{
+    devicetree::{self, memory::DtbMemory},
+    facts::Descriptions,
+    map::{FirmwareMap, FirmwareRegion, MapError},
+    uefi::{AcpiInput, DeviceTree, Loader},
 };
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 mod exclusions;
 mod memory;

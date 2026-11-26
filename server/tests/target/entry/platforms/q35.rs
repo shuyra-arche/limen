@@ -1,6 +1,7 @@
 use core::arch::asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use kernel::entry::boot;
+use limen_treaty::model::PhysicalAddress;
 use uefi::{Status, mem::memory_map::MemoryMap};
 
 static OLD_IDT: AtomicUsize = AtomicUsize::new(0);
@@ -61,14 +62,14 @@ pub(super) fn startup() -> boot::Startup {
     }
 }
 
-pub(super) fn acpi_root() -> Option<kernel::metal::address::PhysicalAddress> {
+pub(super) fn acpi_root() -> Option<PhysicalAddress> {
     uefi::system::with_config_table(|entries| {
         let mut roots = entries
             .iter()
             .filter(|entry| entry.guid == uefi::table::cfg::ConfigTableEntry::ACPI2_GUID);
         let root = roots.next()?.address;
         (!root.is_null() && roots.next().is_none())
-            .then(|| kernel::metal::address::PhysicalAddress::new(root.addr() as u64))
+            .then(|| PhysicalAddress::new(root.addr() as u64))
     })
 }
 

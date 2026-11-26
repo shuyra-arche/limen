@@ -1,8 +1,8 @@
 //! Device-tree bindings for the GICv3 domain and Arm generic timer.
 
 use super::devicetree::{DeviceTree, Error, Node, NodeId};
-use crate::metal::address::PhysicalRange;
 use core::{arch::asm, num::NonZeroU32};
+use limen_treaty::model::PhysicalRange;
 
 /// The windows of the GICv3 interrupt domain named by the timer's source.
 #[derive(Clone, Copy, Debug)]

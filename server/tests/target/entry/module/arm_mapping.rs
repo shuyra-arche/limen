@@ -1,14 +1,8 @@
 //! Inspect the firmware-owned EL1 stage-1 root of the singleton Arm virt guest.
 
 use core::arch::asm;
-use kernel::{
-    metal::firmware::map::FirmwareMap,
-    metal::{
-        address::{PhysicalAddress, PhysicalRange, length},
-        module::Permissions,
-    },
-};
-use limen_treaty::model::ByteLength;
+use kernel::{metal::firmware::map::FirmwareMap, metal::module::Permissions};
+use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 pub const PAGE: u64 = 4096;
 const TABLE_ENTRIES: usize = 512;
@@ -169,7 +163,7 @@ impl Root {
                 flags,
             )?;
         }
-        if Self::current()? != self || walk.observed != length(physical).get() {
+        if Self::current()? != self || walk.observed != physical.length().get() {
             return Err(Error::Incomplete);
         }
         Ok(())

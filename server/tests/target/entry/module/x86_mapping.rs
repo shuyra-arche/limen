@@ -1,14 +1,8 @@
 //! Inspect the live four-level x86 root used by this singleton QEMU guest.
 
 use core::arch::{asm, x86_64::__cpuid};
-use kernel::{
-    metal::firmware::map::FirmwareMap,
-    metal::{
-        address::{PhysicalAddress, PhysicalRange, length},
-        module::Permissions,
-    },
-};
-use limen_treaty::model::ByteLength;
+use kernel::{metal::firmware::map::FirmwareMap, metal::module::Permissions};
+use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 pub const PAGE: u64 = 4096;
 const ENTRIES: u64 = 512;
@@ -100,7 +94,7 @@ impl Root {
             user: true,
         };
         unsafe { walk.table(self.register & self.address_mask, 3, 0, effective)? };
-        if Self::current()? != self || walk.observed != length(physical).get() {
+        if Self::current()? != self || walk.observed != physical.length().get() {
             return Err(Error::Incomplete);
         }
         Ok(())

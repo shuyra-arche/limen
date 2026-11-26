@@ -1,11 +1,10 @@
 use super::{DeviceTree, Error, Node, registers::Cells};
-use crate::metal::address::{PhysicalAddress, PhysicalRange};
 use crate::metal::fdt::RESERVATION_LIMIT;
 #[cfg(any(limen_firmware = "sbi", test))]
 use crate::metal::fdt::{HEADER_SIZE, MAX_BLOCK_BYTES, extent};
 #[cfg(any(limen_firmware = "sbi", test))]
 use core::{ops::Range, slice};
-use limen_treaty::model::ByteLength;
+use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 const RAM_LIMIT: usize = 16;
 

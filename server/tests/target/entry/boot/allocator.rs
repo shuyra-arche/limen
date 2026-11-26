@@ -1,10 +1,17 @@
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
-        address::PhysicalRange,
         allocator::{
-            Allocation, Allowance, Config, Error, Initial, Pending, RamPurpose::Metadata, Request,
-            ReturnId, Search,
+            Allocation,
+            Allowance,
+            Config,
+            Error,
+            Initial,
+            Pending,
+            RamPurpose::Metadata,
+            Request,
+            ReturnId,
+            Search,
         },
         sync::TurnMode::{Fast, Slow},
     },
@@ -12,7 +19,7 @@ use kernel::{
 
 use super::memory::{extent, mapped, retirement};
 
-use limen_treaty::model::{Alignment, ByteLength};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x8400_0000;

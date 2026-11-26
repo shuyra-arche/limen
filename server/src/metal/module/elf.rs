@@ -1,7 +1,8 @@
 //! Checked program headers and relative relocations for independent module images.
 
-use super::Error;
+use super::{Error, ImageAddress, ImageRange};
 use core::ops::Range;
+use limen_treaty::model::{Alignment, ByteLength, ByteOffset, PageSize};
 
 const ELF_HEADER: usize = 64;
 const PROGRAM_HEADER: usize = 56;
@@ -86,8 +87,8 @@ pub enum Permissions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Segment<'a> {
     /// Link-time virtual address, independent of the placement selected at load.
-    pub address: u64,
-    pub memory_size: u64,
+    pub address: ImageAddress,
+    pub memory_size: ByteLength,
     pub file: &'a [u8],
     pub permissions: Permissions,
 }
@@ -95,19 +96,19 @@ pub struct Segment<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Relocation {
     /// Link-time address of the full eight-byte write in a writable segment.
-    pub address: u64,
+    pub address: ImageAddress,
     /// Link-time address of the referenced byte inside this image.
-    pub addend: u64,
+    pub addend: ImageAddress,
 }
 
 #[derive(Clone, Copy)]
 struct Header {
     kind: u32,
     flags: u32,
-    offset: u64,
-    address: u64,
-    file_size: u64,
-    memory_size: u64,
+    offset: ByteOffset,
+    address: ImageAddress,
+    file_size: ByteLength,
+    memory_size: ByteLength,
     alignment: u64,
 }
 
@@ -116,39 +117,34 @@ impl Header {
         Self {
             kind: word(bytes, 0),
             flags: word(bytes, 4),
-            offset: quad(bytes, 8),
-            address: quad(bytes, 16),
-            file_size: quad(bytes, 32),
-            memory_size: quad(bytes, 40),
+            offset: ByteOffset::new(quad(bytes, 8)),
+            address: ImageAddress::new(quad(bytes, 16)),
+            file_size: ByteLength::new(quad(bytes, 32)),
+            memory_size: ByteLength::new(quad(bytes, 40)),
             alignment: quad(bytes, 48),
         }
     }
 
     fn file_range(self, bytes: &[u8]) -> Result<Range<usize>, Error> {
-        let start = usize::try_from(self.offset).map_err(|_| Error::Range)?;
-        let length = usize::try_from(self.file_size).map_err(|_| Error::Range)?;
-        let end = start.checked_add(length).ok_or(Error::Range)?;
+        let start = usize::try_from(self.offset.get()).map_err(|_| Error::Range)?;
+        let end = self
+            .offset
+            .advance(self.file_size)
+            .and_then(|end| usize::try_from(end.get()).ok())
+            .ok_or(Error::Range)?;
         (end <= bytes.len())
             .then_some(start..end)
             .ok_or(Error::Range)
     }
 
-    fn memory(self) -> Result<Range<u64>, Error> {
-        self.extent(self.memory_size)
-    }
-
-    fn extent(self, length: u64) -> Result<Range<u64>, Error> {
-        Ok(self.address..self.address.checked_add(length).ok_or(Error::Range)?)
-    }
-
-    fn pages(self, page_size: u64) -> Result<Range<u64>, Error> {
-        let memory = self.memory()?;
-        let mask = page_size - 1;
-        let end = memory
-            .end
-            .checked_next_multiple_of(page_size)
+    fn pages(self, page_size: PageSize) -> Result<ImageRange, Error> {
+        let alignment = Alignment::new(page_size.get()).expect("page alignment");
+        let end = self
+            .address
+            .advance(self.memory_size)
+            .and_then(|end| end.align_up(alignment))
             .ok_or(Error::Range)?;
-        Ok((memory.start & !mask)..end)
+        ImageRange::new(self.address.align_down(alignment), end).ok_or(Error::Range)
     }
 
     fn permissions(self) -> Result<Permissions, Error> {
@@ -166,17 +162,21 @@ pub(super) struct Elf<'a> {
     bytes: &'a [u8],
     headers: &'a [[u8; PROGRAM_HEADER]],
     relas: &'a [[u8; RELA]],
-    span: Range<u64>,
-    alignment: u64,
+    span: Option<ImageRange>,
+    alignment: Alignment,
     instruction: u64,
 }
 
 impl<'a> Elf<'a> {
-    pub(super) fn read(bytes: &'a [u8], machine: Machine, page_size: u64) -> Result<Self, Error> {
+    pub(super) fn read(
+        bytes: &'a [u8],
+        machine: Machine,
+        page_size: PageSize,
+    ) -> Result<Self, Error> {
         if bytes.len() > MAX_IMAGE {
             return Err(Error::Capacity);
         }
-        if page_size < 4096 || !page_size.is_power_of_two() {
+        if page_size.get() < 4096 {
             return Err(Error::Unsupported);
         }
         let header = bytes.first_chunk::<ELF_HEADER>().ok_or(Error::Format)?;
@@ -213,8 +213,8 @@ impl<'a> Elf<'a> {
             bytes,
             headers,
             relas: &[],
-            span: 0..0,
-            alignment: page_size,
+            span: None,
+            alignment: Alignment::new(page_size.get()).expect("page alignment"),
             instruction,
         };
 
@@ -242,7 +242,7 @@ impl<'a> Elf<'a> {
                     {
                         return Err(Error::Format);
                     }
-                    note_bytes += header.file_size;
+                    note_bytes += header.file_size.get();
                     if note_bytes > MAX_NOTES {
                         return Err(Error::Capacity);
                     }
@@ -263,7 +263,7 @@ impl<'a> Elf<'a> {
                     if header.flags != READ_WRITE {
                         return Err(Error::Unsupported);
                     }
-                    if header.file_size != 0 || header.memory_size != 0 {
+                    if header.file_size.get() != 0 || header.memory_size.get() != 0 {
                         return Err(Error::Format);
                     }
                     stack_seen = true;
@@ -276,14 +276,12 @@ impl<'a> Elf<'a> {
                 _ => return Err(Error::Unsupported),
             }
         }
-        if elf.span.is_empty() {
-            return Err(Error::Format);
-        }
-        if elf.span.end - elf.span.start > MAX_IMAGE as u64 {
+        let span = elf.span.ok_or(Error::Format)?;
+        if span.length().get() > MAX_IMAGE as u64 {
             return Err(Error::Capacity);
         }
         let entry = quad(header, 24);
-        if (entry != 0 && !elf.is_file_executable(entry))
+        if (entry != 0 && !elf.is_file_executable(ImageAddress::new(entry)))
             || !elf.segments().any(|segment| {
                 segment.permissions == Permissions::ReadExecute && !segment.file.is_empty()
             })
@@ -296,12 +294,12 @@ impl<'a> Elf<'a> {
         Ok(elf)
     }
 
-    pub(super) fn alignment(&self) -> u64 {
+    pub(super) fn alignment(&self) -> Alignment {
         self.alignment
     }
 
-    pub(super) fn span(&self) -> Range<u64> {
-        self.span.clone()
+    pub(super) fn span(&self) -> ImageRange {
+        self.span.expect("checked nonempty image")
     }
 
     pub(super) fn segments(&self) -> impl Iterator<Item = Segment<'a>> + '_ {
@@ -327,20 +325,20 @@ impl<'a> Elf<'a> {
 
     pub(super) fn relocations(&self) -> impl ExactSizeIterator<Item = Relocation> + '_ {
         self.relas.iter().map(|bytes| Relocation {
-            address: quad(bytes, 0),
-            addend: quad(bytes, 16),
+            address: ImageAddress::new(quad(bytes, 0)),
+            addend: ImageAddress::new(quad(bytes, 16)),
         })
     }
 
-    pub(super) fn is_file_executable(&self, address: u64) -> bool {
-        address.is_multiple_of(self.instruction)
+    pub(super) fn is_file_executable(&self, address: ImageAddress) -> bool {
+        address.get().is_multiple_of(self.instruction)
             && self.segments().any(|segment| {
                 if segment.permissions != Permissions::ReadExecute {
                     return false;
                 }
                 let offset = address
-                    .checked_sub(segment.address)
-                    .and_then(|offset| usize::try_from(offset).ok());
+                    .distance(segment.address)
+                    .and_then(ByteLength::as_usize);
                 let Some(bytes) = offset.and_then(|offset| segment.file.get(offset..)) else {
                     return false;
                 };
@@ -358,15 +356,21 @@ impl<'a> Elf<'a> {
         &self.bytes[header.file_range(self.bytes).expect("checked file extent")]
     }
 
-    fn check_load(&mut self, header: Header, index: usize, page_size: u64) -> Result<(), Error> {
+    fn check_load(
+        &mut self,
+        header: Header,
+        index: usize,
+        page_size: PageSize,
+    ) -> Result<(), Error> {
         header.permissions()?;
-        if header.memory_size == 0 || header.file_size > header.memory_size {
+        if header.memory_size.get() == 0 || header.file_size > header.memory_size {
             return Err(Error::Range);
         }
-        if header.offset % page_size != header.address % page_size
+        if header.offset.get() % page_size.get() != header.address.get() % page_size.get()
             || (header.alignment > 1
                 && (!header.alignment.is_power_of_two()
-                    || header.offset % header.alignment != header.address % header.alignment))
+                    || header.offset.get() % header.alignment
+                        != header.address.get() % header.alignment))
         {
             return Err(Error::Format);
         }
@@ -374,7 +378,7 @@ impl<'a> Elf<'a> {
         let pages = header.pages(page_size)?;
         for other in self.headers[..index].iter().map(Header::read) {
             if other.kind == LOAD
-                && (overlaps(&pages, &other.pages(page_size)?)
+                && (pages.overlaps(other.pages(page_size)?)
                     || overlaps(&file, &other.file_range(self.bytes)?))
             {
                 return Err(Error::Conflict);
@@ -383,30 +387,41 @@ impl<'a> Elf<'a> {
                 return Err(Error::Format);
             }
         }
-        if self.span.is_empty() {
-            self.span = pages;
-        } else {
-            self.span.start = self.span.start.min(pages.start);
-            self.span.end = self.span.end.max(pages.end);
+        self.span = Some(match self.span {
+            None => pages,
+            Some(span) => {
+                ImageRange::new(span.start().min(pages.start()), span.end().max(pages.end()))
+                    .expect("nonempty image extent")
+            }
+        });
+        if header.alignment > 1 {
+            self.alignment = self
+                .alignment
+                .max(Alignment::new(header.alignment).expect("checked load alignment"));
         }
-        self.alignment = self.alignment.max(header.alignment);
         Ok(())
     }
 
     // A referenced file range must be wholly backed by one PT_LOAD. File
     // offsets and virtual addresses must describe the same bytes.
-    fn file_at(&self, address: u64, length: u64) -> Result<Range<usize>, Error> {
-        let end = address.checked_add(length).ok_or(Error::Range)?;
+    fn file_at(&self, address: ImageAddress, length: ByteLength) -> Result<Range<usize>, Error> {
+        let end = address.advance(length).ok_or(Error::Range)?;
         for header in self
             .headers
             .iter()
             .map(Header::read)
             .filter(|header| header.kind == LOAD)
         {
-            if address >= header.address && end <= header.extent(header.file_size)?.end {
+            if address >= header.address
+                && end
+                    <= header
+                        .address
+                        .advance(header.file_size)
+                        .ok_or(Error::Range)?
+            {
                 let start = header
                     .offset
-                    .checked_add(address - header.address)
+                    .advance(address.distance(header.address).ok_or(Error::Range)?)
                     .ok_or(Error::Range)?;
                 return Header {
                     offset: start,
@@ -420,7 +435,7 @@ impl<'a> Elf<'a> {
     }
 
     fn check_mapped(&self, header: Header) -> Result<(), Error> {
-        if header.file_size == 0 || header.file_size != header.memory_size {
+        if header.file_size.get() == 0 || header.file_size != header.memory_size {
             return Err(Error::Format);
         }
         if self.file_at(header.address, header.file_size)? != header.file_range(self.bytes)? {
@@ -430,7 +445,7 @@ impl<'a> Elf<'a> {
     }
 
     fn read_dynamic(&self, header: Header, machine: Machine) -> Result<&'a [[u8; RELA]], Error> {
-        if !matches!(header.flags, READ | READ_WRITE) || header.address % 8 != 0 {
+        if !matches!(header.flags, READ | READ_WRITE) || header.address.get() % 8 != 0 {
             return Err(Error::Format);
         }
         let (entries, remainder) = self.file(header).as_chunks::<DYNAMIC_ENTRY>();
@@ -445,7 +460,7 @@ impl<'a> Elf<'a> {
         {
             (None, None, None) if description.count.unwrap_or(0) == 0 => &[],
             (Some(address), Some(size), Some(RELA_SIZE))
-                if address % 8 == 0 && size.is_multiple_of(RELA_SIZE) =>
+                if address.get() % 8 == 0 && size.get().is_multiple_of(RELA_SIZE) =>
             {
                 self.bytes[self.file_at(address, size)?]
                     .as_chunks::<RELA>()
@@ -485,7 +500,7 @@ impl<'a> Elf<'a> {
                     return Err(Error::Format);
                 }
                 match (description.strings, description.strings_size) {
-                    (Some(address), Some(size)) if size != 0 => {
+                    (Some(address), Some(size)) if size.get() != 0 => {
                         self.file_at(address, size)?;
                     }
                     (None, None) => (),
@@ -500,18 +515,18 @@ impl<'a> Elf<'a> {
                 // Retain these ordinary linker tables as image bytes. The
                 // loader consumes neither symbols nor name indexes.
                 DT_HASH => {
-                    self.file_at(value, 8)?;
+                    self.file_at(ImageAddress::new(value), ByteLength::new(8))?;
                 }
                 DT_SYMTAB => {
-                    self.file_at(value, 24)?;
+                    self.file_at(ImageAddress::new(value), ByteLength::new(24))?;
                 }
                 DT_GNU_HASH => {
-                    self.file_at(value, 16)?;
+                    self.file_at(ImageAddress::new(value), ByteLength::new(16))?;
                 }
-                DT_STRTAB => description.strings = Some(value),
-                DT_STRSZ => description.strings_size = Some(value),
-                DT_RELA => description.address = Some(value),
-                DT_RELASZ => description.size = Some(value),
+                DT_STRTAB => description.strings = Some(ImageAddress::new(value)),
+                DT_STRSZ => description.strings_size = Some(ByteLength::new(value)),
+                DT_RELA => description.address = Some(ImageAddress::new(value)),
+                DT_RELASZ => description.size = Some(ByteLength::new(value)),
                 DT_RELAENT => description.entry = Some(value),
                 DT_RELACOUNT => description.count = Some(value),
                 DT_SYMENT if value == 24 => (),
@@ -529,18 +544,24 @@ impl<'a> Elf<'a> {
         if quad(bytes, 8) != machine.relative() {
             return Err(Error::Unsupported);
         }
-        let address = quad(bytes, 0);
-        let end = address.checked_add(8).ok_or(Error::Range)?;
-        let addend = quad(bytes, 16);
-        if !address.is_multiple_of(8) || addend > i64::MAX as u64 {
+        let address = ImageAddress::new(quad(bytes, 0));
+        let end = address.advance(ByteLength::new(8)).ok_or(Error::Range)?;
+        let addend = ImageAddress::new(quad(bytes, 16));
+        if !address.get().is_multiple_of(8) || addend.get() > i64::MAX as u64 {
             return Err(Error::Range);
         }
         if !self.segments().any(|segment| {
             segment.permissions == Permissions::ReadWrite
                 && address >= segment.address
-                && end <= segment.address + segment.memory_size
+                && segment
+                    .address
+                    .advance(segment.memory_size)
+                    .is_some_and(|limit| end <= limit)
         }) || !self.segments().any(|segment| {
-            (segment.address..segment.address + segment.memory_size).contains(&addend)
+            segment
+                .address
+                .range(segment.memory_size)
+                .is_some_and(|range| range.contains(addend))
         }) {
             return Err(Error::Range);
         }
@@ -552,12 +573,12 @@ const RELA_SIZE: u64 = RELA as u64;
 
 #[derive(Default)]
 struct Dynamic {
-    address: Option<u64>,
-    size: Option<u64>,
+    address: Option<ImageAddress>,
+    size: Option<ByteLength>,
     entry: Option<u64>,
     count: Option<u64>,
-    strings: Option<u64>,
-    strings_size: Option<u64>,
+    strings: Option<ImageAddress>,
+    strings_size: Option<ByteLength>,
 }
 
 fn overlaps<T: Ord>(first: &Range<T>, second: &Range<T>) -> bool {
