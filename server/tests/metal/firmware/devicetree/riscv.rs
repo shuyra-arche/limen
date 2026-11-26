@@ -5,7 +5,7 @@ use kernel::metal::{
     hart::riscv::description::RiscvCpus,
     mmu::internal::riscv::{
         Mode,
-        description::{RiscvMmu, RiscvMmuMode},
+        description::{MaximumMode, RiscvMmu},
     },
     time::riscv::RiscvTimebase,
 };
@@ -33,10 +33,10 @@ fn read_scope(bytes: &[u8]) -> RiscvCpus<'_> {
 #[test]
 fn rv64_mmu_description_bounds_the_supported_paged_modes() {
     for (property, maximum, supported) in [
-        (b"riscv,none\0", RiscvMmuMode::Bare, [false, false, false]),
-        (b"riscv,sv39\0", RiscvMmuMode::Sv39, [true, false, false]),
-        (b"riscv,sv48\0", RiscvMmuMode::Sv48, [true, true, false]),
-        (b"riscv,sv57\0", RiscvMmuMode::Sv57, [true, true, true]),
+        (b"riscv,none\0", MaximumMode::Bare, [false, false, false]),
+        (b"riscv,sv39\0", MaximumMode::Paged(Mode::Sv39), [true, false, false]),
+        (b"riscv,sv48\0", MaximumMode::Paged(Mode::Sv48), [true, true, false]),
+        (b"riscv,sv57\0", MaximumMode::Paged(Mode::Sv57), [true, true, true]),
     ] {
         let mut fixture = cpu_scope();
         start_cpu(&mut fixture, b"cpu@0", &[0, 0]);
@@ -99,7 +99,7 @@ fn preserves_sparse_hart_ids_and_allocates_no_identity_from_description() {
     assert!(scope.cpu(0).unwrap().unwrap().enabled());
     assert!(scope.cpu(sparse as u32 as u64).unwrap().is_none());
     let mmu = RiscvMmu::describe(&cpu).unwrap().unwrap();
-    assert_eq!(mmu.maximum(), RiscvMmuMode::Sv48);
+    assert_eq!(mmu.maximum(), MaximumMode::Paged(Mode::Sv48));
     assert_eq!(mmu.source(), cpu.node().id());
     let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
     assert!(isa.has(RiscvExtension::Vector));

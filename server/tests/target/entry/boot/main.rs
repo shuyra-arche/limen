@@ -7,7 +7,7 @@ use core::panic::PanicInfo;
 use kernel::metal::{
     execution::riscv::description::RiscvExtension, execution::riscv::description::RiscvIsa,
     firmware::devicetree::memory::Source, hart::riscv::description::RiscvCpus,
-    mmu::internal::riscv::description::RiscvMmu, mmu::internal::riscv::description::RiscvMmuMode,
+    mmu::internal::riscv::description::{MaximumMode, RiscvMmu},
     time::riscv::RiscvTimebase,
 };
 use kernel::entry::boot::{Boot, shutdown, stack_range, write};
@@ -72,7 +72,7 @@ fn check_discovery(boot: &Boot<'_>) {
         .expect("declared MMU mode");
     assert!(matches!(
         mmu.maximum(),
-        RiscvMmuMode::Sv39 | RiscvMmuMode::Sv48 | RiscvMmuMode::Sv57
+        MaximumMode::Paged(_)
     ));
     assert_eq!(mmu.source(), cpu.node().id());
     let isa = RiscvIsa::describe(&cpu).unwrap().expect("declared ISA");

@@ -7,7 +7,7 @@ use core::{
 };
 
 use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
-use kernel::metal::{mmu::internal::riscv::{Mode, context::{self, Context}}, module::Permissions};
+use kernel::metal::mmu::internal::riscv::{LeafAccess, Mode, context::{self, Context}};
 
 pub const PAGE: u64 = 4096;
 const ENTRIES: usize = 512;
@@ -47,11 +47,11 @@ fn nonleaf(address: u64) -> u64 {
     (address / PAGE) << 10 | VALID
 }
 
-fn leaf(address: u64, permission: Permissions) -> u64 {
+fn leaf(address: u64, permission: LeafAccess) -> u64 {
     let flags = match permission {
-        Permissions::ReadOnly => READ,
-        Permissions::ReadWrite => READ | WRITE | DIRTY,
-        Permissions::ReadExecute => READ | EXECUTE,
+        LeafAccess::ReadOnly => READ,
+        LeafAccess::ReadWrite => READ | WRITE | DIRTY,
+        LeafAccess::ReadExecute => READ | EXECUTE,
     };
     (address / PAGE) << 10 | VALID | ACCESSED | flags
 }
@@ -154,7 +154,7 @@ impl Root {
         index
     }
 
-    pub fn map(&mut self, range: Range<u64>, permission: Permissions) {
+    pub fn map(&mut self, range: Range<u64>, permission: LeafAccess) {
         self.map_with(range, permission, |address, permission| {
             permission.map_or_else(|| nonleaf(address), |permission| leaf(address, permission))
         });
@@ -165,8 +165,8 @@ impl Root {
     pub fn map_with(
         &mut self,
         range: Range<u64>,
-        permission: Permissions,
-        mut encode: impl FnMut(u64, Option<Permissions>) -> u64,
+        permission: LeafAccess,
+        mut encode: impl FnMut(u64, Option<LeafAccess>) -> u64,
     ) {
         self.check_inactive();
         assert!(range.start < range.end && range.end <= self.low_end());
@@ -194,7 +194,7 @@ impl Root {
         assert!(address.is_multiple_of(bytes));
         let pte = self
             .mode
-            .leaf(physical, level, Permissions::ReadOnly)
+            .leaf(physical, level, LeafAccess::ReadOnly)
             .unwrap();
         write(self.slot(address, level, nonleaf), pte);
     }
@@ -253,7 +253,7 @@ impl Root {
     }
 
     /// The local mapping owner withdraws after all other Harts have departed.
-    pub fn withdraw(&self, range: Range<u64>, expected: impl Fn(u64) -> Option<Permissions>) {
+    pub fn withdraw(&self, range: Range<u64>, expected: impl Fn(u64) -> Option<LeafAccess>) {
         self.check_active();
         self.remove(range, expected);
         unsafe { asm!("sfence.vma x0, x0", "fence.i", options(nostack)) };
@@ -267,7 +267,7 @@ impl Root {
     pub unsafe fn withdraw_inactive(
         &self,
         range: Range<u64>,
-        expected: impl Fn(u64) -> Option<Permissions>,
+        expected: impl Fn(u64) -> Option<LeafAccess>,
     ) {
         self.check_inactive();
         self.remove(range, expected);
@@ -295,7 +295,7 @@ impl Root {
         CLAIMED[self.bank].store(false, Ordering::Release);
     }
 
-    fn remove(&self, range: Range<u64>, expected: impl Fn(u64) -> Option<Permissions>) {
+    fn remove(&self, range: Range<u64>, expected: impl Fn(u64) -> Option<LeafAccess>) {
         for page in range.clone().step_by(PAGE as usize) {
             assert_eq!(
                 read(self.entry(page)),
@@ -307,7 +307,7 @@ impl Root {
         }
     }
 
-    pub fn publish(&self, start: u64, pages: &[Option<Permissions>]) {
+    pub fn publish(&self, start: u64, pages: &[Option<LeafAccess>]) {
         self.check_active();
         for (index, permission) in pages.iter().copied().enumerate() {
             let page = start + index as u64 * PAGE;
@@ -320,22 +320,22 @@ impl Root {
         unsafe { asm!("sfence.vma x0, x0", "fence.i", options(nostack)) };
     }
 
-    pub fn verify_private(&self, count: u64, expected: impl Fn(u64) -> Option<Permissions>) {
+    pub fn verify_private(&self, count: u64, expected: impl Fn(u64) -> Option<LeafAccess>) {
         assert_eq!(Context::current(), Some(Context::BARE));
         self.verify_inactive(count, expected);
     }
 
-    pub fn verify_inactive(&self, count: u64, expected: impl Fn(u64) -> Option<Permissions>) {
+    pub fn verify_inactive(&self, count: u64, expected: impl Fn(u64) -> Option<LeafAccess>) {
         self.check_inactive();
         self.verify(count, expected);
     }
 
-    pub fn verify_active(&self, count: u64, expected: impl Fn(u64) -> Option<Permissions>) {
+    pub fn verify_active(&self, count: u64, expected: impl Fn(u64) -> Option<LeafAccess>) {
         self.check_active();
         self.verify(count, expected);
     }
 
-    fn verify(&self, count: u64, expected: impl Fn(u64) -> Option<Permissions>) {
+    fn verify(&self, count: u64, expected: impl Fn(u64) -> Option<LeafAccess>) {
         let mut visited = [false; TABLE_COUNT];
         let found = self.walk(0, self.mode.levels() - 1, 0, &mut visited, &expected);
         assert_eq!(found, count);
@@ -350,7 +350,7 @@ impl Root {
         level: usize,
         base: u64,
         visited: &mut [bool; TABLE_COUNT],
-        expected: &impl Fn(u64) -> Option<Permissions>,
+        expected: &impl Fn(u64) -> Option<LeafAccess>,
     ) -> u64 {
         assert!(!visited[table], "duplicated branch table");
         visited[table] = true;

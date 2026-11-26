@@ -4,8 +4,8 @@ use core::mem;
 
 use super::{Mode, contract, geometry};
 use crate::metal::{
-    mmu::internal::riscv::context::Context,
-    module::{Machine, Module, ModuleUse, Permissions, UseError},
+    mmu::internal::riscv::{LeafAccess, context::Context},
+    module::{Machine, Module, ModuleUse, UseError},
 };
 use limen_treaty::model::PhysicalAddress;
 
@@ -13,13 +13,13 @@ use limen_treaty::model::PhysicalAddress;
 pub fn bind<'module, Material, const DEPENDENCIES: usize>(
     mode: Mode,
     module: &'module Module<'_, '_, '_, Material, DEPENDENCIES>,
-) -> Result<Root<'module>, UseError> {
+) -> Result<Encoder<'module>, UseError> {
     let geometry = geometry(module.dependencies())?;
     let encoder = module.acquire(contract(mode))?;
     if encoder.machine() != Machine::Riscv64 || encoder.entry().get() == 0 {
         return Err(UseError::Interface);
     }
-    Ok(Root::new(mode, encoder, geometry))
+    Ok(Encoder::new(mode, encoder, geometry))
 }
 
 type GeometryQuery = unsafe extern "C" fn() -> u64;
@@ -56,8 +56,9 @@ enum Encoding {
 
 /// One live encoder bound to the exact geometry dependency in its module.
 /// The function pointers are never exposed independently of the use.
+/// The local encoding is the independent checker, not a second page-table owner.
 #[must_use]
-pub struct Root<'module> {
+pub struct Encoder<'module> {
     mode: Mode,
     _encoder_use: ModuleUse<'module>,
     _geometry_use: &'module ModuleUse<'module>,
@@ -65,7 +66,7 @@ pub struct Root<'module> {
     geometry: GeometryV1,
 }
 
-impl<'module> Root<'module> {
+impl<'module> Encoder<'module> {
     fn new(mode: Mode, encoder: ModuleUse<'module>, geometry: &'module ModuleUse<'module>) -> Self {
         // Bind checked both exact declarations and the native machine.
         let query = unsafe { mem::transmute::<u64, GeometryQuery>(geometry.entry().get()) };
@@ -113,13 +114,13 @@ impl<'module> Root<'module> {
         &self,
         address: PhysicalAddress,
         level: usize,
-        permission: Permissions,
+        permission: LeafAccess,
     ) -> Option<u64> {
         let expected = self.mode.leaf(address, level, permission)?;
         let kind = match permission {
-            Permissions::ReadOnly => Encoding::ReadOnly,
-            Permissions::ReadWrite => Encoding::ReadWrite,
-            Permissions::ReadExecute => Encoding::ReadExecute,
+            LeafAccess::ReadOnly => Encoding::ReadOnly,
+            LeafAccess::ReadWrite => Encoding::ReadWrite,
+            LeafAccess::ReadExecute => Encoding::ReadExecute,
         };
         (unsafe { self.encode(address, kind) } == expected).then_some(expected)
     }

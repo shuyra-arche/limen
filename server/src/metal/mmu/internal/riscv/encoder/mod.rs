@@ -3,7 +3,7 @@
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 mod binding;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
-pub use binding::{Root, bind};
+pub use binding::{Encoder, bind};
 
 use super::Mode;
 use crate::metal::{

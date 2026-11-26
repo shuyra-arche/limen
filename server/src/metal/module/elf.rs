@@ -78,7 +78,7 @@ impl Machine {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Permissions {
+pub enum SegmentPermissions {
     ReadOnly,
     ReadWrite,
     ReadExecute,
@@ -90,7 +90,7 @@ pub struct Segment<'a> {
     pub address: ImageAddress,
     pub memory_size: ByteLength,
     pub file: &'a [u8],
-    pub permissions: Permissions,
+    pub permissions: SegmentPermissions,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -147,11 +147,11 @@ impl Header {
         ImageRange::new(self.address.align_down(alignment), end).ok_or(Error::Range)
     }
 
-    fn permissions(self) -> Result<Permissions, Error> {
+    fn permissions(self) -> Result<SegmentPermissions, Error> {
         match self.flags {
-            READ => Ok(Permissions::ReadOnly),
-            READ_WRITE => Ok(Permissions::ReadWrite),
-            READ_EXECUTE => Ok(Permissions::ReadExecute),
+            READ => Ok(SegmentPermissions::ReadOnly),
+            READ_WRITE => Ok(SegmentPermissions::ReadWrite),
+            READ_EXECUTE => Ok(SegmentPermissions::ReadExecute),
             _ => Err(Error::Unsupported),
         }
     }
@@ -283,7 +283,7 @@ impl<'a> Elf<'a> {
         let entry = quad(header, 24);
         if (entry != 0 && !elf.is_file_executable(ImageAddress::new(entry)))
             || !elf.segments().any(|segment| {
-                segment.permissions == Permissions::ReadExecute && !segment.file.is_empty()
+                segment.permissions == SegmentPermissions::ReadExecute && !segment.file.is_empty()
             })
         {
             return Err(Error::Range);
@@ -333,7 +333,7 @@ impl<'a> Elf<'a> {
     pub(super) fn is_file_executable(&self, address: ImageAddress) -> bool {
         address.get().is_multiple_of(self.instruction)
             && self.segments().any(|segment| {
-                if segment.permissions != Permissions::ReadExecute {
+                if segment.permissions != SegmentPermissions::ReadExecute {
                     return false;
                 }
                 let offset = address
@@ -551,7 +551,7 @@ impl<'a> Elf<'a> {
             return Err(Error::Range);
         }
         if !self.segments().any(|segment| {
-            segment.permissions == Permissions::ReadWrite
+            segment.permissions == SegmentPermissions::ReadWrite
                 && address >= segment.address
                 && segment
                     .address

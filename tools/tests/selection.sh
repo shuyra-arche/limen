@@ -170,8 +170,8 @@ done
 change server/tests/target/entry/module/arm_mapping.rs
 bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
     [["module-execution", "virt", "debug"], ["module-execution", "virt", "release"]]' >/dev/null
-for source in server/src/metal/mmu/internal/riscv/root/mod.rs \
-              server/src/metal/mmu/internal/riscv/root/binding.rs \
+for source in server/src/metal/mmu/internal/riscv/encoder/mod.rs \
+              server/src/metal/mmu/internal/riscv/encoder/binding.rs \
               server/src/metal/mmu/internal/riscv/mode.rs \
               server/src/metal/mmu/internal/riscv/context/mod.rs \
               server/src/metal/mmu/internal/riscv/context/satp.rs \
@@ -182,7 +182,7 @@ for source in server/src/metal/mmu/internal/riscv/root/mod.rs \
         [["riscv-module-execution", "rv64", "debug"], ["riscv-module-execution", "rv64", "release"]]' >/dev/null
 done
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
-change server/src/metal/mmu/internal/riscv/root/binding.rs
+change server/src/metal/mmu/internal/riscv/encoder/binding.rs
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/allocator/storage.rs
 [[ $(boards) == 'q35 rv64 virt' ]]

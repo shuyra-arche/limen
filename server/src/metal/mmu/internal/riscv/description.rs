@@ -7,22 +7,18 @@ use crate::metal::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RiscvMmuMode {
+pub enum MaximumMode {
     Bare,
-    Sv39,
-    Sv48,
-    Sv57,
+    Paged(Mode),
 }
 
-impl RiscvMmuMode {
+impl MaximumMode {
     /// Whether the firmware's maximum includes this paging mode. The
     /// calling Hart still has to establish the actual SATP configuration.
     pub fn supports(self, mode: Mode) -> bool {
         let maximum = match self {
             Self::Bare => return false,
-            Self::Sv39 => Mode::Sv39,
-            Self::Sv48 => Mode::Sv48,
-            Self::Sv57 => Mode::Sv57,
+            Self::Paged(mode) => mode,
         };
         mode <= maximum
     }
@@ -31,7 +27,7 @@ impl RiscvMmuMode {
 #[derive(Clone, Copy)]
 pub struct RiscvMmu<'a> {
     source: NodeId<'a>,
-    maximum: RiscvMmuMode,
+    maximum: MaximumMode,
 }
 
 impl<'a> RiscvMmu<'a> {
@@ -42,10 +38,10 @@ impl<'a> RiscvMmu<'a> {
             return Ok(None);
         };
         let maximum = match property {
-            b"riscv,none" => RiscvMmuMode::Bare,
-            b"riscv,sv39" => RiscvMmuMode::Sv39,
-            b"riscv,sv48" => RiscvMmuMode::Sv48,
-            b"riscv,sv57" => RiscvMmuMode::Sv57,
+            b"riscv,none" => MaximumMode::Bare,
+            b"riscv,sv39" => MaximumMode::Paged(Mode::Sv39),
+            b"riscv,sv48" => MaximumMode::Paged(Mode::Sv48),
+            b"riscv,sv57" => MaximumMode::Paged(Mode::Sv57),
             _ => return Err(Error::Unsupported),
         };
         Ok(Some(Self {
@@ -58,7 +54,7 @@ impl<'a> RiscvMmu<'a> {
         self.source
     }
 
-    pub fn maximum(self) -> RiscvMmuMode {
+    pub fn maximum(self) -> MaximumMode {
         self.maximum
     }
 }

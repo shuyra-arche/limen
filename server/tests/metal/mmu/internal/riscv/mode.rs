@@ -1,7 +1,4 @@
-use kernel::metal::{
-    mmu::internal::riscv::{Mode, context::Context},
-    module::Permissions,
-};
+use kernel::metal::mmu::internal::riscv::{LeafAccess, Mode, context::Context};
 use limen_treaty::model::{InternalAddress, InternalRange, PageSize, PhysicalAddress};
 
 #[test]
@@ -41,9 +38,9 @@ fn encodes_aligned_leaves_and_rejects_unrepresentable_inputs() {
     let physical = PhysicalAddress::new((1 << 56) - (1 << 12));
     let unaligned = PhysicalAddress::new(physical.get() + 1);
     let permissions = [
-        (Permissions::ReadOnly, 0x43),
-        (Permissions::ReadWrite, 0xc7),
-        (Permissions::ReadExecute, 0x4b),
+        (LeafAccess::ReadOnly, 0x43),
+        (LeafAccess::ReadWrite, 0xc7),
+        (LeafAccess::ReadExecute, 0x4b),
     ];
     assert_eq!(Mode::branch(physical), Some((physical.get() >> 2) | 1));
     assert_eq!(Mode::branch(width_end), None);
@@ -74,7 +71,7 @@ fn encodes_aligned_leaves_and_rejects_unrepresentable_inputs() {
             }
         }
         assert_eq!(
-            mode.leaf(physical, mode.levels(), Permissions::ReadOnly),
+            mode.leaf(physical, mode.levels(), LeafAccess::ReadOnly),
             None
         );
     }

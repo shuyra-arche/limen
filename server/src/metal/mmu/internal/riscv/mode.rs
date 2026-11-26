@@ -1,11 +1,18 @@
 //! Geometry and base PTE encoding for RV64 supervisor paging.
 
-use crate::metal::module::Permissions;
 use limen_treaty::model::{InternalAddress, InternalRange, PageSize, PhysicalAddress};
 
 pub const PAGE_BYTES: u64 = 4096;
 pub const TABLE_ENTRIES: usize = 512;
 pub(super) const PPN_MASK: u64 = (1 << 44) - 1;
+
+/// The access modes of the current supervisor-only leaf encoding contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LeafAccess {
+    ReadOnly,
+    ReadWrite,
+    ReadExecute,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(u8)]
@@ -63,19 +70,19 @@ impl Mode {
         Some(page_number(address, PAGE_BYTES)? << 10 | 1)
     }
 
-    /// Encode a supervisor-only leaf for module storage. Eager A/D bits
+    /// Encode a supervisor-only leaf. Eager A/D bits
     /// permit use on Harts that fault instead of updating them in hardware.
     pub fn leaf(
         self,
         address: PhysicalAddress,
         level: usize,
-        permission: Permissions,
+        permission: LeafAccess,
     ) -> Option<u64> {
         let page = page_number(address, self.leaf_size(level)?.get())?;
         let flags = match permission {
-            Permissions::ReadOnly => 0x43,
-            Permissions::ReadWrite => 0xc7,
-            Permissions::ReadExecute => 0x4b,
+            LeafAccess::ReadOnly => 0x43,
+            LeafAccess::ReadWrite => 0xc7,
+            LeafAccess::ReadExecute => 0x4b,
         };
         Some(page << 10 | flags)
     }

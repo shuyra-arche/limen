@@ -5,7 +5,7 @@ mod elf;
 mod lifetime;
 
 pub use description::{Contract, Description, DescriptionError, Interface};
-pub use elf::{Machine, Permissions};
+pub use elf::{Machine, SegmentPermissions};
 pub use lifetime::{Module, ModuleId, ModuleSlots, ModuleUse, Retirement, UseError};
 
 use crate::metal::mmu::internal::access::MappedRange;
@@ -241,5 +241,5 @@ impl Layout<'_> {
 pub struct PlacedSegment {
     pub physical: PhysicalRange,
     pub internal: InternalRange,
-    pub permissions: Permissions,
+    pub permissions: SegmentPermissions,
 }

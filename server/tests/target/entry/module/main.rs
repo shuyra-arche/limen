@@ -21,7 +21,7 @@ use kernel::{
     metal::{
         mmu::internal::GEOMETRY,
         mmu::internal::access::MappedRange,
-        module::{Layout, ModuleImage, ModuleSlots, Permissions, UseError},
+        module::{Layout, ModuleImage, ModuleSlots, SegmentPermissions, UseError},
     },
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
@@ -37,7 +37,7 @@ const PAGE: u64 = mapping::PAGE;
 
 struct FirmwarePages {
     physical: PhysicalRange,
-    pages: [Permissions; MAX_PAGES],
+    pages: [SegmentPermissions; MAX_PAGES],
 }
 
 struct Placement {
@@ -123,7 +123,7 @@ fn prepare() -> Placement {
     let root = mapping::Root::current().unwrap();
     let before = uefi::boot::memory_map(MemoryType::LOADER_DATA).unwrap();
     let layout = mapping::without_interrupts(|| {
-        unsafe { root.check(checked_map(&before), physical, |_| Permissions::ReadWrite) }.unwrap();
+        unsafe { root.check(checked_map(&before), physical, |_| SegmentPermissions::ReadWrite) }.unwrap();
         // AllocatePages owns this fresh RAM. The actual mapping now permits
         // one writable NX view, with no device or second CPU using these pages.
         let mut view = unsafe { MappedRange::from_identity(physical, storage.cast()) }.unwrap();
@@ -133,7 +133,7 @@ fn prepare() -> Placement {
     #[cfg(target_arch = "aarch64")]
     mapping::without_interrupts(|| mapping::clean(physical));
 
-    let mut pages = [Permissions::ReadOnly; MAX_PAGES];
+    let mut pages = [SegmentPermissions::ReadOnly; MAX_PAGES];
     for segment in layout.segments() {
         let first = segment.physical.start().get();
         let last = segment.physical.end().get();
@@ -150,14 +150,14 @@ fn prepare() -> Placement {
     assert!(entry >= start && entry < physical.end().get());
     assert_eq!(
         pages[((entry - start) / PAGE) as usize],
-        Permissions::ReadExecute
+        SegmentPermissions::ReadExecute
     );
-    assert!(pages[..count].contains(&Permissions::ReadOnly));
-    assert!(pages[..count].contains(&Permissions::ReadWrite));
+    assert!(pages[..count].contains(&SegmentPermissions::ReadOnly));
+    assert!(pages[..count].contains(&SegmentPermissions::ReadWrite));
 
     for (index, permission) in pages[..count].iter().enumerate() {
         let first = start + index as u64 * PAGE;
-        if *permission != Permissions::ReadWrite {
+        if *permission != SegmentPermissions::ReadWrite {
             protection
                 .set_memory_attributes(first..first + PAGE, MemoryAttribute::READ_ONLY)
                 .unwrap();
@@ -169,7 +169,7 @@ fn prepare() -> Placement {
             root.check(checked_map(&sealed), physical, |page| {
                 let index = ((page - start) / PAGE) as usize;
                 match pages[index] {
-                    Permissions::ReadExecute => Permissions::ReadOnly,
+                    SegmentPermissions::ReadExecute => SegmentPermissions::ReadOnly,
                     permission => permission,
                 }
             })
@@ -180,16 +180,16 @@ fn prepare() -> Placement {
     for (index, permission) in pages[..count].iter().copied().enumerate() {
         let first = start + index as u64 * PAGE;
         let scope = first..first + PAGE;
-        if permission == Permissions::ReadExecute {
+        if permission == SegmentPermissions::ReadExecute {
             // The checked root is already read-only and non-executable here.
             protection
                 .clear_memory_attributes(scope.clone(), MemoryAttribute::EXECUTE_PROTECT)
                 .unwrap();
         }
         let expected = match permission {
-            Permissions::ReadOnly => MemoryAttribute::READ_ONLY | MemoryAttribute::EXECUTE_PROTECT,
-            Permissions::ReadWrite => MemoryAttribute::EXECUTE_PROTECT,
-            Permissions::ReadExecute => MemoryAttribute::READ_ONLY,
+            SegmentPermissions::ReadOnly => MemoryAttribute::READ_ONLY | MemoryAttribute::EXECUTE_PROTECT,
+            SegmentPermissions::ReadWrite => MemoryAttribute::EXECUTE_PROTECT,
+            SegmentPermissions::ReadExecute => MemoryAttribute::READ_ONLY,
         };
         assert_eq!(protection.get_memory_attributes(scope).unwrap(), expected);
     }
@@ -212,7 +212,7 @@ fn prepare() -> Placement {
 }
 
 impl FirmwarePages {
-    fn permission(&self, page: u64) -> Permissions {
+    fn permission(&self, page: u64) -> SegmentPermissions {
         self.pages[((page - self.physical.start().get()) / PAGE) as usize]
     }
 }
