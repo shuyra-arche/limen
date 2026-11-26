@@ -41,17 +41,27 @@ impl<'a> Description<'a> {
             let Some((index, count)) = cpus.interrupt_index(bytes, 7, hart)? else {
                 continue;
             };
-            let counter = node.register(0)?;
-            let comparators = node.register(1)?;
-            if !counter.start().get().is_multiple_of(8)
-                || counter.length().get() != 8
+            let mut registers = node.registers()?;
+            if registers.len() != 2 {
+                return Err(Error::Unsupported);
+            }
+            let counter_window = registers.next().unwrap()?;
+            let comparators = registers.next().unwrap()?;
+            if !counter_window.start().get().is_multiple_of(8)
+                || counter_window.length().get() < 8
                 || !comparators.start().get().is_multiple_of(8)
                 || !comparators.length().get().is_multiple_of(8)
                 || comparators.length().get() < (count * 8) as u64
-                || counter.overlaps(comparators)
+                || counter_window.overlaps(comparators)
             {
                 return Err(Error::Range);
             }
+            // The first window may be larger than the single MTIME register.
+            // Describe only the actual register, not every byte in the window.
+            let counter = counter_window
+                .start()
+                .range(ByteLength::new(8))
+                .ok_or(Error::Range)?;
             let comparator = comparators
                 .start()
                 .advance(ByteLength::new((index * 8) as u64))

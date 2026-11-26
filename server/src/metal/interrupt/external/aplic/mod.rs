@@ -164,6 +164,10 @@ pub struct Route<'a> {
 }
 
 impl<'a> Route<'a> {
+    pub fn domain(self) -> NodeId<'a> {
+        self.domain
+    }
+
     pub fn source(self) -> NodeId<'a> {
         self.source
     }

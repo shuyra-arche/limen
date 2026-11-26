@@ -1,7 +1,7 @@
 //! Physical target indices, source scope and machine timer geometry.
 use super::Fixture;
 use kernel::metal::{
-    interrupt::{external::aplic, internal::timer::aclint},
+    interrupt::{external::aplic, internal::aclint::timer},
     platform::description::devicetree::{DeviceTree, Error},
 };
 
@@ -55,7 +55,7 @@ fn fixture(
     fixture.node(b"mtimer@2004000");
     fixture.property(b"compatible", b"riscv,aclint-mtimer\0");
     fixture.property(b"status", b"disabled\0");
-    fixture.cells(b"reg", &[0x0200_bff8, 8, 0x0200_4000, 16]);
+    fixture.cells(b"reg", &[0x0200_bff8, 0x4008, 0x0200_4000, 16]);
     fixture.cells(b"interrupts-extended", timer_targets);
     fixture.end();
 
@@ -77,6 +77,7 @@ fn sparse_hart_ids_follow_the_actual_controller_order() {
     assert_eq!(aplic.registers().start().get(), 0x0d00_0000);
     let device = tree.find_path(b"/device").unwrap().unwrap();
     let route = aplic.route(&tree, device).unwrap();
+    assert_eq!(route.domain(), aplic.source());
     assert_eq!(route.id(), 10);
     assert_eq!(route.mode(), aplic::Mode::LevelHigh);
     let timer = aclint::Description::read(&tree, 3).unwrap().unwrap();

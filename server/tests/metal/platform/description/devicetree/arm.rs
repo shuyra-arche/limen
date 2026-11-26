@@ -4,7 +4,7 @@ use kernel::metal::{
     chrono::aarch64::GenericCounter,
     interrupt::internal::{
         gic::{PrivateInterrupts, Trigger},
-        timer::architected::GenericTimer,
+        architected::GenericTimer,
     },
     platform::{
         description::devicetree::{DeviceTree, Error},

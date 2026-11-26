@@ -8,7 +8,7 @@ use kernel::{
         chrono::riscv::RiscvTimebase,
         interrupt::{
             external::aplic::{self, Direct, Mode},
-            internal::timer::aclint::{self, State, Timer},
+            internal::aclint::timer::{self, State, Timer},
         },
         platform::firmware::sbi::platform_services,
         processor::hart::riscv::description::RiscvCpus,

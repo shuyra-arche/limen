@@ -192,7 +192,7 @@ impl<'a> Direct<'a> {
     /// discarded. Actual sourcecfg/target support is checked by readback.
     pub unsafe fn configure(&mut self, route: Route<'a>) -> Result<(), Failure> {
         self.available()?;
-        if route.domain != self.description.source() || route.id > self.description.sources() {
+        if route.domain() != self.description.source() || route.id > self.description.sources() {
             return Err(Failure::Scope);
         }
         let source = route.id;
