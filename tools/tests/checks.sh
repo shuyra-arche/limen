@@ -13,7 +13,7 @@ for path in "${changed[@]}"; do
             full=true ;;
         server/src/metal/processor/execution/cooperative/x86_64/*|server/src/metal/processor/execution/cooperative/aarch64/*|server/src/metal/platform/boot/x86_64/*|server/src/metal/platform/boot/aarch64/*|server/src/metal/processor/hart/x86_64.rs|server/src/metal/processor/hart/aarch64/native.rs|server/src/metal/platform/firmware/psci/native.rs|server/src/metal/interrupt/internal/gic/native.rs|server/src/metal/chrono/aarch64/native.rs)
             ;;
-        server/src/metal/platform/boot/handoff/uefi.rs|server/src/metal/platform/firmware/uefi/loader.rs|server/src/metal/processor/hart/aarch64/description.rs|server/src/metal/platform/firmware/psci/mod.rs|server/src/metal/interrupt/mod.rs|server/src/metal/interrupt/internal/*|server/src/metal/chrono/aarch64/mod.rs)
+        server/src/metal/platform/boot/handoff/uefi.rs|server/src/metal/platform/firmware/uefi/loader.rs|server/src/metal/processor/hart/aarch64/description.rs|server/src/metal/platform/firmware/psci/mod.rs|server/src/metal/interrupt/mod.rs|server/src/metal/interrupt/internal/mod.rs|server/src/metal/interrupt/internal/gic/mod.rs|server/src/metal/interrupt/internal/timer/mod.rs|server/src/metal/interrupt/internal/timer/architected.rs|server/src/metal/chrono/aarch64/mod.rs)
             host=true ;;
         server/src/*|server/link.x)
             host=true; rv64=true ;;

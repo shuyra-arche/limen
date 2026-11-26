@@ -1,7 +1,7 @@
 pub(super) const DEBUG_CONSOLE: usize = 0x4442_434e;
 pub(super) const SYSTEM_RESET: usize = 0x5352_5354;
 pub(super) const HART_STATE_MANAGEMENT: usize = 0x0048_534d;
-const TIMER: usize = 0x5449_4d45;
+pub(super) const TIMER: usize = 0x5449_4d45;
 const INTER_PROCESSOR_INTERRUPT: usize = 0x0073_5049;
 
 pub(crate) struct Extensions {

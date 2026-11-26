@@ -181,3 +181,5 @@ fn rejects_registers_in_an_unsupported_address_domain() {
 mod riscv;
 
 mod arm;
+
+mod interrupt;

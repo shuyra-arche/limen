@@ -32,6 +32,73 @@ impl<'a> RiscvCpus<'a> {
         self.tree.node(self.source).expect("original CPU node")
     }
 
+    /// Resolve a CPU interrupt-controller phandle in the original CPU scope.
+    /// A physical Hart ID is not a controller's dense target index.
+    pub(crate) fn interrupt_hart(&self, handle: u32) -> Result<u64, Error> {
+        let node = self.tree.phandle(handle)?.ok_or(Error::Missing)?;
+        if !node.compatible(b"riscv,cpu-intc")?
+            || node.property(b"interrupt-controller")? != Some(b"")
+            || node.property(b"#interrupt-cells")? != Some(&1u32.to_be_bytes())
+        {
+            return Err(Error::Unsupported);
+        }
+        let parent = node.parent()?.ok_or(Error::Missing)?;
+        if parent.parent_id() != Some(self.source)
+            || parent.string(b"device_type")? != Some(b"cpu")
+        {
+            return Err(Error::Format);
+        }
+        let id = match (self.address_cells, parent.property(b"reg")?) {
+            (1, Some(value)) if value.len() == 4 => {
+                u64::from(u32::from_be_bytes(value.try_into().unwrap()))
+            }
+            (2, Some(value)) if value.len() == 8 => {
+                u64::from_be_bytes(value.try_into().unwrap())
+            }
+            _ => return Err(Error::Format),
+        };
+        if self.cpu(id)?.is_none_or(|cpu| cpu.node().id() != parent.id()) {
+            return Err(Error::Conflict);
+        }
+        Ok(id)
+    }
+
+    /// Check the complete homogeneous interrupts-extended list. The returned
+    /// index follows controller wiring rather than the physical Hart number.
+    pub(crate) fn interrupt_index(
+        &self,
+        bytes: &[u8],
+        cause: u32,
+        hart: u64,
+    ) -> Result<Option<(usize, usize)>, Error> {
+        let pairs = bytes.chunks_exact(8);
+        let count = pairs.len();
+        if count == 0 || !pairs.remainder().is_empty() {
+            return Err(Error::Format);
+        }
+        if count > HART_LIMIT {
+            return Err(Error::Capacity);
+        }
+        let mut seen = [0; HART_LIMIT];
+        let mut target = None;
+        for (index, pair) in pairs.enumerate() {
+            let handle = u32::from_be_bytes(pair[..4].try_into().unwrap());
+            let kind = u32::from_be_bytes(pair[4..].try_into().unwrap());
+            if kind != cause {
+                return Err(Error::Unsupported);
+            }
+            let id = self.interrupt_hart(handle)?;
+            if seen[..index].contains(&id) {
+                return Err(Error::Conflict);
+            }
+            seen[index] = id;
+            if id == hart {
+                target = Some((index, count));
+            }
+        }
+        Ok(target)
+    }
+
     /// Locate a Hart by hardware ID. Validate the whole CPU identity scope
     /// before returning so duplicate or malformed siblings cannot be missed.
     pub fn cpu(&self, hart: u64) -> Result<Option<RiscvCpu<'_, 'a>>, Error> {

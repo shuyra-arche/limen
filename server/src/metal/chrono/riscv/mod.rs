@@ -35,3 +35,17 @@ impl<'a> RiscvTimebase<'a> {
         self.hertz.get()
     }
 }
+
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+impl RiscvTimebase<'_> {
+    /// Read the current architectural time counter, not a calibrated Instant.
+    ///
+    /// # Safety
+    /// The execution environment must grant this Hart access to time and
+    /// establish its relationship to the described timebase.
+    pub unsafe fn counter(self) -> u64 {
+        let count;
+        unsafe { core::arch::asm!("rdtime {}", out(reg) count, options(nostack, nomem)) };
+        count
+    }
+}
