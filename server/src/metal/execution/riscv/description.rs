@@ -65,9 +65,10 @@ impl<'a> RiscvIsa<'a> {
             .map(legacy_extensions)
             .transpose()?;
         if let (Some(modern), Some(legacy)) = (modern, legacy) {
-            // The compact letters describe these same execution features in
-            // both formats. Legacy Zicsr/Zifencei can be implicit in the base.
-            const COMPARE: u16 = (RiscvExtension::Vector as u16 * 2) - 1;
+            // Both formats describe these compact letters and explicitly
+            // name Sstc. Legacy Zicsr/Zifencei can be implicit in the base.
+            const COMPARE: u16 =
+                ((RiscvExtension::Vector as u16 * 2) - 1) | RiscvExtension::SupervisorTimer as u16;
             if modern & COMPARE != legacy & COMPARE {
                 return Err(Error::Conflict);
             }
