@@ -124,7 +124,10 @@ impl<'a> PrivateInterrupts<'a> {
                 specifier
             };
             let (intid, trigger) = ppi(ppi_bytes.try_into().unwrap())?;
-            if entries[..index].iter().any(|earlier| earlier.intid == intid) {
+            if entries[..index]
+                .iter()
+                .any(|earlier| earlier.intid == intid)
+            {
                 return Err(Error::Conflict);
             }
             entries[index] = PrivateInterrupt { intid, trigger };
