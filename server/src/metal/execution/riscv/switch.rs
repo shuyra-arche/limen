@@ -68,7 +68,11 @@ impl Context {
 
     // These are normal call boundaries. Integer caller-saved registers can be
     // discarded, gp and tp remain Hart-local, and FS/VS stay disabled.
-    pub(in crate::metal::execution) unsafe fn switch(&self, incoming: &Context, argument: *const ()) {
+    pub(in crate::metal::execution) unsafe fn switch(
+        &self,
+        incoming: &Context,
+        argument: *const (),
+    ) {
         unsafe { limen_switch_context(self.0.get(), incoming.0.get(), argument) };
     }
 }

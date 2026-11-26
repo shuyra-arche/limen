@@ -180,8 +180,7 @@ impl<'a> Exclusions<'a> {
                     },
                 })
         });
-        self
-            .resident
+        self.resident
             .iter()
             .flatten()
             .copied()
