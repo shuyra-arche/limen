@@ -20,12 +20,12 @@ mod returns;
 mod search;
 
 pub use allocation::{Allocation, AllocationConstruction, AllocationId, MappedStorage};
-pub use allowance::{Allowance, AllowanceCandidate, AllowanceId, Balance};
 pub(crate) use allowance::permit::{AllocationPermit, AllocationPermitSlot, LayoutLimit};
-pub use region::{Grant, RegionDescription, RegionOrigin};
-pub use returns::{Pending, Retired, ReturnId, ReturnReceipt, Returned};
+pub use allowance::{Allowance, AllowanceCandidate, AllowanceId, Balance};
 pub(crate) use bootstrap::RootInitialization;
 pub use bootstrap::{Config, Initial, RootStorage};
+pub use region::{Grant, RegionDescription, RegionOrigin};
+pub use returns::{Pending, Retired, ReturnId, ReturnReceipt, Returned};
 pub use search::{Candidate, Lookup, RamPurpose, Request, Search};
 
 use allowance::{AllowanceSlot, Free};

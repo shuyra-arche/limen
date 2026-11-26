@@ -3,8 +3,8 @@
 mod description;
 mod elf;
 
-pub use description::{Description, DescriptionError};
 use super::{Contract, Interface};
+pub use description::{Description, DescriptionError};
 pub use elf::{Machine, SegmentPermissions};
 
 use crate::metal::memory::mmu::internal::access::MappedRange;

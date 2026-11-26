@@ -3,7 +3,10 @@
 mod image;
 mod interface;
 
-pub use image::{Description, DescriptionError, Error, Image, ImageAddress, Layout, Machine, ModuleImage, PlacedSegment, SegmentPermissions};
+pub use image::{
+    Description, DescriptionError, Error, Image, ImageAddress, Layout, Machine, ModuleImage,
+    PlacedSegment, SegmentPermissions,
+};
 pub use interface::{Contract, Interface, ModuleUse};
 
 use core::{

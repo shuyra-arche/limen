@@ -8,13 +8,13 @@ use crate::metal::sync::{TurnAccess, TurnAcquireError, TurnLock, TurnPlan, TurnP
 use super::{AllocationId, Error as SourceError, MappedStorage};
 use group::{Chain, Group, Links};
 
-pub use group::{Geometry, Retirement, Supply};
 use group::GroupRecord;
-pub use slot::{Detached, REFERENCE_LIMIT, Reclamation, Reference, Stable, StableOwner};
+pub use group::{Geometry, Retirement, Supply};
 use slot::{Claim, Completion, SlotPosition, State};
 pub use slot::{
     DestructionReceipt, Occupied, Prepared, ReleaseCursor, ReleaseProgress, Reservation,
 };
+pub use slot::{Detached, REFERENCE_LIMIT, Reclamation, Reference, Stable, StableOwner};
 
 /// Largest value supported by this increment's by-value initializer.
 pub const VALUE_BYTES: usize = 512;

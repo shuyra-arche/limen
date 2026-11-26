@@ -63,7 +63,11 @@ impl AllocationPermit {
         self.slot
     }
 
-    pub(in crate::metal::memory::allocator) fn check(self, source: &Allocator, candidate: Candidate) -> Result<(), Error> {
+    pub(in crate::metal::memory::allocator) fn check(
+        self,
+        source: &Allocator,
+        candidate: Candidate,
+    ) -> Result<(), Error> {
         if !ptr::eq(source, self.source) {
             return Err(Error::PermitOrigin);
         }

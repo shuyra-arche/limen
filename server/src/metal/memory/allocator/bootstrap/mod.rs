@@ -20,7 +20,10 @@ use super::{
     SourceId,
     allocation::{Allocation, AllocationId, AllocationRecord, Phase},
     allowance::{ASSIGNMENT_LOCKS, Allowance, AllowanceSlot, Balance, Free},
-    region::{Backing, buddy::{Geometry, Root}},
+    region::{
+        Backing,
+        buddy::{Geometry, Root},
+    },
     returns::ReturnRecord,
 };
 

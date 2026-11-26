@@ -46,7 +46,11 @@ pub struct Interface<'a> {
 
 impl<'a> Interface<'a> {
     pub(super) const fn new(contract: Contract<'a>, entry: ImageAddress, source: NodeId<'a>) -> Self {
-        Self { contract, entry, source }
+        Self {
+            contract,
+            entry,
+            source,
+        }
     }
 
     pub const fn contract(self) -> Contract<'a> {

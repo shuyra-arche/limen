@@ -1,8 +1,8 @@
 mod retirement;
 
 pub(super) use retirement::GroupRecord;
-pub use retirement::Retirement;
 use retirement::Material;
+pub use retirement::Retirement;
 
 use core::{alloc::Layout, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
 
