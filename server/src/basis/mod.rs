@@ -1,7 +1,7 @@
-#[cfg(all(limen_target, target_arch = "riscv64"))]
+#[cfg(limen_cooperative)]
 pub mod execution;
 pub mod pend;
-#[cfg(all(limen_target, target_arch = "riscv64"))]
+#[cfg(limen_cooperative)]
 pub mod room;
-#[cfg(all(limen_target, target_arch = "riscv64"))]
+#[cfg(limen_cooperative)]
 pub mod unit;

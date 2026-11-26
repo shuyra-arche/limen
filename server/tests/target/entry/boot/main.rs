@@ -95,7 +95,8 @@ fn check_discovery(boot: &Boot<'_>) {
         .expect("QEMU timebase");
     assert_eq!(timebase.source(), cpus.node().id());
     assert_eq!(timebase.hertz(), 10_000_000);
-    let sbi = boot.sbi_services();
+    assert!(boot.acpi().is_none(), "SBI supplied a DTB, not ACPI");
+    let sbi = kernel::metal::firmware::sbi::platform_services();
     assert!(sbi.hart_state_management() && sbi.timer() && sbi.inter_processor_interrupt());
     write("PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1\n");
 }

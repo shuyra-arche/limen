@@ -14,6 +14,9 @@ The boot CPU is the *major*. The image can then start a *minor* on its own stack
 | AArch64 virt | UEFI (AAVMF) | Major and minor startup, retained device tree, EL1 vectors and PSCI startup |
 
 Each target uses the same Rust boot handoff and terminal exception reporter.
+The build selects a concrete boot protocol and the available machine mechanisms.
+Retained firmware descriptions are independent of the selected instruction set;
+ACPI and Device Tree absence is represented by the actual handoff, not by ISA.
 The RV64 execution interface lets a trusted Unit yield, resume and return an
 end value. User-mode calls and the new Treaty ABI are under development.
 Consumers of ABI 14, including existing Vanllia images, should pin their

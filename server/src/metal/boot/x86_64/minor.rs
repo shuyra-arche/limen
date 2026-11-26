@@ -198,7 +198,7 @@ unsafe extern "sysv64" fn finish(hart: usize, slot: &'static Minor) -> ! {
 }
 
 impl Minor {
-    pub(in crate::metal) fn established(&self) -> bool {
-        super::established()
+    pub(in crate::metal) fn established(&self, hart: usize) -> bool {
+        hart == crate::metal::hart::boot_identity() && super::established()
     }
 }

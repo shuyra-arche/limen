@@ -1,5 +1,7 @@
 //! Trusted local CPU facts and fixed storage.
 #[cfg(limen_target)]
+use super::HartId;
+#[cfg(limen_target)]
 use core::cell::Cell;
 use core::ptr;
 
@@ -30,7 +32,7 @@ pub(in crate::metal) use backend::stack_pointer;
 #[cfg(all(limen_target, target_arch = "aarch64"))]
 pub use backend::{Aarch64Cpus, CpuCandidate};
 pub(crate) use node::QueueNode;
-#[cfg(all(limen_target, target_arch = "riscv64"))]
+#[cfg(any(limen_cooperative, test))]
 pub(crate) use protection::can_switch;
 pub(crate) use protection::{Error, TURN_CAPACITY, TurnParticipation, begin_leaf, begin_turn};
 
@@ -81,21 +83,6 @@ fn installed() -> Option<&'static HartLocal> {
 #[cfg(all(limen_target, target_arch = "x86_64"))]
 pub(in crate::metal) unsafe fn clear_local() {
     unsafe { backend::install_local(0) };
-}
-
-#[cfg(limen_target)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct HartId(usize);
-
-#[cfg(limen_target)]
-impl HartId {
-    pub(crate) const fn new(value: usize) -> Self {
-        Self(value)
-    }
-
-    pub(crate) const fn get(self) -> usize {
-        self.0
-    }
 }
 
 #[cfg(limen_target)]

@@ -32,15 +32,7 @@ pub(crate) unsafe fn admit<'a>(
         ));
     }
 
-    // OpenSBI supplies the actual caller's Hart identity in a0. The UEFI
-    // handoff comes from the loader and is checked against the machine ID.
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    if hart != hart::boot_identity() {
-        services.reject(format_args!(
-            "FAIL Limen boot: major CPU identity mismatch\n"
-        ));
-    }
-    let Some(facts) = (unsafe { boot::firmware::admit(hart, input, descriptions) }) else {
+    let Some(facts) = (unsafe { boot::admit(hart, input, descriptions) }) else {
         services.reject(format_args!("FAIL Limen boot: invalid firmware input\n"));
     };
     unsafe { LOCAL.install(hart) };

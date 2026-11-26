@@ -51,8 +51,10 @@ change server/src/metal/hart/protection.rs
 change server/src/metal/sync/turn.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
-change server/src/metal/execution/mod.rs
-bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["boot-handoff","kernel-execution","kernel-execution-harts","riscv-module-execution"]' >/dev/null
+for source in server/src/metal/execution/mod.rs server/src/metal/execution/cooperative.rs; do
+    change "$source"
+    bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["boot-handoff","kernel-execution","kernel-execution-harts","riscv-module-execution"]' >/dev/null
+done
 change server/src/metal/identity/mod.rs
 [[ $(bash "$discover" . "$base") == "$(jq -c 'map(select(.id != "module-execution" and .id != "riscv-module-execution"))' <<<"$full")" ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
@@ -86,8 +88,8 @@ change server/src/metal/firmware/uefi/loader.rs
 [[ $(boards) == 'q35 virt' ]]
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/firmware/acpi/madt.rs
-[[ $(boards) == 'q35 virt' ]]
-bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
+[[ $(bash "$discover" . "$base") == "$full" ]]
+bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 change server/src/metal/firmware/map.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null

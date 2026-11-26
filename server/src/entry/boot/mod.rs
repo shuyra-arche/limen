@@ -15,12 +15,9 @@ use limen_treaty::model::ByteLength;
 
 #[cfg(limen_target)]
 pub use crate::metal::boot::{Startup, console::Console, services::Services};
-#[cfg(not(target_arch = "riscv64"))]
 use crate::metal::firmware::acpi;
 #[cfg(limen_target)]
 use crate::metal::firmware::facts::Descriptions;
-#[cfg(all(limen_target, target_arch = "riscv64"))]
-use crate::metal::firmware::sbi::SbiServices;
 use crate::metal::firmware::{
     devicetree::{
         self,
@@ -105,15 +102,6 @@ unsafe extern "Rust" {
 #[cfg(limen_target)]
 pub use crate::metal::boot::minor::{Minor, StartError};
 
-#[cfg(all(limen_target, target_arch = "riscv64"))]
-#[cfg(limen_target)]
-impl Boot<'_> {
-    /// Probe the running firmware for its HSM, timer and IPI services.
-    pub fn sbi_services(&self) -> SbiServices {
-        crate::metal::firmware::sbi::platform_services()
-    }
-}
-
 #[cfg(test)]
 #[path = "../../../tests/entry/boot/mod.rs"]
 pub(crate) mod tests;
@@ -123,7 +111,7 @@ pub(crate) mod tests;
 /// # Safety
 /// Run once on the major CPU in ring 0 with paging (x86) or non-secure EL1 (Arm).
 /// Keep the image, identity mappings, loader stack and inputs reserved across delivery.
-#[cfg(all(limen_target, any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(limen_firmware = "uefi")]
 pub unsafe fn major(
     hart: usize,
     loader: &crate::metal::firmware::uefi::Loader<'_>,

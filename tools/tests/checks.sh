@@ -13,7 +13,7 @@ for path in "${changed[@]}"; do
             full=true ;;
         server/src/metal/boot/x86_64/*|server/src/metal/boot/aarch64/*|server/src/metal/hart/x86_64.rs|server/src/metal/hart/aarch64.rs|server/src/metal/firmware/psci.rs|server/src/metal/firmware/uefi/mod.rs|server/src/metal/firmware/arm.rs)
             ;;
-        server/src/metal/firmware/uefi/loader.rs|server/src/metal/firmware/acpi/*)
+        server/src/metal/firmware/uefi/loader.rs)
             host=true ;;
         server/src/*|server/link.x)
             host=true; rv64=true ;;

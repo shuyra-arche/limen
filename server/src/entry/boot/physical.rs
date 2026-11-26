@@ -1,6 +1,5 @@
 //! Physical exclusions and the conditions for retiring early use.
 
-#[cfg(not(target_arch = "riscv64"))]
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, Source};
 use crate::metal::{
@@ -122,7 +121,6 @@ pub struct Exclusions<'a> {
     resident: [Option<Exclusion>; 5],
     map: Option<FirmwareMap<'a>>,
     memory: Option<&'a DtbMemory>,
-    #[cfg(not(target_arch = "riscv64"))]
     acpi: Option<&'a Acpi<'a>>,
 }
 
@@ -153,12 +151,10 @@ impl<'a> Exclusions<'a> {
             ],
             map,
             memory,
-            #[cfg(not(target_arch = "riscv64"))]
             acpi: None,
         }
     }
 
-    #[cfg(not(target_arch = "riscv64"))]
     pub(super) fn with_acpi(mut self, acpi: Option<&'a Acpi<'a>>) -> Self {
         self.acpi = acpi;
         self
@@ -184,24 +180,22 @@ impl<'a> Exclusions<'a> {
                     },
                 })
         });
-        let entries = self
+        self
             .resident
             .iter()
             .flatten()
             .copied()
             .chain(reservations)
-            .chain(firmware);
-        #[cfg(not(target_arch = "riscv64"))]
-        let entries = entries.chain(self.acpi.into_iter().flat_map(|acpi| {
-            core::iter::once(acpi.rsdp_range())
-                .chain(core::iter::once(acpi.xsdt().physical()))
-                .chain(acpi.tables().map(|table| table.physical()))
-                .map(|physical| Exclusion {
-                    physical,
-                    occupant: Occupant::Acpi,
-                })
-        }));
-        entries
+            .chain(firmware)
+            .chain(self.acpi.into_iter().flat_map(|acpi| {
+                core::iter::once(acpi.rsdp_range())
+                    .chain(core::iter::once(acpi.xsdt().physical()))
+                    .chain(acpi.tables().map(|table| table.physical()))
+                    .map(|physical| Exclusion {
+                        physical,
+                        occupant: Occupant::Acpi,
+                    })
+            }))
     }
 
     /// Test a candidate physical range against the current exclusions. Any

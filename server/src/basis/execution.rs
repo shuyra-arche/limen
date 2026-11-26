@@ -16,7 +16,7 @@ use crate::{
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, Units},
     },
     metal::{
-        execution::{Hart, LeaveReceipt, LocalHart, extensions_off},
+        execution::{Hart, LeaveReceipt, LocalHart, cooperative_ready},
         hart::{self, HartId},
         sync::{TurnAcquireError, TurnLock},
     },
@@ -146,7 +146,7 @@ impl Execution {
                 reason: EstablishError::WrongHart,
             });
         }
-        if !supported() {
+        if !cooperative_ready() {
             return Err(EstablishFailure {
                 boot,
                 stacks,
@@ -186,14 +186,15 @@ impl Execution {
         Err(Error::Unsupported)
     }
 
-    /// Start the minor Hart through OpenSBI. It attaches on its dispatcher
+    /// Start the minor Hart using the supplied platform startup method.
+    /// It attaches on its dispatcher
     /// stack with the early trap vector installed before the platform entry.
     ///
     /// # Safety
     ///
     /// The entry must be trusted supervisor code built for the Bare Nest.
-    /// It must preserve gp, tp, masked interrupts, disabled extensions and
-    /// the configured traps. The 32 KiB dispatcher stack is shared by the
+    /// It must preserve the selected machine calling convention and verified
+    /// execution environment. The 32 KiB dispatcher stack is shared by the
     /// live Limen startup frames, the entry and all dispatcher-side callees.
     /// The caller must include those startup frames in the total stack
     /// budget when bounding the entry and its callees.
@@ -201,9 +202,10 @@ impl Execution {
         &'static self,
         hart: usize,
         entry: fn(&'static Execution) -> !,
+        method: boot::Startup,
     ) -> Result<(), Error> {
         let minor = self.minor_boot.ok_or(Error::Unsupported)?;
-        if hart::current_hart() != self.major_id || !supported() {
+        if hart::current_hart() != self.major_id || !cooperative_ready() {
             return Err(Error::Unsupported);
         }
         if HartId::new(hart) == self.major_id {
@@ -221,8 +223,7 @@ impl Execution {
             Ok(())
         })??;
         let argument = ptr::from_ref(self).expose_provenance();
-        if let Err(error) = unsafe { minor.start(hart, admit_minor, argument, boot::Startup::Sbi) }
-        {
+        if let Err(error) = unsafe { minor.start(hart, admit_minor, argument, method) } {
             self.launch.acquire(|launch| *launch = None)?;
             return Err(match error {
                 boot::StartError::Busy => Error::Busy,
@@ -238,8 +239,8 @@ impl Execution {
     ///
     /// The caller supplies a trusted supervisor entry whose compiler and
     /// callees fit the 16 KiB stack, preserve the established Bare and trap
-    /// configuration and Hart-local registers, and run with interrupts and
-    /// FP/vector state disabled. Any local borrow must allow suspension at
+    /// configuration, Hart-local registers, and the selected backend's
+    /// interrupt and extension restrictions. Any local borrow must allow suspension at
     /// `yield_now`. The Unit stays on the constructing Hart.
     pub unsafe fn create(&self, entry: Entry) -> Result<UnitId, Error> {
         let (hart, _) = self.local()?;
@@ -297,7 +298,7 @@ impl Execution {
     /// The original admission remains occupied until `vacate`.
     pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
         let (id, hart) = self.local()?;
-        if !supported() {
+        if !cooperative_ready() {
             return Err(Error::Unsupported);
         }
         if !hart::can_switch() {
@@ -368,7 +369,7 @@ impl Execution {
 
     fn leave(&self, unit: UnitId, end: Option<u64>) -> Result<(), Error> {
         let (_, hart) = self.local()?;
-        if !supported() {
+        if !cooperative_ready() {
             return Err(Error::Unsupported);
         }
         if !hart::can_switch() {
@@ -458,7 +459,7 @@ fn admit_minor(hart: usize, argument: usize) -> ! {
     let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
     let id = hart::current_hart();
     assert_eq!(id.get(), hart);
-    assert!(supported());
+    assert!(cooperative_ready());
     execution
         .dispatch(|dispatch| dispatch.room.attach(id).map_err(Error::from))
         .expect("reserved Room participation");
@@ -472,8 +473,4 @@ fn admit_minor(hart: usize, argument: usize) -> ! {
         })
         .expect("reserved minor launch protection");
     entry(execution)
-}
-
-fn supported() -> bool {
-    crate::metal::boot::established() && extensions_off()
 }

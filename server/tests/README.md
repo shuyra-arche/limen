@@ -118,6 +118,10 @@ and executes up to two guests concurrently. The artifact contains a per-case log
 evidence directory and exit status, plus the selected plan and combined results.
 
 Hardware execution and later runtime contracts require separate verification.
+The Host Hart protection checks include the common cooperative-switch gate;
+RV64 machine switching is verified by the single- and dual-Hart target guests.
+ACPI parsing and retained exclusions are compiled independently of ISA; the
+OpenSBI boot guest checks that ACPI is absent from its actual handoff.
 
 ## RV64 Kernel Unit execution
 

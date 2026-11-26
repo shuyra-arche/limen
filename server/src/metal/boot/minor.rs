@@ -138,9 +138,7 @@ pub(crate) extern "C" fn arrive(hart: usize, minor: &'static Minor) -> ! {
     let launch = unsafe { (&*minor.launch.get()).assume_init_ref() };
     let sp = hart::stack_pointer();
     assert!(hart == launch.hart && minor.stack_range().contains(&sp));
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    assert_eq!(hart, hart::boot_identity());
-    assert!(minor.established());
+    assert!(minor.established(hart));
     // `Entered` identifies this CPU as the sole initializer of this resident
     // local record. The terminal vectors cannot observe its partial setup.
     unsafe { minor.local.install(hart) };
