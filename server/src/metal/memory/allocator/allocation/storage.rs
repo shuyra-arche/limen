@@ -3,7 +3,7 @@
 use crate::metal::memory::mmu::internal::access::MappedRange;
 use limen_treaty::model::PhysicalRange;
 
-use super::{Allocation, AllocationId, Error};
+use super::super::{Allocation, AllocationId, Error};
 
 /// The unique original Allocation paired with its exact exclusive mapping.
 /// Neither a physical address nor a same-length slice can substitute for
@@ -49,15 +49,15 @@ impl<'a> MappedStorage<'a> {
         (self.allocation, self.mapping)
     }
 
-    pub(super) fn allocation(&self) -> &Allocation {
+    pub(in crate::metal::memory::allocator) fn allocation(&self) -> &Allocation {
         &self.allocation
     }
 
-    pub(super) fn mapping(&self) -> &MappedRange<'a> {
+    pub(in crate::metal::memory::allocator) fn mapping(&self) -> &MappedRange<'a> {
         &self.mapping
     }
 
-    pub(super) fn mapping_mut(&mut self) -> &mut MappedRange<'a> {
+    pub(in crate::metal::memory::allocator) fn mapping_mut(&mut self) -> &mut MappedRange<'a> {
         &mut self.mapping
     }
 }

@@ -5,7 +5,7 @@ use limen_treaty::model::{Alignment, ByteLength};
 
 use crate::metal::sync::{TurnAccess, TurnPlan};
 
-use super::{Allocator, Allowance, AllowanceId, Candidate, Error, RamPurpose};
+use super::super::{Allocator, Allowance, AllowanceId, Candidate, Error, RamPurpose};
 
 /// Immutable purpose of one permanently supplied initial Pend receiver.
 /// Pend controls whether its single holding is installed or can still spend.
@@ -20,7 +20,7 @@ impl AllocationPermitSlot {
         }
     }
 
-    pub(super) fn matches(&self, other: &Self) -> bool {
+    pub(in crate::metal::memory::allocator) fn matches(&self, other: &Self) -> bool {
         ptr::eq(self, other)
     }
 }
@@ -59,11 +59,11 @@ impl AllocationPermit {
         self.allowance
     }
 
-    pub(super) fn slot(self) -> &'static AllocationPermitSlot {
+    pub(in crate::metal::memory::allocator) fn slot(self) -> &'static AllocationPermitSlot {
         self.slot
     }
 
-    pub(super) fn check(self, source: &Allocator, candidate: Candidate) -> Result<(), Error> {
+    pub(in crate::metal::memory::allocator) fn check(self, source: &Allocator, candidate: Candidate) -> Result<(), Error> {
         if !ptr::eq(source, self.source) {
             return Err(Error::PermitOrigin);
         }

@@ -1,4 +1,8 @@
 //! Slot storage and the original rights to prepare, destroy, and release it.
+mod reference;
+
+pub use reference::{Detached, REFERENCE_LIMIT, Reclamation, Reference, Stable, StableOwner};
+
 use core::{
     cell::UnsafeCell,
     mem::MaybeUninit,

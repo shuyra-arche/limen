@@ -1,7 +1,7 @@
 use core::{mem::MaybeUninit, ops::Range};
 use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
-use crate::metal::memory::allocator::buddy::{
+use crate::metal::memory::allocator::region::buddy::{
     Buddy, Error, Geometry, Request, Revision, Root, Scan, Search,
 };
 

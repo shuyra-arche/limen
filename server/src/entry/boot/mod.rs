@@ -5,7 +5,7 @@ mod physical;
 mod regions;
 #[cfg(limen_target)]
 use crate::metal::memory::allocator::RegionDescription;
-use crate::metal::memory::allocator::bump;
+use crate::metal::memory::allocator::bootstrap::bump;
 #[cfg(limen_target)]
 use crate::metal::platform::boot::major;
 #[cfg(limen_target)]

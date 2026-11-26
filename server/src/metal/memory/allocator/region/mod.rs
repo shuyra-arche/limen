@@ -1,3 +1,5 @@
+pub mod buddy;
+
 use core::{
     cell::UnsafeCell,
     mem::MaybeUninit,
@@ -13,9 +15,10 @@ use limen_treaty::model::PhysicalRange;
 use super::{
     Allocator, Error, RegionId,
     allocation::{AllocationRecord, AllocationScope},
-    buddy::{Buddy, Geometry, Root},
     returns::{ReturnRecord, ReturnScope},
 };
+
+use buddy::{Buddy, Geometry, Root};
 
 /// Provenance and raw attributes of the accepted RAM description.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

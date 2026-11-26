@@ -6,10 +6,8 @@ use core::{
 
 use crate::metal::sync::{TurnAccess, TurnLock};
 
-use super::{
-    DestructionReceipt, Error, Occupied, SourceError,
-    slot::{Claim, State},
-};
+use super::super::{Error, SourceError};
+use super::{Claim, DestructionReceipt, Occupied, State};
 
 /// Maximum simultaneous owners of a stable object, including its base owner.
 pub const REFERENCE_LIMIT: usize = 64;

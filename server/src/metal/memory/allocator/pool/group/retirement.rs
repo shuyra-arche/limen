@@ -1,17 +1,15 @@
 use crate::metal::sync::{TurnMode, TurnWorkspace};
 use limen_treaty::model::PhysicalRange;
 
-use super::super::{
+use super::super::super::{
     Allocation, AllocationId, Allocator, ReturnId, Returned, returns::ReceiptOwner,
 };
-use super::{
-    Error, GroupId, Pool, SourceError,
-    group::{Chain, Group},
-};
+use super::super::{Error, GroupId, Pool, SourceError};
+use super::{Chain, Group};
 
-pub(super) struct Material {
-    pub(super) allocation: Allocation,
-    pub(super) retirement: ReturnId,
+pub(in crate::metal::memory::allocator::pool) struct Material {
+    pub(in crate::metal::memory::allocator::pool) allocation: Allocation,
+    pub(in crate::metal::memory::allocator::pool) retirement: ReturnId,
 }
 
 impl Material {
@@ -26,14 +24,14 @@ impl Material {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Receipt {
+pub(in crate::metal::memory::allocator::pool) struct Receipt {
     source: &'static Allocator,
     allocation: AllocationId,
     physical: PhysicalRange,
     retirement: ReturnId,
 }
 
-pub(super) enum GroupRecord<'storage, T> {
+pub(in crate::metal::memory::allocator::pool) enum GroupRecord<'storage, T> {
     Open(Group<'storage, T>),
     Shutting(Material),
     Returning(Receipt),
@@ -41,7 +39,7 @@ pub(super) enum GroupRecord<'storage, T> {
 }
 
 impl<T> GroupRecord<'_, T> {
-    pub(super) fn allocation(&self) -> AllocationId {
+    pub(in crate::metal::memory::allocator::pool) fn allocation(&self) -> AllocationId {
         match self {
             Self::Open(group) => group.material.allocation.id(),
             Self::Shutting(material) => material.allocation.id(),

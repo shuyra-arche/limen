@@ -1,4 +1,6 @@
 //! Preflight and initialize the source’s permanent root and initial material.
+pub(crate) mod bump;
+
 use core::{
     alloc::Layout,
     mem::MaybeUninit,
@@ -18,11 +20,11 @@ use super::{
     SourceId,
     allocation::{Allocation, AllocationId, AllocationRecord, Phase},
     allowance::{ASSIGNMENT_LOCKS, Allowance, AllowanceSlot, Balance, Free},
-    buddy::{Geometry, Root},
-    bump::Bump,
-    region::Backing,
+    region::{Backing, buddy::{Geometry, Root}},
     returns::ReturnRecord,
 };
+
+use bump::Bump;
 
 /// Per-position maximum capacities include unpublished Region positions.
 #[derive(Clone, Copy, Debug)]

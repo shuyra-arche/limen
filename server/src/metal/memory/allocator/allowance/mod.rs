@@ -1,3 +1,5 @@
+pub(super) mod permit;
+
 use limen_treaty::model::ByteLength;
 
 use core::sync::atomic::Ordering::Acquire;

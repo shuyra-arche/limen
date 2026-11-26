@@ -1,5 +1,11 @@
 //! Actual physical occupation, allocation identities and atomic conversion.
 
+mod construction;
+mod storage;
+
+pub use construction::AllocationConstruction;
+pub use storage::MappedStorage;
+
 use core::ptr;
 
 use crate::metal::{

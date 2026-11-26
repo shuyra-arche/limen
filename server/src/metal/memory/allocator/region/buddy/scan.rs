@@ -30,15 +30,15 @@ impl Request {
         self
     }
 
-    pub(in super::super) fn length(self) -> ByteLength {
+    pub(in crate::metal::memory::allocator) fn length(self) -> ByteLength {
         self.length
     }
 
-    pub(in super::super) fn alignment(self) -> Alignment {
+    pub(in crate::metal::memory::allocator) fn alignment(self) -> Alignment {
         self.alignment
     }
 
-    pub(in super::super) fn window(self) -> Option<PhysicalRange> {
+    pub(in crate::metal::memory::allocator) fn window(self) -> Option<PhysicalRange> {
         self.window
     }
 

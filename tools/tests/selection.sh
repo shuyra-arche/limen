@@ -190,10 +190,10 @@ done
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/memory/mmu/internal/riscv/encoder/binding.rs
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
-change server/src/metal/memory/allocator/storage.rs
+change server/src/metal/memory/allocator/allocation/storage.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
-change server/src/metal/memory/allocator/bump.rs
+change server/src/metal/memory/allocator/bootstrap/bump.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/platform/boot/x86_64/example.rs

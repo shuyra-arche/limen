@@ -1,6 +1,6 @@
 use core::alloc::Layout;
 
-use super::bump::Bump;
+use super::bootstrap::bump::Bump;
 
 #[test]
 fn reserves_aligned_disjoint_ranges_inside_the_owned_interval() {

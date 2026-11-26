@@ -1,9 +1,14 @@
+mod retirement;
+
+pub(super) use retirement::GroupRecord;
+pub use retirement::Retirement;
+use retirement::Material;
+
 use core::{alloc::Layout, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
 
 use super::super::{Allocation, AllocationId, ReturnId};
 use super::{
     Error, GroupId, VALUE_ALIGNMENT, VALUE_BYTES,
-    retirement::Material,
     slot::{Slot, SlotState, State},
 };
 

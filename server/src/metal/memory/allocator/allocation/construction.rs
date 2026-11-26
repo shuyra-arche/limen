@@ -4,11 +4,11 @@ use core::ptr;
 
 use crate::metal::sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace};
 
-use super::{
+use super::super::{
     Allocation, AllocationId, Allocator, AllowanceId, Candidate, Error, RegionId,
     allocation::Phase,
     allowance::SlotState,
-    permit::{AllocationPermit, AllocationPermitSlot},
+    allowance::permit::{AllocationPermit, AllocationPermitSlot},
 };
 
 #[derive(Clone, Copy)]

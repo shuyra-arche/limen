@@ -13,27 +13,20 @@ use limen_treaty::model::PhysicalRange;
 
 mod allocation;
 mod allowance;
-pub mod buddy;
-pub(crate) mod bump;
-mod construction;
-mod permit;
+pub(crate) mod bootstrap;
 pub mod pool;
-mod region;
+pub mod region;
 mod returns;
-mod root;
 mod search;
-mod storage;
 
-pub use allocation::{Allocation, AllocationId};
+pub use allocation::{Allocation, AllocationConstruction, AllocationId, MappedStorage};
 pub use allowance::{Allowance, AllowanceCandidate, AllowanceId, Balance};
-pub use construction::AllocationConstruction;
-pub(crate) use permit::{AllocationPermit, AllocationPermitSlot, LayoutLimit};
+pub(crate) use allowance::permit::{AllocationPermit, AllocationPermitSlot, LayoutLimit};
 pub use region::{Grant, RegionDescription, RegionOrigin};
 pub use returns::{Pending, Retired, ReturnId, ReturnReceipt, Returned};
-pub(crate) use root::RootInitialization;
-pub use root::{Config, Initial, RootStorage};
+pub(crate) use bootstrap::RootInitialization;
+pub use bootstrap::{Config, Initial, RootStorage};
 pub use search::{Candidate, Lookup, RamPurpose, Request, Search};
-pub use storage::MappedStorage;
 
 use allowance::{AllowanceSlot, Free};
 use region::Region;
