@@ -1,4 +1,3 @@
-use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 use super::{Boot, Retirement, physical, regions};
 use crate::metal::firmware::{
     devicetree::{self, memory::DtbMemory},
@@ -6,6 +5,7 @@ use crate::metal::firmware::{
     map::{FirmwareMap, FirmwareRegion, MapError},
     uefi::{AcpiInput, DeviceTree, Loader},
 };
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 mod exclusions;
 mod memory;

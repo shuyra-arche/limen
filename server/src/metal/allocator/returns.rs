@@ -2,8 +2,11 @@
 
 use core::ptr;
 
+use crate::metal::{
+    identity::Key,
+    sync::{TurnLock, TurnMode, TurnWorkspace},
+};
 use limen_treaty::model::PhysicalRange;
-use crate::metal::{identity::Key, sync::{TurnLock, TurnMode, TurnWorkspace}};
 
 use super::{
     Allocation, AllocationId, Allocator, AllowanceId, Error, RegionId,

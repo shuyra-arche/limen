@@ -1,7 +1,6 @@
 use core::sync::atomic::Ordering::Acquire;
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
-
 use super::{
     Allocator, Error, REGION_LIMIT, RegionDescription, RegionId, RegionOrigin,
     buddy::{self, Revision, Scan},

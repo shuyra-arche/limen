@@ -2,12 +2,12 @@
 
 use core::mem;
 
-use limen_treaty::model::PhysicalAddress;
 use super::{Mode, contract, geometry};
 use crate::metal::{
     mmu::internal::riscv::context::Context,
     module::{Machine, Module, ModuleUse, Permissions, UseError},
 };
+use limen_treaty::model::PhysicalAddress;
 
 /// Bind an installed encoder to the provider that its module actually retains.
 pub fn bind<'module, Material, const DEPENDENCIES: usize>(

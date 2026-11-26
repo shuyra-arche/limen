@@ -157,10 +157,7 @@ fn translate(
     })
 }
 
-fn within_address_cells(
-    range: BusRange,
-    address_cells: usize,
-) -> Result<BusRange, Error> {
+fn within_address_cells(range: BusRange, address_cells: usize) -> Result<BusRange, Error> {
     if address_cells == 1 && range.end().get() > 1_u64 << 32 {
         return Err(Error::Range);
     }

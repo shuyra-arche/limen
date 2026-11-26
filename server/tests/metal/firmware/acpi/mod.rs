@@ -1,7 +1,7 @@
-use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 use kernel::metal::firmware::acpi::{
     Acpi, Error, IoApic, Polarity, Processor, SourceOverride, Trigger,
 };
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 const ROOT: u64 = 0x1000;
 const XSDT: u64 = 0x3000;

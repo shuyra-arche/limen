@@ -4,8 +4,11 @@ use core::{
     sync::atomic::Ordering::{Acquire, Release},
 };
 
+use crate::metal::{
+    identity::{Entry, GenerationTable},
+    sync::{TurnLock, TurnMode, TurnWorkspace},
+};
 use limen_treaty::model::PhysicalRange;
-use crate::metal::{identity::{Entry, GenerationTable}, sync::{TurnLock, TurnMode, TurnWorkspace}};
 
 use super::{
     Allocator, Error, RegionId,

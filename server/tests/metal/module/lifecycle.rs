@@ -1,10 +1,13 @@
-use limen_treaty::model::{InternalAddress, PhysicalAddress};
 use super::{IMAGES, PAGE, ROOT, SV39_ROOT};
 use kernel::metal::{
     mmu::internal::access::MappedRange,
-    mmu::internal::{GEOMETRY, riscv::{Mode, root}},
+    mmu::internal::{
+        GEOMETRY,
+        riscv::{Mode, root},
+    },
     module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, UseError},
 };
+use limen_treaty::model::{InternalAddress, PhysicalAddress};
 use std::{mem::MaybeUninit, sync::Barrier, thread};
 
 fn image() -> ModuleImage<'static> {
@@ -24,7 +27,9 @@ fn prepare(
         // The synthetic physical range represents this exclusively owned
         // simulation buffer. No target address is invoked on the Host.
         let mut mapped = unsafe { MappedRange::new(physical, &mut storage) }.unwrap();
-        image.prepare(&mut mapped, InternalAddress::new(virtual_start)).unwrap()
+        image
+            .prepare(&mut mapped, InternalAddress::new(virtual_start))
+            .unwrap()
     };
     (layout, storage)
 }

@@ -168,7 +168,11 @@ pub(super) struct Elf<'a> {
 }
 
 impl<'a> Elf<'a> {
-    pub(super) fn read(bytes: &'a [u8], machine: Machine, page_size: PageSize) -> Result<Self, Error> {
+    pub(super) fn read(
+        bytes: &'a [u8],
+        machine: Machine,
+        page_size: PageSize,
+    ) -> Result<Self, Error> {
         if bytes.len() > MAX_IMAGE {
             return Err(Error::Capacity);
         }
@@ -352,7 +356,12 @@ impl<'a> Elf<'a> {
         &self.bytes[header.file_range(self.bytes).expect("checked file extent")]
     }
 
-    fn check_load(&mut self, header: Header, index: usize, page_size: PageSize) -> Result<(), Error> {
+    fn check_load(
+        &mut self,
+        header: Header,
+        index: usize,
+        page_size: PageSize,
+    ) -> Result<(), Error> {
         header.permissions()?;
         if header.memory_size.get() == 0 || header.file_size > header.memory_size {
             return Err(Error::Range);
@@ -380,11 +389,10 @@ impl<'a> Elf<'a> {
         }
         self.span = Some(match self.span {
             None => pages,
-            Some(span) => ImageRange::new(
-                span.start().min(pages.start()),
-                span.end().max(pages.end()),
-            )
-            .expect("nonempty image extent"),
+            Some(span) => {
+                ImageRange::new(span.start().min(pages.start()), span.end().max(pages.end()))
+                    .expect("nonempty image extent")
+            }
         });
         if header.alignment > 1 {
             self.alignment = self
@@ -405,7 +413,11 @@ impl<'a> Elf<'a> {
             .filter(|header| header.kind == LOAD)
         {
             if address >= header.address
-                && end <= header.address.advance(header.file_size).ok_or(Error::Range)?
+                && end
+                    <= header
+                        .address
+                        .advance(header.file_size)
+                        .ok_or(Error::Range)?
             {
                 let start = header
                     .offset
@@ -541,7 +553,10 @@ impl<'a> Elf<'a> {
         if !self.segments().any(|segment| {
             segment.permissions == Permissions::ReadWrite
                 && address >= segment.address
-                && segment.address.advance(segment.memory_size).is_some_and(|limit| end <= limit)
+                && segment
+                    .address
+                    .advance(segment.memory_size)
+                    .is_some_and(|limit| end <= limit)
         }) || !self.segments().any(|segment| {
             segment
                 .address

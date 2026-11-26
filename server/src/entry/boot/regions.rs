@@ -3,15 +3,8 @@
 use super::{Boot, Exclusions, Retirement, bump::Bump};
 use crate::metal::{
     allocator::{
-        Allocator,
-        Allowance,
-        Config,
-        Error,
-        Initial,
-        RegionDescription,
-        RegionOrigin,
-        RootInitialization,
-        RootStorage,
+        Allocator, Allowance, Config, Error, Initial, RegionDescription, RegionOrigin,
+        RootInitialization, RootStorage,
     },
     mmu::internal::access::MappedRange,
 };

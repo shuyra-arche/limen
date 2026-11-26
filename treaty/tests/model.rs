@@ -130,7 +130,10 @@ fn coordinates_share_geometry_without_marker_traits() {
     let physical = PhysicalAddress::new(4096);
     let range = PhysicalRange::new(physical, PhysicalAddress::new(8192)).unwrap();
     assert_eq!(range.length(), ByteLength::new(4096));
-    assert_eq!(PhysicalAddress::new(u64::MAX).range(ByteLength::new(1)), None);
+    assert_eq!(
+        PhysicalAddress::new(u64::MAX).range(ByteLength::new(1)),
+        None
+    );
 
     let pages = PageRange::new(PageOffset::new(2), PageOffset::new(7)).unwrap();
     assert_eq!(pages.length(), PageCount::new(5));

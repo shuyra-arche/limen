@@ -5,8 +5,11 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering::Acquire},
 };
 
+use crate::metal::{
+    identity::Slot,
+    sync::{TurnAcquireError, TurnLock},
+};
 use limen_treaty::model::PhysicalRange;
-use crate::metal::{identity::Slot, sync::{TurnAcquireError, TurnLock}};
 
 mod allocation;
 mod allowance;

@@ -7,8 +7,8 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use limen_treaty::model::{InternalAddress, InternalRange, PhysicalRange};
 use super::{Contract, Layout, Machine};
+use limen_treaty::model::{InternalAddress, InternalRange, PhysicalRange};
 
 // Closing admission and observing the final release cover the same
 // population because the phase and use count share a modification order.

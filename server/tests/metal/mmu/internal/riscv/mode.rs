@@ -1,5 +1,8 @@
+use kernel::metal::{
+    mmu::internal::riscv::{Mode, context::Context},
+    module::Permissions,
+};
 use limen_treaty::model::{InternalAddress, InternalRange, PageSize, PhysicalAddress};
-use kernel::metal::{mmu::internal::riscv::{Mode, context::Context}, module::Permissions};
 
 #[test]
 fn indexes_both_canonical_ranges_at_every_supported_level() {

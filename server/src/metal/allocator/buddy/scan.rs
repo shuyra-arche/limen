@@ -3,7 +3,6 @@
 use core::ptr;
 use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
-
 use super::{Buddy, Error, Root, State, geometry::Block};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

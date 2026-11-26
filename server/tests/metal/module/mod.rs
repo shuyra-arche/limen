@@ -152,7 +152,9 @@ fn prepares_independently_linked_programs_using_only_program_headers() {
         let length = image.required_length().as_usize().unwrap();
         let mut buffer = vec![MaybeUninit::new(0xa5); length];
         let mut storage = mapped(&mut buffer);
-        let plan = image.prepare(&mut storage, InternalAddress::new(VIRTUAL)).unwrap();
+        let plan = image
+            .prepare(&mut storage, InternalAddress::new(VIRTUAL))
+            .unwrap();
         assert_eq!(plan.physical(), storage.physical());
         assert_eq!(
             plan.internal(),
@@ -202,7 +204,9 @@ fn prepares_independently_linked_programs_using_only_program_headers() {
         assert_eq!(word(&bytes_after, target as usize), PAGE.get());
 
         let code = programs(&bytes)
-            .find(|program| program.kind == 1 && program.address == interface.entry().get() as usize)
+            .find(|program| {
+                program.kind == 1 && program.address == interface.entry().get() as usize
+            })
             .unwrap();
         assert_eq!(
             bytes_after[code.address..code.address + code.file_size],

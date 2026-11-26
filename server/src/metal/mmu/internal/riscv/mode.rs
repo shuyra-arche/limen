@@ -36,9 +36,7 @@ impl Mode {
     pub const fn is_canonical_range(self, range: InternalRange) -> bool {
         let first = range.start();
         let last = InternalAddress::new(range.end().get() - 1);
-        self.is_canonical(first)
-            && self.is_canonical(last)
-            && first.get() >> 63 == last.get() >> 63
+        self.is_canonical(first) && self.is_canonical(last) && first.get() >> 63 == last.get() >> 63
     }
 
     /// Leaf size, including superpages at the upper levels.

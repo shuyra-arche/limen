@@ -1,5 +1,5 @@
-use limen_treaty::model::PhysicalAddress;
 use super::{Error, Table, field};
+use limen_treaty::model::PhysicalAddress;
 
 const HEADER: usize = 44;
 const RECORD_LIMIT: usize = 256;

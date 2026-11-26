@@ -1,11 +1,11 @@
 //! Facts retained from the firmware handoff.
 
-use limen_treaty::model::PhysicalRange;
 use super::acpi::Acpi;
 use super::{
     devicetree::{self, memory::DtbMemory},
     map::FirmwareMap,
 };
+use limen_treaty::model::PhysicalRange;
 
 pub(crate) struct Facts<'a> {
     pub(crate) image: PhysicalRange,

@@ -15,9 +15,7 @@ use crate::{
 };
 use crate::{
     entry::boot::{
-        Boot,
-        Regions,
-        Retirement,
+        Boot, Regions, Retirement,
         tests::{describe, image, organization::retired, range},
     },
     metal::firmware::{facts::Descriptions, map::FirmwareMap},

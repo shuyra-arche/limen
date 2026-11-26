@@ -138,7 +138,12 @@ impl<'a> ModuleImage<'a> {
                 .and_then(ByteLength::as_usize)
                 .expect("checked relocation offset");
             let value = internal_start
-                .advance(relocation.addend.distance(span.start()).expect("checked addend"))
+                .advance(
+                    relocation
+                        .addend
+                        .distance(span.start())
+                        .expect("checked addend"),
+                )
                 .expect("checked placement")
                 .get();
             for (target, source) in bytes[offset..offset + 8]
@@ -225,7 +230,10 @@ impl Layout<'_> {
             .entry()
             .distance(self.image.elf.span().start())
             .expect("checked interface offset");
-        self.internal.start().advance(offset).expect("checked placement")
+        self.internal
+            .start()
+            .advance(offset)
+            .expect("checked placement")
     }
 }
 

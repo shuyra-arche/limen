@@ -2,11 +2,11 @@
 
 use core::ptr;
 
-use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 use crate::metal::{
     identity::{GenerationTable, Key, Reservation as SlotReservation, ReserveError},
     sync::{TurnMode, TurnWorkspace},
 };
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 use super::{
     AllocationConstruction, Allocator, AllowanceId, Error, RegionId, Retired, ReturnId,

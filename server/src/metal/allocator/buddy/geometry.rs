@@ -3,7 +3,6 @@
 use core::{alloc::Layout, ops::Range};
 use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
-
 use super::Error;
 
 /// A checked, nonempty region in absolute physical bytes.

@@ -1,10 +1,10 @@
 //! Physical exclusions and the conditions for retiring early use.
 
-use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, Source};
 use crate::metal::allocator::{Allocator, Error, Grant, RegionDescription};
 use core::ops::Range;
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Occupant {

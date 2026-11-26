@@ -1,9 +1,9 @@
-use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 use crate::metal::firmware::{
     acpi, devicetree,
     facts::{Descriptions, Facts},
     map::FirmwareMap,
 };
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 /// How the trusted platform uses its retained DTB.
 pub enum DeviceTree<'a> {
