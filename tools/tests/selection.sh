@@ -64,6 +64,11 @@ bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","ke
 change server/tests/basis/sync/contracts.rs
 bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and .manifests == ["server/tests/basis/sync/host/Cargo.toml"]' >/dev/null
 [[ $(bash "$discover" . "$base") == '[]' ]]
+change server/src/basis/pend.rs
+bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+bash "$discover" . "$base" | jq -e 'map(select(.id == "boot-handoff") | .profile) | sort == ["debug","release"]' >/dev/null
+change server/tests/entry/boot/contracts.rs
+bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
 change server/src/entry/boot/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/firmware/uefi/mod.rs

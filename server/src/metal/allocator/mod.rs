@@ -21,7 +21,9 @@ pub use region::Grant;
 pub use search::{Candidate, Lookup, RamPurpose, Request, Search};
 pub use storage::{Config, Initial};
 pub(crate) use transfer::Spender;
-pub use transfer::{Allocation, AllocationId, Construction, Pending, Retired, ReturnId, Returned};
+pub use transfer::{
+    Allocation, AllocationId, Construction, Pending, Retired, ReturnId, ReturnReceipt, Returned,
+};
 
 use allowance::{Free, Slot};
 use region::Region;

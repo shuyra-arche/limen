@@ -13,7 +13,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     Limit,
-    Empty,
+    Receiver,
     Installed,
     Revoked,
     Exhausted,
@@ -55,26 +55,29 @@ enum Admission {
 }
 
 struct Pend {
-    permit: AllocationPermit,
+    holding: Option<AllocationPermit>,
     branch: Admission,
 }
 
-enum Holding {
-    Empty,
-    Held(Pend),
-    Exhausted,
+enum State {
+    Fresh,
+    Published(Pend),
 }
 
-impl Holding {
-    fn resolve(&self) -> Result<AllocationPermit, Error> {
+impl State {
+    fn published(&mut self) -> &mut Pend {
         match self {
-            Self::Empty => Err(Error::Empty),
-            Self::Exhausted => Err(Error::Exhausted),
-            Self::Held(Pend {
-                branch: Admission::Shut,
-                ..
-            }) => Err(Error::Revoked),
-            Self::Held(pend) => Ok(pend.permit),
+            Self::Fresh => unreachable!("roles are issued only after publication"),
+            Self::Published(pend) => pend,
+        }
+    }
+
+    fn resolve(&mut self) -> Result<AllocationPermit, Error> {
+        let pend = self.published();
+        let permit = pend.holding.ok_or(Error::Exhausted)?;
+        match pend.branch {
+            Admission::Open => Ok(permit),
+            Admission::Shut => Err(Error::Revoked),
         }
     }
 }
@@ -83,33 +86,43 @@ impl Holding {
 /// sole local handle is never reused. The initial branch has no parent,
 /// descendants or persistent uses. Its gate and holding share this Turn.
 pub struct PendSpace {
-    state: TurnLock<Holding>,
+    state: TurnLock<State>,
+}
+
+/// Preallocated receiving fields of the actual spending and close owners.
+pub struct Initial<'receiver> {
+    pub spending: &'receiver mut Option<Handle>,
+    pub closing: &'receiver mut Option<Revoker>,
 }
 
 impl PendSpace {
     pub const fn new() -> Self {
         Self {
-            state: TurnLock::new(Holding::Empty),
+            state: TurnLock::new(State::Fresh),
         }
     }
 
-    /// Install the first root and its sole external holding together.
+    /// Install the first root and its two distinct roles in one commit.
     ///
     /// # Safety
     ///
     /// The trusted boot owner must still have initial issuance authority
     /// for this Allowance and the exact kernel receiver. The PendSpace is
     /// already in permanent, supplied storage and is the original receiver.
-    /// Only the trusted owner can distribute its initial local handle.
+    /// Both output fields must be the durable receivers of their own roles.
     pub unsafe fn publish_initial(
         &'static self,
         allowance: &Allowance,
         maximum: u64,
         alignment: u64,
+        roles: Initial<'_>,
         mode: Acquisition,
     ) -> Result<(), Error> {
         if maximum == 0 || !alignment.is_power_of_two() {
             return Err(Error::Limit);
+        }
+        if roles.spending.is_some() || roles.closing.is_some() {
+            return Err(Error::Receiver);
         }
         let mut work = Work::<2>::new();
         let mut plan = work.plan();
@@ -118,51 +131,52 @@ impl PendSpace {
         plan.execute(mode, |held| {
             allowance.check_spender(held)?;
             let receiver = held.access(&self.state).expect("initial PendSpace");
-            match receiver {
-                Holding::Empty => {}
-                Holding::Held(_) => return Err(Error::Installed),
-                Holding::Exhausted => return Err(Error::Exhausted),
+            if let State::Published(pend) = receiver {
+                return Err(if pend.holding.is_some() {
+                    Error::Installed
+                } else {
+                    Error::Exhausted
+                });
             }
-            *receiver = Holding::Held(Pend {
-                permit: AllocationPermit {
+            *receiver = State::Published(Pend {
+                holding: Some(AllocationPermit {
                     source: allowance.source(),
                     allowance: allowance.id(),
                     maximum,
                     alignment,
-                },
+                }),
                 branch: Admission::Open,
             });
+            *roles.spending = Some(Handle { space: self });
+            *roles.closing = Some(Revoker { space: self });
             Ok(())
         })
         .map_err(allocator::Error::from)?
-    }
-
-    /// The original space can rediscover the local handle after publication.
-    /// It remains discoverable for release after the branch shuts.
-    pub fn initial(&'static self) -> Result<Handle, Error> {
-        with_turn(&self.state, |state| match state {
-            Holding::Empty => Err(Error::Empty),
-            Holding::Held(_) => Ok(Handle { space: self }),
-            Holding::Exhausted => Err(Error::Exhausted),
-        })?
-    }
-
-    /// The trusted original branch owner closes future admission.
-    pub fn revoke(&self) -> Result<(), Error> {
-        with_turn(&self.state, |state| match state {
-            Holding::Held(pend) => {
-                pend.branch = Admission::Shut;
-                Ok(())
-            }
-            Holding::Empty => Err(Error::Empty),
-            Holding::Exhausted => Err(Error::Exhausted),
-        })?
     }
 }
 
 impl Default for PendSpace {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Close authority for this exact root, independently retained after Release.
+pub struct Revoker {
+    space: &'static PendSpace,
+}
+
+impl Revoker {
+    pub fn revoke(&self) -> Result<(), Error> {
+        Ok(with_turn(&self.space.state, |state| {
+            state.published().branch = Admission::Shut;
+        })?)
+    }
+
+    pub fn revoked(&self) -> Result<bool, Error> {
+        Ok(with_turn(&self.space.state, |state| {
+            matches!(state.published().branch, Admission::Shut)
+        })?)
     }
 }
 
@@ -187,7 +201,7 @@ impl Handle {
     pub fn reserve(
         self,
         candidate: Candidate,
-        receiver: &'static TurnLock<Construction>,
+        receiver: &'static Construction,
         mode: Acquisition,
     ) -> Result<AllocationId, Error> {
         let permit = with_turn(&self.space.state, |state| state.resolve())??;
@@ -220,12 +234,11 @@ impl Handle {
 
     pub fn issue(
         self,
-        receiver: &'static TurnLock<Construction>,
+        receiver: &'static Construction,
         mode: Acquisition,
     ) -> Result<AllocationId, Error> {
         let permit = with_turn(&self.space.state, |state| state.resolve())??;
-        let (region, allowance) =
-            with_turn(receiver, |state| state.reservation())?.ok_or(allocator::Error::Receiver)?;
+        let (region, allowance) = receiver.reservation()?;
         if allowance != permit.allowance {
             return Err(allocator::Error::Protection.into());
         }
@@ -249,13 +262,9 @@ impl Handle {
     /// End the one external holding. Existing Allocator obligations remain
     /// in their original construction and source records.
     pub fn release(self) -> Result<(), Error> {
-        with_turn(&self.space.state, |state| match state {
-            Holding::Held(_) => {
-                *state = Holding::Exhausted;
-                Ok(())
-            }
-            Holding::Empty => Err(Error::Empty),
-            Holding::Exhausted => Err(Error::Exhausted),
+        with_turn(&self.space.state, |state| {
+            state.published().holding.take().ok_or(Error::Exhausted)?;
+            Ok(())
         })?
     }
 }

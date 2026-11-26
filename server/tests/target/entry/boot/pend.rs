@@ -4,12 +4,12 @@ use kernel::{
     allocator::{
         Allocation, Allowance, Config, Construction, Initial,
         RamPurpose::Metadata,
-        Request, Search,
+        Request, ReturnReceipt, Search,
         pool::{GroupSlot, Occupied, Pool},
     },
     entry::boot::{self, Boot, MappedRange, Physical},
-    pend::{Error, PendSpace},
-    sync::{Acquisition::Fast, TurnLock, Work},
+    pend::{Error, Handle, Initial as InitialPend, PendSpace, Revoker},
+    sync::Acquisition::Fast,
 };
 
 use super::memory::{mapped, retirement};
@@ -40,7 +40,11 @@ static mut STORAGE: MaybeUninit<Pool<'static, PendSpace>> = MaybeUninit::uninit(
 static mut INITIAL: Option<Allocation> = None;
 static mut ALLOWANCE: Option<Allowance> = None;
 static mut SPACE: Option<Occupied<'static, 'static, PendSpace>> = None;
-static DESTINATION: TurnLock<Construction> = TurnLock::new(Construction::new());
+static mut SPENDING: Option<Handle> = None;
+static mut CLOSING: Option<Revoker> = None;
+static DESTINATION: Construction = Construction::new();
+static mut MATERIAL: Option<Allocation> = None;
+static mut RECEIPT: Option<ReturnReceipt> = None;
 
 pub(super) fn check(boot: &Boot<'_>) {
     let evidence = retirement(boot, pages(0, 6));
@@ -75,8 +79,20 @@ pub(super) fn check(boot: &Boot<'_>) {
     let receiver = unsafe { &mut *(&raw mut SPACE) };
     prepared.publish(receiver).ok().unwrap();
     let space = receiver.as_ref().unwrap().get();
-    unsafe { space.publish_initial(allowance, PAGE, PAGE, Fast) }.unwrap();
-    let handle = space.initial().unwrap();
+    let spending = unsafe { &mut *(&raw mut SPENDING) };
+    let closing = unsafe { &mut *(&raw mut CLOSING) };
+    unsafe {
+        space.publish_initial(
+            allowance,
+            PAGE,
+            PAGE,
+            InitialPend { spending, closing },
+            Fast,
+        )
+    }
+    .unwrap();
+    let handle = spending.as_ref().copied().unwrap();
+    let revoker = closing.as_ref().unwrap();
 
     let request = Request::new(PAGE, PAGE, pages(3, 4), None, Metadata).unwrap();
     let mut lookup = source.lookup(request, None).unwrap();
@@ -90,38 +106,33 @@ pub(super) fn check(boot: &Boot<'_>) {
     let id = handle.reserve(candidate, &DESTINATION, Fast).unwrap();
     assert_eq!(handle.issue(&DESTINATION, Fast), Ok(id));
     assert_eq!(allowance.balance().unwrap().occupied, 2 * PAGE);
-    space.revoke().unwrap();
+    revoker.revoke().unwrap();
     assert_eq!(
         handle.reserve(candidate, &DESTINATION, Fast),
         Err(Error::Revoked)
     );
     handle.release().unwrap();
-    assert_eq!(space.initial().err(), Some(Error::Exhausted));
+    assert_eq!(handle.release(), Err(Error::Exhausted));
+    assert_eq!(revoker.revoked(), Ok(true));
 
-    let mut work = Work::<1>::new();
-    let mut plan = work.plan();
-    plan.insert(&DESTINATION).unwrap();
-    let allocation = plan
-        .execute(Fast, |held| unsafe {
-            held.access(&DESTINATION).unwrap().take()
-        })
-        .unwrap()
-        .unwrap();
+    let material = unsafe { &mut *(&raw mut MATERIAL) };
+    unsafe { DESTINATION.take(material) }.unwrap();
+    let allocation = material.take().unwrap();
     let physical = allocation.physical();
     assert_eq!(physical, pages(3, 4));
     // Use the issued material through the fixture's canonical bare mapping.
     // The reference ends here and no device or other hart used the page.
-    let byte = &mut unsafe { mapped(physical) }[0];
-    byte.write(0x5a);
-    assert_eq!(unsafe { byte.assume_init_read() }, 0x5a);
-    let mut receipt = None;
-    source
-        .begin_return(unsafe { allocation.retire() }, &mut receipt)
-        .ok()
-        .unwrap();
-    let receipt = receipt.unwrap();
-    assert_eq!(source.finish_return(receipt, Fast).unwrap().allocation, id);
-    source.acknowledge(receipt).unwrap();
+    let byte = unsafe { mapped(physical) }[0].as_mut_ptr();
+    unsafe {
+        byte.write_volatile(0x5a);
+        assert_eq!(byte.read_volatile(), 0x5a);
+    }
+    let receipt = unsafe { &mut *(&raw mut RECEIPT) };
+    let retired = unsafe { allocation.retire() };
+    unsafe { retired.begin_return(receipt) }.ok().unwrap();
+    let receipt = receipt.as_ref().unwrap();
+    assert_eq!(receipt.finish(Fast).unwrap().allocation, id);
+    receipt.acknowledge().unwrap();
     assert_eq!(allowance.balance(), Ok(original));
     boot::write("PASS initial-pend installed=1 spend=1 revoked=1 refund=1\n");
 }
