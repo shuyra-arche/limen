@@ -65,8 +65,8 @@
         "server/tests/target/entry/platforms/pl011.rs",
         "server/src/metal/platform/firmware/psci/**",
         "server/src/metal/interrupt/**",
-        "server/src/metal/time/mod.rs",
-        "server/src/metal/time/aarch64/**",
+        "server/src/metal/chrono/mod.rs",
+        "server/src/metal/chrono/aarch64/**",
         "server/src/metal/processor/hart/aarch64/**",
         "server/src/metal/processor/execution/cooperative/aarch64/**",
         "server/tests/target/entry/platforms/cooperative/aarch64.rs"

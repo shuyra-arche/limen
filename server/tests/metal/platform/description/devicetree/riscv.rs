@@ -7,7 +7,7 @@ use kernel::metal::{
     },
     processor::execution::description::riscv::{RiscvExtension, RiscvIsa},
     processor::hart::riscv::description::RiscvCpus,
-    time::riscv::RiscvTimebase,
+    chrono::riscv::RiscvTimebase,
 };
 
 fn cpu_scope() -> Fixture {

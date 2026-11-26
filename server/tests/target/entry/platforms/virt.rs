@@ -5,7 +5,7 @@ use kernel::metal::{
     platform::description::devicetree::{DeviceTree, Error as TreeError},
     platform::firmware::psci::{Conduit, PsciDescription},
     processor::hart::aarch64::description::Aarch64Cpus,
-    time::aarch64::GenericTimer,
+    chrono::aarch64::GenericTimer,
 };
 use uefi::{
     Status,

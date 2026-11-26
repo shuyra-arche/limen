@@ -18,7 +18,7 @@ use crate::{
         Boot, Regions, Retirement,
         tests::{describe, image, organization::retired, range},
     },
-    metal::platform::firmware::{facts::Descriptions, map::FirmwareMap},
+    metal::platform::{boot::handoff::Descriptions, firmware::uefi::map::FirmwareMap},
 };
 use core::mem::MaybeUninit;
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};

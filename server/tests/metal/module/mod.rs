@@ -87,7 +87,7 @@ fn note_property(bytes: &[u8], path: &[u8], name: &[u8]) -> usize {
     let fdt_length =
         u32::from_le_bytes(bytes[note.offset + 4..note.offset + 8].try_into().unwrap()) as usize;
     let fdt_start = note.offset + 12 + name_length.next_multiple_of(4);
-    let description = kernel::metal::platform::firmware::devicetree::DeviceTree::new(
+    let description = kernel::metal::platform::description::devicetree::DeviceTree::new(
         &bytes[fdt_start..fdt_start + fdt_length],
     )
     .unwrap();

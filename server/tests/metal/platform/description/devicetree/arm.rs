@@ -7,7 +7,7 @@ use kernel::metal::{
         firmware::psci::{Conduit, PsciDescription, PsciVersion},
     },
     processor::hart::aarch64::description::Aarch64Cpus,
-    time::aarch64::GenericTimer,
+    chrono::aarch64::GenericTimer,
 };
 
 fn cpus(affinities: &[u64]) -> Vec<u8> {

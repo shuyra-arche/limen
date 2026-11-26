@@ -1,3 +1,4 @@
+pub mod chrono;
 #[cfg(any(limen_target, test))]
 pub(crate) mod identity;
 pub mod interrupt;
@@ -7,4 +8,3 @@ pub mod platform;
 pub mod processor;
 #[cfg(any(limen_target, test))]
 pub mod sync;
-pub mod time;

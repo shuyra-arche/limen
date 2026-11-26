@@ -8,7 +8,7 @@ use kernel::metal::{
     processor::execution::description::riscv::RiscvExtension, processor::execution::description::riscv::RiscvIsa,
     platform::description::devicetree::memory::Source, processor::hart::riscv::description::RiscvCpus,
     memory::mmu::internal::riscv::description::{MaximumMode, RiscvMmu},
-    time::riscv::RiscvTimebase,
+    chrono::riscv::RiscvTimebase,
 };
 use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 use limen_treaty::model::{ByteLength, PhysicalAddress};
