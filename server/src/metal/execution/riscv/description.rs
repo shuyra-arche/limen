@@ -118,13 +118,16 @@ fn legacy_extensions(isa: &[u8]) -> Result<u16, Error> {
     if !matches!(suffix.first(), Some(b'i' | b'g')) {
         return Err(Error::Unsupported);
     }
-    let names = suffix.split(|byte| *byte == b'_');
-    let mut segments = names.clone();
-    let mut compact = segments.next().ok_or(Error::Format)?;
+    let compact_end = suffix
+        .iter()
+        .position(|byte| matches!(byte, b'_' | b's' | b'x' | b'z'))
+        .unwrap_or(suffix.len());
+    let (mut compact, named) = suffix.split_at(compact_end);
     let mut letters = 0u32;
-    let mut extensions = 0u16;
+    // The legacy binding includes CSR and instruction-fence operations in I.
+    let mut extensions = RiscvExtension::Csr as u16 | RiscvExtension::InstructionFence as u16;
     while let Some((&letter, rest)) = compact.split_first() {
-        if !letter.is_ascii_lowercase() || matches!(letter, b'z' | b'x' | b's') {
+        if !letter.is_ascii_lowercase() {
             return Err(Error::Format);
         }
         let bit = 1u32 << (letter - b'a');
@@ -138,24 +141,24 @@ fn legacy_extensions(isa: &[u8]) -> Result<u16, Error> {
                 | RiscvExtension::Atomic as u16
                 | RiscvExtension::Float as u16
                 | RiscvExtension::Double as u16
-                | RiscvExtension::Csr as u16
-                | RiscvExtension::InstructionFence as u16
         } else {
             RiscvExtension::from_name(&[letter]).map_or(0, |extension| extension as u16)
         };
         compact = after_version(rest);
     }
-    for (index, name) in segments.enumerate() {
+    if named.is_empty() {
+        return Ok(extensions);
+    }
+    let names = named
+        .strip_prefix(b"_")
+        .unwrap_or(named)
+        .split(|byte| *byte == b'_');
+    for (index, name) in names.clone().enumerate() {
         if index == EXTENSION_LIMIT {
             return Err(Error::Capacity);
         }
         validate_name(name)?;
-        if names
-            .clone()
-            .skip(1)
-            .take(index)
-            .any(|previous| previous == name)
-        {
+        if names.clone().take(index).any(|previous| previous == name) {
             return Err(Error::Conflict);
         }
         if let Some(extension) = [

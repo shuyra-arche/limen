@@ -149,15 +149,36 @@ fn rejects_duplicate_properties_and_ambiguous_references() {
     );
 }
 
+#[test]
+fn bounds_property_padding_and_validates_node_padding() {
+    let mut fixture = Fixture::root();
+    let name_padding = fixture.structure.len() + 4 + b"test\0".len();
+    fixture.node(b"test");
+    let value_padding = fixture.structure.len() + 12 + 1;
+    fixture.property(b"data", &[42]);
+    fixture.end();
+    let mut bytes = fixture.finish();
+    let structure = u32::from_be_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    bytes[structure + value_padding] = 1;
+    let tree = DeviceTree::new(&bytes).unwrap();
+    let node = tree.find_path(b"/test").unwrap().unwrap();
+    assert_eq!(node.property(b"data").unwrap(), Some(&[42][..]));
+
+    bytes[structure + name_padding] = 1;
+    assert_eq!(DeviceTree::new(&bytes).unwrap_err(), Error::Format);
+}
+
 fn bus(outer: Option<&[u32]>, inner: Option<&[u32]>, register: &[u32]) -> Vec<u8> {
     let mut fixture = Fixture::root();
     fixture.node(b"outer");
+    fixture.property(b"compatible", b"simple-bus\0");
     fixture.cells(b"#address-cells", &[1]);
     fixture.cells(b"#size-cells", &[1]);
     if let Some(outer) = outer {
         fixture.cells(b"ranges", outer);
     }
     fixture.node(b"inner");
+    fixture.property(b"compatible", b"test,inner\0simple-bus\0");
     fixture.cells(b"#address-cells", &[1]);
     fixture.cells(b"#size-cells", &[1]);
     if let Some(inner) = inner {
@@ -207,6 +228,23 @@ fn translates_nested_windows_and_requires_each_parent_mapping() {
         translated(&bus(Some(&outer), Some(&inner), &[u32::MAX, 2])),
         Err(Error::Range)
     );
+}
+
+#[test]
+fn rejects_registers_in_an_unsupported_address_domain() {
+    let mut fixture = Fixture::root();
+    fixture.node(b"isa");
+    fixture.cells(b"#address-cells", &[2]);
+    fixture.cells(b"#size-cells", &[1]);
+    fixture.cells(b"ranges", &[1, 0, 0x1000, 0x20]);
+    fixture.node(b"serial@8");
+    fixture.cells(b"reg", &[1, 8, 4]);
+    fixture.end();
+    fixture.end();
+    let bytes = fixture.finish();
+    let tree = DeviceTree::new(&bytes).unwrap();
+    let serial = tree.find_path(b"/isa/serial@8").unwrap().unwrap();
+    assert_eq!(serial.register(0), Err(Error::Unsupported));
 }
 
 #[test]

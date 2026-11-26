@@ -17,6 +17,24 @@ impl Cells {
         if !(1..=2).contains(&cells.address) || !(1..=2).contains(&cells.size) {
             return Err(Error::Unsupported);
         }
+        let Some(parent) = node.parent_id() else {
+            return Ok(cells);
+        };
+        // A cell count alone cannot distinguish scalar addresses from a
+        // binding with address-space flags, such as ISA I/O space.
+        if node.name() == b"reserved-memory" {
+            let root = node.tree.node(parent).ok_or(Error::Missing)?;
+            if root.parent_id().is_some()
+                || node.property(b"#address-cells")?.is_none()
+                || node.property(b"#size-cells")?.is_none()
+                || node.property(b"ranges")? != Some(b"")
+                || cells != Self::read(&root)?
+            {
+                return Err(Error::Unsupported);
+            }
+        } else if !node.compatible(b"simple-bus")? {
+            return Err(Error::Unsupported);
+        }
         Ok(cells)
     }
 
@@ -50,7 +68,8 @@ impl<'a> Node<'_, 'a> {
         }
     }
 
-    /// Resolve a byte-addressable register through the complete parent path.
+    /// Resolve a byte-addressable register through supported scalar address
+    /// domains: the root, simple buses and the top-level reserved-memory node.
     pub fn register(&self, index: usize) -> Result<PhysicalRange, Error> {
         self.registers()?.nth(index).ok_or(Error::Missing)?
     }
@@ -86,8 +105,8 @@ fn translate(
     parent: &Node<'_, '_>,
     range: PhysicalRange,
 ) -> Result<PhysicalRange, Error> {
-    let ranges = bus.property(b"ranges")?.ok_or(Error::Missing)?;
     let child = Cells::read(bus)?;
+    let ranges = bus.property(b"ranges")?.ok_or(Error::Missing)?;
     let parent_address = parent.address_cells()?;
     if !(1..=2).contains(&parent_address) {
         return Err(Error::Unsupported);

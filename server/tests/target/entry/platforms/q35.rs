@@ -122,14 +122,8 @@ impl Idtr {
 pub(super) fn check_discovery(boot: &boot::Boot<'_>, target: usize) {
     let acpi = boot.acpi().expect("real firmware ACPI");
     let madt = acpi.madt().expect("MADT describes q35 topology");
-    let enabled = |candidate| {
-        madt.processors().any(|processor| {
-            matches!(processor, boot::acpi::Processor::Apic { id, .. } if usize::from(id) == candidate)
-                && processor.enabled()
-        })
-    };
-    assert!(enabled(boot.hart()));
-    assert!(enabled(target));
+    assert!(madt.enabled_local_apic(u8::try_from(boot.hart()).unwrap()));
+    assert!(madt.enabled_local_apic(u8::try_from(target).unwrap()));
     assert!(madt.io_apics().next().is_some());
     assert!(madt.source_overrides().next().is_some());
     let early = boot.exclusions();

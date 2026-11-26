@@ -534,9 +534,9 @@ impl<'a> Cursor<'a> {
         Ok(u32::from_be_bytes(*word))
     }
 
-    fn aligned(&mut self, length: usize) -> Result<&'a [u8], Error> {
+    fn aligned(&mut self, length: usize) -> Result<(&'a [u8], &'a [u8]), Error> {
         let padded = length.checked_next_multiple_of(4).ok_or(Error::Format)?;
-        Ok(&self.take(padded)?[..length])
+        Ok(self.take(padded)?.split_at(length))
     }
 
     fn name(&mut self) -> Result<&'a [u8], Error> {
@@ -545,7 +545,11 @@ impl<'a> Cursor<'a> {
             .iter()
             .position(|byte| *byte == 0)
             .ok_or(Error::Format)?;
-        Ok(&self.aligned(length + 1)?[..length])
+        let (name, padding) = self.aligned(length + 1)?;
+        if padding.iter().any(|byte| *byte != 0) {
+            return Err(Error::Format);
+        }
+        Ok(&name[..length])
     }
 
     fn property(&mut self, strings: &'a [u8]) -> Result<Option<Property<'a>>, Error> {
@@ -556,7 +560,9 @@ impl<'a> Cursor<'a> {
                 PROPERTY => {
                     let length = self.word()? as usize;
                     let offset = self.word()? as usize;
-                    let value = self.aligned(length)?;
+                    // QEMU firmware may leave nonzero bytes after the value.
+                    // Bound the full token and keep only its declared payload.
+                    let (value, _) = self.aligned(length)?;
                     let string = strings.get(offset..).ok_or(Error::Format)?;
                     let length = string
                         .iter()

@@ -198,6 +198,12 @@ fn read_table<'a>(
         return Err(Error::Overlap);
     }
     let header = read_exact(prefix, read)?;
+    if !header[..4]
+        .iter()
+        .all(|byte| byte.is_ascii() && !byte.is_ascii_control())
+    {
+        return Err(Error::InvalidSignature);
+    }
     let length = u32::from_le_bytes(field(header, 4)) as usize;
     if length < TABLE_HEADER {
         return Err(Error::InvalidLength);

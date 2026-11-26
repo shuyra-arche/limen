@@ -157,13 +157,8 @@ fn parse(tree: DeviceTree<'_>, memory: &mut DtbMemory, include_ram: bool) -> Res
                 }
                 let enabled = enabled(&node)?;
                 reserved_node = Some((node.id(), enabled));
-                if enabled
-                    && (node.property(b"#address-cells")?.is_none()
-                        || node.property(b"#size-cells")?.is_none()
-                        || Cells::read(&node)? != Cells::read(&root)?
-                        || node.property(b"ranges")? != Some(b""))
-                {
-                    return Err(Error::Unsupported);
+                if enabled {
+                    Cells::read(&node)?;
                 }
                 continue;
             }

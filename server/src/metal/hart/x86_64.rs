@@ -9,8 +9,6 @@ pub(in crate::metal) fn matches_madt(
     hart: usize,
     madt: crate::metal::firmware::acpi::Madt<'_>,
 ) -> bool {
-    use crate::metal::firmware::acpi::Processor;
-
     let features = __cpuid(1);
     const MSR_AND_APIC: u32 = (1 << 5) | (1 << 9);
     if features.edx & MSR_AND_APIC != MSR_AND_APIC {
@@ -36,11 +34,7 @@ pub(in crate::metal) fn matches_madt(
         return false;
     }
 
-    let mut matching = madt.processors().filter(|processor| match processor {
-        Processor::Apic { id, .. } => usize::from(*id) == hart,
-        _ => false,
-    });
-    matching.next().is_some_and(|processor| processor.enabled()) && matching.next().is_none()
+    u8::try_from(hart).is_ok_and(|identity| madt.enabled_local_apic(identity))
 }
 
 const GS_BASE: u32 = 0xc000_0101;

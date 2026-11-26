@@ -4,6 +4,8 @@ use crate::address::PhysicalAddress;
 const HEADER: usize = 44;
 const RECORD_LIMIT: usize = 256;
 const AFFINITY_BITS: u64 = 0xff_00ff_ffff;
+const ENABLED: u32 = 1;
+const GICC_ONLINE_CAPABLE: u32 = 1 << 3;
 
 /// Validated static interrupt-controller description from one ACPI table.
 #[derive(Clone, Copy, Debug)]
@@ -16,7 +18,8 @@ impl<'a> Madt<'a> {
     pub(super) fn new(table: Table<'a>) -> Result<Self, Error> {
         let bytes = table.bytes();
         let body = bytes.get(HEADER..).ok_or(Error::InvalidLength)?;
-        if !(1..=7).contains(&table.revision()) {
+        let revision = table.revision();
+        if !(1..=7).contains(&revision) {
             return Err(Error::UnsupportedRevision);
         }
         let mut rest = body;
@@ -27,7 +30,7 @@ impl<'a> Madt<'a> {
                 return Ok(Self::from_records(table, override_address));
             }
             let (record, next) = Record::split(rest, offset).ok_or(Error::InvalidRecord)?;
-            if !record.valid() {
+            if !record.valid(revision) {
                 return Err(Error::InvalidRecord);
             }
             if records(&body[..offset - HEADER]).any(|prior| record.conflicts(prior)) {
@@ -69,6 +72,13 @@ impl<'a> Madt<'a> {
 
     pub fn processors(self) -> impl Iterator<Item = Processor> + 'a {
         self.records().filter_map(Record::processor)
+    }
+
+    /// Whether the boot-enabled xAPIC topology includes this local APIC.
+    pub fn enabled_local_apic(self, identity: u8) -> bool {
+        self.processors().any(|processor| {
+            matches!(processor, Processor::Apic { id, .. } if id == identity) && processor.enabled()
+        })
     }
 
     pub fn io_apics(self) -> impl Iterator<Item = IoApic> + 'a {
@@ -165,7 +175,7 @@ impl<'a> Record<'a> {
         })
     }
 
-    fn valid(self) -> bool {
+    fn valid(self, revision: u8) -> bool {
         let bytes = self.bytes;
         match self.kind() {
             0 => bytes.len() == 8 && valid_apic_flags(u32::from_le_bytes(field(bytes, 4))),
@@ -190,6 +200,7 @@ impl<'a> Record<'a> {
             11 => {
                 matches!(bytes.len(), 76 | 80 | 82)
                     && field::<2>(bytes, 2) == [0; 2]
+                    && valid_gicc_flags(u32::from_le_bytes(field(bytes, 12)), revision)
                     && u64::from_le_bytes(field(bytes, 68)) & !AFFINITY_BITS == 0
             }
             _ => true,
@@ -237,6 +248,17 @@ fn valid_apic_flags(flags: u32) -> bool {
     flags < 3
 }
 
+fn valid_gicc_flags(flags: u32, revision: u8) -> bool {
+    // MADT revision 6 adds Online Capable and revision 7 adds GICR Non-coherent.
+    let known = match revision {
+        6 => 0b0_1111,
+        7 => 0b1_1111,
+        _ => 0b0_0111,
+    };
+    let enabled_and_online_capable = ENABLED | GICC_ONLINE_CAPABLE;
+    flags & !known == 0 && flags & enabled_and_online_capable != enabled_and_online_capable
+}
+
 /// A described processor identity and its original flags.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Processor {
@@ -249,7 +271,7 @@ impl Processor {
     pub const fn enabled(self) -> bool {
         match self {
             Self::Apic { flags, .. } | Self::X2Apic { flags, .. } | Self::Gicc { flags, .. } => {
-                flags & 1 != 0
+                flags & ENABLED != 0
             }
         }
     }
@@ -260,7 +282,7 @@ impl Processor {
         }
         match self {
             Self::Apic { flags, .. } | Self::X2Apic { flags, .. } => flags & 2 != 0,
-            Self::Gicc { flags, .. } => flags & 8 != 0,
+            Self::Gicc { flags, .. } => flags & GICC_ONLINE_CAPABLE != 0,
         }
     }
 

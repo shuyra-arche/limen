@@ -78,10 +78,14 @@ fn table(signature: [u8; 4], revision: u8, body: &[u8]) -> Vec<u8> {
 }
 
 fn madt(records: &[u8]) -> Vec<u8> {
+    madt_with_revision(5, records)
+}
+
+fn madt_with_revision(revision: u8, records: &[u8]) -> Vec<u8> {
     let mut body = vec![0; 8];
     body[..4].copy_from_slice(&0xfee0_0000u32.to_le_bytes());
     body.extend_from_slice(records);
-    table(*b"APIC", 5, &body)
+    table(*b"APIC", revision, &body)
 }
 
 #[test]
@@ -216,6 +220,17 @@ fn rejects_bad_checksums_and_inconsistent_reader_responses() {
 }
 
 #[test]
+fn rejects_malformed_signatures_and_retains_unknown_printable_ones() {
+    for invalid in [[0xff, b'S', b'D', b'T'], [0, b'S', b'D', b'T']] {
+        let firmware = Firmware::new(vec![(FIRST, table(invalid, 1, &[]))]);
+        assert_eq!(firmware.discover().unwrap_err(), Error::InvalidSignature);
+    }
+    let firmware = Firmware::new(vec![(FIRST, table(*b"ZZZ!", 1, &[]))]);
+    let acpi = firmware.discover().unwrap();
+    assert_eq!(acpi.tables().next().unwrap().signature(), *b"ZZZ!");
+}
+
+#[test]
 fn distinguishes_unsupported_root_revision_missing_madt_and_invalid_layout() {
     let mut firmware = Firmware::new(Vec::new());
     assert!(firmware.discover().unwrap().madt().is_none());
@@ -263,16 +278,22 @@ fn rejects_second_madt_and_duplicate_usable_identities_or_routes() {
         assert_eq!(firmware.discover().unwrap_err(), Error::DuplicateRecord);
     }
     let absent_apic = [0, 8, 6, 11, 0, 0, 0, 0];
-    let firmware = Firmware::new(vec![(FIRST, madt(&[apic, absent_apic].concat()))]);
-    assert_eq!(
-        firmware
+    for records in [[apic, absent_apic], [absent_apic, apic]] {
+        let firmware = Firmware::new(vec![(FIRST, madt(&records.concat()))]);
+        let tables = firmware.discover().unwrap();
+        let topology = tables.madt().unwrap();
+        assert_eq!(topology.processors().count(), 2);
+        assert!(topology.enabled_local_apic(11));
+        assert!(!topology.enabled_local_apic(12));
+    }
+    let firmware = Firmware::new(vec![(FIRST, madt(&absent_apic))]);
+    assert!(
+        !firmware
             .discover()
             .unwrap()
             .madt()
             .unwrap()
-            .processors()
-            .count(),
-        2
+            .enabled_local_apic(11)
     );
 }
 
@@ -296,13 +317,13 @@ fn rejects_truncation_no_progress_invalid_binding_and_record_budget_exhaustion()
 
 #[test]
 fn distinguishes_gicc_affinity_and_online_capability_from_local_apic_flags() {
-    let mut gicc = [0; 80];
+    let mut gicc = [0; 82];
     gicc[0] = 11;
-    gicc[1] = 80;
+    gicc[1] = 82;
     gicc[8..12].copy_from_slice(&13u32.to_le_bytes());
     gicc[12..16].copy_from_slice(&8u32.to_le_bytes());
     gicc[68..76].copy_from_slice(&0xab_0012_3456u64.to_le_bytes());
-    let firmware = Firmware::new(vec![(FIRST, madt(&gicc))]);
+    let firmware = Firmware::new(vec![(FIRST, madt_with_revision(6, &gicc))]);
     let processor = firmware
         .discover()
         .unwrap()
@@ -323,6 +344,37 @@ fn distinguishes_gicc_affinity_and_online_capability_from_local_apic_flags() {
     assert!(processor.online_capable());
 
     gicc[71] = 1;
-    let firmware = Firmware::new(vec![(FIRST, madt(&gicc))]);
+    let firmware = Firmware::new(vec![(FIRST, madt_with_revision(6, &gicc))]);
     assert_eq!(firmware.discover().unwrap_err(), Error::InvalidRecord);
+}
+
+#[test]
+fn validates_gicc_flags_for_the_madt_revision() {
+    for (revision, length, flags, valid) in [
+        (3, 76, 0b0_0111u32, true),
+        (5, 80, 0b0_0111, true),
+        (5, 80, 0b0_1000, false),
+        (6, 82, 0b0_1110, true),
+        (6, 82, 0b1_0000, false),
+        (7, 82, 0b1_0111, true),
+        (7, 82, 0b1_1000, true),
+        (7, 82, 0b0_1001, false),
+        (7, 82, 1 << 5, false),
+        (7, 82, 1 << 31, false),
+    ] {
+        let mut gicc = [0; 82];
+        gicc[0] = 11;
+        gicc[1] = length;
+        gicc[12..16].copy_from_slice(&flags.to_le_bytes());
+        let firmware = Firmware::new(vec![(
+            FIRST,
+            madt_with_revision(revision, &gicc[..usize::from(length)]),
+        )]);
+        let result = firmware.discover();
+        if valid {
+            assert_eq!(result.unwrap().madt().unwrap().processors().count(), 1);
+        } else {
+            assert_eq!(result.unwrap_err(), Error::InvalidRecord);
+        }
+    }
 }

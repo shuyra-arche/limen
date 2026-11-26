@@ -134,8 +134,8 @@ pub(crate) unsafe fn admit<'a>(
             Services::active().reject(format_args!("FAIL Limen boot: DTB CPU {error:?}\n"))
         }
     }
-    // The firmware gives this Hart's actual identity in a0. When HSM is
-    // advertised, independently check the live ID with its status function.
+    // The entry ABI supplies the current Hart identity in a0. HSM can also
+    // report the state of that named Hart when the extension is available.
     if platform_services().hart_state_management()
         && call(HART_STATE_MANAGEMENT, HART_STATUS, hart, 0, 0) != (0, STARTED)
     {

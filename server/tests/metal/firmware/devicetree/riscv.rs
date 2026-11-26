@@ -110,6 +110,16 @@ fn distinguishes_absent_hart_capabilities_from_invalid_and_conflicting_values() 
     start_cpu(&mut fixture, b"cpu@4", &[0, 4]);
     fixture.property(b"riscv,isa-base", b"rv64i\0");
     fixture.end();
+    start_cpu(&mut fixture, b"cpu@5", &[0, 5]);
+    fixture.property(b"riscv,isa", b"rv64imafdc\0");
+    fixture.end();
+    start_cpu(&mut fixture, b"cpu@6", &[0, 6]);
+    fixture.property(b"riscv,isa-base", b"rv64i\0");
+    fixture.property(b"riscv,isa-extensions", b"i\0");
+    fixture.end();
+    start_cpu(&mut fixture, b"cpu@7", &[0, 7]);
+    fixture.property(b"riscv,isa", b"rv64imafdcsstc2p0\0");
+    fixture.end();
     fixture.end();
     let bytes = fixture.finish();
     let scope = read_scope(&bytes);
@@ -144,4 +154,19 @@ fn distinguishes_absent_hart_capabilities_from_invalid_and_conflicting_values() 
         RiscvIsa::describe(&scope.cpu(4).unwrap().unwrap()),
         Err(Error::Missing)
     ));
+    let legacy = RiscvIsa::describe(&scope.cpu(5).unwrap().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(legacy.has(RiscvExtension::Csr));
+    assert!(legacy.has(RiscvExtension::InstructionFence));
+    let modern = RiscvIsa::describe(&scope.cpu(6).unwrap().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(!modern.has(RiscvExtension::Csr));
+    assert!(!modern.has(RiscvExtension::InstructionFence));
+    let legacy = RiscvIsa::describe(&scope.cpu(7).unwrap().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(legacy.has(RiscvExtension::Compressed));
+    assert!(legacy.has(RiscvExtension::SupervisorTimer));
 }
