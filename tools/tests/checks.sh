@@ -21,7 +21,7 @@ while IFS= read -r -d '' manifest; do
     owner=${manifest%/host/Cargo.toml}
     for path in "${changed[@]}"; do
         if [[ $path == "$owner/"* || $path == "${owner/server\/tests/server\/src}/"* ||
-              ( $owner == server/tests/entry/boot && ( $path == server/src/metal/firmware/map.rs || $path == server/src/metal/firmware/uefi/loader.rs || $path == server/src/metal/firmware/devicetree/* || $path == server/src/metal/boot/console.rs || $path == server/src/metal/allocator/* || $path == server/src/metal/identity/* || $path == server/src/basis/pend.rs || $path == server/src/basis/sync/queue.rs || $path == server/src/basis/sync/turn.rs || $path == server/src/metal/hart/node.rs ) ) ||
+              ( $owner == server/tests/entry/boot && ( $path == server/src/metal/firmware/map.rs || $path == server/src/metal/firmware/uefi/loader.rs || $path == server/src/metal/firmware/devicetree/* || $path == server/src/metal/boot/console.rs || $path == server/src/metal/allocator/* || $path == server/src/metal/mmu/internal/access.rs || $path == server/src/metal/identity/* || $path == server/src/basis/pend.rs || $path == server/src/basis/sync/queue.rs || $path == server/src/basis/sync/turn.rs || $path == server/src/metal/hart/node.rs ) ) ||
               ( $owner == server/tests/basis/sync && $path == server/src/metal/hart/node.rs ) ]]; then
             manifests+=("$manifest")
             break

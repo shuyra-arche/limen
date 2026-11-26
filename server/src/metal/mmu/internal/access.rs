@@ -21,7 +21,8 @@ pub struct MappedRange<'a> {
 impl<'a> MappedRange<'a> {
     /// # Safety
     /// The caller is the actual storage owner or its authorized borrower.
-    /// The entire slice must be ordinary writable RAM, with each byte
+    /// If the geometric check succeeds, the entire slice must be ordinary
+    /// writable RAM, with each byte
     /// corresponding to the supplied physical byte in order. The storage
     /// must satisfy Rust slice validity and exclusivity, including through
     /// every alias and any hardware access. Preserve the real mapping,
@@ -72,11 +73,12 @@ impl<'a> MappedRange<'a> {
         else {
             return Err((self, Error::Split));
         };
-        let (left, right) = self.bytes.split_at_mut(offset);
+        let Self { physical, bytes } = self;
+        let (left, right) = bytes.split_at_mut(offset);
         Ok((
             Self {
                 physical: Physical {
-                    start: self.physical.start,
+                    start: physical.start,
                     end: mid,
                 },
                 bytes: left,
@@ -84,7 +86,7 @@ impl<'a> MappedRange<'a> {
             Self {
                 physical: Physical {
                     start: mid,
-                    end: self.physical.end,
+                    end: physical.end,
                 },
                 bytes: right,
             },

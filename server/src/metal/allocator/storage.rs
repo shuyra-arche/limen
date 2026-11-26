@@ -111,12 +111,12 @@ pub struct MappedStorage<'a> {
 
 impl<'a> MappedStorage<'a> {
     /// # Safety
-    /// The mapping must belong to this exact issued Allocation instance,
-    /// not another instance at the same physical address. The original
-    /// owner must keep all mapping and exclusive-storage guarantees valid
-    /// through the consumer's actual derived uses and their settlement.
-    /// Range equality checks geometry only; it cannot prove this identity
-    /// or the lifetime of hardware mappings.
+    /// Both inputs must be valid independently. If their ranges match, the
+    /// caller must establish that the mapping belongs to this exact issued
+    /// Allocation, not a different generation at the same address. The
+    /// original owner must preserve the actual mapping and exclusive-storage
+    /// obligations through all derived uses and their settlement. Range
+    /// equality proves geometry only, not identity or hardware lifetime.
     pub unsafe fn prepare(
         allocation: Allocation,
         mapping: MappedRange<'a>,

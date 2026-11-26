@@ -141,7 +141,11 @@ impl<'storage, T> Pool<'storage, T> {
         // walk. Only the short directory publication consumes it.
         Group::<T>::prepare(
             geometry,
-            material.as_mut().expect("checked material").mapping_mut().bytes(),
+            material
+                .as_mut()
+                .expect("checked material")
+                .mapping_mut()
+                .bytes(),
         );
         let (allocation, mapping) = material.take().expect("checked material").into_parts();
         let group = Group::new(allocation, retirement, geometry, mapping.into_bytes());
