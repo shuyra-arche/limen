@@ -35,6 +35,28 @@ fn read_scope(bytes: &[u8]) -> RiscvCpus<'_> {
 }
 
 #[test]
+fn rejects_contradictory_sstc_declarations_for_the_same_hart() {
+    let cases = [
+        (b"i\0sstc\0".as_slice(), b"rv64i\0".as_slice()),
+        (b"i\0".as_slice(), b"rv64i_sstc\0".as_slice()),
+    ];
+    let results = cases.map(|(modern, legacy)| {
+        let mut fixture = cpu_scope();
+        start_cpu(&mut fixture, b"cpu@0", &[0, 0]);
+        fixture.property(b"riscv,isa-base", b"rv64i\0");
+        fixture.property(b"riscv,isa-extensions", modern);
+        fixture.property(b"riscv,isa", legacy);
+        fixture.end();
+        fixture.end();
+        let bytes = fixture.finish();
+        let scope = read_scope(&bytes);
+        let cpu = scope.cpu(0).unwrap().unwrap();
+        RiscvIsa::describe(&cpu).map(|isa| isa.map(|isa| isa.has(RiscvExtension::SupervisorTimer)))
+    });
+    assert_eq!(results, [Err(Error::Conflict), Err(Error::Conflict)]);
+}
+
+#[test]
 fn preserves_sparse_hart_ids_and_allocates_no_identity_from_description() {
     let mut fixture = cpu_scope();
     fixture.cells(b"timebase-frequency", &[10_000_000]);
