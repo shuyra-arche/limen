@@ -40,14 +40,19 @@ pub(crate) unsafe extern "C" fn start(hart: usize, input: *const ()) -> ! {
     let mut descriptions = Descriptions::new();
     let facts = unsafe { major::admit(hart, input, &mut descriptions) };
     #[cfg(limen_firmware = "sbi")]
-    let reception = unsafe {
-        crate::metal::interrupt::internal::supervisor::Supervisor::admit(hart as u64)
-    }
-    .unwrap_or_else(|_| {
-        Services::active().reject(format_args!("FAIL Limen boot: local reception\n"))
-    });
+    let reception =
+        unsafe { crate::metal::interrupt::internal::supervisor::Supervisor::admit(hart as u64) }
+            .unwrap_or_else(|_| {
+                Services::active().reject(format_args!("FAIL Limen boot: local reception\n"))
+            });
     #[cfg(limen_firmware = "sbi")]
-    let boot = Boot::new(hart, facts.image, facts.firmware_map, &descriptions, reception);
+    let boot = Boot::new(
+        hart,
+        facts.image,
+        facts.firmware_map,
+        &descriptions,
+        reception,
+    );
     #[cfg(not(limen_firmware = "sbi"))]
     let boot = Boot::new(hart, facts.image, facts.firmware_map, &descriptions);
     if !boot.stacks_in_image() {

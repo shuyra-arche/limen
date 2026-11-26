@@ -103,7 +103,8 @@ impl<'a> Boot<'a> {
         image: PhysicalRange,
         firmware_map: Option<FirmwareMap<'a>>,
         descriptions: &'a Descriptions<'a>,
-        #[cfg(limen_firmware = "sbi")] reception: crate::metal::interrupt::internal::supervisor::Supervisor,
+        #[cfg(limen_firmware = "sbi")]
+        reception: crate::metal::interrupt::internal::supervisor::Supervisor,
     ) -> Self {
         Self {
             hart,
