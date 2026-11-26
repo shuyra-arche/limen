@@ -1,21 +1,21 @@
 use crate::{
-    Boot, FirmwareMap, IMAGE, Physical, Retirement,
+    Boot, FirmwareMap, PhysicalRange, Retirement,
     access::MappedRange,
     allocator::{
         Allocation, Allocator, Allowance, Config, Error, Grant, Initial, Pending,
         RamPurpose::Metadata, Request, Retired, ReturnId, Search,
     },
-    describe,
+    describe, image,
     organization::retired,
+    range,
     regions::{Region, RegionSource, Regions},
     sync::Acquisition::{Fast, Slow},
 };
 use core::mem::MaybeUninit;
+use limen_treaty::model::ByteLength;
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x100_000;
-const SCOPE: Physical = pages(0, 13);
-const LATER: Physical = pages(16, 20);
 const ATTRIBUTES: RegionSource = RegionSource::Uefi { attributes: 8 };
 const CONFIG: Config = Config {
     granule: PAGE,
@@ -29,11 +29,8 @@ const CONFIG: Config = Config {
     edits: 128,
 };
 
-const fn pages(first: u64, last: u64) -> Physical {
-    Physical {
-        start: BASE + first * PAGE,
-        end: BASE + last * PAGE,
-    }
+fn pages(first: u64, last: u64) -> PhysicalRange {
+    range(BASE + first * PAGE, BASE + last * PAGE)
 }
 
 #[repr(align(4096))]
@@ -46,11 +43,12 @@ pub(super) fn bootstrap(
     operation: impl FnOnce(&mut Regions<'_>, &mut Option<MappedRange<'static>>),
 ) {
     let mut descriptors = Descriptors([0; 40]);
-    describe(&mut descriptors.0, 7, SCOPE.start, 13, 8);
+    let scope = pages(0, 13);
+    describe(&mut descriptors.0, 7, scope.start().get(), 13, 8);
     let map = FirmwareMap::new(&descriptors.0, 40, 1, 1).unwrap();
-    let boot = Boot::from_uefi(0, IMAGE, None, map, None);
-    let exclusions = boot.exclusions_for(IMAGE, IMAGE);
-    let evidence = retired(SCOPE);
+    let boot = Boot::from_uefi(0, image(), None, map, None);
+    let exclusions = boot.exclusions_for(image(), image());
+    let evidence = retired(scope);
     let mut scratch = [None; 3];
     let mut regions =
         Regions::organize(&boot, &exclusions, PAGE, Some(&evidence), &mut scratch).unwrap();
@@ -296,7 +294,7 @@ fn rejects_invalid_geometry_and_receivers_before_consuming_the_root() {
             Some(Error::Range)
         );
         assert!(mapping.is_some() && initial.is_none() && allowance.is_none());
-        assert_eq!(regions.entries().next().unwrap().physical, SCOPE);
+        assert_eq!(regions.entries().next().unwrap().physical, pages(0, 13));
         let config = Config {
             regions: 1,
             ..CONFIG
@@ -330,8 +328,12 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
         .try_into()
         .ok()
         .unwrap();
-    let unused = original.physical().end;
-    unsafe { source.split(original.retire(), unused - PAGE, &mut halves, Fast) }
+    let split = original
+        .physical()
+        .end()
+        .retreat(ByteLength::new(PAGE))
+        .unwrap();
+    unsafe { source.split(original.retire(), split, &mut halves, Fast) }
         .ok()
         .unwrap();
     let [left, right] = halves.map(Option::unwrap);
@@ -398,24 +400,25 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
     let Search::Candidate(candidate) = positive.step().unwrap() else {
         panic!("the stable freed range was not found");
     };
-    assert!(candidate.physical().end <= pages(0, 4).end);
+    assert!(candidate.physical().end() <= pages(0, 4).end());
     assert_eq!(candidate.region(), left);
 
+    let later = pages(16, 20);
     let mut adding = source
         .lookup(
-            Request::new(PAGE, PAGE, LATER, None, Metadata).unwrap(),
+            Request::new(PAGE, PAGE, later, None, Metadata).unwrap(),
             None,
         )
         .unwrap();
     let description = Region {
-        physical: LATER,
+        physical: later,
         source: ATTRIBUTES,
     };
     assert_eq!(
-        unsafe { Grant::new(source, description, &Retirement::new(LATER).unwrap()) }.err(),
+        unsafe { Grant::new(source, description, &Retirement::new(later)) }.err(),
         Some(Error::Range)
     );
-    let mut grant = unsafe { Grant::new(source, description, &retired(LATER)) }.unwrap();
+    let mut grant = unsafe { Grant::new(source, description, &retired(later)) }.unwrap();
     let region = grant.admit(Fast).unwrap();
     assert_eq!(grant.admit(Slow), Ok(region));
     loop {

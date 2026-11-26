@@ -12,7 +12,7 @@ use kernel::{
     entry::boot::{Boot, write},
 };
 
-use super::pool_material::{GROUP, install};
+use super::pool_material::{group_extent, install};
 
 #[repr(align(64))]
 struct Boundary([u8; VALUE_BYTES]);
@@ -54,7 +54,8 @@ pub(super) fn check() {
     let value = object.get();
     let address = ptr::from_ref(value).addr();
     assert!(address.is_multiple_of(VALUE_ALIGNMENT));
-    assert!(GROUP.start as usize <= address && address + VALUE_BYTES <= GROUP.end as usize);
+    let storage = super::memory::extent(address as u64, (address + VALUE_BYTES) as u64);
+    assert!(group_extent().covers(storage));
     assert!(value.0.iter().all(|&byte| byte == 0x65));
     object.destroy().ok().unwrap().release().ok().unwrap();
     write("PASS pool value-bytes=512 value-align=64 unit-stack=1\n");

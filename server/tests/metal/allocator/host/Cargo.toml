@@ -8,3 +8,6 @@ autotests = false
 [[test]]
 name = "allocator"
 path = "../mod.rs"
+
+[dependencies]
+limen-treaty = { path = "../../../../../treaty" }

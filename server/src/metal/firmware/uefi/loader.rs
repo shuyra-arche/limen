@@ -1,4 +1,5 @@
-use super::{Boot, FirmwareMap, Physical, devicetree};
+use super::{Boot, FirmwareMap, devicetree};
+use crate::address::{PhysicalAddress, PhysicalRange};
 
 /// How the trusted platform uses its retained DTB.
 pub enum DeviceTree<'a> {
@@ -14,7 +15,7 @@ const LOADER_DATA: u32 = 2;
 /// The optional DTB is the exact, immutable copy in loader-data pages.
 pub struct Loader<'a> {
     /// Physical extent of the resident image under the entry identity map.
-    pub image: Physical,
+    pub image: PhysicalRange,
     pub descriptors: &'a [u8],
     pub stride: usize,
     pub version: u32,
@@ -24,9 +25,6 @@ pub struct Loader<'a> {
 
 impl<'a> Loader<'a> {
     pub(crate) fn admit(&self, hart: usize) -> Option<Boot<'a>> {
-        if self.image.start >= self.image.end {
-            return None;
-        }
         let map = FirmwareMap::new(
             self.descriptors,
             self.stride,
@@ -42,15 +40,15 @@ impl<'a> Loader<'a> {
                 };
                 let start = bytes.as_ptr().addr();
                 let end = start.checked_add(bytes.len())?;
-                let physical_start = u64::try_from(start).ok()?;
-                let physical_end = u64::try_from(end).ok()?;
+                let physical = PhysicalRange::new(
+                    PhysicalAddress::new(u64::try_from(start).ok()?),
+                    PhysicalAddress::new(u64::try_from(end).ok()?),
+                )?;
                 // The loader retains the identity mapping and owns the DTB
                 // copy. A valid map must cover its entire extent as loader data.
                 if bytes.len() < devicetree::HEADER_SIZE
                     || !map.regions().any(|region| {
-                        region.kind == LOADER_DATA
-                            && region.physical.start <= physical_start
-                            && physical_end <= region.physical.end
+                        region.kind == LOADER_DATA && region.physical.covers(physical)
                     })
                 {
                     return None;

@@ -14,6 +14,7 @@
     "server/src/metal/mmu/mod.rs",
     "server/src/metal/identity/**",
     "server/src/metal/mod.rs",
+    "server/src/metal/address.rs",
     "server/src/metal/boot/minor.rs",
     "server/src/metal/boot/mod.rs",
     "server/src/metal/boot/major.rs",

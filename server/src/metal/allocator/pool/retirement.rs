@@ -1,7 +1,9 @@
 use crate::sync::{Acquisition, Work};
 
+use crate::address::{PhysicalRange, length};
+
 use super::super::{
-    Allocation, AllocationId, Allocator, Physical, ReturnId, Returned, transfer::ReceiptOwner,
+    Allocation, AllocationId, Allocator, ReturnId, Returned, transfer::ReceiptOwner,
 };
 use super::{
     Error, GroupId, Pool, SourceError,
@@ -29,7 +31,7 @@ impl Material {
 pub(super) struct Receipt {
     source: &'static Allocator,
     allocation: AllocationId,
-    physical: Physical,
+    physical: PhysicalRange,
     retirement: ReturnId,
 }
 
@@ -55,7 +57,7 @@ impl<T> GroupRecord<'_, T> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Retirement {
     /// Check the original access evidence before beginning the physical return.
-    Shutting(GroupId, Physical),
+    Shutting(GroupId, PhysicalRange),
     /// The original source accepted the handoff. Its refund can be reconciled.
     Returning(GroupId),
     More,
@@ -94,7 +96,7 @@ impl<T> Pool<'_, T> {
     /// Close an empty group to all future claims and withdraw its capacity.
     /// All old slot owners (including detached or reclaiming ones) must settle
     /// before the group can shut. The physical charge remains until refund.
-    pub fn shut(&self, id: GroupId) -> Result<Physical, Error> {
+    pub fn shut(&self, id: GroupId) -> Result<PhysicalRange, Error> {
         with_turn(&self.state, |state| {
             let capacity = match state.entry(id)? {
                 GroupRecord::Open(group) if group.free == group.geometry.slots => {
@@ -208,7 +210,9 @@ impl<T> Pool<'_, T> {
             }
             region.acknowledge_return(receipt.retirement, ReceiptOwner::Pool)?;
             *entry = GroupRecord::Retired(done);
-            state.bytes -= (done.physical.end - done.physical.start) as usize;
+            state.bytes -= length(done.physical)
+                .as_usize()
+                .expect("installed group size");
             Ok(done)
         })
         .map_err(SourceError::from)?

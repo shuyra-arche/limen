@@ -3,7 +3,8 @@
 use core::sync::atomic::{AtomicUsize, Ordering::Acquire};
 
 use crate::{
-    entry::boot::{Physical, Region as Description},
+    address::{self, PhysicalRange},
+    entry::boot::Region as Description,
     sync::{Acquisition, AcquisitionError, TurnLock, Work},
 };
 
@@ -67,7 +68,7 @@ pub struct RegionId(usize);
 /// A fixed source. Its root and canonical locks live for the runtime's lifetime.
 pub struct Allocator {
     config: Config,
-    root: Physical,
+    root: PhysicalRange,
     directory: TurnLock<()>,
     published: AtomicUsize,
     regions: &'static [Region],
@@ -76,7 +77,7 @@ pub struct Allocator {
 }
 
 impl Allocator {
-    pub fn root(&self) -> Physical {
+    pub fn root(&self) -> PhysicalRange {
         self.root
     }
 
@@ -95,20 +96,12 @@ impl Allocator {
     }
 }
 
-fn length(physical: Physical) -> u64 {
-    physical.end - physical.start
+fn length(physical: PhysicalRange) -> u64 {
+    address::length(physical).get()
 }
 
-fn contains(outer: Physical, inner: Physical) -> bool {
-    outer.start <= inner.start && inner.start < inner.end && inner.end <= outer.end
-}
-
-fn overlaps(left: Physical, right: Physical) -> bool {
-    left.start < right.end && right.start < left.end
-}
-
-fn range(physical: Physical) -> core::ops::Range<u64> {
-    physical.start..physical.end
+fn buddy_range(physical: PhysicalRange) -> core::ops::Range<u64> {
+    physical.start().get()..physical.end().get()
 }
 
 pub(crate) fn with_turn<T, R>(

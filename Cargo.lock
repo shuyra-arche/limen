@@ -11,14 +11,23 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 [[package]]
 name = "kernel"
 version = "0.0.1"
+dependencies = [
+ "limen-treaty",
+]
 
 [[package]]
 name = "kernel-host-allocator"
 version = "0.0.1"
+dependencies = [
+ "limen-treaty",
+]
 
 [[package]]
 name = "kernel-host-boot"
 version = "0.0.1"
+dependencies = [
+ "limen-treaty",
+]
 
 [[package]]
 name = "kernel-host-identity"
@@ -38,3 +47,7 @@ version = "0.0.1"
 dependencies = [
  "bitflags",
 ]
+
+[[package]]
+name = "limen-treaty"
+version = "0.0.1"

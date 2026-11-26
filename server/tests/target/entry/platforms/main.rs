@@ -3,7 +3,10 @@
 
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use kernel::entry::boot;
+use kernel::{
+    address::{PhysicalAddress, PhysicalRange},
+    entry::boot,
+};
 
 #[path = "../foundation.rs"]
 mod foundation;
@@ -69,6 +72,10 @@ fn main() -> Status {
     let Some(end) = start.checked_add(size) else {
         return Status::COMPROMISED_DATA;
     };
+    let Some(image) = PhysicalRange::new(PhysicalAddress::new(start), PhysicalAddress::new(end))
+    else {
+        return Status::COMPROMISED_DATA;
+    };
     let board = match board::capture() {
         Ok(input) => input,
         Err(status) => {
@@ -83,7 +90,7 @@ fn main() -> Status {
     let map = unsafe { uefi::boot::exit_boot_services(None) };
     let meta = map.meta();
     let input = boot::Loader {
-        image: boot::Physical { start, end },
+        image,
         descriptors: map.buffer(),
         stride: meta.desc_size,
         version: meta.desc_version,
@@ -102,47 +109,43 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     let major = boot::stack_range();
     let minor = MINOR.stack_range();
     let image = boot.image();
-    assert!(image.start <= minor.start as u64 && minor.end as u64 <= image.end);
+    assert!(image.covers(memory::extent(minor.start as u64, minor.end as u64)));
     assert!(
         early
             .entries()
             .any(|entry| entry.occupant == boot::Occupant::MajorStack
-                && entry.physical.start == major.start as u64
-                && entry.physical.end == major.end as u64)
+                && entry.physical == memory::extent(major.start as u64, major.end as u64))
     );
     assert!(
-        early
-            .entries()
-            .any(|entry| entry.occupant == boot::Occupant::TrapStack
-                && image.start <= entry.physical.start
-                && entry.physical.end <= image.end)
+        early.entries().any(
+            |entry| entry.occupant == boot::Occupant::TrapStack && image.covers(entry.physical)
+        )
     );
     let descriptors = map.descriptors().as_ptr_range();
     assert!(
         early
             .entries()
             .any(|entry| entry.occupant == boot::Occupant::FirmwareMap
-                && entry.physical.start == descriptors.start.addr() as u64
-                && entry.physical.end == descriptors.end.addr() as u64)
+                && entry.physical
+                    == memory::extent(
+                        descriptors.start.addr() as u64,
+                        descriptors.end.addr() as u64
+                    ))
     );
     if let Some(tree) = boot.device_tree() {
         assert!(
             early
                 .entries()
                 .any(|entry| entry.occupant == boot::Occupant::DeviceTree
-                    && entry.physical.start == tree.start as u64
-                    && entry.physical.end == tree.end as u64)
+                    && entry.physical == memory::extent(tree.start as u64, tree.end as u64))
         );
     }
     let candidate = map
         .regions()
         .find(|entry| entry.kind == 7)
         .expect("conventional memory");
-    let scope = boot::Physical {
-        start: candidate.physical.start,
-        end: candidate.physical.end,
-    };
-    assert!(early.retains(scope, None).unwrap());
+    let scope = candidate.physical;
+    assert!(early.retains(scope, None));
     let mut storage = [None; 4];
     let mut regions = boot
         .regions(uefi::boot::PAGE_SIZE as u64, None, &mut storage)
@@ -187,9 +190,9 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     assert_eq!(map.regions().len(), view.entries().count());
     assert!(map.regions().any(|r| r.kind == 7));
     for (region, descriptor) in map.regions().zip(view.entries()) {
-        assert_eq!(region.physical.start, descriptor.phys_start);
+        assert_eq!(region.physical.start().get(), descriptor.phys_start);
         assert_eq!(
-            region.physical.end,
+            region.physical.end().get(),
             descriptor
                 .phys_start
                 .checked_add(descriptor.page_count.checked_mul(4096).unwrap())

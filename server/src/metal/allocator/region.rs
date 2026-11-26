@@ -13,7 +13,7 @@ use crate::{
 use super::{
     Allocator, Description, Error, RegionId,
     buddy::{Buddy, Geometry, Root},
-    length, overlaps, range,
+    buddy_range, length,
     transfer::{AllocationRecord, AllocationScope, ReturnRecord, ReturnScope},
 };
 
@@ -153,10 +153,10 @@ impl Grant {
             if source.published.load(Acquire) != index {
                 return Err(Error::Changed);
             }
-            if overlaps(source.root, physical)
+            if source.root.overlaps(physical)
                 || source
                     .regions()
-                    .any(|(_, current)| overlaps(current.physical, physical))
+                    .any(|(_, current)| current.physical.overlaps(physical))
             {
                 return Err(Error::Overlap);
             }
@@ -183,5 +183,5 @@ impl Grant {
 
 /// Physical geometry does not itself establish exclusive source custody.
 pub(super) fn geometry(description: Description, granule: u64) -> Result<Geometry, Error> {
-    Geometry::new(range(description.physical), granule).map_err(|_| Error::Range)
+    Geometry::new(buddy_range(description.physical), granule).map_err(|_| Error::Range)
 }

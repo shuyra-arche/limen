@@ -1,6 +1,7 @@
 use core::{mem::MaybeUninit, ptr};
 
 use kernel::{
+    address::PhysicalAddress,
     allocator::{
         Allocation, Allowance, Error as SourceError,
         pool::{Error, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement, Stable},
@@ -11,7 +12,7 @@ use kernel::{
 
 use super::{
     foundation::reference,
-    pool_material::{GROUP, PAGE, install},
+    pool_material::{PAGE, group_extent, install},
 };
 
 type Entry = Stable<TurnLock<usize>>;
@@ -27,6 +28,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     let directory = unsafe { &mut *(&raw mut GROUPS) };
     let (pool, group, source) = unsafe { install(boot, directory, allocation, allowance) };
     let pool = unsafe { (&mut *(&raw mut TYPED)).write(pool) };
+    let physical = group_extent();
 
     let supply = pool.supply(group).unwrap();
     let geometry = supply.geometry;
@@ -76,7 +78,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         let reference = reference(&original);
         let entry = reference.get();
         let current = ptr::from_ref(entry).addr();
-        assert!((GROUP.start as usize..GROUP.end as usize).contains(&current));
+        assert!(physical.contains(PhysicalAddress::new(current as u64)));
         assert_eq!(*address.get_or_insert(current), current);
         let mut object_work = Work::<1>::new();
         let mut plan = object_work.plan();
@@ -106,11 +108,12 @@ pub(super) fn check(boot: &Boot<'_>) {
     assert_eq!(source.budget(Fast), Ok((PAGE as u64, 0)));
     let owner = allowance.as_ref().unwrap();
     assert_eq!(owner.balance().unwrap().occupied, PAGE as u64);
-    assert_eq!(pool.shut(group), Ok(GROUP));
+    assert_eq!(pool.shut(group), Ok(physical));
     assert_eq!(pool.capacity().unwrap().bytes, PAGE);
-    let Retirement::Shutting(group, GROUP) = pool.retirement(&mut 0, 1).unwrap() else {
+    let Retirement::Shutting(group, scope) = pool.retirement(&mut 0, 1).unwrap() else {
         panic!("shut group missing from the Pool directory");
     };
+    assert_eq!(scope, physical);
     // Bare RV64 has no active translation for the group, and the original
     // consumer has released every software reference. No device used it.
     unsafe { pool.begin_return(group, Fast) }.unwrap();
@@ -124,7 +127,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     );
     assert_eq!(pool.finish_return(group, Fast), Ok(result));
     assert_eq!(result.allocation, supply.allocation);
-    assert_eq!(result.physical, GROUP);
+    assert_eq!(result.physical, physical);
     assert_eq!(pool.finish_return(group, Fast), Ok(result));
     assert_eq!(
         source.acknowledge(supply.retirement),

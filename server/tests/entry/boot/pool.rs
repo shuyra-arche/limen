@@ -5,7 +5,6 @@ use core::{
 };
 
 use crate::{
-    Physical,
     access::MappedRange,
     allocator::{
         Allocation, Allowance, Config, Initial, MappedStorage,
@@ -14,6 +13,7 @@ use crate::{
             ReleaseProgress, Retirement, Stable,
         },
     },
+    range,
     source::bootstrap,
     sync::{Acquisition::Fast, TurnLock, Work},
 };
@@ -68,12 +68,9 @@ fn supply() -> ([Option<Allocation>; 2], Allowance) {
     let mut blocks = [None, None];
     let mut allowance = None;
     bootstrap(|regions, mapping| {
-        let base = regions.entries().next().unwrap().physical.start;
+        let base = regions.entries().next().unwrap().physical.start().get();
         let [first, second] = &mut blocks;
-        let page = |index| Physical {
-            start: base + index * PAGE as u64,
-            end: base + (index + 1) * PAGE as u64,
-        };
+        let page = |index| range(base + index * PAGE as u64, base + (index + 1) * PAGE as u64);
         let mut initial = [Initial::new(page(0), first), Initial::new(page(1), second)];
         unsafe {
             regions.allocator(
@@ -104,10 +101,7 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
     let mut pool = Pool::new(&mut directory).unwrap();
     assert_eq!(unsafe { pool.install(&mut None) }, Err(Error::Material));
 
-    let short = Physical {
-        start: physical.start,
-        end: physical.end - 1,
-    };
+    let short = range(physical.start().get(), physical.end().get() - 1);
     let mapping = unsafe { MappedRange::new(short, &mut bytes.0[..PAGE - 1]) }.unwrap();
     let (allocation, mut returned, reason) =
         unsafe { MappedStorage::prepare(material.take().unwrap(), mapping) }

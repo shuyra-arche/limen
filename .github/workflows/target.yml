@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "server/src/**"
+      - "treaty/src/**"
+      - "treaty/Cargo.toml"
       - "server/tests/**"
       - "server/Cargo.toml"
       - "server/build.rs"
@@ -18,6 +20,8 @@ on:
     branches: [main]
     paths:
       - "server/src/**"
+      - "treaty/src/**"
+      - "treaty/Cargo.toml"
       - "server/tests/**"
       - "server/Cargo.toml"
       - "server/build.rs"

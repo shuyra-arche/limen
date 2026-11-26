@@ -125,7 +125,8 @@ impl<'storage, T> Pool<'storage, T> {
         if !mapping.address().is_multiple_of(geometry.alignment)
             || !supplied
                 .physical()
-                .start
+                .start()
+                .get()
                 .is_multiple_of(geometry.alignment as u64)
         {
             return Err(Error::Layout);

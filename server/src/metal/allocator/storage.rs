@@ -8,7 +8,8 @@ use core::{
 
 use crate::{
     access::MappedRange,
-    entry::boot::{Physical, RegionError, Regions, RootStorage},
+    address::PhysicalRange,
+    entry::boot::{RegionError, Regions, RootStorage},
     metal::identity::Entry,
     sync::TurnLock,
 };
@@ -18,7 +19,7 @@ use super::{
     allowance::{Allowance, Balance, Free, Slot, SlotState},
     buddy::{Geometry, Root},
     bump::Bump,
-    contains, length, overlaps,
+    length,
     region::{self, Backing},
     transfer::{Allocation, AllocationId, AllocationRecord, Phase, ReturnRecord},
 };
@@ -134,7 +135,7 @@ impl<'a> MappedStorage<'a> {
         self.allocation.id()
     }
 
-    pub fn physical(&self) -> Physical {
+    pub fn physical(&self) -> PhysicalRange {
         self.mapping.physical()
     }
 
@@ -159,13 +160,13 @@ impl<'a> MappedStorage<'a> {
 
 /// One actual initial allocation and its original receiver slot.
 pub struct Initial<'a> {
-    physical: Physical,
+    physical: PhysicalRange,
     receiver: &'a mut Option<Allocation>,
     staged: Option<AllocationId>,
 }
 
 impl<'a> Initial<'a> {
-    pub fn new(physical: Physical, receiver: &'a mut Option<Allocation>) -> Self {
+    pub fn new(physical: PhysicalRange, receiver: &'a mut Option<Allocation>) -> Self {
         Self {
             physical,
             receiver,
@@ -227,18 +228,18 @@ impl Regions<'_> {
                 .ok_or(Error::Capacity)?;
             let mut count = 0;
             for (index, item) in initial.iter().enumerate() {
-                if !contains(description.physical, item.physical) {
+                if !description.physical.covers(item.physical) {
                     continue;
                 }
                 if item.receiver.is_some()
-                    || !item.physical.start.is_multiple_of(config.granule)
-                    || !item.physical.end.is_multiple_of(config.granule)
+                    || !item.physical.start().get().is_multiple_of(config.granule)
+                    || !item.physical.end().get().is_multiple_of(config.granule)
                 {
                     return Err(Error::Receiver);
                 }
                 if initial[..index]
                     .iter()
-                    .any(|prior| overlaps(prior.physical, item.physical))
+                    .any(|prior| prior.physical.overlaps(item.physical))
                 {
                     return Err(Error::Overlap);
                 }
@@ -257,7 +258,7 @@ impl Regions<'_> {
         if initial.iter().any(|item| {
             !self
                 .after_root(&plan)
-                .any(|region| contains(region.physical, item.physical))
+                .any(|region| region.physical.covers(item.physical))
         }) {
             return Err(Error::Range);
         }
@@ -386,11 +387,11 @@ fn initialize(
         charged -= amount;
         for item in initial
             .iter_mut()
-            .filter(|x| contains(description.physical, x.physical))
+            .filter(|x| description.physical.covers(x.physical))
         {
             state
                 .buddy()
-                .occupy(super::range(item.physical))
+                .occupy(super::buddy_range(item.physical))
                 .expect("initial ranges preflighted");
             item.staged =
                 Some(state.record(RegionId(index), item.physical, allowance, Phase::Issued));

@@ -2,6 +2,7 @@ use core::{mem::MaybeUninit, ptr};
 
 use kernel::{
     access::MappedRange,
+    address::{PhysicalAddress, PhysicalRange, length},
     allocator::{
         Allocation, AllocationId, Allocator, Allowance, Candidate, Config, Construction,
         Error as SourceError, Initial, MappedStorage, Pending,
@@ -12,12 +13,12 @@ use kernel::{
             StableOwner,
         },
     },
-    entry::boot::{self, Boot, Physical, Retirement as PhysicalRetirement},
+    entry::boot::{self, Boot, Retirement as PhysicalRetirement},
     pend::{Error, Handle, Initial as InitialPend, PendSpace, Revoker},
     sync::Acquisition::Fast,
 };
 
-use super::memory::mapped;
+use super::memory::{extent, mapped};
 
 const PAGE: u64 = 4096;
 pub(super) const PAGES: usize = 6;
@@ -65,7 +66,7 @@ pub(super) fn reference<'pool, T: Sync>(owner: &StableOwner<'pool, '_, T>) -> Re
     panic!("retain stayed Busy for 16 attempts");
 }
 
-fn search(source: &'static Allocator, length: u64, physical: Physical) -> Option<Candidate> {
+fn search(source: &'static Allocator, length: u64, physical: PhysicalRange) -> Option<Candidate> {
     let request = Request::new(length, PAGE, physical, None, Metadata).unwrap();
     let mut lookup = source.lookup(request, None).unwrap();
     loop {
@@ -87,13 +88,32 @@ fn issue(
     id
 }
 
+fn check_read_write(mapping: &mut MappedRange<'_>, first: u8, last: u8) {
+    let physical = mapping.physical();
+    let bytes = mapping.bytes();
+    let (head, tail) = bytes.split_first_mut().unwrap();
+    let head = head.as_mut_ptr();
+    let tail = tail.last_mut().unwrap().as_mut_ptr();
+    assert_eq!(head.addr() as u64, physical.start().get());
+    assert_eq!(tail.addr() as u64, physical.end().get() - 1);
+    // Each probe stays in the current private borrow. Check both stores
+    // before returning either byte to any subsequent owner.
+    unsafe {
+        head.write_volatile(first);
+        tail.write_volatile(last);
+        assert_eq!(head.read_volatile(), first);
+        assert_eq!(tail.read_volatile(), last);
+    }
+}
+
 fn retire_group(
     material: &mut Option<Allocation>,
-    physical: Physical,
+    physical: PhysicalRange,
 ) -> (&'static Objects, ReturnId) {
     assert_eq!(material.as_ref().unwrap().physical(), physical);
     let mut pool = Pool::new(unsafe { &mut *(&raw mut OBJECT_GROUPS) }).unwrap();
-    let mapping = unsafe { MappedRange::new(physical, mapped(physical)) }.unwrap();
+    let mut mapping = unsafe { mapped(physical) };
+    check_read_write(&mut mapping, 0x41, 0x42);
     let mut paired = Some(
         unsafe { MappedStorage::prepare(material.take().unwrap(), mapping) }
             .ok()
@@ -112,7 +132,7 @@ fn retire_group(
     let reference = reference(&owner);
     let detached = owner.detach();
     let value = ptr::from_ref(&reference.get()[0]);
-    assert!((physical.start as usize..physical.end as usize).contains(&value.addr()));
+    assert!(physical.contains(PhysicalAddress::new(value.addr() as u64)));
     assert_eq!(unsafe { value.read_volatile() }, 0x1234);
     // The payload alone is 256 bytes, so 16 records cover every slot in a page.
     let mut occupied = [const { None }; 16];
@@ -165,7 +185,7 @@ fn recover_group(pool: &Objects) -> (GroupId, Returned) {
 fn exhaust_history(
     allowance: &Allowance,
     handle: Handle,
-    physical: Physical,
+    physical: PhysicalRange,
     material: &mut Option<Allocation>,
 ) {
     let source = allowance.source();
@@ -206,16 +226,13 @@ fn exhaust_history(
 /// The platform fixture must own the whole isolated physical window and its
 /// canonical writable identity view for the duration of the guest.
 pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetirement) {
-    let pages = |first, end| Physical {
-        start: start + first * PAGE,
-        end: start + end * PAGE,
-    };
+    let pages = |first, end| extent(start + first * PAGE, start + end * PAGE);
     let scope = pages(0, PAGES as u64);
     let mut scratch = [None; 1];
     let mut regions = boot.regions(PAGE, Some(evidence), &mut scratch).unwrap();
     assert!(regions.entries().map(|entry| entry.physical).eq([scope]));
     let backing = pages(0, 2);
-    let mut mapping = Some(unsafe { MappedRange::new(backing, mapped(backing)) }.unwrap());
+    let mut mapping = Some(unsafe { mapped(backing) });
     let material = unsafe { &mut *(&raw mut INITIAL) };
     let allowance = unsafe { &mut *(&raw mut ALLOWANCE) };
     let group = pages(2, 3);
@@ -250,14 +267,14 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     let (managed, unassigned) = source.budget(Fast).unwrap();
     let root = source.root();
     assert!(mapping.is_none() && regions.entries().next().is_none());
-    assert_eq!(root.start, backing.start);
-    assert!(root.end <= backing.end);
-    assert_eq!(managed + root.end - root.start, scope.end - scope.start);
+    assert_eq!(root.start(), backing.start());
+    assert!(backing.covers(root));
+    assert_eq!(managed + length(root).get(), length(scope).get());
     assert_eq!(original.occupied, PAGE);
     assert_eq!(managed, unassigned + original.capacity);
 
     let mut pool = Pool::new(unsafe { &mut *(&raw mut DIRECTORY) }).unwrap();
-    let mapping = unsafe { MappedRange::new(group, mapped(group)) }.unwrap();
+    let mapping = unsafe { mapped(group) };
     let mut paired = Some(
         unsafe { MappedStorage::prepare(material.take().unwrap(), mapping) }
             .ok()
@@ -339,11 +356,8 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     assert_eq!(closed.occupied, charged.occupied);
     assert_eq!(closed.available(), 0);
     {
-        let byte = unsafe { mapped(allocation.physical()) }[0].as_mut_ptr();
-        unsafe {
-            byte.write_volatile(0x5a);
-            assert_eq!(byte.read_volatile(), 0x5a);
-        }
+        let mut mapping = unsafe { mapped(allocation.physical()) };
+        check_read_write(&mut mapping, 0x5a, 0xa5);
     }
 
     // The identity view is no longer borrowed. No other Hart or device accessed it.
@@ -377,4 +391,5 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     boot::write(
         "PASS foundation-pressure preflight=1 fragments=1 allocation=1 pool=1 history=1 rediscover=1 shut=1\n",
     );
+    boot::write("PASS boot-mapped-storage identity=1 range=1 rw=1 reuse=1\n");
 }

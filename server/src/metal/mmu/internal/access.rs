@@ -1,8 +1,9 @@
 //! Exclusive storage in a real, already established CPU mapping.
 
-use core::mem::MaybeUninit;
+use core::{mem::MaybeUninit, ptr::NonNull, slice};
 
-use crate::metal::firmware::devicetree::memory::Physical;
+use crate::address::{PhysicalRange, length};
+use limen_treaty::model::ByteLength;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -14,7 +15,7 @@ pub enum Error {
 /// authority. Its original mapping must remain valid through every derived use.
 #[must_use]
 pub struct MappedRange<'a> {
-    physical: Physical,
+    physical: PhysicalRange,
     bytes: &'a mut [MaybeUninit<u8>],
 }
 
@@ -29,15 +30,41 @@ impl<'a> MappedRange<'a> {
     /// compatible attributes and the backing material until all derived
     /// borrows and typed objects have ended. A numeric address or a
     /// successfully checked physical extent does not establish these facts.
-    pub unsafe fn new(physical: Physical, bytes: &'a mut [MaybeUninit<u8>]) -> Result<Self, Error> {
-        let length = physical.end.checked_sub(physical.start);
-        if bytes.is_empty() || length.and_then(|n| usize::try_from(n).ok()) != Some(bytes.len()) {
+    pub unsafe fn new(
+        physical: PhysicalRange,
+        bytes: &'a mut [MaybeUninit<u8>],
+    ) -> Result<Self, Error> {
+        if length(physical).as_usize() != Some(bytes.len()) {
             return Err(Error::Range);
         }
         Ok(Self { physical, bytes })
     }
 
-    pub fn physical(&self) -> Physical {
+    /// Borrow an original identity-mapped RAM extent from its raw storage pointer.
+    /// Reject invalid geometry before forming a reference and retain the supplied
+    /// pointer's provenance.
+    ///
+    /// # Safety
+    /// On success, `base` must provide a single valid ordinary RAM storage range
+    /// covering the complete physical extent. The actual owner must keep its
+    /// writable identity mapping and compatible attributes live, and exclude
+    /// conflicting software or hardware access for `'a`. A matching address
+    /// does not prove any of these conditions.
+    pub unsafe fn from_identity(
+        physical: PhysicalRange,
+        base: NonNull<MaybeUninit<u8>>,
+    ) -> Result<Self, Error> {
+        let start = usize::try_from(physical.start().get()).map_err(|_| Error::Range)?;
+        let end = usize::try_from(physical.end().get()).map_err(|_| Error::Range)?;
+        let length = end.checked_sub(start).ok_or(Error::Range)?;
+        if length == 0 || length > isize::MAX as usize || base.addr().get() != start {
+            return Err(Error::Range);
+        }
+        let bytes = unsafe { slice::from_raw_parts_mut(base.as_ptr(), length) };
+        Ok(Self { physical, bytes })
+    }
+
+    pub fn physical(&self) -> PhysicalRange {
         self.physical
     }
 
@@ -64,28 +91,22 @@ impl<'a> MappedRange<'a> {
         if offset == 0 || offset >= self.length() {
             return Err((self, Error::Split));
         }
-        let Some(mid) = u64::try_from(offset)
+        let Some((left, right)) = u64::try_from(offset)
             .ok()
-            .and_then(|offset| self.physical.start.checked_add(offset))
+            .and_then(|offset| self.physical.start().advance(ByteLength::new(offset)))
+            .and_then(|mid| self.physical.split(mid))
         else {
             return Err((self, Error::Split));
         };
-        let Self { physical, bytes } = self;
-        let (left, right) = bytes.split_at_mut(offset);
+        let (prefix, suffix) = self.bytes.split_at_mut(offset);
         Ok((
             Self {
-                physical: Physical {
-                    start: physical.start,
-                    end: mid,
-                },
-                bytes: left,
+                physical: left,
+                bytes: prefix,
             },
             Self {
-                physical: Physical {
-                    start: mid,
-                    end: physical.end,
-                },
-                bytes: right,
+                physical: right,
+                bytes: suffix,
             },
         ))
     }

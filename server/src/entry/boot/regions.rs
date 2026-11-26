@@ -1,8 +1,9 @@
 //! Organize early physical ranges and reserve explicitly mapped root storage.
 
-use super::{Boot, Exclusions, Physical, Retirement, bump::Bump, physical::contains};
-use crate::access::MappedRange;
+use super::{Boot, Exclusions, Retirement, bump::Bump};
+use crate::{access::MappedRange, address::PhysicalRange};
 use core::{alloc::Layout, mem::MaybeUninit};
+use limen_treaty::model::{Alignment, ByteLength};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegionError {
@@ -22,7 +23,7 @@ pub enum RegionSource {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Region {
-    pub physical: Physical,
+    pub physical: PhysicalRange,
     pub source: RegionSource,
 }
 
@@ -31,23 +32,23 @@ pub struct Region {
 pub struct Regions<'a> {
     entries: &'a mut [Option<Region>],
     length: usize,
-    granule: u64,
+    granule: Alignment,
 }
 
 /// Storage reserved for a root layout. Its entire backing granules have
 /// already been removed from the geometry.
 pub struct RootStorage<'a> {
     mapping: MappedRange<'a>,
-    reserved: Physical,
+    reserved: PhysicalRange,
     source: RegionSource,
 }
 
 impl<'a> RootStorage<'a> {
-    pub fn physical(&self) -> Physical {
+    pub fn physical(&self) -> PhysicalRange {
         self.mapping.physical()
     }
 
-    pub fn reserved(&self) -> Physical {
+    pub fn reserved(&self) -> PhysicalRange {
         self.reserved
     }
 
@@ -67,8 +68,8 @@ impl<'a> RootStorage<'a> {
 pub(crate) struct RootPlan {
     index: usize,
     region: Region,
-    physical: Physical,
-    reserved: Physical,
+    physical: PhysicalRange,
+    reserved: PhysicalRange,
     offset: core::ops::Range<usize>,
 }
 
@@ -76,14 +77,14 @@ impl RootPlan {
     fn remainder(&self) -> [Option<Region>; 2] {
         let physical = self.region.physical;
         let part = |start, end| {
-            (start < end).then_some(Region {
-                physical: Physical { start, end },
+            PhysicalRange::new(start, end).map(|physical| Region {
+                physical,
                 source: self.region.source,
             })
         };
         [
-            part(physical.start, self.reserved.start),
-            part(self.reserved.end, physical.end),
+            part(physical.start(), self.reserved.start()),
+            part(self.reserved.end(), physical.end()),
         ]
     }
 }
@@ -97,9 +98,7 @@ impl<'a> Regions<'a> {
         storage: &'a mut [Option<Region>],
     ) -> Result<Self, RegionError> {
         storage.fill(None);
-        if !granule.is_power_of_two() {
-            return Err(RegionError::Granule);
-        }
+        let granule = Alignment::new(granule).ok_or(RegionError::Granule)?;
         let mut regions = Self {
             entries: storage,
             length: 0,
@@ -123,15 +122,12 @@ impl<'a> Regions<'a> {
         &mut self,
         boot: &Boot<'_>,
         exclusions: &Exclusions<'_>,
-        scope: Physical,
+        scope: PhysicalRange,
     ) -> Result<(), RegionError> {
         if let Some(regions) = boot.conventional_ram() {
             for region in regions {
                 self.exclude(
-                    Physical {
-                        start: region.physical.start,
-                        end: region.physical.end,
-                    },
+                    region.physical,
                     RegionSource::DeviceTreeAndUefi {
                         attributes: region.attributes,
                     },
@@ -142,10 +138,7 @@ impl<'a> Regions<'a> {
         } else if let Some(map) = boot.firmware_map() {
             for region in map.conventional() {
                 self.exclude(
-                    Physical {
-                        start: region.physical.start,
-                        end: region.physical.end,
-                    },
+                    region.physical,
                     RegionSource::Uefi {
                         attributes: region.attributes,
                     },
@@ -154,7 +147,7 @@ impl<'a> Regions<'a> {
                 )?;
             }
         } else if let Some(memory) = boot.dtb_memory() {
-            for &region in memory.ram() {
+            for region in memory.ram() {
                 self.exclude(region, RegionSource::DeviceTree, exclusions, scope)?;
             }
         }
@@ -163,33 +156,30 @@ impl<'a> Regions<'a> {
 
     fn exclude(
         &mut self,
-        candidate: Physical,
+        candidate: PhysicalRange,
         source: RegionSource,
         exclusions: &Exclusions<'_>,
-        scope: Physical,
+        scope: PhysicalRange,
     ) -> Result<(), RegionError> {
-        let end = self.floor(candidate.end.min(scope.end));
-        let start = candidate.start.max(scope.start);
+        let Some(candidate) = candidate.intersect(scope) else {
+            return Ok(());
+        };
+        let end = candidate.end().align_down(self.granule);
+        let start = candidate.start();
         if start >= end {
             return Ok(());
         }
         // Since end is aligned, rounding an address below it cannot overflow.
-        let mut cursor = start
-            .checked_next_multiple_of(self.granule)
-            .ok_or(RegionError::Range)?;
+        let mut cursor = start.align_up(self.granule).ok_or(RegionError::Range)?;
         while cursor < end {
             let mut next = end;
             let mut blocked = cursor;
             for claim in exclusions.entries().filter(|entry| entry.fixed()) {
-                let first = self.floor(claim.physical.start);
+                let first = claim.physical.start().align_down(self.granule);
                 if first > cursor {
                     next = next.min(first);
                 } else {
-                    let last = claim
-                        .physical
-                        .end
-                        .checked_next_multiple_of(self.granule)
-                        .unwrap_or(end);
+                    let last = claim.physical.end().align_up(self.granule).unwrap_or(end);
                     blocked = blocked.max(last.min(end));
                 }
             }
@@ -197,10 +187,7 @@ impl<'a> Regions<'a> {
                 cursor = blocked;
             } else {
                 self.insert(Region {
-                    physical: Physical {
-                        start: cursor,
-                        end: next,
-                    },
+                    physical: PhysicalRange::new(cursor, next).expect("nonempty candidate"),
                     source,
                 })?;
                 cursor = next;
@@ -209,18 +196,19 @@ impl<'a> Regions<'a> {
         Ok(())
     }
 
-    fn floor(&self, address: u64) -> u64 {
-        address & !(self.granule - 1)
-    }
-
     fn insert(&mut self, region: Region) -> Result<(), RegionError> {
         let position = self.entries[..self.length].partition_point(|entry| {
-            entry.expect("occupied region").physical.start < region.physical.start
+            entry.expect("occupied region").physical.start() < region.physical.start()
         });
         if (position > 0
-            && self.entries[position - 1].unwrap().physical.end > region.physical.start)
+            && self.entries[position - 1]
+                .unwrap()
+                .physical
+                .overlaps(region.physical))
             || (position < self.length
-                && region.physical.end > self.entries[position].unwrap().physical.start)
+                && region
+                    .physical
+                    .overlaps(self.entries[position].unwrap().physical))
         {
             return Err(RegionError::Overlap);
         }
@@ -248,7 +236,7 @@ impl<'a> Regions<'a> {
     }
 
     pub(crate) fn granule(&self) -> u64 {
-        self.granule
+        self.granule.get()
     }
 
     pub(crate) fn after_root<'r>(
@@ -284,7 +272,7 @@ impl<'a> Regions<'a> {
         let Some((index, region)) = self
             .entries()
             .enumerate()
-            .find(|(_, region)| contains(region.physical, mapped.physical()))
+            .find(|(_, region)| region.physical.covers(mapped.physical()))
         else {
             return Ok(None);
         };
@@ -293,7 +281,8 @@ impl<'a> Regions<'a> {
             .checked_add(mapped.length())
             .ok_or(RegionError::Range)?;
         if layout.size() == 0
-            || mapped.physical().start % layout.align() as u64 != (address % layout.align()) as u64
+            || mapped.physical().start().get() % layout.align() as u64
+                != (address % layout.align()) as u64
         {
             return Err(RegionError::Layout);
         }
@@ -302,19 +291,22 @@ impl<'a> Regions<'a> {
         let offset = bytes.start - address..bytes.end - address;
         // Bump proved the offsets within the slice, whose length matches
         // the checked physical extent.
-        let physical = Physical {
-            start: mapped.physical().start + offset.start as u64,
-            end: mapped.physical().start + offset.end as u64,
-        };
-        let reserved = Physical {
-            start: self.floor(physical.start),
-            end: physical
-                .end
-                .checked_next_multiple_of(self.granule)
+        let physical = mapped
+            .physical()
+            .start()
+            .advance(ByteLength::new(offset.start as u64))
+            .and_then(|start| start.span(ByteLength::new(offset.len() as u64)))
+            .ok_or(RegionError::Range)?;
+        let reserved = PhysicalRange::new(
+            physical.start().align_down(self.granule),
+            physical
+                .end()
+                .align_up(self.granule)
                 .ok_or(RegionError::Range)?,
-        };
-        let left = region.physical.start < reserved.start;
-        let right = reserved.end < region.physical.end;
+        )
+        .ok_or(RegionError::Range)?;
+        let left = region.physical.start() < reserved.start();
+        let right = reserved.end() < region.physical.end();
         if left && right && self.length == self.entries.len() {
             return Err(RegionError::Capacity);
         }

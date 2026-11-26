@@ -1,3 +1,4 @@
+pub mod address;
 pub mod allocator;
 pub(crate) mod boot;
 #[cfg(target_arch = "riscv64")]

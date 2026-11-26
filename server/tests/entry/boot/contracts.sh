@@ -3,15 +3,18 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 target=${1:-riscv64gc-unknown-none-elf}
-artifact=$(cargo build --locked -p kernel --target "$target" --message-format json |
-    jq -er 'select(.reason == "compiler-artifact" and .target.name == "kernel")
-        | .filenames[] | select(endswith(".rmeta"))')
+build=$(cargo build --locked -p kernel --target "$target" --message-format json)
+artifact=$(jq -er 'select(.reason == "compiler-artifact" and .target.name == "kernel")
+    | .filenames[] | select(endswith(".rmeta"))' <<<"$build")
+mapfile -t dependencies < <(jq -r '
+    select(.reason == "compiler-artifact") | .filenames[] | select(endswith(".rmeta"))
+    | "-Ldependency=" + sub("/[^/]+$"; "")' <<<"$build" | sort -u)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
 compile=(rustc --edition 2024 --crate-type lib --emit metadata --error-format json
     --target "$target" -D warnings -C panic=abort --extern "kernel=$artifact"
-    --out-dir "$scratch" server/tests/entry/boot/contracts.rs)
+    "${dependencies[@]}" --out-dir "$scratch" server/tests/entry/boot/contracts.rs)
 "${compile[@]}"
 for contract in receiver role mapping material mapping-move material-move; do
     expected=E0616

@@ -4,7 +4,10 @@
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
-use kernel::entry::boot::{Boot, Physical, Source, shutdown, stack_range, write};
+use kernel::{
+    address::PhysicalAddress,
+    entry::boot::{Boot, Source, shutdown, stack_range, write},
+};
 
 #[path = "../synchronization.rs"]
 mod synchronization;
@@ -93,10 +96,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let image = (&raw const _kernel_base).addr()..(&raw const _kernel_edge).addr();
     assert_eq!(
         boot.image(),
-        Physical {
-            start: image.start as u64,
-            end: image.end as u64
-        }
+        memory::extent(image.start as u64, image.end as u64)
     );
     let bss = (&raw const _bss_start).addr()..(&raw const _bss_end).addr();
     assert!(
@@ -158,17 +158,16 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let early = boot.exclusions();
     assert!(early.entries().any(|entry| entry.occupant
         == kernel::entry::boot::Occupant::MajorStack
-        && entry.physical.start <= sp as u64
-        && (sp as u64) < entry.physical.end));
+        && entry.physical.contains(PhysicalAddress::new(sp as u64))));
     assert!(early.entries().any(|entry| entry.occupant
         == kernel::entry::boot::Occupant::TrapStack
-        && boot.image().start <= entry.physical.start
-        && entry.physical.end <= boot.image().end));
+        && boot.image().covers(entry.physical)));
     assert!(early.entries().any(|entry| entry.occupant
         == kernel::entry::boot::Occupant::DeviceTree
-        && entry.physical.start == device_tree.start as u64
-        && entry.physical.end == device_tree.end as u64));
-    assert!(early.retains(memory.ram()[0], None).unwrap());
+        && entry.physical == memory::extent(device_tree.start as u64, device_tree.end as u64)));
+    let bank = memory::extent(0x8000_0000, 0x8800_0000);
+    assert!(memory.ram().eq([bank]));
+    assert!(early.retains(bank, None));
     let mut storage = [None; 4];
     let mut regions = boot.regions(4096, None, &mut storage).unwrap();
     assert!(regions.entries().next().is_none());
@@ -182,18 +181,10 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         entry.occupant,
         kernel::entry::boot::Occupant::Reservation(_)
     )));
-    assert_eq!(
-        memory.ram(),
-        &[Physical {
-            start: 0x8000_0000,
-            end: 0x8800_0000
-        }]
-    );
     assert!(
-        memory.reservations().iter().any(|entry| {
-            entry.physical.start == 0x8000_0000
-                && entry.physical.end > entry.physical.start
-                && entry.physical.end <= 0x8020_0000
+        memory.reservations().any(|entry| {
+            entry.physical.start().get() == 0x8000_0000
+                && entry.physical.end().get() <= 0x8020_0000
                 && matches!(entry.source, Source::ReservedMemory { .. })
         }),
         "OpenSBI firmware reservation is missing"
@@ -201,12 +192,9 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
     allocator::check(&boot);
     pool::check(&boot);
-    let foundation = Physical {
-        start: 0x8430_0000,
-        end: 0x8430_0000 + 4096 * foundation::PAGES as u64,
-    };
+    let foundation = memory::extent(0x8430_0000, 0x8430_0000 + 4096 * foundation::PAGES as u64);
     let evidence = memory::retirement(&boot, foundation);
-    unsafe { foundation::check(&boot, foundation.start, &evidence) };
+    unsafe { foundation::check(&boot, foundation.start().get(), &evidence) };
     synchronization::check();
     synchronization::check_enabled();
     write("PASS synchronization\n");

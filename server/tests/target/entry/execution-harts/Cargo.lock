@@ -5,6 +5,9 @@ version = 4
 [[package]]
 name = "kernel"
 version = "0.0.1"
+dependencies = [
+ "limen-treaty",
+]
 
 [[package]]
 name = "kernel-execution-harts"
@@ -12,3 +15,7 @@ version = "0.0.0"
 dependencies = [
  "kernel",
 ]
+
+[[package]]
+name = "limen-treaty"
+version = "0.0.1"
