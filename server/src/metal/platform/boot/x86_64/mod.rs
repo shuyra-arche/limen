@@ -1,6 +1,6 @@
 use crate::metal::{
-    platform::boot::trap as diagnostic,
     platform::boot::handoff::{Descriptions, Facts, uefi},
+    platform::boot::trap as diagnostic,
     processor::hart::x86_64,
 };
 mod major;

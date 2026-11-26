@@ -28,7 +28,10 @@ pub(crate) unsafe fn admit<'a>(
         ));
     }
     // The trusted loader keeps this value and its buffers resident.
-    describe(unsafe { input.cast::<Loader<'a>>().as_ref() }?, descriptions)
+    describe(
+        unsafe { input.cast::<Loader<'a>>().as_ref() }?,
+        descriptions,
+    )
 }
 
 #[cfg(limen_firmware = "uefi")]
@@ -79,10 +82,9 @@ where
                 DeviceTree::Memory(_) => {
                     devicetree::memory::describe(description, &mut descriptions.memory)
                 }
-                DeviceTree::Description(_) => devicetree::memory::describe_reservations(
-                    description,
-                    &mut descriptions.memory,
-                ),
+                DeviceTree::Description(_) => {
+                    devicetree::memory::describe_reservations(description, &mut descriptions.memory)
+                }
             }
             .ok()?;
             Some(description)

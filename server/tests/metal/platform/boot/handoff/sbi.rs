@@ -30,7 +30,11 @@ fn keeps_the_trusted_dtb_and_memory_descriptions_on_one_view() {
     assert_eq!(tree.bytes().as_ptr().addr(), start);
     assert_eq!(tree.bytes().len(), source.len());
     let mut reservations_only = None;
-    crate::metal::platform::description::devicetree::memory::describe_reservations(tree, &mut reservations_only).unwrap();
+    crate::metal::platform::description::devicetree::memory::describe_reservations(
+        tree,
+        &mut reservations_only,
+    )
+    .unwrap();
     assert_eq!(reservations_only.unwrap().ram().len(), 0);
 
     assert_eq!(

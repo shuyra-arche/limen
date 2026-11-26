@@ -1,5 +1,5 @@
-use crate::metal::platform::boot::trap as diagnostic;
 pub(crate) use super::handoff::sbi::admit;
+use crate::metal::platform::boot::trap as diagnostic;
 use core::arch::{asm, naked_asm};
 
 // Both entries establish supervisor state before using either stack.
