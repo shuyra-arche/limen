@@ -17,8 +17,18 @@ fn main() {
     println!("cargo::rerun-if-changed={script}");
     println!("cargo::rerun-if-changed=../../../metal/module/fixture.rs");
     println!("cargo::rerun-if-changed=../../../metal/module/probe.rs");
+    println!("cargo::rerun-if-changed=../../../metal/module/sv39_root.rs");
 
-    let source = root.join("../../../metal/module/probe.rs");
-    let output = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("module.elf");
-    fixture::build(&source, "riscv64gc-unknown-none-elf", &output);
+    const TARGET: &str = "riscv64gc-unknown-none-elf";
+    let source = root.join("../../../metal/module");
+    let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    fixture::build(&source.join("probe.rs"), TARGET, &output.join("module.elf"));
+    fixture::build_module(
+        &source.join("sv39_root.rs"),
+        TARGET,
+        &output.join("sv39-root.elf"),
+        "sv39-root",
+        "module_sv39_root",
+        2,
+    );
 }

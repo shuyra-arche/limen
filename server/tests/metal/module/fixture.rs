@@ -9,6 +9,17 @@ use std::{
 const ENTRY: u64 = 0x1000;
 
 pub fn build(probe: &Path, target: &str, output: &Path) {
+    build_module(probe, target, output, "mmu-geometry", "module_geometry", 1);
+}
+
+pub fn build_module(
+    program: &Path,
+    target: &str,
+    output: &Path,
+    interface: &str,
+    entry: &str,
+    abi: u32,
+) {
     let rustc = env::var_os("RUSTC").unwrap();
     let host = env::var("HOST").unwrap();
     let sysroot = Command::new(&rustc)
@@ -25,8 +36,8 @@ pub fn build(probe: &Path, target: &str, output: &Path) {
 
     let source = output.with_extension("rs");
     let object = output.with_extension("o");
-    let mut code = fs::read_to_string(probe).unwrap();
-    let description = description();
+    let mut code = fs::read_to_string(program).unwrap();
+    let description = description(interface, abi);
     write!(
         code,
         "\nglobal_asm!(r#\"\n.section .note.shuyra.module, \"a\", %note\n\
@@ -78,7 +89,7 @@ pub fn build(probe: &Path, target: &str, output: &Path) {
             "-z",
             "max-page-size=4096",
             "-e",
-            "module_geometry",
+            entry,
             "-o",
         ])
         .arg(output)
@@ -157,14 +168,14 @@ impl Fdt {
     }
 }
 
-fn description() -> Vec<u8> {
+fn description(interface: &str, abi: u32) -> Vec<u8> {
     let mut fdt = Fdt::default();
     fdt.node(b"\0");
     fdt.property(b"version\0", &1_u32.to_be_bytes());
-    fdt.property(b"abi\0", &1_u32.to_be_bytes());
+    fdt.property(b"abi\0", &abi.to_be_bytes());
     fdt.node(b"interfaces\0");
-    fdt.node(b"mmu-geometry\0");
-    fdt.property(b"compatible\0", b"shuyra,mmu-geometry\0");
+    fdt.node(format!("{interface}\0").as_bytes());
+    fdt.property(b"compatible\0", format!("shuyra,{interface}\0").as_bytes());
     fdt.property(b"version\0", &1_u32.to_be_bytes());
     fdt.property(b"entry\0", &ENTRY.to_be_bytes());
     fdt.word(2);

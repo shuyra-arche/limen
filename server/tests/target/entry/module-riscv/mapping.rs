@@ -1,9 +1,9 @@
-//! This probe owns an Sv39 root for one Hart on QEMU virt.
+//! Image-owned initial and successor Sv39 roots for the QEMU virt probe.
 
 use core::{
     arch::asm,
     ops::Range,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use kernel::module::Permissions;
@@ -11,6 +11,7 @@ use kernel::module::Permissions;
 pub const PAGE: u64 = 4096;
 const ENTRIES: usize = 512;
 const TABLE_COUNT: usize = 16;
+const ROOT_COUNT: usize = 2;
 const LOW_END: u64 = 1 << 38;
 const SV39: u64 = 8 << 60;
 const VALID: u64 = 1 << 0;
@@ -27,9 +28,15 @@ impl Table {
     const fn new() -> Self {
         Self([const { AtomicU64::new(0) }; ENTRIES])
     }
+
+    fn is_empty(&self) -> bool {
+        self.0.iter().all(|pte| read(pte) == 0)
+    }
 }
 
-static TABLES: [Table; TABLE_COUNT] = [const { Table::new() }; TABLE_COUNT];
+static TABLES: [[Table; TABLE_COUNT]; ROOT_COUNT] =
+    [const { [const { Table::new() }; TABLE_COUNT] }; ROOT_COUNT];
+static CLAIMED: [AtomicBool; ROOT_COUNT] = [const { AtomicBool::new(false) }; ROOT_COUNT];
 const _: () = assert!(size_of::<Table>() == PAGE as usize);
 
 pub fn backing() -> Range<u64> {
@@ -37,8 +44,7 @@ pub fn backing() -> Range<u64> {
     start..start + size_of_val(&TABLES) as u64
 }
 
-fn nonleaf(table: usize) -> u64 {
-    let address = (&TABLES[table] as *const Table).addr() as u64;
+fn nonleaf(address: u64) -> u64 {
     (address / PAGE) << 10 | VALID
 }
 
@@ -65,6 +71,30 @@ fn satp() -> u64 {
     value
 }
 
+/// Move the calling Hart onto its next verified root and synchronize the
+/// local translations and instruction stream, including prior ASID-zero use.
+///
+/// The caller must have checked the next context's complete live mapping
+/// or Bare identity path, and established page-table and instruction-store
+/// visibility on this Hart.
+pub unsafe fn switch_context(previous: u64, next: u64) {
+    assert_eq!(satp(), previous);
+    assert!(previous != next && (next == 0 || next >> 44 == SV39 >> 44));
+    check_interrupts();
+    unsafe {
+        asm!(
+            "sfence.vma x0, x0",
+            "csrw satp, {context}",
+            "sfence.vma x0, x0",
+            "fence.i",
+            context = in(reg) next,
+            options(nostack),
+        )
+    };
+    assert_eq!(satp(), next);
+    check_interrupts();
+}
+
 fn check_interrupts() {
     let (status, enable): (u64, u64);
     unsafe {
@@ -81,6 +111,7 @@ fn check_interrupts() {
 }
 
 pub struct Root {
+    tables: &'static [Table; TABLE_COUNT],
     used: usize,
 }
 
@@ -88,66 +119,94 @@ impl Root {
     pub fn new() -> Self {
         assert_eq!(satp(), 0);
         check_interrupts();
-        assert!(
-            TABLES
-                .iter()
-                .all(|table| table.0.iter().all(|pte| read(pte) == 0))
-        );
-        Self { used: 1 }
+        Self::take(0)
     }
 
-    fn context(&self) -> u64 {
-        SV39 | (backing().start / PAGE)
+    pub fn successor(&self) -> Self {
+        self.check_active();
+        assert!(core::ptr::eq(self.tables, &TABLES[0]));
+        let next = Self::take(1);
+        assert!(self.storage().end <= next.storage().start);
+        next
+    }
+
+    fn take(bank: usize) -> Self {
+        assert!(!CLAIMED[bank].swap(true, Ordering::AcqRel));
+        let tables = &TABLES[bank];
+        assert!(tables.iter().all(Table::is_empty));
+        Self { tables, used: 1 }
+    }
+
+    fn address(&self, table: usize) -> u64 {
+        (&self.tables[table] as *const Table).addr() as u64
+    }
+
+    pub fn storage(&self) -> Range<u64> {
+        let start = self.address(0);
+        start..start + size_of_val(self.tables) as u64
+    }
+
+    pub fn context(&self) -> u64 {
+        let start = self.address(0);
+        assert!(start.is_multiple_of(PAGE) && start >> 56 == 0);
+        SV39 | (start / PAGE)
     }
 
     fn child(&self, pte: u64) -> usize {
-        let tables = backing();
+        let tables = self.storage();
         let address = (pte >> 10) << 12;
         assert!(tables.contains(&address));
         let index = ((address - tables.start) / PAGE) as usize;
         assert!(index < self.used);
-        assert_eq!(pte, nonleaf(index));
+        assert_eq!(pte, nonleaf(address));
         index
     }
 
     pub fn map(&mut self, range: Range<u64>, permission: Permissions) {
-        assert_eq!(satp(), 0);
+        self.map_with(range, permission, |address, permission| {
+            permission.map_or_else(|| nonleaf(address), |permission| leaf(address, permission))
+        });
+    }
+
+    /// Materialize an unpublished tree with the chosen Sv39 backend.
+    /// The mapping owner verifies the backend's result before every write.
+    pub fn map_with(
+        &mut self,
+        range: Range<u64>,
+        permission: Permissions,
+        mut encode: impl FnMut(u64, Option<Permissions>) -> u64,
+    ) {
+        self.check_inactive();
         assert!(range.start < range.end && range.end <= LOW_END);
         assert!(range.start.is_multiple_of(PAGE) && range.end.is_multiple_of(PAGE));
         for address in range.step_by(PAGE as usize) {
             let mut table = 0;
             for level in [2, 1] {
-                let entry = &TABLES[table].0[index(address, level)];
+                let entry = &self.tables[table].0[index(address, level)];
                 let pte = read(entry);
                 table = if pte == 0 {
                     let next = self.used;
-                    write(entry, nonleaf(next));
+                    let branch = self.address(next);
+                    let pte = encode(branch, None);
+                    assert_eq!(pte, nonleaf(branch));
+                    write(entry, pte);
                     self.used += 1;
                     next
                 } else {
                     self.child(pte)
                 };
             }
-            let entry = &TABLES[table].0[index(address, 0)];
+            let entry = &self.tables[table].0[index(address, 0)];
             assert_eq!(read(entry), 0);
-            write(entry, leaf(address, permission));
+            let pte = encode(address, Some(permission));
+            assert_eq!(pte, leaf(address, permission));
+            write(entry, pte);
         }
     }
 
     /// The caller has checked identity mappings for the live image and DTB.
     pub unsafe fn activate(&self) {
-        assert_eq!(satp(), 0);
-        check_interrupts();
-        unsafe {
-            asm!(
-                "sfence.vma x0, x0",
-                "csrw satp, {context}",
-                "sfence.vma x0, x0",
-                context = in(reg) self.context(),
-                options(nostack),
-            )
-        };
-        self.check_active();
+        unsafe { switch_context(0, self.context()) };
     }
 
     fn check_active(&self) {
@@ -155,26 +214,66 @@ impl Root {
         check_interrupts();
     }
 
+    fn check_inactive(&self) {
+        assert_ne!(satp(), self.context());
+        check_interrupts();
+    }
+
     fn entry(&self, page: u64) -> &AtomicU64 {
         assert!(page < LOW_END && page.is_multiple_of(PAGE));
         let mut table = 0;
         for level in [2, 1] {
-            table = self.child(read(&TABLES[table].0[index(page, level)]));
+            table = self.child(read(&self.tables[table].0[index(page, level)]));
         }
-        &TABLES[table].0[index(page, 0)]
+        &self.tables[table].0[index(page, 0)]
     }
 
+    /// The local mapping owner withdraws after all other Harts have departed.
     pub fn withdraw(&self, range: Range<u64>, expected: impl Fn(u64) -> Option<Permissions>) {
         self.check_active();
-        for page in range.step_by(PAGE as usize) {
-            let pte = self.entry(page);
+        self.remove(range, expected);
+        unsafe { asm!("sfence.vma x0, x0", "fence.i", options(nostack)) };
+    }
+
+    /// Clear exactly the old module mappings in the dormant root.
+    ///
+    /// Every Hart which previously used this root must have departed and
+    /// completed its old translation and instruction maintenance. The
+    /// caller keeps the root out of service throughout this operation.
+    pub unsafe fn withdraw_inactive(
+        &self,
+        range: Range<u64>,
+        expected: impl Fn(u64) -> Option<Permissions>,
+    ) {
+        self.check_inactive();
+        self.remove(range, expected);
+    }
+
+    /// Erase root and branch pages after all Harts have left and fenced.
+    ///
+    /// The caller must have excluded subsequent use of this root on all
+    /// Harts before reusing or releasing its retained table storage.
+    pub unsafe fn clear_inactive(&mut self) {
+        self.check_inactive();
+        for table in &self.tables[..self.used] {
+            for entry in &table.0 {
+                write(entry, 0);
+            }
+        }
+        assert!(self.tables.iter().all(Table::is_empty));
+        self.used = 1;
+    }
+
+    fn remove(&self, range: Range<u64>, expected: impl Fn(u64) -> Option<Permissions>) {
+        for page in range.clone().step_by(PAGE as usize) {
             assert_eq!(
-                read(pte),
+                read(self.entry(page)),
                 expected(page).map_or(0, |permission| leaf(page, permission))
             );
-            write(pte, 0);
         }
-        unsafe { asm!("sfence.vma x0, x0", "fence.i", options(nostack)) };
+        for page in range.step_by(PAGE as usize) {
+            write(self.entry(page), 0);
+        }
     }
 
     pub fn publish(&self, start: u64, pages: &[Option<Permissions>]) {
@@ -192,6 +291,11 @@ impl Root {
 
     pub fn verify_private(&self, count: u64, expected: impl Fn(u64) -> Option<Permissions>) {
         assert_eq!(satp(), 0);
+        self.verify_inactive(count, expected);
+    }
+
+    pub fn verify_inactive(&self, count: u64, expected: impl Fn(u64) -> Option<Permissions>) {
+        self.check_inactive();
         self.verify(count, expected);
     }
 
@@ -220,7 +324,7 @@ impl Root {
         assert!(!visited[table], "duplicated branch table");
         visited[table] = true;
         let mut count = 0;
-        for (index, pte) in TABLES[table].0.iter().enumerate() {
+        for (index, pte) in self.tables[table].0.iter().enumerate() {
             let pte = read(pte);
             if pte == 0 {
                 continue;

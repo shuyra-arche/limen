@@ -20,7 +20,7 @@ mod lifecycle;
 use access::MappedRange;
 use address::{PhysicalAddress, PhysicalRange};
 use limen_treaty::model::{ByteLength, PageSize};
-use module::{Abi, Contract, Error, Machine, ModuleImage, Permissions};
+use module::{Abi, Contract, DescriptionError, Error, Machine, ModuleImage, Permissions};
 use std::mem::MaybeUninit;
 
 const PAGE: PageSize = PageSize::new(4096).unwrap();
@@ -40,6 +40,7 @@ const IMAGES: [(Machine, &[u8]); 3] = [
         include_bytes!(concat!(env!("OUT_DIR"), "/aarch64.elf")),
     ),
 ];
+const SV39_ROOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sv39-root.elf"));
 
 #[derive(Clone, Copy)]
 struct Program {
@@ -76,6 +77,25 @@ fn program(bytes: &[u8], kind: u32) -> Program {
     programs(bytes)
         .find(|program| program.kind == kind)
         .unwrap()
+}
+
+fn note_property(bytes: &[u8], path: &[u8], name: &[u8]) -> usize {
+    let note = program(bytes, 4);
+    let name_length =
+        u32::from_le_bytes(bytes[note.offset..note.offset + 4].try_into().unwrap()) as usize;
+    let fdt_length =
+        u32::from_le_bytes(bytes[note.offset + 4..note.offset + 8].try_into().unwrap()) as usize;
+    let fdt_start = note.offset + 12 + name_length.next_multiple_of(4);
+    let description =
+        devicetree::DeviceTree::new(&bytes[fdt_start..fdt_start + fdt_length]).unwrap();
+    let property = description
+        .find_path(path)
+        .unwrap()
+        .unwrap()
+        .property(name)
+        .unwrap()
+        .unwrap();
+    property.as_ptr().addr() - bytes.as_ptr().addr()
 }
 
 fn relative_entry(bytes: &[u8]) -> usize {
@@ -200,22 +220,7 @@ fn rejects_malformed_permissions_note_and_relative_record() {
     let load = program(original, 1);
     let relocation = relative_entry(original);
 
-    let fdt_start = note.offset + 20;
-    let fdt_length = u32::from_le_bytes(
-        original[note.offset + 4..note.offset + 8]
-            .try_into()
-            .unwrap(),
-    );
-    let description =
-        devicetree::DeviceTree::new(&original[fdt_start..fdt_start + fdt_length as usize]).unwrap();
-    let entry = description
-        .find_path(b"/interfaces/mmu-geometry")
-        .unwrap()
-        .unwrap()
-        .property(b"entry")
-        .unwrap()
-        .unwrap();
-    let entry_offset = entry.as_ptr().addr() - original.as_ptr().addr();
+    let entry_offset = note_property(original, b"/interfaces/mmu-geometry", b"entry");
 
     // The independently linked fixtures contain a single RELATIVE record.
     let cases: [(usize, &[u8]); 9] = [
@@ -273,6 +278,69 @@ fn selects_a_unique_provider_from_the_original_images() {
     assert!(matches!(select(&[bytes; 2]), Err(Error::Conflict)));
     assert!(matches!(select(&[bytes; 17]), Err(Error::Capacity)));
     assert!(select(&[bytes, &bytes[..64]]).is_err());
+}
+
+#[test]
+fn selects_distinct_rv64_geometry_and_root_images() {
+    let (machine, geometry) = IMAGES[0];
+    let sources = [geometry, SV39_ROOT];
+    for (bytes, abi, own, other) in [
+        (
+            geometry,
+            Abi::Scalar,
+            Contract::MmuGeometry,
+            Contract::Sv39Root,
+        ),
+        (
+            SV39_ROOT,
+            Abi::Sv39Root,
+            Contract::Sv39Root,
+            Contract::MmuGeometry,
+        ),
+    ] {
+        let selected = ModuleImage::select(&sources, machine, PAGE, own)
+            .unwrap()
+            .unwrap();
+        let description = selected.description();
+        assert_eq!(description.abi(), abi);
+        assert!(description.interface(other).is_none());
+        let offered = description.interface(own).unwrap();
+        assert_eq!(offered.entry(), word(bytes, 24));
+        assert_eq!(offered.version(), 1);
+        assert!(matches!(
+            ModuleImage::select(&[geometry, SV39_ROOT, bytes], machine, PAGE, own),
+            Err(Error::Conflict)
+        ));
+    }
+}
+
+#[test]
+fn rejects_a_mismatched_root_abi_machine_or_version() {
+    for (machine, bytes, path, property, replacement) in [
+        (
+            Machine::Riscv64,
+            SV39_ROOT,
+            b"/".as_slice(),
+            b"abi".as_slice(),
+            1_u32,
+        ),
+        (
+            Machine::Riscv64,
+            SV39_ROOT,
+            b"/interfaces/sv39-root",
+            b"version",
+            2,
+        ),
+        (Machine::X86_64, IMAGES[1].1, b"/", b"abi", 2),
+    ] {
+        let offset = note_property(bytes, path, property);
+        let mut modified = bytes.to_vec();
+        modified[offset..offset + 4].copy_from_slice(&replacement.to_be_bytes());
+        assert!(matches!(
+            ModuleImage::read(&modified, machine, PAGE),
+            Err(Error::Description(DescriptionError::Unsupported))
+        ));
+    }
 }
 
 #[test]

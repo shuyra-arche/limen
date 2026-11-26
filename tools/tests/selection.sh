@@ -100,7 +100,7 @@ change server/src/metal/boot/trap.rs
 change server/src/metal/boot/major.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/boot/minor.rs
-bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution-harts","platform-boot"]' >/dev/null
+bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution-harts","platform-boot","riscv-module-execution"]' >/dev/null
 change server/src/metal/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/firmware/psci.rs
@@ -152,6 +152,10 @@ done
 change server/tests/target/entry/module/arm_mapping.rs
 bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
     [["module-execution", "virt", "debug"], ["module-execution", "virt", "release"]]' >/dev/null
+change server/tests/metal/module/sv39_root.rs
+bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
+    [["riscv-module-execution", "rv64", "debug"], ["riscv-module-execution", "rv64", "release"]]' >/dev/null
+bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/module/host/Cargo.toml"]' >/dev/null
 change server/src/metal/allocator/storage.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null

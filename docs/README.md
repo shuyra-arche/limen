@@ -24,7 +24,11 @@ visibility, then publishes into fixed boot slots. A published module owns
 its backing and the uses of already published providers. Each consumer
 keeps an exact ModuleUse through its calls and cleanup. Shut closes new uses.
 The mapping owner settles old mapping and instruction effects before
-reclaim returns the original backing. See the [formal Module contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/module/README.md).
+reclaim returns the original backing. The RV64 Sv39Root v1 interface binds
+the retained MmuGeometry v1 provider. It encodes branches, base-page leaves
+and a SATP context using a synchronous call through that provider's versioned
+import table. The mapping owner checks the returned encodings, supplies the
+page tables and installs the verified root. See the [formal Module contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/module/README.md).
 
 For build commands see the [repository README](../README.md). The architecture
 and Treaty contracts are maintained in [Document Limen](https://github.com/shuyra-arche/document-limen).
