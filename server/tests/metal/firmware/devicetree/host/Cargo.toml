@@ -1,0 +1,13 @@
+[package]
+name = "kernel-host-devicetree"
+version.workspace = true
+edition.workspace = true
+publish = false
+autotests = false
+
+[[test]]
+name = "devicetree"
+path = "../mod.rs"
+
+[dependencies]
+limen-treaty = { path = "../../../../../../treaty" }

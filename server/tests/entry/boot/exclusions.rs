@@ -1,5 +1,4 @@
-use super::handoff::Boot;
-use super::physical::{Condition, Occupant, Retirement};
+use super::physical::{Condition, Exclusions, Occupant, Retirement};
 use super::{FirmwareMap, PhysicalAddress, PhysicalRange, describe, image, range};
 
 const CONDITIONS: [Condition; 4] = [
@@ -16,8 +15,14 @@ fn every_condition_must_cover_the_requested_physical_scope() {
     let mut bytes = Descriptors([0; 40]);
     describe(&mut bytes.0, 4, 0x4000, 3, 0);
     let map = FirmwareMap::new(&bytes.0, 40, 1, 1).unwrap();
-    let boot = Boot::from_uefi(0, image(), Some(0x6001..0x6010), map, None);
-    let early = boot.exclusions_for(range(0x1100, 0x1200), range(0x1300, 0x1400));
+    let early = Exclusions::new(
+        image(),
+        range(0x1100, 0x1200),
+        range(0x1300, 0x1400),
+        Some(0x6001..0x6010),
+        Some(map),
+        None,
+    );
     let page = range(0x4000, 0x5000);
     assert!(early.retains(page, None));
     for missing in CONDITIONS {
@@ -52,8 +57,14 @@ fn fixed_claims_outlive_retirement_evidence_and_preserve_partial_pages() {
     // Old access can end before ACPI has been enabled.
     describe(&mut bytes.0[80..], 9, 0x5000, 1, 0);
     let map = FirmwareMap::new(&bytes.0, 40, 1, 3).unwrap();
-    let boot = Boot::from_uefi(0, image(), Some(0x6001..0x6010), map, None);
-    let early = boot.exclusions_for(range(0x1100, 0x1200), range(0x1300, 0x1400));
+    let early = Exclusions::new(
+        image(),
+        range(0x1100, 0x1200),
+        range(0x1300, 0x1400),
+        Some(0x6001..0x6010),
+        Some(map),
+        None,
+    );
     assert!(
         early
             .entries()

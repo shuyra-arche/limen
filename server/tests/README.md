@@ -1,7 +1,8 @@
 # Limen tests
 
-Host suites under `entry/boot/` and `metal/` exercise DTB header validation,
-UEFI descriptor geometry, SBI extension discovery, the bounded allocation
+Host suites under `entry/boot/` and `metal/` exercise bounded Device Tree
+traversal, original node scope, address translation, ACPI source and table
+validation, UEFI descriptor geometry, SBI extension discovery, the bounded allocation
 cursor, fixed identity slots and RV64 page-table entry operations. The Identity
 suite exercises the table implementation with owner-supplied slot storage,
 distinct scopes and separate allocation and return tables. Its compiler tests
@@ -170,7 +171,12 @@ QMP transcript and exit status. Both test images use the same UEFI entry and
 retain the final memory map after exiting Boot Services. Arm checks the
 configured 256 MiB RAM bank and verifies that the DTB and the UEFI map
 corroborate the reported whole-page ranges, excluding the retained DTB and
-firmware reservations. q35 checks the handoff without a DTB. The Boot Host
+firmware reservations. q35 checks the ACPI-only handoff. The q35 guest requires
+enabled MADT entries for the major and selected minor, the local xAPIC
+cross-check in Boot, I/O APIC and source overrides, and a physical exclusion
+for each admitted table. Arm checks the source-scoped GICv3 windows and
+timer PPI, compares the major's affinity and the target with PSCI and
+verifies the accessible counter frequency. The Boot Host
 suite covers overlapping reservations, partial pages, absent coverage and
 conflicting UEFI types and runtime attributes.
 [Platform contracts](../../docs/platforms.md)

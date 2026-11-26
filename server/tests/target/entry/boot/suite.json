@@ -18,6 +18,10 @@
     "server/src/metal/allocator/**",
     "server/src/metal/mmu/internal/access.rs",
     "server/src/metal/mmu/internal/mod.rs",
+    "server/src/metal/mmu/internal/riscv/description.rs",
+    "server/src/metal/execution/**",
+    "server/src/metal/hart/description.rs",
+    "server/src/metal/time/**",
     "server/src/metal/mmu/mod.rs",
     "server/src/metal/identity/**",
     "server/src/metal/boot/riscv/**",
@@ -42,6 +46,7 @@
     "kind": "qemu",
     "kernel": "boot-handoff",
     "expects": [
+      "PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1",
       "PASS synchronization",
       "PASS allocator source=1 negative=1 delayed=1 return=1",
       "PASS typed-pool mapped=1 slots=1 reuse=1 joint=1 stable=1 refund=1",

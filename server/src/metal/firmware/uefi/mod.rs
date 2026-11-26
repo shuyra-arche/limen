@@ -1,13 +1,13 @@
 use crate::{
-    entry::boot::Boot,
+    entry::boot::{Boot, Descriptions},
     metal::{
         boot::{self, services::Services},
-        firmware::{devicetree, map::FirmwareMap},
+        firmware::{acpi, devicetree, map::FirmwareMap},
     },
 };
 
 mod loader;
-pub use loader::{DeviceTree, Loader};
+pub use loader::{AcpiInput, DeviceTree, Loader};
 
 /// Hand off a loaded image after successful ExitBootServices.
 ///
@@ -19,9 +19,20 @@ pub unsafe fn major(hart: usize, loader: &Loader<'_>, services: &'static Service
     unsafe { boot::enter_major(hart, loader) }
 }
 
-pub(crate) unsafe fn admit<'a>(hart: usize, input: *const ()) -> Option<Boot<'a>> {
+pub(crate) unsafe fn admit<'a>(
+    hart: usize,
+    input: *const (),
+    descriptions: &'a mut Descriptions<'a>,
+) -> Option<Boot<'a>> {
     // The trusted loader keeps this value and its buffers resident.
-    unsafe { input.cast::<Loader<'a>>().as_ref() }?.admit(hart)
+    let boot = unsafe { input.cast::<Loader<'a>>().as_ref() }?.admit(hart, descriptions)?;
+    #[cfg(target_arch = "x86_64")]
+    if let Some(acpi) = boot.acpi()
+        && !crate::metal::hart::matches_madt(hart, acpi.madt()?)
+    {
+        return None;
+    }
+    Some(boot)
 }
 
 pub(crate) fn services_on_entry() -> &'static Services {

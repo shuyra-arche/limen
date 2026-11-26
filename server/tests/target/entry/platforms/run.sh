@@ -48,12 +48,14 @@ case "$platform" in
     q35)
         args+=(-machine q35 -m 128M -drive "format=raw,file=fat:rw:$out/esp"
             -debugcon "file:$out/guest.log" -device isa-debug-exit,iobase=0xf4,iosize=4)
+        firmware_marker='PASS firmware-discovery q35 acpi=1 madt=1 routes=1 retained=1'
         expected_exit=33
         marker='PASS q35 major=1 minor=1 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1' ;;
     virt)
         args+=(-machine virt,gic-version=3,secure=off,virtualization=off,acpi=off -cpu cortex-a57 -m 256M
             -drive "if=none,id=esp,format=raw,file=fat:rw:$out/esp"
             -device virtio-blk-pci,drive=esp -serial "file:$out/guest.log")
+        firmware_marker='PASS firmware-discovery virt dtb=1 psci=1 affinity=1 gic=1 timer=1'
         expected_exit=0
         marker='PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1 ram=1 reconciled=1' ;;
 esac
@@ -69,6 +71,7 @@ cat "$out/stderr.log" "$out/guest.log"
 printf '%s\n' "$status" >"$out/exit.status"
 [[ "$status" == "$expected_exit" ]]
 grep -Fxq "$marker" "$out/guest.log"
+grep -Fxq "$firmware_marker" "$out/guest.log"
 grep -Fxq 'PASS early physical exclusions regions=0 roots=0' "$out/guest.log"
 grep -Fxq 'PASS allocator retained without retirement or mapping' "$out/guest.log"
 grep -Fxq 'PASS bootstrap-foundation pend=1 pool=1 retained=1 refund=1 generation=1 stale=1 revoked=1' "$out/guest.log"

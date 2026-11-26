@@ -1,14 +1,34 @@
-use super::{DtbMemory, FirmwareMap, FirmwareRegion, physical::Exclusions};
+#[cfg(not(target_arch = "riscv64"))]
+use super::acpi::Acpi;
+use super::{DtbMemory, FirmwareMap, FirmwareRegion, devicetree, physical::Exclusions};
 use crate::address::PhysicalRange;
 use core::ops::Range;
+
+/// Retained firmware descriptions prepared in the startup caller's frame.
+pub(crate) struct Descriptions<'a> {
+    pub(crate) device_tree: Option<devicetree::DeviceTree<'a>>,
+    pub(crate) memory: Option<DtbMemory>,
+    #[cfg(not(target_arch = "riscv64"))]
+    pub(crate) acpi: Option<Acpi<'a>>,
+}
+
+impl Descriptions<'_> {
+    pub(crate) const fn new() -> Self {
+        Self {
+            device_tree: None,
+            memory: None,
+            #[cfg(not(target_arch = "riscv64"))]
+            acpi: None,
+        }
+    }
+}
 
 /// Facts admitted on the major CPU. These carry no allocation authority.
 pub struct Boot<'a> {
     hart: usize,
     image: PhysicalRange,
-    device_tree: Option<Range<usize>>,
+    descriptions: &'a Descriptions<'a>,
     firmware_map: Option<FirmwareMap<'a>>,
-    memory: Option<DtbMemory>,
 }
 
 impl<'a> Boot<'a> {
@@ -25,18 +45,32 @@ impl<'a> Boot<'a> {
         major: PhysicalRange,
         trap: PhysicalRange,
     ) -> Exclusions<'_> {
-        Exclusions::new(
+        let exclusions = Exclusions::new(
             self.image(),
             major,
             trap,
             self.device_tree(),
             self.firmware_map(),
-            self.dtb_memory(),
-        )
+            self.descriptions.memory.as_ref(),
+        );
+        #[cfg(not(target_arch = "riscv64"))]
+        let exclusions = exclusions.with_acpi(self.acpi());
+        exclusions
     }
 
     pub fn device_tree(&self) -> Option<Range<usize>> {
-        self.device_tree.clone()
+        let bytes = self.descriptions.device_tree?.bytes().as_ptr_range();
+        Some(bytes.start.addr()..bytes.end.addr())
+    }
+
+    /// The validated, retained hardware description in its original scope.
+    pub fn device_tree_description(&self) -> Option<devicetree::DeviceTree<'a>> {
+        self.descriptions.device_tree
+    }
+
+    #[cfg(not(target_arch = "riscv64"))]
+    pub fn acpi(&self) -> Option<&Acpi<'a>> {
+        self.descriptions.acpi.as_ref()
     }
 
     pub fn firmware_map(&self) -> Option<FirmwareMap<'a>> {
@@ -45,7 +79,10 @@ impl<'a> Boot<'a> {
 
     /// RAM and reservations from a DTB supplied as a memory description.
     pub fn dtb_memory(&self) -> Option<&DtbMemory> {
-        self.memory.as_ref()
+        self.descriptions
+            .memory
+            .as_ref()
+            .filter(|memory| memory.ram().next().is_some())
     }
 
     /// Compare DTB RAM with the final UEFI map when both were supplied.
@@ -60,38 +97,17 @@ impl<'a> Boot<'a> {
         )
     }
 
-    #[cfg(not(target_arch = "riscv64"))]
-    pub(crate) fn from_uefi(
+    pub(crate) fn new(
         hart: usize,
         image: PhysicalRange,
-        device_tree: Option<Range<usize>>,
-        firmware_map: FirmwareMap<'a>,
-        memory: Option<DtbMemory>,
+        firmware_map: Option<FirmwareMap<'a>>,
+        descriptions: &'a Descriptions<'a>,
     ) -> Self {
         Self {
             hart,
             image,
-            device_tree,
-            firmware_map: Some(firmware_map),
-            memory,
-        }
-    }
-}
-
-#[cfg(any(target_arch = "riscv64", test))]
-impl Boot<'static> {
-    pub(crate) fn from_opensbi(
-        hart: usize,
-        image: Range<usize>,
-        device_tree: Range<usize>,
-        memory: DtbMemory,
-    ) -> Self {
-        Self {
-            hart,
-            image: super::physical::extent(image),
-            device_tree: Some(device_tree),
-            firmware_map: None,
-            memory: Some(memory),
+            descriptions,
+            firmware_map,
         }
     }
 }

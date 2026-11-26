@@ -16,6 +16,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-host-acpi"
+version = "0.0.1"
+dependencies = [
+ "limen-treaty",
+]
+
+[[package]]
 name = "kernel-host-allocator"
 version = "0.0.1"
 dependencies = [
@@ -24,6 +31,13 @@ dependencies = [
 
 [[package]]
 name = "kernel-host-boot"
+version = "0.0.1"
+dependencies = [
+ "limen-treaty",
+]
+
+[[package]]
+name = "kernel-host-devicetree"
 version = "0.0.1"
 dependencies = [
  "limen-treaty",

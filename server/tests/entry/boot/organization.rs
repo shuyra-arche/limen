@@ -1,4 +1,4 @@
-use super::physical::Condition;
+use super::physical::{Condition, Exclusions};
 use super::regions::{RegionError, Regions};
 use super::{
     Boot, FirmwareMap, PhysicalAddress, PhysicalRange, Retirement, describe, image, range,
@@ -59,8 +59,16 @@ fn sorts_sources_clips_the_evidence_and_excludes_partial_reserved_pages() {
     describe(&mut storage.0[40..80], 7, 0x2000, 4, 8);
     describe(&mut storage.0[80..], 7, 0x6000, 2, 1 << 63);
     let map = FirmwareMap::new(&storage.0, 40, 1, 3).unwrap();
-    let boot = Boot::from_uefi(0, image(), Some(0x4301..0x4500), map, None);
-    let exclusions = boot.exclusions_for(image(), image());
+    let descriptions = super::Descriptions::new();
+    let boot = Boot::new(0, image(), Some(map), &descriptions);
+    let exclusions = Exclusions::new(
+        image(),
+        image(),
+        image(),
+        Some(0x4301..0x4500),
+        Some(map),
+        None,
+    );
     let evidence = retired(range(0x2fff, 0xa001));
     let expected = [
         RegionDescription {
@@ -113,7 +121,8 @@ fn a_root_consumes_a_mapped_grant_and_removes_its_whole_physical_page() {
     let mut descriptors = Descriptors([0; 40]);
     describe(&mut descriptors.0, 7, 0x2000, 7, 8);
     let map = FirmwareMap::new(&descriptors.0, 40, 1, 1).unwrap();
-    let boot = Boot::from_uefi(0, image(), None, map, None);
+    let descriptions = super::Descriptions::new();
+    let boot = Boot::new(0, image(), Some(map), &descriptions);
     let exclusions = boot.exclusions_for(image(), image());
     let evidence = retired(range(0x2000, 0x9000));
     let layout = Layout::from_size_align(17, 64).unwrap();

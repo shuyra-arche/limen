@@ -34,7 +34,12 @@ fail before the handoff. Later startup stages compare the descriptions with
 live image and hardware exclusions before admitting any range to Allocator.
 
 Admission also requires the SBI debug console and system reset extensions.
-A minor starts through SBI HSM with its resident record in `a1`.
+Boot checks the firmware Hart against the enabled description and queries
+its actual SBI HSM status when firmware provides that extension. An enabled
+CPU node can supply source-scoped MMU mode and ISA extension facts. The
+`/cpus` node can supply a timebase frequency. Boot exposes the independently
+probed SBI HSM, TIME and IPI extensions. A minor starts through SBI HSM
+with its resident record in `a1`.
 [RV64 entry](../server/src/metal/boot/riscv/) · [SBI](../server/src/metal/firmware/sbi/)
 
 ## UEFI loader
@@ -59,8 +64,10 @@ memory description. The adapter checks the retained copy and runs the same
 bounded parser as OpenSBI. A retained memory description can occupy up to
 2 MiB including firmware padding. The parser limits the combined structure
 and strings blocks to 256 KiB. Use `DeviceTree::Description(bytes)` for a DTB
-whose extent alone needs checking at this handoff, or `None` when the loader
-has no DTB.
+used only for hardware description. Its reservations still constrain RAM
+admission. Pass `None` when the loader has no DTB.
+`Boot::device_tree_description` exposes the checked immutable blob. Node
+identities and property positions stay scoped to that original description.
 
 `Boot::conventional_ram` is present when both memory descriptions were supplied.
 It walks their intersection without allocating, returning whole UEFI pages
@@ -86,7 +93,17 @@ to calibrate a TSC delay. It supplies the page and delay to the xAPIC
 INIT/SIPI path. The reset stub expects a four-level identity map and addresses
 below 4 GiB for the page-table root, GDT base, entry and launch record. The
 minor enters long mode and loads the kernel IDT. The debug ports belong to the
-test image. [x86_64 entry](../server/src/metal/boot/x86_64/)
+test image.
+
+The loader obtains the ACPI 2.0 RSDP from the UEFI configuration table and
+supplies independent read access to the retained ACPI pages. Limen checks
+every requested extent against the final ACPI Reclaim or NVS descriptors
+before asking for its bytes. The bounded reader validates the RSDP, XSDT and
+referenced tables. It preserves raw entries for unsupported bindings and
+decodes MADT processor and interrupt-controller descriptions. Boot compares
+the major's enabled MADT entry and local controller address with CPUID and
+the active xAPIC base. The test also compares the selected minor with MADT
+and checks the ACPI exclusions. [x86_64 entry](../server/src/metal/boot/x86_64/)
 
 ### AArch64 virt
 
