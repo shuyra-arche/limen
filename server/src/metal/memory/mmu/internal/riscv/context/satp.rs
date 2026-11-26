@@ -2,7 +2,7 @@
 
 use core::{arch::asm, marker::PhantomData};
 
-use super::{Context, super::description::RiscvMmu};
+use super::{super::description::RiscvMmu, Context};
 use crate::metal::processor::hart::local::try_current_hart;
 
 impl Context {
@@ -40,7 +40,10 @@ impl<'a> Translation<'a> {
         };
         access.check()?;
         let current = Context::current().ok_or(SwitchError::Current)?;
-        if current.mode().is_some_and(|mode| !description.maximum().supports(mode)) {
+        if current
+            .mode()
+            .is_some_and(|mode| !description.maximum().supports(mode))
+        {
             return Err(SwitchError::Scope);
         }
         Ok(access)
@@ -66,7 +69,10 @@ impl<'a> Translation<'a> {
     /// instruction visibility, remote synchronization and old-root retirement.
     pub unsafe fn switch(&mut self, current: Context, next: Context) -> Result<(), SwitchError> {
         self.check()?;
-        if next.mode().is_some_and(|mode| !self.description.maximum().supports(mode)) {
+        if next
+            .mode()
+            .is_some_and(|mode| !self.description.maximum().supports(mode))
+        {
             return Err(SwitchError::Scope);
         }
         if read() != current.bits() {
@@ -90,7 +96,6 @@ impl<'a> Translation<'a> {
         } else {
             Err(SwitchError::Rejected)
         }
-
     }
 }
 

@@ -70,7 +70,10 @@ pub(crate) unsafe fn admit<'a>(
         Ok(Some(cpus)) => cpus,
         _ => Services::active().reject(format_args!("FAIL Limen boot: missing CPU scope\n")),
     };
-    match cpus.cpu(hart as u64).map(|cpu| cpu.is_some_and(|cpu| cpu.enabled())) {
+    match cpus
+        .cpu(hart as u64)
+        .map(|cpu| cpu.is_some_and(|cpu| cpu.enabled()))
+    {
         Ok(true) => {}
         Ok(false) => Services::active().reject(format_args!(
             "FAIL Limen boot: firmware Hart missing or disabled in DTB\n"
@@ -82,7 +85,10 @@ pub(crate) unsafe fn admit<'a>(
     // The entry ABI supplies the current Hart identity in a0. HSM can also
     // report the state of that named Hart when the extension is available.
     let sbi = platform_services();
-    if sbi.hart_state_management().is_some_and(|service| !service.started(hart)) {
+    if sbi
+        .hart_state_management()
+        .is_some_and(|service| !service.started(hart))
+    {
         Services::active().reject(format_args!("FAIL Limen boot: SBI Hart status mismatch\n"));
     }
     descriptions.cpus = Some(cpus);

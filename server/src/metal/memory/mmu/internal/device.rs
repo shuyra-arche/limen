@@ -48,7 +48,6 @@ impl DeviceWindow {
     /// Validate one aligned word access, without performing hardware I/O.
     pub fn word(&self, offset: usize) -> Option<usize> {
         let address = self.base.checked_add(offset)?;
-        (offset.checked_add(4)? <= self.length && address.is_multiple_of(4))
-            .then_some(address)
+        (offset.checked_add(4)? <= self.length && address.is_multiple_of(4)).then_some(address)
     }
 }

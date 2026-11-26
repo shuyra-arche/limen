@@ -167,6 +167,11 @@ fn external_test(boot: &Boot<'_>) {
     // supervisor domain delegated by OpenSBI establish this test's ownership.
     let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
     let mut mapping = unsafe { DeviceWindow::admit(description.registers(), base) }.unwrap();
+    assert_eq!(mapping.physical(), description.registers());
+    assert_eq!(mapping.word(0), Some(base));
+    assert_eq!(mapping.word(1), None);
+    assert_eq!(mapping.word(description.registers().length().as_usize().unwrap()), None);
+    assert_eq!(mapping.word(usize::MAX), None);
     let mut wrong = unsafe { Reception::admit(boot.hart() as u64, Cause::Timer) }.unwrap();
     assert!(matches!(
         unsafe { Direct::admit(description, &mut mapping, &mut wrong) },

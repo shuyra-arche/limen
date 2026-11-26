@@ -36,7 +36,10 @@ impl PsciDescription<'_> {
                 }
             }
         }
-        Ok(Psci { conduit: self.conduit, version })
+        Ok(Psci {
+            conduit: self.conduit,
+            version,
+        })
     }
 }
 

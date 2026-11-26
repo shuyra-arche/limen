@@ -52,7 +52,9 @@ impl<'a> Counter<'a> {
     /// establishes its relationship to the described source. These conditions
     /// must remain valid throughout this use.
     pub unsafe fn admit(timebase: RiscvTimebase<'a>, hart: u64) -> Option<Self> {
-        if !crate::metal::processor::hart::local::try_current_hart().is_some_and(|current| current.get() as u64 == hart) {
+        if !crate::metal::processor::hart::local::try_current_hart()
+            .is_some_and(|current| current.get() as u64 == hart)
+        {
             return None;
         }
         Some(Self {
@@ -75,7 +77,9 @@ impl<'a> Counter<'a> {
     }
 
     pub fn read(&self) -> Option<u64> {
-        if !crate::metal::processor::hart::local::try_current_hart().is_some_and(|current| current.get() as u64 == self.hart) {
+        if !crate::metal::processor::hart::local::try_current_hart()
+            .is_some_and(|current| current.get() as u64 == self.hart)
+        {
             return None;
         }
         let count;

@@ -16,12 +16,13 @@ pub(crate) unsafe fn wake_minor(
     hart: usize,
     Startup::Sbi(service): Startup,
 ) -> Result<(), StartError> {
-    service.start(
-        hart,
-        minor as *const () as usize,
-        core::ptr::from_ref(slot).expose_provenance(),
-    )
-    .map_err(StartError::Rejected)
+    service
+        .start(
+            hart,
+            minor as *const () as usize,
+            core::ptr::from_ref(slot).expose_provenance(),
+        )
+        .map_err(StartError::Rejected)
 }
 
 #[unsafe(naked)]

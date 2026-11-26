@@ -213,7 +213,10 @@ impl<'a> Direct<'a> {
         // bounded by its checked source/context geometry.
         unsafe {
             asm!("fence iorw, iorw", options(nostack));
-            let value = ptr::without_provenance::<u32>(self.mapping.word(offset).expect("checked APLIC offset")).read_volatile();
+            let value = ptr::without_provenance::<u32>(
+                self.mapping.word(offset).expect("checked APLIC offset"),
+            )
+            .read_volatile();
             asm!("fence iorw, iorw", options(nostack));
             value
         }
@@ -221,7 +224,10 @@ impl<'a> Direct<'a> {
 
     fn write(&mut self, offset: usize, value: u32) {
         unsafe {
-            ptr::without_provenance_mut::<u32>(self.mapping.word(offset).expect("checked APLIC offset")).write_volatile(value);
+            ptr::without_provenance_mut::<u32>(
+                self.mapping.word(offset).expect("checked APLIC offset"),
+            )
+            .write_volatile(value);
             asm!("fence iorw, iorw", options(nostack));
         }
     }
