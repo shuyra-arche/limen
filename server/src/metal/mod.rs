@@ -1,4 +1,5 @@
 pub mod chrono;
+mod devicetree;
 #[cfg(any(limen_target, test))]
 pub(crate) mod identity;
 pub mod interrupt;

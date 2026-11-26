@@ -1,7 +1,7 @@
 //! Interface declarations and exact retained uses of installed modules.
 
 use super::{ImageAddress, Machine, ModuleId, USE};
-use crate::devicetree::NodeId;
+use crate::metal::devicetree::NodeId;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use limen_treaty::model::InternalAddress;
 
