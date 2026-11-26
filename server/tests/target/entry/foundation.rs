@@ -1,9 +1,10 @@
 use core::{mem::MaybeUninit, ptr};
 
 use kernel::{
+    access::MappedRange,
     allocator::{
         Allocation, AllocationId, Allocator, Allowance, Candidate, Config, Construction,
-        Error as SourceError, Initial, Pending,
+        Error as SourceError, Initial, MappedStorage, Pending,
         RamPurpose::Metadata,
         Request, ReturnId, ReturnReceipt, Returned, Search,
         pool::{
@@ -11,7 +12,7 @@ use kernel::{
             StableOwner,
         },
     },
-    entry::boot::{self, Boot, MappedRange, Physical, Retirement as PhysicalRetirement},
+    entry::boot::{self, Boot, Physical, Retirement as PhysicalRetirement},
     pend::{Error, Handle, Initial as InitialPend, PendSpace, Revoker},
     sync::Acquisition::Fast,
 };
@@ -92,8 +93,14 @@ fn retire_group(
 ) -> (&'static Objects, ReturnId) {
     assert_eq!(material.as_ref().unwrap().physical(), physical);
     let mut pool = Pool::new(unsafe { &mut *(&raw mut OBJECT_GROUPS) }).unwrap();
-    let group = unsafe { pool.install(material, &mut Some(mapped(physical))) }.unwrap();
-    assert!(material.is_none());
+    let mapping = unsafe { MappedRange::new(physical, mapped(physical)) }.unwrap();
+    let mut paired = Some(
+        unsafe { MappedStorage::prepare(material.take().unwrap(), mapping) }
+            .ok()
+            .unwrap(),
+    );
+    let group = unsafe { pool.install(&mut paired) }.unwrap();
+    assert!(material.is_none() && paired.is_none());
     let pool = unsafe { (&mut *(&raw mut OBJECTS)).write(pool) };
     let supply = pool.supply(group).unwrap();
     let mut reservation = None;
@@ -250,7 +257,14 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     assert_eq!(managed, unassigned + original.capacity);
 
     let mut pool = Pool::new(unsafe { &mut *(&raw mut DIRECTORY) }).unwrap();
-    unsafe { pool.install(material, &mut Some(mapped(group))) }.unwrap();
+    let mapping = unsafe { MappedRange::new(group, mapped(group)) }.unwrap();
+    let mut paired = Some(
+        unsafe { MappedStorage::prepare(material.take().unwrap(), mapping) }
+            .ok()
+            .unwrap(),
+    );
+    unsafe { pool.install(&mut paired) }.unwrap();
+    assert!(material.is_none() && paired.is_none());
     let pool = unsafe { (&mut *(&raw mut STORAGE)).write(pool) };
     let mut reservation = None;
     pool.reserve(&mut reservation).unwrap();

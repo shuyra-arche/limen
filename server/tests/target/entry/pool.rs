@@ -1,9 +1,10 @@
 use kernel::{
+    access::MappedRange,
     allocator::{
-        Allocation, Allocator, Allowance, Config, Initial,
+        Allocation, Allocator, Allowance, Config, Initial, MappedStorage,
         pool::{GroupId, GroupSlot, Pool},
     },
-    entry::boot::{Boot, MappedRange, Physical},
+    entry::boot::{Boot, Physical},
 };
 
 use super::memory::{mapped, retirement};
@@ -62,9 +63,14 @@ pub(super) unsafe fn install<T>(
     .unwrap()
     .unwrap();
     let mut pool = Pool::new(directory).unwrap();
-    let mut bytes = Some(unsafe { mapped(GROUP) });
-    let group = unsafe { pool.install(allocation, &mut bytes) }.unwrap();
+    let mapping = unsafe { MappedRange::new(GROUP, mapped(GROUP)) }.unwrap();
+    let mut paired = Some(
+        unsafe { MappedStorage::prepare(allocation.take().unwrap(), mapping) }
+            .ok()
+            .unwrap(),
+    );
+    let group = unsafe { pool.install(&mut paired) }.unwrap();
 
-    assert!(allocation.is_none() && bytes.is_none());
+    assert!(allocation.is_none() && paired.is_none());
     (pool, group, source)
 }

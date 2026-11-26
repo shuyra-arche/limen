@@ -1,12 +1,13 @@
 use crate::{
     Boot, FirmwareMap, IMAGE, Physical, Retirement,
+    access::MappedRange,
     allocator::{
         Allocation, Allocator, Allowance, Config, Error, Grant, Initial, Pending,
         RamPurpose::Metadata, Request, Retired, ReturnId, Search,
     },
     describe,
     organization::retired,
-    regions::{MappedRange, Region, RegionSource, Regions},
+    regions::{Region, RegionSource, Regions},
     sync::Acquisition::{Fast, Slow},
 };
 use core::mem::MaybeUninit;

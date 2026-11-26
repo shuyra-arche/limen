@@ -1,9 +1,10 @@
 use kernel::{
+    access::MappedRange,
     allocator::{
         Allocation, Allowance, Config, Error, Grant, Initial, Pending, RamPurpose::Metadata,
         Request, ReturnId, Search,
     },
-    entry::boot::{self, Boot, MappedRange, Physical},
+    entry::boot::{self, Boot, Physical},
     sync::Acquisition::{Fast, Slow},
 };
 

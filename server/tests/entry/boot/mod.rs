@@ -1,3 +1,5 @@
+#[path = "../../../src/metal/mmu/internal/access.rs"]
+pub mod access;
 #[path = "../../../src/metal/firmware/devicetree/mod.rs"]
 mod devicetree;
 mod memory;
@@ -234,7 +236,7 @@ mod entry {
         pub use crate::{
             devicetree::memory::Physical,
             physical::Retirement,
-            regions::{MappedRange, Region, RegionError, RegionSource, Regions, RootStorage},
+            regions::{Region, RegionError, RegionSource, Regions, RootStorage},
         };
     }
 }
