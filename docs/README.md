@@ -16,7 +16,8 @@ validates mapped storage and its Host tests exercise the RV64 page-table entry
 algorithms. See the [formal Metal organization](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/README.md).
 
 Module reads bounded ELF64 `ET_DYN` program headers and a source-scoped
-`PT_NOTE` declaration to select a unique interface. Preparation copies and
+`PT_NOTE` declaration to select a unique exact interface name, ABI and
+version supplied by the consumer. Preparation copies and
 zeroes private mapped storage and applies the target's relative relocations.
 The returned layout gives numeric addresses and requested page permissions.
 The initial mapping owner establishes actual permissions and instruction
@@ -24,8 +25,9 @@ visibility, then publishes into fixed boot slots. A published module owns
 its backing and the uses of already published providers. Each consumer
 keeps an exact ModuleUse through its calls and cleanup. Shut closes new uses.
 The mapping owner settles old mapping and instruction effects before
-reclaim returns the original backing. The RV64 Sv39Root v1 interface binds
-the retained MmuGeometry v1 provider. It encodes branches, base-page leaves
+reclaim returns the original backing. Internal MMU defines MmuGeometry v1
+and its RV64 backend validates the Sv39Root v1 offer and binds the retained
+geometry provider. It encodes branches, base-page leaves
 and a SATP context using a synchronous call through that provider's versioned
 import table. The mapping owner checks the returned encodings, supplies the
 page tables and installs the verified root. See the [formal Module contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/module/README.md).

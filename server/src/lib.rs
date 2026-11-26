@@ -25,7 +25,7 @@ mod basis;
 ))]
 pub use {
     basis::pend,
-    metal::{address, allocator, mmu::internal::access, module, sync},
+    metal::{address, allocator, mmu, mmu::internal::access, module, sync},
 };
 #[cfg(any(
     target_arch = "riscv64",

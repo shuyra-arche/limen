@@ -9,6 +9,10 @@ use kernel::{
     access::MappedRange,
     address::{PhysicalAddress, PhysicalRange},
     entry::boot::{self, Boot, Occupant},
+    mmu::internal::{
+        GEOMETRY,
+        riscv::sv39::{self, ROOT, Sv39Encoding},
+    },
     module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, Permissions, UseError},
 };
 use limen_treaty::model::PageSize;
@@ -208,7 +212,7 @@ impl ImagePages {
 }
 
 fn prepare(
-    contract: Contract,
+    contract: Contract<'_>,
     storage: NonNull<MaybeUninit<u8>>,
 ) -> (Layout<'static>, ReservedPages, ImagePages) {
     let image = ModuleImage::select(
@@ -258,8 +262,6 @@ fn prepare(
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
-    use kernel::module::Sv39Encoding;
-
     let peer = harts::check(&boot);
     let storage = NonNull::new((&raw mut STORAGE).cast::<Storage>()).unwrap();
     let start = storage.addr().get() as u64;
@@ -275,12 +277,10 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     unsafe { initial.activate() };
     initial.verify_active(total, |page| resident.permission(page));
 
-    let (geometry_layout, geometry_material, geometry_pages) =
-        prepare(Contract::MmuGeometry, storage.cast());
-    let (root_layout, root_material, root_pages) =
-        prepare(Contract::Sv39Root, unsafe { storage.add(1) }.cast());
-    let geometry_entry = geometry_layout.entry(Contract::MmuGeometry).unwrap();
-    let root_entry = root_layout.entry(Contract::Sv39Root).unwrap();
+    let (geometry_layout, geometry_material, geometry_pages) = prepare(GEOMETRY, storage.cast());
+    let (root_layout, root_material, root_pages) = prepare(ROOT, unsafe { storage.add(1) }.cast());
+    let geometry_entry = geometry_layout.entry(GEOMETRY).unwrap();
+    let root_entry = root_layout.entry(ROOT).unwrap();
     let images = [&geometry_pages, &root_pages];
     let reserved = total - geometry_pages.count() - root_pages.count();
     let outside_images = |page| {
@@ -310,12 +310,13 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     let geometry = unsafe { slots.publish(geometry_layout, geometry_material, []) }
         .ok()
         .unwrap();
-    let provider = geometry.acquire(Contract::MmuGeometry, 1).unwrap();
-    let retained = geometry.acquire(Contract::MmuGeometry, 1).unwrap();
+    let provider = geometry.acquire(GEOMETRY).unwrap();
+    let retained = geometry.acquire(GEOMETRY).unwrap();
+    sv39::check(&root_layout, core::slice::from_ref(&retained)).unwrap();
     let backend = unsafe { slots.publish(root_layout, root_material, [retained]) }
         .ok()
         .unwrap();
-    let encoder = backend.bind_sv39().unwrap();
+    let encoder = sv39::bind(&backend).unwrap();
     let mut successor = initial.successor();
 
     for (range, _) in resident.ranges() {
@@ -366,10 +367,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     // The minor has left both roots and is physically STOPPED. The provider
     // still cannot retire until the dependent executable and its use end.
     geometry.shut();
-    assert!(matches!(
-        geometry.acquire(Contract::MmuGeometry, 1),
-        Err(UseError::Closed)
-    ));
+    assert!(matches!(geometry.acquire(GEOMETRY), Err(UseError::Closed)));
     assert!(matches!(geometry.retire(), Err(UseError::Busy)));
     drop(provider);
     assert!(matches!(geometry.retire(), Err(UseError::Busy)));

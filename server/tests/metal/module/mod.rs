@@ -1,13 +1,21 @@
-#[path = "../../../src/metal/mmu/internal/access.rs"]
-#[allow(dead_code)]
-pub mod access;
 #[path = "../../../src/metal/address.rs"]
 pub mod address;
 #[path = "../../../src/metal/firmware/devicetree/mod.rs"]
 #[allow(dead_code)]
 pub mod devicetree;
+#[path = "../../../src/metal/mmu/internal/mod.rs"]
+#[allow(dead_code)]
+pub mod mmu_internal;
 #[path = "../../../src/metal/module/mod.rs"]
 pub mod module;
+#[path = "../../../src/metal/mmu/internal/riscv/sv39.rs"]
+pub mod sv39;
+
+pub mod mmu {
+    pub use crate::mmu_internal as internal;
+}
+
+pub use mmu::internal::access;
 
 mod metal {
     pub(crate) mod firmware {
@@ -20,8 +28,10 @@ mod lifecycle;
 use access::MappedRange;
 use address::{PhysicalAddress, PhysicalRange};
 use limen_treaty::model::{ByteLength, PageSize};
-use module::{Abi, Contract, DescriptionError, Error, Machine, ModuleImage, Permissions};
+use mmu::internal::GEOMETRY;
+use module::{Contract, Error, Machine, ModuleImage, Permissions};
 use std::mem::MaybeUninit;
+use sv39::ROOT;
 
 const PAGE: PageSize = PageSize::new(4096).unwrap();
 const VIRTUAL: u64 = 0x4000_0000;
@@ -140,8 +150,9 @@ fn prepares_independently_linked_programs_using_only_program_headers() {
         let bytes = strip_sections(bytes);
         let image = ModuleImage::read(&bytes, machine, PAGE).unwrap();
         let description = image.description();
-        assert_eq!(description.abi(), Abi::Scalar);
-        let interface = description.interface(Contract::MmuGeometry).unwrap();
+        assert_eq!(description.abi(), 1);
+        let interface = description.interface(GEOMETRY).unwrap();
+        assert_eq!(interface.contract(), GEOMETRY);
         assert_eq!(interface.version(), 1);
         assert_eq!(interface.entry(), word(&bytes, 24));
 
@@ -151,10 +162,7 @@ fn prepares_independently_linked_programs_using_only_program_headers() {
         let plan = image.prepare(&mut storage, VIRTUAL).unwrap();
         assert_eq!(plan.physical(), storage.physical());
         assert_eq!(plan.virtual_range(), VIRTUAL..VIRTUAL + length as u64);
-        assert_eq!(
-            plan.entry(Contract::MmuGeometry),
-            Some(VIRTUAL + interface.entry())
-        );
+        assert_eq!(plan.entry(GEOMETRY), Some(VIRTUAL + interface.entry()));
 
         let permissions = [
             Permissions::ReadOnly,
@@ -268,9 +276,7 @@ fn rv64_entry_needs_the_file_bytes_for_its_instruction_width() {
 #[test]
 fn selects_a_unique_provider_from_the_original_images() {
     let (machine, bytes) = IMAGES[1];
-    let select = |source: &[&'static [u8]]| {
-        ModuleImage::select(source, machine, PAGE, Contract::MmuGeometry)
-    };
+    let select = |source: &[&'static [u8]]| ModuleImage::select(source, machine, PAGE, GEOMETRY);
     assert!(select(&[]).unwrap().is_none());
     let source = [bytes];
     let selected = select(&source).unwrap().unwrap();
@@ -285,18 +291,8 @@ fn selects_distinct_rv64_geometry_and_root_images() {
     let (machine, geometry) = IMAGES[0];
     let sources = [geometry, SV39_ROOT];
     for (bytes, abi, own, other) in [
-        (
-            geometry,
-            Abi::Scalar,
-            Contract::MmuGeometry,
-            Contract::Sv39Root,
-        ),
-        (
-            SV39_ROOT,
-            Abi::Sv39Root,
-            Contract::Sv39Root,
-            Contract::MmuGeometry,
-        ),
+        (geometry, 1, GEOMETRY, ROOT),
+        (SV39_ROOT, 2, ROOT, GEOMETRY),
     ] {
         let selected = ModuleImage::select(&sources, machine, PAGE, own)
             .unwrap()
@@ -305,6 +301,7 @@ fn selects_distinct_rv64_geometry_and_root_images() {
         assert_eq!(description.abi(), abi);
         assert!(description.interface(other).is_none());
         let offered = description.interface(own).unwrap();
+        assert_eq!(offered.contract(), own);
         assert_eq!(offered.entry(), word(bytes, 24));
         assert_eq!(offered.version(), 1);
         assert!(matches!(
@@ -315,32 +312,72 @@ fn selects_distinct_rv64_geometry_and_root_images() {
 }
 
 #[test]
-fn rejects_a_mismatched_root_abi_machine_or_version() {
-    for (machine, bytes, path, property, replacement) in [
+fn selects_only_the_exact_abi_and_contract_version() {
+    for (machine, bytes, name, path, property, replacement, offered) in [
         (
             Machine::Riscv64,
             SV39_ROOT,
+            ROOT,
             b"/".as_slice(),
             b"abi".as_slice(),
-            1_u32,
+            7_u32,
+            Contract::new(b"shuyra,sv39-root", 7, 1),
         ),
         (
             Machine::Riscv64,
             SV39_ROOT,
+            ROOT,
             b"/interfaces/sv39-root",
             b"version",
             2,
+            Contract::new(b"shuyra,sv39-root", 2, 2),
         ),
-        (Machine::X86_64, IMAGES[1].1, b"/", b"abi", 2),
+        (
+            Machine::X86_64,
+            IMAGES[1].1,
+            GEOMETRY,
+            b"/",
+            b"abi",
+            2,
+            Contract::new(b"shuyra,mmu-geometry", 2, 1),
+        ),
     ] {
         let offset = note_property(bytes, path, property);
         let mut modified = bytes.to_vec();
         modified[offset..offset + 4].copy_from_slice(&replacement.to_be_bytes());
-        assert!(matches!(
-            ModuleImage::read(&modified, machine, PAGE),
-            Err(Error::Description(DescriptionError::Unsupported))
-        ));
+        let image = ModuleImage::read(&modified, machine, PAGE).unwrap();
+        assert!(image.description().interface(offered).is_some());
+        assert!(
+            ModuleImage::select(&[&modified], machine, PAGE, name)
+                .unwrap()
+                .is_none()
+        );
     }
+}
+
+#[test]
+fn reads_a_contract_name_owned_by_another_domain() {
+    let machine = Machine::Riscv64;
+    let mut bytes = SV39_ROOT.to_vec();
+    let offset = note_property(&bytes, b"/interfaces/sv39-root", b"compatible");
+    let compatible = b"shuyra,gicv3-irq\0";
+    assert_eq!(
+        &bytes[offset..offset + compatible.len()],
+        b"shuyra,sv39-root\0"
+    );
+    bytes[offset..offset + compatible.len()].copy_from_slice(compatible);
+    let offered = Contract::new(b"shuyra,gicv3-irq", 2, 1);
+
+    assert!(
+        ModuleImage::select(&[&bytes], machine, PAGE, offered)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        ModuleImage::select(&[&bytes], machine, PAGE, ROOT)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

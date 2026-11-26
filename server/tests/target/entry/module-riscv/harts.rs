@@ -14,7 +14,8 @@ use kernel::{
     entry::boot::{
         Boot, Minor, RiscvCpus, RiscvExtension, RiscvIsa, RiscvMmu, RiscvMmuMode, Startup,
     },
-    module::{ModuleUse, Sv39Encoding, Sv39Root},
+    mmu::internal::riscv::sv39::{Sv39Encoding, Sv39Root},
+    module::ModuleUse,
 };
 
 use super::mapping;

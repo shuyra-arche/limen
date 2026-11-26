@@ -3,14 +3,10 @@
 mod description;
 mod elf;
 mod lifetime;
-#[cfg(target_arch = "riscv64")]
-mod sv39;
 
-pub use description::{Abi, Contract, Description, DescriptionError, Interface};
+pub use description::{Contract, Description, DescriptionError, Interface};
 pub use elf::{Machine, Permissions};
 pub use lifetime::{Module, ModuleId, ModuleSlots, ModuleUse, Retirement, UseError};
-#[cfg(target_arch = "riscv64")]
-pub use sv39::{Sv39Encoding, Sv39Root};
 
 use crate::{
     access::MappedRange,
@@ -46,7 +42,7 @@ impl<'a> ModuleImage<'a> {
     /// machine and actual initial page granule.
     pub fn read(bytes: &'a [u8], machine: Machine, page_size: PageSize) -> Result<Self, Error> {
         let elf = elf::Elf::read(bytes, machine, page_size.get())?;
-        let description = Description::read(&elf, machine).map_err(Error::Description)?;
+        let description = Description::read(&elf).map_err(Error::Description)?;
         Ok(Self {
             elf,
             description,
@@ -62,7 +58,7 @@ impl<'a> ModuleImage<'a> {
         source: &[&'a [u8]],
         machine: Machine,
         page_size: PageSize,
-        contract: Contract,
+        contract: Contract<'_>,
     ) -> Result<Option<Self>, Error> {
         if source.len() > MAX_IMAGES {
             return Err(Error::Capacity);
@@ -156,6 +152,10 @@ pub struct Layout<'source> {
 }
 
 impl Layout<'_> {
+    pub fn machine(&self) -> Machine {
+        self.image.machine
+    }
+
     pub fn physical(&self) -> PhysicalRange {
         self.physical
     }
@@ -186,7 +186,7 @@ impl Layout<'_> {
     }
 
     /// A numeric entry location for the exact interface in this image.
-    pub fn entry(&self, contract: Contract) -> Option<u64> {
+    pub fn entry(&self, contract: Contract<'_>) -> Option<u64> {
         let interface = self.image.description.interface(contract)?;
         Some(self.place_entry(interface))
     }

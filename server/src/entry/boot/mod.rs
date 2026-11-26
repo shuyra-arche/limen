@@ -23,7 +23,7 @@ pub use crate::metal::{
     execution::description::{RiscvExtension, RiscvIsa},
     firmware::sbi::SbiServices,
     hart::description::{RiscvCpu, RiscvCpus},
-    mmu::internal::description::{RiscvMmu, RiscvMmuMode},
+    mmu::internal::riscv::description::{RiscvMmu, RiscvMmuMode},
     time::RiscvTimebase,
 };
 #[cfg(target_arch = "aarch64")]
