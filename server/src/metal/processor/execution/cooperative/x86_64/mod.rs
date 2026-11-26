@@ -15,12 +15,16 @@ pub(super) fn ready() -> bool {
     if features.edx & REQUIRED != REQUIRED {
         return false;
     }
-    let (cr0, cr4): (usize, usize);
+    let (cr0, cr4, flags): (usize, usize, usize);
     unsafe {
-        asm!("mov {}, cr0", "mov {}, cr4", out(reg) cr0, out(reg) cr4,
-            options(nomem, nostack, preserves_flags));
+        asm!("mov {}, cr0", "mov {}, cr4", "pushfq", "pop {}",
+            out(reg) cr0, out(reg) cr4, out(reg) flags);
     }
-    if cr0 & ((1 << 2) | (1 << 3)) != 0 || cr4 & (1 << 9) == 0 {
+    if cr0 & ((1 << 2) | (1 << 3)) != 0
+        || cr0 & (1 << 31) == 0
+        || cr4 & (1 << 9) == 0
+        || flags & (1 << 9) != 0
+    {
         return false;
     }
     if cr4 & (1 << 18) != 0 {

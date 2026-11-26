@@ -25,8 +25,14 @@ pub struct Description<'a> {
 }
 
 impl<'a> Description<'a> {
-    pub fn read(tree: &DeviceTree<'a>, hart: u64) -> Result<Option<Self>, Error> {
-        let cpus = RiscvCpus::new(*tree)?.ok_or(Error::Missing)?;
+    pub fn read(
+        tree: &DeviceTree<'a>,
+        cpus: &RiscvCpus<'a>,
+        hart: u64,
+    ) -> Result<Option<Self>, Error> {
+        if tree.node(cpus.node().id()).is_none() {
+            return Err(Error::Conflict);
+        }
         if !cpus.cpu(hart)?.is_some_and(|cpu| cpu.enabled()) {
             return Err(Error::Missing);
         }

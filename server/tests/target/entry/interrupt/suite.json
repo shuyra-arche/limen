@@ -42,7 +42,11 @@
     "server/src/metal/chrono/riscv/**",
     "server/src/metal/sync/**",
     "server/src/metal/identity/**",
-    "server/src/metal/memory/mod.rs"
+    "server/src/metal/memory/mod.rs",
+    "server/src/metal/interrupt/internal/supervisor.rs",
+    "server/src/metal/memory/mmu/internal/device.rs",
+    "server/src/metal/memory/mmu/internal/mod.rs",
+    "server/src/entry/boot/handoff.rs"
   ],
   "run": {
     "kind": "qemu",

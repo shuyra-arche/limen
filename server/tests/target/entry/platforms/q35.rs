@@ -53,7 +53,7 @@ fn delay(microseconds: u32) -> bool {
     ticks != 0
 }
 
-pub(super) fn startup() -> boot::Startup {
+fn startup() -> boot::Startup {
     boot::Startup::Xapic {
         trampoline: NonNull::new(TRAMPOLINE.load(Ordering::Acquire))
             .unwrap()
@@ -139,7 +139,7 @@ pub(super) fn check_discovery(boot: &boot::Boot<'_>, target: usize) {
     assert!(boot.conventional_ram().is_none());
 }
 
-pub(super) fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) {
+pub(super) fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) -> boot::Startup {
     assert!(boot.device_tree().is_none());
     assert!(boot.dtb_memory().is_none());
     let idtr = Idtr::read();
@@ -159,6 +159,7 @@ pub(super) fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) {
         assert!(unsafe { gate.add(2).cast::<u16>().read_unaligned() } == cs);
     }
     boot::write("PASS firmware-discovery q35 acpi=1 madt=1 routes=1 retained=1\n");
+    startup()
 }
 
 pub(super) fn report() -> ! {

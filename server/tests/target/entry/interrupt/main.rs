@@ -5,13 +5,15 @@ use core::{arch::naked_asm, fmt::Write, ptr};
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
-        chrono::riscv::RiscvTimebase,
+        chrono::riscv::{Counter, RiscvTimebase},
         interrupt::{
             external::aplic::{self, Direct, Mode},
-            internal::aclint::timer::{self, State, Timer},
+            internal::{
+                aclint::timer::{self, State, Timer},
+                supervisor::Reception,
+            },
         },
-        platform::firmware::sbi::platform_services,
-        processor::hart::riscv::description::RiscvCpus,
+        memory::mmu::internal::device::DeviceWindow,
     },
 };
 
@@ -59,11 +61,11 @@ unsafe extern "C" fn receive(until: u64) -> usize {
     )
 }
 
-fn timer_test(boot: &Boot<'_>) {
+fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     let tree = boot.device_tree_description().expect("trusted RV64 DTB");
-    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
-    let timebase = RiscvTimebase::describe(&cpus).unwrap().unwrap();
-    let description = timer::Description::read(&tree, boot.hart() as u64)
+    let cpus = boot.riscv_cpus();
+    let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();
+    let description = timer::Description::read(&tree, cpus, boot.hart() as u64)
         .unwrap()
         .expect("ACLINT machine timer");
     assert_eq!(description.clock_scope(), timebase.source());
@@ -72,8 +74,14 @@ fn timer_test(boot: &Boot<'_>) {
     assert_eq!(description.hart(), boot.hart() as u64);
     // The runner's exact machine configuration has ACLINT and disables Sstc.
     // OpenSBI owns the machine comparator; the guest never maps or writes it.
-    let services = platform_services();
-    let mut timer = unsafe { Timer::admit(description, timebase, services) }.unwrap();
+    let service = boot.sbi_services().timer().expect("SBI TIME");
+    assert!(unsafe { Counter::admit(timebase, u64::MAX) }.is_none());
+    let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
+    assert!(matches!(
+        unsafe { Timer::admit(description, &counter, service, wrong) },
+        Err(timer::Failure::Scope)
+    ));
+    let mut timer = unsafe { Timer::admit(description, &counter, service, local) }.unwrap();
     assert_eq!(timer.state(), State::Inherited);
     assert_eq!(timer.arm(1), Err(timer::Failure::Busy));
     assert_eq!(timer.rearm(1), Err(timer::Failure::Busy));
@@ -131,11 +139,11 @@ fn uart_write(base: usize, register: usize, value: u8) {
     }
 }
 
-fn external_test(boot: &Boot<'_>) {
+fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     let tree = boot.device_tree_description().unwrap();
-    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
-    let timebase = RiscvTimebase::describe(&cpus).unwrap().unwrap();
-    let description = aplic::Description::read(&tree, boot.hart() as u64)
+    let cpus = boot.riscv_cpus();
+    let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();
+    let description = aplic::Description::read(&tree, cpus, boot.hart() as u64)
         .unwrap()
         .expect("supervisor direct APLIC");
     assert_eq!(description.contexts(), 1);
@@ -154,7 +162,18 @@ fn external_test(boot: &Boot<'_>) {
     let base = usize::try_from(description.registers().start().get()).unwrap();
     // The single-Hart QEMU board, initial bare mapping, quiet device and
     // supervisor domain delegated by OpenSBI establish this test's ownership.
-    let mut direct = unsafe { Direct::admit(description, base) }.unwrap();
+    let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
+    let mut mapping = unsafe { DeviceWindow::admit(description.registers(), base) }.unwrap();
+    assert_eq!(mapping.physical(), description.registers());
+    assert_eq!(mapping.word(0), Some(base));
+    assert_eq!(mapping.word(1), None);
+    assert_eq!(mapping.word(description.registers().length().as_usize().unwrap()), None);
+    assert_eq!(mapping.word(usize::MAX), None);
+    assert!(matches!(
+        unsafe { Direct::admit(description, &mut mapping, wrong) },
+        Err(aplic::Failure::Scope)
+    ));
+    let mut direct = unsafe { Direct::admit(description, &mut mapping, local) }.unwrap();
     assert_eq!(core::mem::size_of::<aplic::Source>(), 2);
     assert_eq!(direct.state(), aplic::State::Prepared);
     assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Vacant);
@@ -177,8 +196,8 @@ fn external_test(boot: &Boot<'_>) {
         // software pending injection and no SBI console calls in this window.
         uart_write(serial, 1, 2);
         uart_write(serial, 0, b' ');
-        let limit = unsafe { timebase.counter() }
-            .checked_add(u64::from(timebase.hertz()) * 2)
+        let limit = counter.read().unwrap()
+            .checked_add(u64::from(counter.hertz()) * 2)
             .unwrap();
         assert_eq!(unsafe { receive(limit) }, EXTERNAL, "supervisor external trap");
         {
@@ -216,10 +235,12 @@ fn external_test(boot: &Boot<'_>) {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
+extern "Rust" fn limen_platform_ready(mut boot: Boot<'_>) -> ! {
     assert_eq!(boot.hart(), 0);
-    timer_test(&boot);
-    external_test(&boot);
+    let mut reception = boot.take_reception().expect("major reception handoff");
+    assert!(boot.take_reception().is_none());
+    timer_test(&boot, &mut reception.timer, &mut reception.external);
+    external_test(&boot, &mut reception.external, &mut reception.timer);
     let enabled: usize;
     unsafe {
         core::arch::asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem));

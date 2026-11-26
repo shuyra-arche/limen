@@ -3,7 +3,7 @@
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 mod satp;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
-pub use satp::{SwitchError, switch};
+pub use satp::{SwitchError, Translation};
 
 use super::{
     Mode, PAGE_BYTES,

@@ -1,7 +1,7 @@
 //! Native PSCI calls through the verified conduit.
 use core::arch::asm;
 
-use super::{Conduit, PsciDescription, PsciError, PsciVersion};
+use super::{Conduit, Psci, PsciDescription, PsciError, PsciVersion};
 
 const VERSION: usize = 0x8400_0000;
 const CPU_ON: usize = 0xc400_0003;
@@ -15,7 +15,7 @@ impl PsciDescription<'_> {
     /// # Safety
     /// The caller must establish that this conduit reaches PSCI from the
     /// current exception level. A tree from an unrelated platform is invalid.
-    pub unsafe fn verify(self) -> Result<PsciVersion, PsciError> {
+    pub unsafe fn verify(self) -> Result<Psci, PsciError> {
         let raw = unsafe { self.conduit.invoke(VERSION, 0, 0, 0) } as i32;
         if raw < 0 {
             return Err(PsciError::Firmware(raw));
@@ -36,7 +36,16 @@ impl PsciDescription<'_> {
                 }
             }
         }
-        Ok(version)
+        Ok(Psci {
+            conduit: self.conduit,
+            version,
+        })
+    }
+}
+
+impl Psci {
+    pub fn version(self) -> PsciVersion {
+        self.version
     }
 
     /// Check the current PSCI state of a described affinity at level zero.
@@ -50,6 +59,18 @@ impl PsciDescription<'_> {
             1 if !online => Ok(()),
             code if code < 0 => Err(PsciError::Firmware(code)),
             _ => Err(PsciError::Affinity),
+        }
+    }
+
+    pub(in crate::metal) unsafe fn cpu_on(
+        self,
+        hart: usize,
+        entry: *const (),
+        context: usize,
+    ) -> Result<(), isize> {
+        match unsafe { self.conduit.invoke(CPU_ON, hart, entry.addr(), context) as i32 } {
+            0 => Ok(()),
+            code => Err(code as isize),
         }
     }
 }
@@ -69,18 +90,6 @@ impl Conduit {
             Self::Smc => invoke!("smc #0"),
         }
         result
-    }
-
-    pub(in crate::metal) unsafe fn cpu_on(
-        self,
-        hart: usize,
-        entry: *const (),
-        context: usize,
-    ) -> Result<(), isize> {
-        match unsafe { self.invoke(CPU_ON, hart, entry.addr(), context) as i32 } {
-            0 => Ok(()),
-            code => Err(code as isize),
-        }
     }
 
     /// Request SYSTEM_OFF through this conduit.

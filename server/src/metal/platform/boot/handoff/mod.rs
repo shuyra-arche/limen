@@ -21,6 +21,10 @@ pub(crate) struct Facts<'a> {
 
 /// Retained firmware descriptions prepared in the startup caller's frame.
 pub(crate) struct Descriptions<'a> {
+    #[cfg(limen_firmware = "sbi")]
+    pub(crate) cpus: Option<crate::metal::processor::hart::riscv::description::RiscvCpus<'a>>,
+    #[cfg(limen_firmware = "sbi")]
+    pub(crate) sbi: Option<crate::metal::platform::firmware::sbi::SbiServices>,
     pub(crate) device_tree: Option<devicetree::DeviceTree<'a>>,
     pub(crate) memory: Option<DtbMemory>,
     // The parser bounds its retained table directory; a missing description
@@ -31,6 +35,10 @@ pub(crate) struct Descriptions<'a> {
 impl Descriptions<'_> {
     pub(crate) const fn new() -> Self {
         Self {
+            #[cfg(limen_firmware = "sbi")]
+            cpus: None,
+            #[cfg(limen_firmware = "sbi")]
+            sbi: None,
             device_tree: None,
             memory: None,
             acpi: None,

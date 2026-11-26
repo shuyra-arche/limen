@@ -27,12 +27,14 @@ impl MaximumMode {
 #[derive(Clone, Copy)]
 pub struct RiscvMmu<'a> {
     source: NodeId<'a>,
+    hart: u64,
     maximum: MaximumMode,
 }
 
 impl<'a> RiscvMmu<'a> {
     /// Interpret `mmu-type`. The result is a description of capacity.
     pub fn describe(cpu: &RiscvCpu<'_, 'a>) -> Result<Option<Self>, Error> {
+        let hart = cpu.id();
         let cpu = cpu.node();
         let Some(property) = cpu.string(b"mmu-type")? else {
             return Ok(None);
@@ -46,12 +48,17 @@ impl<'a> RiscvMmu<'a> {
         };
         Ok(Some(Self {
             source: cpu.id(),
+            hart,
             maximum,
         }))
     }
 
     pub fn source(self) -> NodeId<'a> {
         self.source
+    }
+
+    pub fn hart(self) -> u64 {
+        self.hart
     }
 
     pub fn maximum(self) -> MaximumMode {

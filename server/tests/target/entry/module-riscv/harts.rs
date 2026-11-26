@@ -13,8 +13,7 @@ use kernel::{
     entry::boot::{Boot, Minor, Startup},
     metal::{
         processor::execution::description::riscv::{RiscvExtension, RiscvIsa},
-        processor::hart::riscv::description::RiscvCpus,
-        memory::mmu::internal::riscv::{Mode, context::Context, description::RiscvMmu, encoder::Encoder},
+        memory::mmu::internal::riscv::{Mode, context::{Context, Translation}, description::RiscvMmu, encoder::Encoder},
         module::ModuleUse,
     },
 };
@@ -45,12 +44,12 @@ static ENTRY: AtomicU64 = AtomicU64::new(0);
 static ENCODER: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static RETURNS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 
-pub fn check(boot: &Boot<'_>, modes: &[Mode]) -> usize {
+pub fn check<'a>(boot: &Boot<'a>, modes: &[Mode]) -> [RiscvMmu<'a>; 2] {
     let major = boot.hart();
     assert!(major < 2);
     let minor = 1 - major;
     let tree = boot.device_tree_description().unwrap();
-    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+    let cpus = boot.riscv_cpus();
     let count = tree
         .nodes()
         .filter(|node| {
@@ -59,18 +58,20 @@ pub fn check(boot: &Boot<'_>, modes: &[Mode]) -> usize {
         })
         .count();
     assert_eq!(count, 2);
-    for hart in [major, minor] {
+    let descriptions = [major, minor].map(|hart| {
         let cpu = cpus.cpu(hart as u64).unwrap().unwrap();
         assert!(cpu.enabled());
         let mmu = RiscvMmu::describe(&cpu).unwrap().unwrap();
         assert!(modes.iter().all(|&mode| mmu.maximum().supports(mode)));
         let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
         assert!(isa.has(RiscvExtension::InstructionFence));
-    }
-    assert!(kernel::metal::platform::firmware::sbi::platform_services().hart_state_management());
+        assert_eq!(mmu.hart(), hart as u64);
+        mmu
+    });
+    assert!(boot.sbi_services().hart_state_management().is_some());
     assert_eq!(status(major), STARTED);
     assert_eq!(status(minor), STOPPED);
-    minor
+    descriptions
 }
 
 fn advance(phase: Phase) {
@@ -95,12 +96,14 @@ fn wait(phase: Phase) {
 /// Only this fixture starts the minor, and it does not start it again after
 /// the stop receipt. The held interface has the scalar geometry entry ABI.
 pub unsafe fn exercise(
-    peer: usize,
+    description: RiscvMmu<'_>,
+    service: kernel::metal::platform::firmware::sbi::HartService,
     roots: [Context; 2],
     held: &ModuleUse<'_>,
     encoder: &Encoder<'_>,
     first_returned: impl FnOnce(),
 ) -> [u64; 2] {
+    let peer = usize::try_from(description.hart()).unwrap();
     assert_eq!(PHASE.load(Relaxed), Phase::Idle as u8);
     assert_ne!(roots[0], roots[1]);
     let mode = roots[0].mode().unwrap();
@@ -112,7 +115,10 @@ pub unsafe fn exercise(
     ENTRY.store(held.entry().get(), Relaxed);
     ENCODER.store(shared_pointer(encoder), Relaxed);
     advance(Phase::Initial);
-    unsafe { minor.start(peer, run, peer, Startup::Sbi) }.unwrap();
+    // The launch argument retains the exact peer's checked description until
+    // the HSM stop receipt; the peer admits its own local translation access.
+    let argument = ptr::from_ref(&description).expose_provenance();
+    unsafe { minor.start(peer, run, argument, Startup::Sbi(service)) }.unwrap();
     wait(Phase::FirstReturned);
     assert!(minor.ready());
     assert_eq!(status(peer), STARTED);
@@ -135,16 +141,18 @@ fn shared_pointer<T: Sync>(value: &T) -> *mut () {
     ptr::from_ref(value).cast_mut().cast()
 }
 
-fn run(hart: usize, expected: usize) -> ! {
-    assert_eq!(hart, expected);
+fn run(hart: usize, argument: usize) -> ! {
     wait(Phase::Initial);
+    let description = unsafe { *ptr::with_exposed_provenance::<RiscvMmu<'_>>(argument) };
+    assert_eq!(hart as u64, description.hart());
+    let mut translation = unsafe { Translation::admit(description) }.unwrap();
     let [initial, successor] = ROOTS
         .each_ref()
         .map(|root| Context::from_bits(root.load(Relaxed)).unwrap());
     let entry = ENTRY.load(Relaxed);
     // The two checked contexts preserve this stack, this code and the
     // published modules. Each switch synchronizes this Hart's own fetch.
-    unsafe { mapping::switch_context(Context::BARE, initial) };
+    unsafe { mapping::switch_context(&mut translation, Context::BARE, initial) };
     let query = unsafe { core::mem::transmute::<u64, unsafe extern "C" fn() -> u64>(entry) };
     RETURNS[0].store(unsafe { query() }, Relaxed);
     let pointer = ENCODER.load(Relaxed).cast::<Encoder<'_>>();
@@ -156,12 +164,12 @@ fn run(hart: usize, expected: usize) -> ! {
     advance(Phase::FirstReturned);
 
     wait(Phase::Successor);
-    unsafe { mapping::switch_context(initial, successor) };
+    unsafe { mapping::switch_context(&mut translation, initial, successor) };
     RETURNS[1].store(unsafe { query() }, Relaxed);
     assert_eq!(unsafe { encoder.context(physical) }, Some(successor));
     // Leave the shared address spaces and close prior translation and fetch
     // effects locally, before the major may edit either root.
-    unsafe { mapping::switch_context(successor, Context::BARE) };
+    unsafe { mapping::switch_context(&mut translation, successor, Context::BARE) };
     advance(Phase::Departed);
     let (error, _) = hsm(HART_STOP, 0);
     panic!("minor HSM stop returned {error}");

@@ -34,7 +34,7 @@ pub fn capture() -> Option<LoaderTree<'static>> {
             return Err(Status::UNSUPPORTED);
         }
         unsafe {
-            psci.verify().map_err(|_| Status::UNSUPPORTED)?;
+            let psci = psci.verify().map_err(|_| Status::UNSUPPORTED)?;
             psci.verify_affinity(cpu.affinity, true)
                 .map_err(|_| Status::DEVICE_ERROR)?;
         }

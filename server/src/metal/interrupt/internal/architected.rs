@@ -39,7 +39,7 @@ impl<'a> GenericTimer<'a> {
         };
         Ok(Self {
             source,
-            domain: interrupts.controller().source,
+            domain: interrupts.controller().source(),
             interrupt: interrupts.entries()[index],
             always_on,
         })

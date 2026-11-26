@@ -19,11 +19,20 @@ impl Extensions {
     }
 }
 
-/// Availability reported by the running SBI implementation's BASE extension.
+/// An actual TIME call endpoint, admitted by the BASE probe. Exclusive
+/// comparator authority remains with the consumer, not this service value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimerService(());
+
+/// An admitted HSM call endpoint, not authority over a particular target Hart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HartService(());
+
+/// Services reported by the running SBI implementation's BASE extension.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SbiServices {
-    hart_state_management: bool,
-    timer: bool,
+    hart_state_management: Option<HartService>,
+    timer: Option<TimerService>,
     inter_processor_interrupt: bool,
 }
 
@@ -31,17 +40,18 @@ impl SbiServices {
     pub(crate) fn probe(mut base: impl FnMut(usize, usize) -> (isize, usize)) -> Self {
         let modern = modern(&mut base);
         Self {
-            hart_state_management: modern && supports(&mut base, HART_STATE_MANAGEMENT),
-            timer: modern && supports(&mut base, TIMER),
+            hart_state_management: (modern && supports(&mut base, HART_STATE_MANAGEMENT))
+                .then_some(HartService(())),
+            timer: (modern && supports(&mut base, TIMER)).then_some(TimerService(())),
             inter_processor_interrupt: modern && supports(&mut base, INTER_PROCESSOR_INTERRUPT),
         }
     }
 
-    pub fn hart_state_management(self) -> bool {
+    pub fn hart_state_management(self) -> Option<HartService> {
         self.hart_state_management
     }
 
-    pub fn timer(self) -> bool {
+    pub fn timer(self) -> Option<TimerService> {
         self.timer
     }
 

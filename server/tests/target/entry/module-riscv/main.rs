@@ -9,7 +9,7 @@ use kernel::{
     entry::boot::{self, Boot, Occupant},
     metal::{
         memory::mmu::internal::access::MappedRange,
-        memory::mmu::internal::{GEOMETRY, riscv::{LeafAccess, Mode, context::Context, encoder}},
+        memory::mmu::internal::{GEOMETRY, riscv::{LeafAccess, Mode, context::{Context, Translation}, description::RiscvMmu, encoder}},
         module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, SegmentPermissions, UseError},
     },
 };
@@ -279,13 +279,16 @@ fn prepare(
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
-    let peer = harts::check(&boot, &MODES);
+    let [major, peer] = harts::check(&boot, &MODES);
+    assert!(unsafe { Translation::admit(peer) }.is_err());
+    let mut translation = unsafe { Translation::admit(major) }.unwrap();
+    let service = boot.sbi_services().hart_state_management().expect("SBI HSM");
     let storage = NonNull::new((&raw mut STORAGE).cast::<Storage>()).unwrap();
     let start = storage.addr().get() as u64;
     let resident = Resident::from_boot(&boot, start..start + size_of::<[Storage; 2]>() as u64);
     for (mode, image) in MODES.into_iter().zip(ROOT_IMAGES) {
-        prove_geometry(mode, &resident);
-        exercise(mode, image, peer, &resident, storage);
+        prove_geometry(&mut translation, mode, &resident);
+        exercise(&mut translation, mode, image, peer, service, &resident, storage);
     }
     boot::write(
         "PASS riscv-module-execution virt modes=sv39,sv48,sv57 high-leaves=12 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2\n",
@@ -293,7 +296,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     boot::shutdown(true)
 }
 
-fn prove_geometry(mode: Mode, resident: &Resident) {
+fn prove_geometry(translation: &mut Translation<'_>, mode: Mode, resident: &Resident) {
     static PROBE: u64 = 0x46c8_ce4b_34d7_985e;
     let physical = (&raw const PROBE).addr() as u64;
     assert!(covers(&resident.read_only, &(physical..physical + 8)));
@@ -317,7 +320,7 @@ fn prove_geometry(mode: Mode, resident: &Resident) {
 
     // The identity mapping is still complete. The minor remains stopped,
     // and neither module has been staged or installed.
-    unsafe { root.activate() };
+    unsafe { root.activate(translation) };
     for &address in &probes[..mode.levels()] {
         let value: u64;
         unsafe {
@@ -326,16 +329,18 @@ fn prove_geometry(mode: Mode, resident: &Resident) {
         assert_eq!(value, PROBE);
     }
     unsafe {
-        mapping::switch_context(root.context(), Context::BARE);
+        mapping::switch_context(translation, root.context(), Context::BARE);
         root.clear_inactive();
     }
     root.release();
 }
 
 fn exercise(
+    translation: &mut Translation<'_>,
     mode: Mode,
     image: &'static [u8],
-    peer: usize,
+    peer: RiscvMmu<'_>,
+    service: kernel::metal::platform::firmware::sbi::HartService,
     resident: &Resident,
     storage: NonNull<Storage>,
 ) {
@@ -348,7 +353,7 @@ fn exercise(
     initial.verify_private(total, |page| resident.permission(page));
     // No other Hart is active yet. The independent initial mapping supplies
     // access to both module arenas, both root banks and the trap path.
-    unsafe { initial.activate() };
+    unsafe { initial.activate(translation) };
     initial.verify_active(total, |page| resident.permission(page));
 
     let (geometry_layout, geometry_material, geometry_pages) =
@@ -431,13 +436,14 @@ fn exercise(
     let replies = unsafe {
         harts::exercise(
             peer,
+            service,
             [initial.context(), context],
             &provider,
             &encoder,
             || {
                 // The remote Hart still uses the initial root. Switch the major
                 // while retaining both table sets and both callable instances.
-                mapping::switch_context(initial.context(), context);
+                mapping::switch_context(translation, initial.context(), context);
                 successor.verify_active(published, placed);
                 assert_eq!(encoder.context(root_physical).unwrap(), context);
             },
@@ -491,7 +497,7 @@ fn exercise(
     // Follow the minor's departure with the major's own local completion.
     // The two dormant banks are clear before the next mode can claim them.
     unsafe {
-        mapping::switch_context(context, Context::BARE);
+        mapping::switch_context(translation, context, Context::BARE);
         successor.clear_inactive();
     }
     initial.release();

@@ -7,7 +7,7 @@ use core::{
 };
 
 use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
-use kernel::metal::memory::mmu::internal::riscv::{LeafAccess, Mode, context::{self, Context}};
+use kernel::metal::memory::mmu::internal::riscv::{LeafAccess, Mode, context::{Context, Translation}};
 
 pub const PAGE: u64 = 4096;
 const ENTRIES: usize = 512;
@@ -68,11 +68,11 @@ fn write(pte: &AtomicU64, bits: u64) {
 ///
 /// The caller keeps a complete live identity path for the next context and
 /// establishes both page-table and instruction-store visibility on this Hart.
-pub unsafe fn switch_context(previous: Context, next: Context) {
+pub unsafe fn switch_context(translation: &mut Translation<'_>, previous: Context, next: Context) {
     assert_ne!(previous, next);
     check_interrupts();
     unsafe {
-        context::switch(previous, next).unwrap();
+        translation.switch(previous, next).unwrap();
         asm!("fence.i", options(nostack));
     }
     check_interrupts();
@@ -227,8 +227,8 @@ impl Root {
     }
 
     /// The caller has checked identity mappings for the live image and DTB.
-    pub unsafe fn activate(&self) {
-        unsafe { switch_context(Context::BARE, self.context()) };
+    pub unsafe fn activate(&self, translation: &mut Translation<'_>) {
+        unsafe { switch_context(translation, Context::BARE, self.context()) };
     }
 
     fn check_active(&self) {

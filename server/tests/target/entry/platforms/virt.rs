@@ -7,7 +7,7 @@ use kernel::metal::{
         gic::{GicV3, PrivateInterrupts, Trigger},
     },
     platform::description::devicetree::{DeviceTree, Error as TreeError},
-    platform::firmware::psci::{Conduit, PsciDescription},
+    platform::firmware::psci::{Conduit, Psci, PsciDescription},
     processor::hart::aarch64::description::Aarch64Cpus,
 };
 use uefi::{
@@ -35,9 +35,6 @@ fn conduit() -> Conduit {
         Conduit::Smc
     }
 }
-pub(super) fn startup() -> boot::Startup {
-    boot::Startup::Psci(conduit())
-}
 pub(super) static SERVICES: boot::Services = boot::Services {
     output: Some(|b| unsafe { pl011::write_byte(UART.load(Ordering::Acquire), b) }),
     reset: Some(|_| unsafe { conduit().system_off() }),
@@ -63,7 +60,7 @@ fn discover(bytes: &[u8]) -> Result<(), Status> {
     // AAVMF's retained native tree describes the conduit of this running VM.
     // Probe the calls before installing PSCI as a startup and shutdown service.
     unsafe {
-        psci.verify().map_err(|_| Status::UNSUPPORTED)?;
+        let psci = psci.verify().map_err(|_| Status::UNSUPPORTED)?;
         psci.verify_affinity(major.affinity, true)
             .map_err(|_| Status::COMPROMISED_DATA)?;
         psci.verify_affinity(target.affinity, false)
@@ -114,7 +111,7 @@ pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
     devicetree::copy(discover).map(Some)
 }
 
-pub(super) fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) {
+pub(super) fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) -> boot::Startup {
     let (el, daif, sp, vectors, spsel): (usize, usize, usize, usize, usize);
     unsafe {
         asm!("mrs {}, CurrentEL", "mrs {}, DAIF", "mov {}, sp", "mrs {}, VBAR_EL1",
@@ -141,7 +138,7 @@ pub(super) fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) {
         .expect("validated UEFI virt DTB");
     assert_eq!(firmware.bytes().as_ptr().addr(), tree.start);
     assert_eq!(firmware.bytes().len(), tree.len());
-    inspect_firmware(&firmware, boot.hart());
+    let psci = inspect_firmware(&firmware, boot.hart());
 
     let description = boot.dtb_memory().expect("decoded DTB memory");
     let bank = memory::extent(0x4000_0000, 0x5000_0000);
@@ -172,6 +169,7 @@ pub(super) fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) {
     console
         .write_str("PASS firmware-discovery virt dtb=1 psci=1 affinity=1 gic=1 timer=1\n")
         .expect("firmware discovery output");
+    boot::Startup::Psci(psci)
 }
 
 pub(super) fn report() -> ! {
@@ -182,7 +180,7 @@ pub(super) fn report() -> ! {
     boot::shutdown(true)
 }
 
-fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
+fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) -> Psci {
     let cpus = Aarch64Cpus::read(tree).unwrap().expect("CPU declarations");
     let current = unsafe { cpus.current() }.expect("MPIDR matches an enabled CPU node");
     assert_eq!(current.affinity, major);
@@ -199,47 +197,40 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
         .expect("PSCI declaration");
     assert!(tree.node(psci.source()).is_some());
     assert_eq!(psci.conduit(), conduit());
-    unsafe {
-        psci.verify().expect("live PSCI version and calls");
-        psci.verify_affinity(target, false)
-            .expect("minor affinity before startup");
-    }
+    let psci = unsafe { psci.verify() }.expect("live PSCI version and calls");
+    unsafe { psci.verify_affinity(target, false) }.expect("minor affinity before startup");
 
     let counter = GenericCounter::read(tree)
         .unwrap()
         .expect("generic counter declaration");
     assert_eq!(tree.node(counter.source()).unwrap().name(), b"timer");
-    let interrupts =
-        PrivateInterrupts::read(tree, counter.source()).expect("GIC private interrupts");
+    let controller = GicV3::read(tree).unwrap().expect("GIC description");
+    let interrupts = PrivateInterrupts::read(tree, counter.source(), controller)
+        .expect("GIC private interrupts");
     let timer = GenericTimer::describe(tree, &interrupts).expect("virtual timer role");
     let controller = interrupts.controller();
     assert_eq!(timer.source(), counter.source());
-    assert_eq!(timer.domain(), controller.source);
+    assert_eq!(timer.domain(), controller.source());
     let interrupt = timer.virtual_interrupt();
     assert_eq!(interrupt.intid, 27);
     assert_eq!(interrupt.trigger, Trigger::LevelHigh);
     assert!(timer.always_on());
-    assert!(tree.node(controller.source).is_some());
+    assert!(tree.node(controller.source()).is_some());
     assert_eq!(
-        controller.distributor,
+        controller.distributor(),
         memory::extent(0x0800_0000, 0x0801_0000)
     );
     assert!(
         controller
-            .redistributor
+            .redistributor()
             .covers(memory::extent(0x080a_0000, 0x080c_0000))
     );
     assert!(unsafe { GicV3::cpu_interface_available() });
     let _frequency = unsafe { counter.counter_frequency() }.expect("live generic timer frequency");
+    psci
 }
 
 /// Recheck the original PSCI target only after the minor has entered.
-pub(super) fn inspect_started(tree: &DeviceTree<'_>, target: usize) {
-    let psci = PsciDescription::read(tree)
-        .unwrap()
-        .expect("PSCI declaration");
-    unsafe {
-        psci.verify_affinity(target, true)
-            .expect("live minor affinity");
-    }
+pub(super) fn inspect_started(boot::Startup::Psci(psci): boot::Startup, target: usize) {
+    unsafe { psci.verify_affinity(target, true) }.expect("live minor affinity");
 }
