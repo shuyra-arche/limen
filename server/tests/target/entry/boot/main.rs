@@ -10,9 +10,10 @@ use kernel::entry::boot::{Boot, Physical, Source, shutdown, stack_range, write};
 mod synchronization;
 
 mod allocator;
+#[path = "../foundation.rs"]
+mod foundation;
 #[path = "../memory.rs"]
 mod memory;
-mod pend;
 mod pool;
 #[path = "../pool.rs"]
 mod pool_material;
@@ -200,7 +201,12 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
     allocator::check(&boot);
     pool::check(&boot);
-    pend::check(&boot);
+    let foundation = Physical {
+        start: 0x8430_0000,
+        end: 0x8430_0000 + 4096 * foundation::PAGES as u64,
+    };
+    let evidence = memory::retirement(&boot, foundation);
+    unsafe { foundation::check(&boot, foundation.start, &evidence) };
     synchronization::check();
     synchronization::check_enabled();
     write("PASS synchronization\n");

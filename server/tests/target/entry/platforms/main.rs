@@ -5,6 +5,11 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use kernel::entry::boot;
 
+#[path = "../foundation.rs"]
+mod foundation;
+#[path = "../memory.rs"]
+mod memory;
+mod ram;
 #[path = "../synchronization.rs"]
 mod synchronization;
 
@@ -71,6 +76,10 @@ fn main() -> Status {
             return status;
         }
     };
+    if let Err(status) = ram::prepare() {
+        uefi::println!("Foundation RAM grant: {status:?}");
+        return status;
+    }
     let map = unsafe { uefi::boot::exit_boot_services(None) };
     let meta = map.meta();
     let input = boot::Loader {
@@ -191,6 +200,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
             descriptor.ty == uefi::mem::memory_map::MemoryType::CONVENTIONAL
         );
     }
+    ram::check(&boot);
     let target = TARGET.load(Ordering::Acquire);
     assert_ne!(target, boot.hart());
     let startup = board::startup();

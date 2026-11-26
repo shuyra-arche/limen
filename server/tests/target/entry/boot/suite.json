@@ -31,6 +31,7 @@
     "server/src/basis/pend.rs",
     "server/tests/target/entry/synchronization.rs",
     "server/tests/target/entry/memory.rs",
+    "server/tests/target/entry/foundation.rs",
     "server/tests/target/entry/pool.rs"
   ],
   "run": {
@@ -41,6 +42,7 @@
       "PASS allocator source=1 negative=1 delayed=1 return=1",
       "PASS typed-pool mapped=1 slots=1 reuse=1 joint=1 stable=1 refund=1",
       "PASS bootstrap-foundation pend=1 pool=1 retained=1 refund=1 generation=1 stale=1 revoked=1",
+      "PASS foundation-pressure preflight=1 fragments=1 allocation=1 pool=1 history=1 rediscover=1 shut=1",
       "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1 regions=0 roots=0"
     ]
   }

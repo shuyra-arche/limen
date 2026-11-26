@@ -3,23 +3,23 @@ use core::{mem::MaybeUninit, ptr};
 use kernel::{
     allocator::{
         Allocation, AllocationId, Allocator, Allowance, Candidate, Config, Construction,
-        Error as SourceError, Initial,
+        Error as SourceError, Initial, Pending,
         RamPurpose::Metadata,
         Request, ReturnId, ReturnReceipt, Returned, Search,
-        pool::{Error as PoolError, GroupId, GroupSlot, Occupied, Pool, Retirement, Stable},
+        pool::{
+            Error as PoolError, GroupId, GroupSlot, Occupied, Pool, Reference, Retirement, Stable,
+            StableOwner,
+        },
     },
-    entry::boot::{self, Boot, MappedRange, Physical},
+    entry::boot::{self, Boot, MappedRange, Physical, Retirement as PhysicalRetirement},
     pend::{Error, Handle, Initial as InitialPend, PendSpace, Revoker},
     sync::Acquisition::Fast,
 };
 
-use super::{
-    memory::{mapped, retirement},
-    pool::reference,
-};
+use super::memory::mapped;
 
 const PAGE: u64 = 4096;
-const BASE: u64 = 0x8430_0000;
+pub(super) const PAGES: usize = 6;
 const CONFIG: Config = Config {
     granule: PAGE,
     maximum: 8 * PAGE,
@@ -34,13 +34,6 @@ const CONFIG: Config = Config {
     edits: 64,
 };
 
-const fn pages(first: u64, end: u64) -> Physical {
-    Physical {
-        start: BASE + first * PAGE,
-        end: BASE + end * PAGE,
-    }
-}
-
 static mut DIRECTORY: [GroupSlot<'static, PendSpace>; 1] = [GroupSlot::EMPTY];
 static mut STORAGE: MaybeUninit<Pool<'static, PendSpace>> = MaybeUninit::uninit();
 static mut INITIAL: Option<Allocation> = None;
@@ -49,22 +42,36 @@ static mut SPACE: Option<Occupied<'static, 'static, PendSpace>> = None;
 static mut SPENDING: Option<Handle> = None;
 static mut CLOSING: Option<Revoker> = None;
 static FIRST: Construction = Construction::new();
+static HISTORY: Construction = Construction::new();
 static SECOND: Construction = Construction::new();
 static mut MATERIAL: Option<Allocation> = None;
+static mut HISTORY_RECEIPT: Option<ReturnId> = None;
 static mut RECEIPT: Option<ReturnReceipt> = None;
 
-type Objects = Pool<'static, Stable<u64>>;
-static mut OBJECT_GROUPS: [GroupSlot<'static, Stable<u64>>; 1] = [GroupSlot::EMPTY];
+type Payload = [u64; 32];
+type Objects = Pool<'static, Stable<Payload>>;
+static mut OBJECT_GROUPS: [GroupSlot<'static, Stable<Payload>>; 1] = [GroupSlot::EMPTY];
 static mut OBJECTS: MaybeUninit<Objects> = MaybeUninit::uninit();
 
-fn candidate(source: &'static Allocator, physical: Physical) -> Candidate {
-    let request = Request::new(PAGE, PAGE, physical, None, Metadata).unwrap();
+pub(super) fn reference<'pool, T: Sync>(owner: &StableOwner<'pool, '_, T>) -> Reference<'pool, T> {
+    for _ in 0..16 {
+        match owner.reference() {
+            Ok(reference) => return reference,
+            Err(PoolError::Busy) => {}
+            Err(error) => panic!("unexpected retain error: {error:?}"),
+        }
+    }
+    panic!("retain stayed Busy for 16 attempts");
+}
+
+fn search(source: &'static Allocator, length: u64, physical: Physical) -> Option<Candidate> {
+    let request = Request::new(length, PAGE, physical, None, Metadata).unwrap();
     let mut lookup = source.lookup(request, None).unwrap();
     loop {
         match lookup.step().unwrap() {
-            Search::Candidate(candidate) => return candidate,
+            Search::Candidate(candidate) => return Some(candidate),
             Search::Pending => {}
-            Search::NoRange => panic!("initial Pend has no metadata candidate"),
+            Search::NoRange => return None,
         }
     }
 }
@@ -91,15 +98,23 @@ fn retire_group(
     let supply = pool.supply(group).unwrap();
     let mut reservation = None;
     pool.reserve(&mut reservation).unwrap();
-    let prepared = reservation.unwrap().initialize(Stable::new(0x1234_u64));
+    let prepared = reservation.unwrap().initialize(Stable::new([0x1234; 32]));
     let mut object = None;
     prepared.publish(&mut object).ok().unwrap();
     let owner = object.unwrap().stabilize();
     let reference = reference(&owner);
     let detached = owner.detach();
-    let value = ptr::from_ref(reference.get());
+    let value = ptr::from_ref(&reference.get()[0]);
     assert!((physical.start as usize..physical.end as usize).contains(&value.addr()));
     assert_eq!(unsafe { value.read_volatile() }, 0x1234);
+    // The payload alone is 256 bytes, so 16 records cover every slot in a page.
+    let mut occupied = [const { None }; 16];
+    assert!(supply.geometry.slots <= occupied.len());
+    let occupied = &mut occupied[..supply.geometry.slots - 1];
+    for slot in &mut *occupied {
+        pool.reserve(slot).unwrap();
+    }
+    assert_eq!(pool.reserve(&mut None), Err(PoolError::Full));
     assert_eq!(pool.shut(group), Err(PoolError::Busy));
     let mut reclamation = None;
     let (detached, error) = detached.claim(&mut reclamation).err().unwrap();
@@ -114,11 +129,16 @@ fn retire_group(
         .release()
         .ok()
         .unwrap();
+    assert_eq!(pool.capacity().unwrap().free, 1);
+    for slot in occupied {
+        slot.take().unwrap().cancel().ok().unwrap();
+    }
     assert_eq!(pool.shut(group), Ok(physical));
+    assert_eq!(pool.reserve(&mut None), Err(PoolError::Full));
     assert_eq!(pool.capacity().unwrap().bytes, PAGE as usize);
 
-    // All software references ended. This bare guest never enabled a CPU
-    // translation for the page, and no device or other Hart used it.
+    // All software references ended. The permanent identity view is
+    // still available. No other Hart or device used the page.
     unsafe { pool.begin_return(group, Fast) }.unwrap();
     (pool, supply.retirement)
 }
@@ -135,15 +155,78 @@ fn recover_group(pool: &Objects) -> (GroupId, Returned) {
     (group, refunded)
 }
 
-pub(super) fn check(boot: &Boot<'_>) {
-    let evidence = retirement(boot, pages(0, 6));
+fn exhaust_history(
+    allowance: &Allowance,
+    handle: Handle,
+    physical: Physical,
+    material: &mut Option<Allocation>,
+) {
+    let source = allowance.source();
+    let before = allowance.balance().unwrap();
+    let candidate = search(source, PAGE, physical).unwrap();
+    let id = issue(handle, candidate, &HISTORY);
+    // This consumer keeps the issued page private and never uses its bytes.
+    unsafe { HISTORY.take(material) }.unwrap();
+    let allocation = material.take().unwrap();
+    let region = allocation.region();
+    let retired = unsafe { allocation.retire() };
+    let receipt = unsafe { &mut *(&raw mut HISTORY_RECEIPT) };
+    // The recovery scan consumes no notification or immediate return result.
+    let outcome = source.begin_return(retired, receipt);
+    assert!(outcome.is_ok());
+    let mut cursor = 0;
+    let pending = (0..CONFIG.returns)
+        .find_map(|_| match source.pending(region, &mut cursor, 1).unwrap() {
+            Pending::Found(id) => Some(id),
+            Pending::More => None,
+            Pending::End => panic!("scan ended before finding the original return"),
+        })
+        .expect("original pending return missing from the bounded table");
+    assert_eq!(source.finish_return(pending, Fast).unwrap().allocation, id);
+    assert_eq!(allowance.balance(), Ok(before));
+
+    let candidate = search(source, PAGE, physical).unwrap();
+    assert_eq!(
+        handle.reserve(candidate, &SECOND, Fast),
+        Err(Error::Source(SourceError::ReturnCapacity))
+    );
+    assert_eq!(allowance.balance(), Ok(before));
+    assert_eq!(receipt.take(), Some(pending));
+    source.acknowledge(pending).unwrap();
+}
+
+/// # Safety
+/// The platform fixture must own the whole isolated physical window and its
+/// canonical writable identity view for the duration of the guest.
+pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetirement) {
+    let pages = |first, end| Physical {
+        start: start + first * PAGE,
+        end: start + end * PAGE,
+    };
+    let scope = pages(0, PAGES as u64);
     let mut scratch = [None; 1];
-    let mut regions = boot.regions(PAGE, Some(&evidence), &mut scratch).unwrap();
+    let mut regions = boot.regions(PAGE, Some(evidence), &mut scratch).unwrap();
+    assert!(regions.entries().map(|entry| entry.physical).eq([scope]));
     let backing = pages(0, 2);
     let mut mapping = Some(unsafe { MappedRange::new(backing, mapped(backing)) }.unwrap());
     let material = unsafe { &mut *(&raw mut INITIAL) };
     let allowance = unsafe { &mut *(&raw mut ALLOWANCE) };
     let group = pages(2, 3);
+    assert_eq!(
+        unsafe {
+            regions.allocator(
+                &mut mapping,
+                CONFIG,
+                PAGE - 1,
+                allowance,
+                &mut [Initial::new(group, material)],
+            )
+        }
+        .err(),
+        Some(SourceError::Capacity)
+    );
+    assert!(mapping.is_some() && material.is_none() && allowance.is_none());
+    assert!(regions.entries().map(|entry| entry.physical).eq([scope]));
     let source = unsafe {
         regions.allocator(
             &mut mapping,
@@ -157,7 +240,14 @@ pub(super) fn check(boot: &Boot<'_>) {
     .unwrap();
     let allowance = allowance.as_ref().unwrap();
     let original = allowance.balance().unwrap();
+    let (managed, unassigned) = source.budget(Fast).unwrap();
+    let root = source.root();
+    assert!(mapping.is_none() && regions.entries().next().is_none());
+    assert_eq!(root.start, backing.start);
+    assert!(root.end <= backing.end);
+    assert_eq!(managed + root.end - root.start, scope.end - scope.start);
     assert_eq!(original.occupied, PAGE);
+    assert_eq!(managed, unassigned + original.capacity);
 
     let mut pool = Pool::new(unsafe { &mut *(&raw mut DIRECTORY) }).unwrap();
     unsafe { pool.install(material, &mut Some(mapped(group))) }.unwrap();
@@ -183,13 +273,22 @@ pub(super) fn check(boot: &Boot<'_>) {
     let handle = spending.as_ref().copied().unwrap();
     let revoker = closing.as_ref().unwrap();
 
-    let physical = pages(3, 4);
+    let physical = pages(4, 5);
     let material = unsafe { &mut *(&raw mut MATERIAL) };
-    let first = issue(handle, candidate(source, physical), &FIRST);
+    let first = issue(handle, search(source, PAGE, physical).unwrap(), &FIRST);
     // The guest's durable field receives the material before handing it to the Pool.
     unsafe { FIRST.take(material) }.unwrap();
     assert_eq!(material.as_ref().unwrap().id(), first);
-    assert_eq!(allowance.balance().unwrap().occupied, 2 * PAGE);
+    let charged = allowance.balance().unwrap();
+    assert_eq!(charged.occupied, 2 * PAGE);
+    let free = search(source, PAGE, pages(3, 4)).unwrap();
+    assert!(search(source, PAGE, pages(5, 6)).is_some());
+    assert!(search(source, 2 * PAGE, pages(2, 6)).is_none());
+    assert_eq!(
+        handle.reserve(free, &SECOND, Fast),
+        Err(Error::Source(SourceError::AllocationCapacity))
+    );
+    assert_eq!(allowance.balance(), Ok(charged));
     let (objects, old_return) = retire_group(material, physical);
     assert_eq!(allowance.balance().unwrap().occupied, 2 * PAGE);
 
@@ -200,7 +299,8 @@ pub(super) fn check(boot: &Boot<'_>) {
     assert_eq!(refunded.physical, physical);
     assert_eq!(allowance.balance(), Ok(original));
 
-    let replacement = candidate(source, physical);
+    exhaust_history(allowance, handle, physical, material);
+    let replacement = search(source, PAGE, physical).unwrap();
     let second = issue(handle, replacement, &SECOND);
     assert_ne!(first, second);
     assert_eq!(objects.finish_return(retiring, Fast), Ok(refunded));
@@ -220,6 +320,10 @@ pub(super) fn check(boot: &Boot<'_>) {
     let allocation = material.take().unwrap();
     assert_eq!(allocation.id(), second);
     assert_eq!(allocation.physical(), physical);
+    allowance.shut(Some(allocation.region()), Fast).unwrap();
+    let closed = allowance.balance().unwrap();
+    assert_eq!(closed.occupied, charged.occupied);
+    assert_eq!(closed.available(), 0);
     {
         let byte = unsafe { mapped(allocation.physical()) }[0].as_mut_ptr();
         unsafe {
@@ -228,7 +332,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         }
     }
 
-    // The bare view is no longer in use. No other Hart or device accessed it.
+    // The identity view is no longer borrowed. No other Hart or device accessed it.
     let receipt = unsafe { &mut *(&raw mut RECEIPT) };
     let retired = unsafe { allocation.retire() };
     unsafe { retired.begin_return(receipt) }.ok().unwrap();
@@ -239,19 +343,24 @@ pub(super) fn check(boot: &Boot<'_>) {
         source.finish_return(old_return, Fast),
         Err(SourceError::Stale)
     );
-    assert_eq!(allowance.balance().unwrap().occupied, 2 * PAGE);
+    assert_eq!(allowance.balance(), Ok(closed));
     let returned = receipt.finish(Fast).unwrap();
     assert_eq!(returned.allocation, second);
     assert_eq!(returned.physical, physical);
-    assert_eq!(allowance.balance(), Ok(original));
     assert_eq!(
         source.finish_return(old_return, Fast),
         Err(SourceError::Stale)
     );
     assert_eq!(receipt.finish(Fast), Ok(returned));
     receipt.acknowledge().unwrap();
-    assert_eq!(allowance.balance(), Ok(original));
+    let remaining = allowance.balance().unwrap();
+    assert_eq!(remaining.occupied, PAGE);
+    assert_eq!(remaining.available(), 0);
+    assert_eq!(source.budget(Fast), Ok((managed, managed - PAGE)));
     boot::write(
         "PASS bootstrap-foundation pend=1 pool=1 retained=1 refund=1 generation=1 stale=1 revoked=1\n",
+    );
+    boot::write(
+        "PASS foundation-pressure preflight=1 fragments=1 allocation=1 pool=1 history=1 rediscover=1 shut=1\n",
     );
 }

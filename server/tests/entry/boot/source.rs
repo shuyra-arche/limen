@@ -103,9 +103,11 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
     use crate::{
         allocator::{Construction, RamPurpose},
         pend::{Error as PendError, Initial as InitialPend, PendSpace},
+        sync::Work,
     };
+    use std::{sync::mpsc::sync_channel, thread};
 
-    let cancelled = Box::leak(Box::new(Construction::new()));
+    let cancelled = &*Box::leak(Box::new(Construction::new()));
     let issued = Box::leak(Box::new(Construction::new()));
     let mut initial = None;
     let (allowance, before, issued_id) = {
@@ -199,6 +201,25 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
         assert_eq!(allowance.balance(), Ok(before));
 
         let valid = candidate(PAGE, PAGE, Metadata);
+        let (entered, held) = sync_channel(0);
+        let (release, released) = sync_channel(0);
+        thread::scope(|scope| {
+            scope.spawn(move || {
+                let mut work = Work::<1>::new();
+                let mut plan = work.plan();
+                cancelled.plan(&mut plan).unwrap();
+                plan.execute(Fast, |_| {
+                    entered.send(()).unwrap();
+                    released.recv().unwrap();
+                })
+                .unwrap();
+            });
+            held.recv().unwrap();
+            let result = handle.reserve(valid, cancelled, Fast);
+            release.send(()).unwrap();
+            assert_eq!(result, Err(PendError::Source(Error::Busy)));
+        });
+        assert_eq!(allowance.balance(), Ok(before));
         handle.reserve(valid, cancelled, Fast).unwrap();
         assert_eq!(cancelled.cancel(Fast), Err(Error::Receiver));
         assert_eq!(
