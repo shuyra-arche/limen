@@ -10,8 +10,8 @@ use kernel::{
             RamPurpose::Metadata,
             Request, ReturnId, ReturnReceipt, Returned, Search,
             pool::{
-                Error as PoolError, GroupId, GroupReceipt, GroupSlot, Occupied, Pool, Reference, Retirement,
-                Stable, StableOwner,
+                Error as PoolError, GroupId, GroupReceipt, GroupSlot, Occupied, Pool, Reference,
+                Retirement, Stable, StableOwner,
             },
         },
         memory::mmu::internal::access::MappedRange,
