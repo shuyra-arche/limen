@@ -10,7 +10,7 @@ use core::{
 use crate::metal::hart::local::QueueNode;
 
 #[cfg(test)]
-#[path = "../../../tests/metal/sync/mod.rs"]
+#[path = "../../../../tests/metal/sync/turn/queue.rs"]
 mod tests;
 
 pub(super) struct Queue {

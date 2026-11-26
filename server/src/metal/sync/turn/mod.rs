@@ -8,7 +8,8 @@ use core::{
 
 use crate::metal::hart::local::{self, TurnParticipation};
 
-use super::queue::Queue;
+mod queue;
+use queue::Queue;
 
 /// FIFO protection for ordinary shared state.
 ///

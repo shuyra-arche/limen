@@ -3,7 +3,6 @@ pub mod allocator;
 #[cfg(any(limen_target, test))]
 pub(crate) mod boot;
 pub mod execution;
-pub(crate) mod fdt;
 pub mod firmware;
 pub mod hart;
 #[cfg(any(limen_target, test))]

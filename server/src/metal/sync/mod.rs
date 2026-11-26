@@ -4,7 +4,6 @@
 //! protection for the current Hart. Synchronous exception entry cannot use it.
 
 mod leaf;
-mod queue;
 mod snap;
 mod turn;
 

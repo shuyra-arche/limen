@@ -1,6 +1,3 @@
-#[repr(align(8))]
-struct Header([u32; 10]);
-
 fn admitted(structure_size: u32, strings: u32, strings_size: u32, reservations: u32) -> bool {
     let words = [
         0xd00d_feed,
@@ -14,9 +11,7 @@ fn admitted(structure_size: u32, strings: u32, strings_size: u32, reservations: 
         strings_size,
         structure_size,
     ];
-    let header = Header(words.map(u32::to_be));
-    // The parser reads only this aligned, initialized header.
-    unsafe { super::extent(&raw const header.0, 0..0).is_some() }
+    super::header_layout(words).is_some()
 }
 
 #[test]

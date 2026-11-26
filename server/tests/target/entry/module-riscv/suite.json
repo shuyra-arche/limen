@@ -23,7 +23,7 @@
     "server/src/metal/firmware/map.rs",
     "server/src/metal/firmware/acpi/**",
     "server/src/metal/firmware/devicetree/**",
-    "server/src/metal/fdt.rs",
+    "server/src/devicetree/**",
     "server/src/metal/firmware/facts.rs",
     "server/src/metal/firmware/sbi/**",
     "server/src/metal/hart/riscv/description.rs",

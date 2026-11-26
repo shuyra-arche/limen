@@ -1,7 +1,7 @@
 //! Device tree bindings used to interpret firmware facts.
 
-use crate::metal::fdt::printable;
-pub use crate::metal::fdt::{DeviceTree, Error, Node, NodeId, Nodes, Property};
+use crate::devicetree::printable;
+pub use crate::devicetree::{DeviceTree, Error, Node, NodeId, Nodes, Property};
 
 pub mod memory;
 mod registers;

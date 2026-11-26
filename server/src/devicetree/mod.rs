@@ -2,7 +2,7 @@
 
 use core::{fmt, ops::Range};
 
-const ALIGNMENT: usize = 8;
+pub(crate) const ALIGNMENT: usize = 8;
 pub(crate) const HEADER_SIZE: usize = 40;
 const MAGIC: u32 = 0xd00d_feed;
 pub(crate) const MAX_BLOCK_BYTES: usize = 256 * 1024;
@@ -30,34 +30,14 @@ pub enum Error {
     Missing,
 }
 
-/// # Safety
-///
-/// The trusted firmware must supply immutable readable storage for the header
-/// at a nonzero aligned address. This check reads only the fixed-size header.
-#[cfg(any(limen_firmware = "sbi", test))]
-pub(crate) unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Option<Range<usize>> {
-    let address = header.addr();
-    let header_end = address.checked_add(HEADER_SIZE)?;
-    if header.is_null()
-        || !address.is_multiple_of(ALIGNMENT)
-        || overlaps(&(address..header_end), &image)
-    {
-        return None;
-    }
-
-    let header = layout(unsafe { header.read_volatile() }.map(u32::from_be))?;
-    let extent = address..address.checked_add(header.size as usize)?;
-    (!overlaps(&extent, &image)).then_some(extent)
-}
-
-struct Layout {
-    size: u32,
+pub(crate) struct HeaderLayout {
+    pub(crate) size: u32,
     structure: Range<u32>,
     strings: Range<u32>,
     reservations: u32,
 }
 
-fn layout(header: [u32; 10]) -> Option<Layout> {
+pub(crate) fn header_layout(header: [u32; 10]) -> Option<HeaderLayout> {
     let [
         magic,
         size,
@@ -84,7 +64,7 @@ fn layout(header: [u32; 10]) -> Option<Layout> {
     {
         return None;
     }
-    Some(Layout {
+    Some(HeaderLayout {
         size,
         structure,
         strings,
@@ -102,7 +82,7 @@ fn overlaps<T: Ord>(first: &Range<T>, second: &Range<T>) -> bool {
     !first.is_empty() && !second.is_empty() && first.start < second.end && second.start < first.end
 }
 
-/// A structurally validated, bounded view of one immutable firmware blob.
+/// A structurally validated, bounded view of one immutable flattened tree.
 #[derive(Clone, Copy)]
 pub struct DeviceTree<'a> {
     bytes: &'a [u8],
@@ -131,7 +111,7 @@ impl<'a> DeviceTree<'a> {
         for (word, raw) in words.iter_mut().zip(header.as_chunks::<4>().0) {
             *word = u32::from_be_bytes(*raw);
         }
-        let layout = layout(words).ok_or(Error::Format)?;
+        let layout = header_layout(words).ok_or(Error::Format)?;
         if layout.size as usize != bytes.len() {
             return Err(Error::Format);
         }
@@ -563,5 +543,5 @@ impl<'a> Cursor<'a> {
 }
 
 #[cfg(test)]
-#[path = "../../tests/metal/firmware/devicetree/header.rs"]
+#[path = "../../tests/devicetree/header.rs"]
 mod tests;

@@ -1,7 +1,7 @@
 use super::{DeviceTree, Error, Node, registers::Cells};
-use crate::metal::fdt::RESERVATION_LIMIT;
+use crate::devicetree::RESERVATION_LIMIT;
 #[cfg(any(limen_firmware = "sbi", test))]
-use crate::metal::fdt::{HEADER_SIZE, MAX_BLOCK_BYTES, extent};
+use crate::devicetree::{ALIGNMENT, HEADER_SIZE, MAX_BLOCK_BYTES, header_layout};
 #[cfg(any(limen_firmware = "sbi", test))]
 use core::{ops::Range, slice};
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
@@ -66,6 +66,31 @@ impl DtbMemory {
         self.reservation_count += 1;
         Ok(())
     }
+}
+
+/// # Safety
+///
+/// The trusted firmware must supply immutable readable storage for the header
+/// at a nonzero aligned address. This check reads only the fixed-size header.
+#[cfg(any(limen_firmware = "sbi", test))]
+unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Option<Range<usize>> {
+    let address = header.addr();
+    let header_end = address.checked_add(HEADER_SIZE)?;
+    if header.is_null()
+        || !address.is_multiple_of(ALIGNMENT)
+        || overlaps_extent(&(address..header_end), &image)
+    {
+        return None;
+    }
+
+    let header = header_layout(unsafe { header.read_volatile() }.map(u32::from_be))?;
+    let extent = address..address.checked_add(header.size as usize)?;
+    (!overlaps_extent(&extent, &image)).then_some(extent)
+}
+
+#[cfg(any(limen_firmware = "sbi", test))]
+fn overlaps_extent(first: &Range<usize>, second: &Range<usize>) -> bool {
+    !first.is_empty() && !second.is_empty() && first.start < second.end && second.start < first.end
 }
 
 /// # Safety

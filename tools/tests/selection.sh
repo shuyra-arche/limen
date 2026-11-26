@@ -48,7 +48,7 @@ change server/src/metal/hart/local/node.rs
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/hart/local/protection.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/sync/turn.rs
+change server/src/metal/sync/turn/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 for source in server/src/metal/execution/mod.rs server/src/metal/execution/cooperative.rs; do
@@ -194,7 +194,7 @@ mkdir -p server/src/metal/boot/aarch64
 git mv server/src/metal/boot/{x86_64,aarch64}/example.rs
 git commit -qm rename
 [[ $(bash "$discover" . "$previous" | jq -r 'map(.platform)|unique|join(" ")') == 'q35 virt' ]]
-change server/src/metal/fdt.rs
+change server/src/devicetree/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 change server/src/metal/hart/local/mod.rs
