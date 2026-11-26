@@ -2,12 +2,10 @@
 
 use core::ptr;
 
-use crate::{
+use crate::metal::{
     address::{PhysicalAddress, PhysicalRange},
-    metal::{
-        identity::{GenerationTable, Key, Reservation as SlotReservation, ReserveError},
-        sync::{TurnMode, TurnWorkspace},
-    },
+    identity::{GenerationTable, Key, Reservation as SlotReservation, ReserveError},
+    sync::{TurnMode, TurnWorkspace},
 };
 
 use super::{

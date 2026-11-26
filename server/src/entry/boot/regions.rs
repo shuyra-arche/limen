@@ -1,13 +1,13 @@
 //! Organize early physical ranges and reserve explicitly mapped root storage.
 
 use super::{Boot, Exclusions, Retirement, bump::Bump};
-use crate::{
-    access::MappedRange,
+use crate::metal::{
     address::{PhysicalRange, length},
     allocator::{
         Allocator, Allowance, Config, Error, Initial, RegionDescription, RegionOrigin,
         RootInitialization, RootStorage,
     },
+    mmu::internal::access::MappedRange,
 };
 use core::alloc::Layout;
 use limen_treaty::model::{Alignment, ByteLength};
@@ -53,7 +53,7 @@ impl RootPlan {
 }
 
 impl<'a> Regions<'a> {
-    pub(super) fn organize(
+    pub(crate) fn organize(
         boot: &Boot<'_>,
         exclusions: &Exclusions<'_>,
         granule: ByteLength,

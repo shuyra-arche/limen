@@ -2,9 +2,9 @@
 
 use core::ptr;
 
-use crate::{
+use crate::metal::{
     address::length,
-    metal::sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
+    sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
 };
 
 use super::{
@@ -190,7 +190,7 @@ impl Allocator {
             .access(slot)
             .ok_or(Error::Protection)?
             .open(allowance)?;
-        if amount > balance.available() {
+        if amount > balance.available().get() {
             return Err(Error::Balance);
         }
         let state = held.access(&region.state).ok_or(Error::Protection)?;
@@ -200,7 +200,7 @@ impl Allocator {
             .occupy(candidate.physical)
             .map_err(|_| Error::Changed)?;
         let id = state.record(candidate.physical, allowance, Phase::Reserved(construction));
-        balance.reserved += amount;
+        balance.reserve(amount);
         held.access(slot).expect("Allowance").state = SlotState::Open(balance);
         *held.access(&construction.state).expect("receiver") = Preparation::Reserved(Reservation {
             source: self,
@@ -248,8 +248,7 @@ impl Allocator {
         let physical = record.physical;
         record.phase = Phase::Issued;
         let amount = length(physical).get();
-        balance.reserved -= amount;
-        balance.occupied += amount;
+        balance.issue(amount);
         held.access(slot).expect("Allowance").state = SlotState::Open(balance);
         *held.access(&construction.state).expect("receiver") =
             Preparation::Issued(Some(Allocation::issued(self, reservation.id, physical)));

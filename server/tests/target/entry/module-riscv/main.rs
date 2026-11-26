@@ -6,14 +6,16 @@ mod mapping;
 
 use core::{arch::asm, fmt::Write, mem::MaybeUninit, ops::Range, ptr::NonNull};
 use kernel::{
-    access::MappedRange,
-    address::{PhysicalAddress, PhysicalRange},
     entry::boot::{self, Boot, Occupant},
-    mmu::internal::{
-        GEOMETRY,
-        riscv::sv39::{self, ROOT, Sv39Encoding},
+    metal::{
+        address::{PhysicalAddress, PhysicalRange},
+        mmu::internal::access::MappedRange,
+        mmu::internal::{
+            GEOMETRY,
+            riscv::sv39::{self, ROOT, Sv39Encoding},
+        },
+        module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, Permissions, UseError},
     },
-    module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, Permissions, UseError},
 };
 use limen_treaty::model::PageSize;
 use mapping::PAGE;
@@ -367,7 +369,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     // The minor has left both roots and is physically STOPPED. The provider
     // still cannot retire until the dependent executable and its use end.
     geometry.shut();
-    assert!(matches!(geometry.acquire(GEOMETRY), Err(UseError::Closed)));
+    assert!(matches!(geometry.acquire(GEOMETRY), Err(UseError::Shut)));
     assert!(matches!(geometry.retire(), Err(UseError::Busy)));
     drop(provider);
     assert!(matches!(geometry.retire(), Err(UseError::Busy)));

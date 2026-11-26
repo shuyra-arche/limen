@@ -61,14 +61,14 @@ pub(super) fn startup() -> boot::Startup {
     }
 }
 
-pub(super) fn acpi_root() -> Option<kernel::address::PhysicalAddress> {
+pub(super) fn acpi_root() -> Option<kernel::metal::address::PhysicalAddress> {
     uefi::system::with_config_table(|entries| {
         let mut roots = entries
             .iter()
             .filter(|entry| entry.guid == uefi::table::cfg::ConfigTableEntry::ACPI2_GUID);
         let root = roots.next()?.address;
         (!root.is_null() && roots.next().is_none())
-            .then(|| kernel::address::PhysicalAddress::new(root.addr() as u64))
+            .then(|| kernel::metal::address::PhysicalAddress::new(root.addr() as u64))
     })
 }
 

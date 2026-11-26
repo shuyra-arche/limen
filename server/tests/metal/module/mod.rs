@@ -1,37 +1,11 @@
-#[path = "../../../src/metal/address.rs"]
-pub mod address;
-#[path = "../../../src/metal/firmware/devicetree/mod.rs"]
-#[allow(dead_code)]
-pub mod devicetree;
-#[path = "../../../src/metal/mmu/internal/mod.rs"]
-#[allow(dead_code)]
-pub mod mmu_internal;
-#[path = "../../../src/metal/module/mod.rs"]
-pub mod module;
-#[path = "../../../src/metal/mmu/internal/riscv/sv39.rs"]
-pub mod sv39;
-
-pub mod mmu {
-    pub use crate::mmu_internal as internal;
-}
-
-pub use mmu::internal::access;
-
-mod metal {
-    pub(crate) mod firmware {
-        pub(crate) use crate::devicetree;
-    }
-}
-
 mod lifecycle;
 
-use access::MappedRange;
-use address::{PhysicalAddress, PhysicalRange};
+use kernel::metal::address::{PhysicalAddress, PhysicalRange};
+use kernel::metal::mmu::internal::access::MappedRange;
+use kernel::metal::mmu::internal::{GEOMETRY, riscv::sv39::ROOT};
+use kernel::metal::module::{Contract, Error, Machine, ModuleImage, Permissions};
 use limen_treaty::model::{ByteLength, PageSize};
-use mmu::internal::GEOMETRY;
-use module::{Contract, Error, Machine, ModuleImage, Permissions};
 use std::mem::MaybeUninit;
-use sv39::ROOT;
 
 const PAGE: PageSize = PageSize::new(4096).unwrap();
 const VIRTUAL: u64 = 0x4000_0000;
@@ -96,8 +70,10 @@ fn note_property(bytes: &[u8], path: &[u8], name: &[u8]) -> usize {
     let fdt_length =
         u32::from_le_bytes(bytes[note.offset + 4..note.offset + 8].try_into().unwrap()) as usize;
     let fdt_start = note.offset + 12 + name_length.next_multiple_of(4);
-    let description =
-        devicetree::DeviceTree::new(&bytes[fdt_start..fdt_start + fdt_length]).unwrap();
+    let description = kernel::metal::firmware::devicetree::DeviceTree::new(
+        &bytes[fdt_start..fdt_start + fdt_length],
+    )
+    .unwrap();
     let property = description
         .find_path(path)
         .unwrap()

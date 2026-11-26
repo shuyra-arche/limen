@@ -62,17 +62,20 @@ impl LocalProtection {
     }
 }
 
-fn protect() -> Result<(&'static HartLocal, DropGuard<usize, impl FnOnce(usize)>), Error> {
+type InterruptGuard = DropGuard<usize, fn(usize)>;
+
+fn protect() -> Result<(&'static HartLocal, InterruptGuard), Error> {
     if !ordinary_entry() {
         return Err(Error::Context);
     }
-    let interrupt = DropGuard::new(unsafe { backend::mask_interrupts() }, |saved| unsafe {
-        backend::restore_interrupts(saved)
-    });
+    let interrupt: InterruptGuard =
+        DropGuard::new(unsafe { backend::mask_interrupts() }, |saved| unsafe {
+            backend::restore_interrupts(saved)
+        });
     Ok((installed().ok_or(Error::Context)?, interrupt))
 }
 
-#[cfg(target_arch = "riscv64")]
+#[cfg(all(limen_target, target_arch = "riscv64"))]
 pub(crate) fn can_switch() -> bool {
     let Ok((local, _interrupt)) = protect() else {
         return false;

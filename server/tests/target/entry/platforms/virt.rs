@@ -1,8 +1,12 @@
 use core::{arch::asm, fmt::Write};
 use kernel::entry::boot::{
-    self, Aarch64Cpus, PsciDescription,
+    self,
     arm::{GenericTimer, GicV3, Trigger},
-    devicetree::{DeviceTree, Error as TreeError},
+};
+use kernel::metal::{
+    firmware::devicetree::{DeviceTree, Error as TreeError},
+    firmware::psci::PsciDescription,
+    hart::Aarch64Cpus,
 };
 use uefi::{
     Status,

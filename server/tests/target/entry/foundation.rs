@@ -1,21 +1,23 @@
 use core::{mem::MaybeUninit, ptr};
 
 use kernel::{
-    access::MappedRange,
-    address::{PhysicalAddress, PhysicalRange, length},
-    allocator::{
-        Allocation, AllocationConstruction, AllocationId, Allocator, Allowance, Candidate, Config,
-        Error as SourceError, Initial, MappedStorage, Pending,
-        RamPurpose::Metadata,
-        Request, ReturnId, ReturnReceipt, Returned, Search,
-        pool::{
-            Error as PoolError, GroupId, GroupSlot, Occupied, Pool, Reference, Retirement, Stable,
-            StableOwner,
-        },
-    },
+    basis::pend::{Error, Handle, Initial as InitialPend, PendSpace, Revoker},
     entry::boot::{self, Boot, Retirement as PhysicalRetirement},
-    pend::{Error, Handle, Initial as InitialPend, PendSpace, Revoker},
-    sync::TurnMode::Fast,
+    metal::{
+        address::{PhysicalAddress, PhysicalRange, length},
+        allocator::{
+            Allocation, AllocationConstruction, AllocationId, Allocator, Allowance, Candidate,
+            Config, Error as SourceError, Initial, MappedStorage, Pending,
+            RamPurpose::Metadata,
+            Request, ReturnId, ReturnReceipt, Returned, Search,
+            pool::{
+                Error as PoolError, GroupId, GroupSlot, Occupied, Pool, Reference, Retirement,
+                Stable, StableOwner,
+            },
+        },
+        mmu::internal::access::MappedRange,
+        sync::TurnMode::Fast,
+    },
 };
 
 use super::memory::{extent, mapped};
@@ -275,14 +277,17 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     .unwrap();
     let allowance = allowance.as_ref().unwrap();
     let original = allowance.balance().unwrap();
-    let (managed, unassigned) = source.budget(Fast).unwrap();
+    let (managed, unassigned) = source
+        .budget(Fast)
+        .map(|(total, unassigned)| (total.get(), unassigned.get()))
+        .unwrap();
     let root = source.root();
     assert!(mapping.is_none() && regions.entries().next().is_none());
     assert_eq!(root.start(), backing.start());
     assert!(backing.covers(root));
     assert_eq!(managed + length(root).get(), length(scope).get());
-    assert_eq!(original.occupied, PAGE);
-    assert_eq!(managed, unassigned + original.capacity);
+    assert_eq!(original.occupied().get(), PAGE);
+    assert_eq!(managed, unassigned + original.capacity().get());
 
     let mut pool = Pool::new(unsafe { &mut *(&raw mut DIRECTORY) }).unwrap();
     let mapping = unsafe { mapped(group) };
@@ -322,7 +327,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     unsafe { FIRST.take(material) }.unwrap();
     assert_eq!(material.as_ref().unwrap().id(), first);
     let charged = allowance.balance().unwrap();
-    assert_eq!(charged.occupied, 2 * PAGE);
+    assert_eq!(charged.occupied().get(), 2 * PAGE);
     let free = search(source, PAGE, pages(3, 4)).unwrap();
     assert!(search(source, PAGE, pages(5, 6)).is_some());
     assert!(search(source, 2 * PAGE, pages(2, 6)).is_none());
@@ -332,7 +337,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     );
     assert_eq!(allowance.balance(), Ok(charged));
     let (objects, old_return) = retire_group(material, physical);
-    assert_eq!(allowance.balance().unwrap().occupied, 2 * PAGE);
+    assert_eq!(allowance.balance().unwrap().occupied().get(), 2 * PAGE);
 
     // The original consumer has ended. Recovery finds the handed-off group
     // using the persistent bounded directory and settles with no spending role.
@@ -346,7 +351,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     let second = issue(handle, replacement, &SECOND);
     assert_ne!(first, second);
     assert_eq!(objects.finish_return(retiring, Fast), Ok(refunded));
-    assert_eq!(allowance.balance().unwrap().occupied, 2 * PAGE);
+    assert_eq!(allowance.balance().unwrap().occupied().get(), 2 * PAGE);
     revoker.revoke().unwrap();
     assert_eq!(
         handle.reserve(replacement, &SECOND, Fast),
@@ -364,8 +369,8 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     assert_eq!(allocation.physical(), physical);
     allowance.shut(Some(allocation.region()), Fast).unwrap();
     let closed = allowance.balance().unwrap();
-    assert_eq!(closed.occupied, charged.occupied);
-    assert_eq!(closed.available(), 0);
+    assert_eq!(closed.occupied().get(), charged.occupied().get());
+    assert_eq!(closed.available().get(), 0);
     {
         let mut mapping = unsafe { mapped(allocation.physical()) };
         check_read_write(&mut mapping, 0x5a, 0xa5);
@@ -393,9 +398,14 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     assert_eq!(receipt.finish(Fast), Ok(returned));
     receipt.acknowledge().unwrap();
     let remaining = allowance.balance().unwrap();
-    assert_eq!(remaining.occupied, PAGE);
-    assert_eq!(remaining.available(), 0);
-    assert_eq!(source.budget(Fast), Ok((managed, managed - PAGE)));
+    assert_eq!(remaining.occupied().get(), PAGE);
+    assert_eq!(remaining.available().get(), 0);
+    assert_eq!(
+        source
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok((managed, managed - PAGE))
+    );
     boot::write(
         "PASS bootstrap-foundation pend=1 pool=1 retained=1 refund=1 generation=1 stale=1 revoked=1\n",
     );

@@ -9,7 +9,7 @@ use core::{
 };
 
 use super::{Contract, Layout, Machine};
-use crate::address::PhysicalRange;
+use crate::metal::address::PhysicalRange;
 
 // Closing admission and observing the final release cover the same
 // population because the phase and use count share a modification order.
@@ -26,7 +26,7 @@ const RETIRED: usize = 5;
 pub enum UseError {
     Interface,
     Capacity,
-    Closed,
+    Shut,
     Open,
     Busy,
     Retired,
@@ -163,7 +163,7 @@ impl<'slot, Material, const DEPENDENCIES: usize> Module<'slot, '_, '_, Material,
         let mut state = self.state.load(Ordering::Relaxed);
         loop {
             if state & PHASE != OPEN {
-                return Err(UseError::Closed);
+                return Err(UseError::Shut);
             }
             let next = state.checked_add(USE).ok_or(UseError::Capacity)?;
             match self.state.compare_exchange_weak(

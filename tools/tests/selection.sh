@@ -5,7 +5,7 @@ root=$(git rev-parse --show-toplevel)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 cd "$root"
-git ls-files -z 'server/tests/**/suite.json' 'server/tests/**/host/Cargo.toml' |
+git ls-files -z 'server/tests/**/suite.json' |
     tar --null -T - -cf - | tar -C "$scratch" -xf -
 cd "$scratch"
 git init -q
@@ -32,11 +32,11 @@ boards() {
 change server/src/metal/boot/x86_64/mod.rs
 [[ $(boards) == q35 ]]
 bash "$discover" . "$base" | jq -e 'map(select(.id == "platform-boot").profile) | sort == ["debug","release"]' >/dev/null
-bash "$checks" . "$base" | jq -e '(.full or .runner or .rv64) == false and .manifests == []' >/dev/null
+bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 
 change server/src/metal/hart/x86_64.rs
 [[ $(boards) == q35 ]]
-bash "$checks" . "$base" | jq -e '(.full or .runner or .rv64) == false and .manifests == []' >/dev/null
+bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 change server/src/metal/hart/aarch64.rs
 [[ $(boards) == virt ]]
 change server/src/metal/hart/riscv.rs
@@ -45,17 +45,17 @@ change server/src/metal/hart/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/hart/node.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/sync/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/hart/protection.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/sync/turn.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/sync/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 change server/src/metal/execution/mod.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["boot-handoff","kernel-execution","kernel-execution-harts","riscv-module-execution"]' >/dev/null
 change server/src/metal/identity/mod.rs
 [[ $(bash "$discover" . "$base") == "$(jq -c 'map(select(.id != "module-execution" and .id != "riscv-module-execution"))' <<<"$full")" ]]
-bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/identity/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 
 change server/tests/target/entry/platforms/io.rs
 [[ $(boards) == q35 ]]
@@ -65,32 +65,32 @@ change server/tests/target/entry/platforms/q35.rs server/src/metal/boot/aarch64/
 [[ $(boards) == 'q35 virt' ]]
 change server/tests/target/entry/platforms/main.rs
 [[ $(boards) == 'q35 virt' ]]
-change server/src/basis/room.rs
+change server/src/basis/execution.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts"]' >/dev/null
 change server/tests/metal/sync/contracts.rs
-bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and .manifests == ["server/tests/metal/sync/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.rv64 and ((.host or .runner) | not)' >/dev/null
 [[ $(bash "$discover" . "$base") == '[]' ]]
 change server/src/basis/pend.rs
-bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 bash "$discover" . "$base" | jq -e 'map(select(.id == "boot-handoff" or .id == "platform-boot") | [.platform, .profile]) | sort == [["q35","debug"],["q35","release"],["rv64","debug"],["rv64","release"],["virt","debug"],["virt","release"]]' >/dev/null
 change server/tests/target/entry/foundation.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 change server/tests/entry/boot/contracts.rs
-bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.rv64 and ((.host or .runner) | not)' >/dev/null
 change server/src/entry/boot/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/firmware/uefi/mod.rs
 [[ $(boards) == 'q35 virt' ]]
-bash "$checks" . "$base" | jq -e '.rv64 == false and .manifests == []' >/dev/null
+bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 change server/src/metal/firmware/uefi/loader.rs
 [[ $(boards) == 'q35 virt' ]]
-bash "$checks" . "$base" | jq -e '.rv64 == false and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/firmware/acpi/madt.rs
 [[ $(boards) == 'q35 virt' ]]
-bash "$checks" . "$base" | jq -e '(.full or .runner or .rv64) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/firmware/acpi/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/firmware/map.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/entry/boot/handoff.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/boot/mod.rs
@@ -105,41 +105,41 @@ change server/src/metal/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/firmware/psci.rs
 [[ $(boards) == virt ]]
-bash "$checks" . "$base" | jq -e '(.full or .runner or .rv64) == false' >/dev/null
+bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 change server/src/metal/firmware/sbi/probe.rs
 [[ $(boards) == rv64 ]]
-bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/firmware/sbi/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/boot/console.rs
-bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host' >/dev/null
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/boot/services.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/firmware/devicetree/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/firmware/devicetree/host/Cargo.toml","server/tests/metal/module/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host' >/dev/null
 for source in server/src/metal/hart/description.rs \
               server/src/metal/execution/riscv/description.rs \
               server/src/metal/time/mod.rs; do
     change "$source"
     [[ $(boards) == rv64 ]]
-    bash "$checks" . "$base" | jq -e '.rv64 and .manifests == ["server/tests/metal/firmware/devicetree/host/Cargo.toml"]' >/dev/null
+    bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 done
 change server/src/metal/mmu/internal/riscv/description.rs
 [[ $(boards) == rv64 ]]
-bash "$checks" . "$base" | jq -e '.rv64 and (.manifests | sort) == ["server/tests/metal/firmware/devicetree/host/Cargo.toml","server/tests/metal/mmu/internal/riscv/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 change server/src/metal/address.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/allocator/host/Cargo.toml","server/tests/metal/firmware/acpi/host/Cargo.toml","server/tests/metal/firmware/devicetree/host/Cargo.toml","server/tests/metal/module/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/hart/stack.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/qemu.version
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change rust-toolchain.toml
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '.full and .runner and .rv64' >/dev/null
+bash "$checks" . "$base" | jq -e '.host and .runner and .rv64' >/dev/null
 change server/src/metal/mmu/internal/access.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
-bash "$checks" . "$base" | jq -e '.rv64 and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/module/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 
 for source in server/src/metal/module/elf.rs server/tests/metal/module/probe.rs; do
     change "$source"
@@ -147,7 +147,7 @@ for source in server/src/metal/module/elf.rs server/tests/metal/module/probe.rs;
         [["module-execution", "q35", "debug"], ["module-execution", "q35", "release"],
          ["module-execution", "virt", "debug"], ["module-execution", "virt", "release"],
          ["riscv-module-execution", "rv64", "debug"], ["riscv-module-execution", "rv64", "release"]]' >/dev/null
-    bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/module/host/Cargo.toml"]' >/dev/null
+    bash "$checks" . "$base" | jq -e '.host' >/dev/null
 done
 change server/tests/target/entry/module/arm_mapping.rs
 bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
@@ -157,21 +157,29 @@ for source in server/src/metal/mmu/internal/riscv/sv39.rs server/tests/metal/mod
     bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
         [["riscv-module-execution", "rv64", "debug"], ["riscv-module-execution", "rv64", "release"]]' >/dev/null
 done
-bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/metal/module/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/mmu/internal/riscv/sv39.rs
-bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/metal/mmu/internal/riscv/host/Cargo.toml","server/tests/metal/module/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/allocator/storage.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
-bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/allocator/bump.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
-bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/allocator/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/boot/x86_64/example.rs
 previous=$(git rev-parse HEAD)
 mkdir -p server/src/metal/boot/aarch64
 git mv server/src/metal/boot/{x86_64,aarch64}/example.rs
 git commit -qm rename
 [[ $(bash "$discover" . "$previous" | jq -r 'map(.platform)|unique|join(" ")') == 'q35 virt' ]]
+change server/src/metal/fdt.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
+change server/src/metal/hart/hardware.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+change server/tests/metal/allocator/source.rs
+bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change docs/README.md
+bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 [[ $(bash "$discover" . "$base") == '[]' ]]
 echo 'change selection contracts passed'

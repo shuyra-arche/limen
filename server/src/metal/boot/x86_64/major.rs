@@ -1,6 +1,6 @@
 use super::{Gate, IDT, VECTOR_BYTES, load_idt, vectors};
-use crate::entry::boot::Loader;
 use crate::metal::boot::{STACK_BYTES, major::STACK};
+use crate::metal::firmware::uefi::Loader;
 use core::arch::{asm, naked_asm};
 
 /// Transfer to the kernel stack and install diagnostic interrupt gates.

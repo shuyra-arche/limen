@@ -1,45 +1,15 @@
 #![no_std]
 // Hardware fetches the RV64 early trap and Arm vector table at aligned addresses.
 #![cfg_attr(
-    any(
-        target_arch = "riscv64",
-        all(target_arch = "aarch64", any(target_os = "uefi", target_os = "none"))
-    ),
+    all(limen_target, any(target_arch = "riscv64", target_arch = "aarch64")),
     feature(fn_align)
 )]
 
-#[cfg(any(
-    target_arch = "riscv64",
-    all(
-        any(target_arch = "aarch64", target_arch = "x86_64"),
-        any(target_os = "none", target_os = "uefi")
-    ),
-))]
-mod basis;
-#[cfg(any(
-    target_arch = "riscv64",
-    all(
-        any(target_arch = "aarch64", target_arch = "x86_64"),
-        any(target_os = "none", target_os = "uefi")
-    ),
-))]
-pub use {
-    basis::pend,
-    metal::{address, allocator, mmu, mmu::internal::access, module, sync},
-};
-#[cfg(any(
-    target_arch = "riscv64",
-    all(
-        any(target_arch = "aarch64", target_arch = "x86_64"),
-        any(target_os = "none", target_os = "uefi")
-    ),
-))]
+#[cfg(any(limen_target, test))]
+pub mod basis;
+#[cfg(any(limen_target, test))]
 pub mod entry;
-#[cfg(any(
-    target_arch = "riscv64",
-    all(
-        any(target_arch = "aarch64", target_arch = "x86_64"),
-        any(target_os = "none", target_os = "uefi")
-    ),
-))]
-mod metal;
+pub mod metal;
+
+#[cfg(test)]
+extern crate std;

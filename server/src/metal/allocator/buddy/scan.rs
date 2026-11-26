@@ -3,7 +3,7 @@
 use core::ptr;
 use limen_treaty::model::{Alignment, ByteLength};
 
-use crate::address::{PhysicalAddress, PhysicalRange};
+use crate::metal::address::{PhysicalAddress, PhysicalRange};
 
 use super::{Buddy, Error, Root, State, geometry::Block};
 

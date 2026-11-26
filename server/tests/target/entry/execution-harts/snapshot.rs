@@ -6,7 +6,7 @@ use core::{
         Ordering::{Acquire, Release},
     },
 };
-use kernel::sync::{SnapLock, Snapshot};
+use kernel::metal::sync::{SnapLock, Snapshot};
 
 const LAST: u64 = 4096;
 const BATCH: u64 = 128;

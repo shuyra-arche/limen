@@ -1,7 +1,7 @@
 use core::sync::atomic::Ordering::Acquire;
 use limen_treaty::model::{Alignment, ByteLength};
 
-use crate::address::{PhysicalRange, length};
+use crate::metal::address::{PhysicalRange, length};
 
 use super::{
     Allocator, Error, REGION_LIMIT, RegionDescription, RegionId, RegionOrigin,

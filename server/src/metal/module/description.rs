@@ -1,7 +1,7 @@
 //! Versioned module declarations carried in a bounded ELF note.
 
 use super::elf::Elf;
-use crate::metal::firmware::devicetree::{DeviceTree, Error as TreeError, Node, NodeId};
+use crate::metal::fdt::{DeviceTree, Error as TreeError, Node, NodeId};
 
 const NOTE_OWNER: &[u8] = b"SHUYRA\0";
 const NOTE_TYPE: u32 = 1;

@@ -5,11 +5,11 @@ use core::{
 };
 
 use kernel::{
-    allocator::{
+    entry::boot::{Boot, write},
+    metal::allocator::{
         Allocation, Allowance,
         pool::{GroupSlot, Pool, Prepared, Reservation, VALUE_ALIGNMENT, VALUE_BYTES},
     },
-    entry::boot::{Boot, write},
 };
 
 use super::pool_material::{group_extent, install};

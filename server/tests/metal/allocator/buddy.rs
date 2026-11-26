@@ -1,12 +1,11 @@
 use core::{mem::MaybeUninit, ops::Range};
 use limen_treaty::model::{Alignment, ByteLength};
 
-use crate::address::{PhysicalAddress, PhysicalRange};
+use crate::metal::address::{PhysicalAddress, PhysicalRange};
 
-#[path = "../../../src/metal/allocator/buddy/mod.rs"]
-mod implementation;
-
-use implementation::{Buddy, Error, Geometry, Request, Revision, Root, Search};
+use crate::metal::allocator::buddy::{
+    Buddy, Error, Geometry, Request, Revision, Root, Scan, Search,
+};
 
 fn physical(range: Range<u64>) -> PhysicalRange {
     PhysicalRange::new(
@@ -141,7 +140,7 @@ fn geometries_and_fragmented_search_match_the_flat_model() {
                                     let start = found.start().get();
                                     let end = found.end().get();
                                     assert_eq!(
-                                        crate::address::length(found),
+                                        crate::metal::address::length(found),
                                         ByteLength::new(length * GRANULE)
                                     );
                                     assert_eq!(start % alignment, 0);
@@ -243,7 +242,7 @@ fn an_exact_three_granule_run_can_cross_roots() {
     });
 }
 
-fn pending<'storage>(search: Search<'storage>) -> implementation::Scan<'storage> {
+fn pending<'storage>(search: Search<'storage>) -> Scan<'storage> {
     let Search::Pending(scan) = search else {
         panic!("expected saved progress");
     };

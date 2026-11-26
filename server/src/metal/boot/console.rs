@@ -16,3 +16,7 @@ impl Write for Console {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/metal/boot/console.rs"]
+mod tests;

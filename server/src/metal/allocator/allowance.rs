@@ -1,11 +1,11 @@
+use limen_treaty::model::ByteLength;
+
 use core::sync::atomic::Ordering::Acquire;
 
-use crate::{
+use crate::metal::{
     address::length,
-    metal::{
-        identity::{Generation, Key, Slot},
-        sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
-    },
+    identity::{Generation, Key, Slot},
+    sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
 };
 
 use super::{Allocator, Error, REGION_LIMIT, RegionId, SourceId};
@@ -38,14 +38,47 @@ pub struct Allowance {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Balance {
-    pub capacity: u64,
-    pub reserved: u64,
-    pub occupied: u64,
+    capacity: u64,
+    reserved: u64,
+    occupied: u64,
 }
 
 impl Balance {
-    pub fn available(self) -> u64 {
-        self.capacity - self.reserved - self.occupied
+    /// A new balance starts with issued material and no pending reservation.
+    pub(super) fn new(capacity: u64, occupied: u64) -> Self {
+        assert!(occupied <= capacity);
+        Self {
+            capacity,
+            reserved: 0,
+            occupied,
+        }
+    }
+
+    pub fn capacity(self) -> ByteLength {
+        ByteLength::new(self.capacity)
+    }
+
+    pub fn reserved(self) -> ByteLength {
+        ByteLength::new(self.reserved)
+    }
+
+    pub fn occupied(self) -> ByteLength {
+        ByteLength::new(self.occupied)
+    }
+
+    pub fn available(self) -> ByteLength {
+        ByteLength::new(self.capacity - self.reserved - self.occupied)
+    }
+
+    pub(super) fn reserve(&mut self, amount: u64) {
+        assert!(amount <= self.available().get());
+        self.reserved += amount;
+    }
+
+    pub(super) fn issue(&mut self, amount: u64) {
+        assert!(amount <= self.reserved);
+        self.reserved -= amount;
+        self.occupied += amount;
     }
 }
 
@@ -169,7 +202,7 @@ impl Allowance {
             if !open {
                 return Ok(());
             }
-            let amount = balance.available();
+            let amount = balance.available().get();
             if amount != 0 {
                 let region = region.ok_or(Error::Balance)?;
                 let state = held.access(&region.state).expect("credit Region");
@@ -193,6 +226,10 @@ impl Allowance {
     }
 }
 
+/// Source assignment acquires the free index and the candidate allowance slot
+/// in addition to its selected Region locks.
+pub(super) const ASSIGNMENT_LOCKS: usize = 2;
+
 impl Allocator {
     pub(super) fn slot(&self, id: AllowanceId) -> Result<&TurnLock<AllowanceSlot>, Error> {
         self.allowance_slot(id.0.scope().0, id.0.slot())
@@ -211,7 +248,7 @@ impl Allocator {
 
     /// Coherent managed RAM and unassigned budget. The trusted kernel's
     /// observation of the exact source uses the complete Region set.
-    pub fn budget(&self, mode: TurnMode) -> Result<(u64, u64), Error> {
+    pub fn budget(&self, mode: TurnMode) -> Result<(ByteLength, ByteLength), Error> {
         let count = self.directory.acquire(|_| self.published.load(Acquire))?;
         let mut work = TurnWorkspace::<{ REGION_LIMIT + 1 }>::new();
         let mut plan = work.plan();
@@ -223,19 +260,20 @@ impl Allocator {
             if count != self.published.load(Acquire) {
                 return Err(Error::Changed);
             }
-            self.regions[..count]
-                .iter()
-                .try_fold((0u64, 0u64), |(total, unassigned), region| {
+            self.regions[..count].iter().try_fold(
+                (ByteLength::new(0), ByteLength::new(0)),
+                |(total, unassigned), region| {
                     let state = held.access(&region.state).expect("published Region");
                     Ok((
                         total
-                            .checked_add(length(region.description().physical).get())
+                            .checked_add(length(region.description().physical))
                             .ok_or(Error::Balance)?,
                         unassigned
-                            .checked_add(state.unassigned)
+                            .checked_add(ByteLength::new(state.unassigned))
                             .ok_or(Error::Balance)?,
                     ))
-                })
+                },
+            )
         })?
     }
 
@@ -258,7 +296,7 @@ impl Allocator {
         &'a self,
         plan: &mut TurnPlan<'a, '_>,
         candidate: AllowanceCandidate,
-        debits: &[(RegionId, u64)],
+        debits: &[(RegionId, ByteLength)],
     ) -> Result<(), Error> {
         if debits.len() > self.config.regions {
             return Err(Error::Capacity);
@@ -285,7 +323,7 @@ impl Allocator {
         &'static self,
         held: &mut TurnAccess<'_>,
         candidate: AllowanceCandidate,
-        debits: &[(RegionId, u64)],
+        debits: &[(RegionId, ByteLength)],
         receiver: &mut Option<Allowance>,
     ) -> Result<(), Error> {
         if receiver.is_some() {
@@ -305,6 +343,7 @@ impl Allocator {
         let generation = Generation::next(entry.generation).ok_or(Error::IdentityExhausted)?;
         let mut capacity = 0u64;
         for (position, &(id, amount)) in debits.iter().enumerate() {
+            let amount = amount.get();
             if !amount.is_multiple_of(self.config.granule.get())
                 || debits[..position].iter().any(|&(prior, _)| prior == id)
             {
@@ -322,17 +361,11 @@ impl Allocator {
             let state = held
                 .access(&self.regions[id.index()].state)
                 .expect("checked debit");
-            state.unassigned -= amount;
+            state.unassigned -= amount.get();
         }
         held.access(&self.free).expect("free index").head = next;
-        *held.access(slot).expect("Allowance") = AllowanceSlot::open_generation(
-            generation,
-            Balance {
-                capacity,
-                reserved: 0,
-                occupied: 0,
-            },
-        );
+        *held.access(slot).expect("Allowance") =
+            AllowanceSlot::open_generation(generation, Balance::new(capacity, 0));
         *receiver = Some(Allowance::initial(
             self,
             AllowanceId::new(candidate.source, candidate.slot, generation),
@@ -361,8 +394,9 @@ impl Allocator {
         held: &mut TurnAccess<'_>,
         from: AllowanceId,
         to: AllowanceId,
-        amount: u64,
+        amount: ByteLength,
     ) -> Result<(), Error> {
+        let amount = amount.get();
         if from == to || !amount.is_multiple_of(self.config.granule.get()) {
             return Err(Error::Layout);
         }
@@ -370,7 +404,7 @@ impl Allocator {
         let receiver = self.slot(to)?;
         let mut debit = held.access(sender).ok_or(Error::Protection)?.open(from)?;
         let mut credit = held.access(receiver).ok_or(Error::Protection)?.open(to)?;
-        if amount > debit.available() {
+        if amount > debit.available().get() {
             return Err(Error::Balance);
         }
         credit.capacity = credit.capacity.checked_add(amount).ok_or(Error::Balance)?;

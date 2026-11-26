@@ -1,5 +1,9 @@
-use super::{Boot, Descriptions, FirmwareMap, acpi, devicetree};
-use crate::address::{PhysicalAddress, PhysicalRange};
+use crate::metal::address::{PhysicalAddress, PhysicalRange};
+use crate::metal::firmware::{
+    acpi, devicetree,
+    facts::{Descriptions, Facts},
+    map::FirmwareMap,
+};
 
 /// How the trusted platform uses its retained DTB.
 pub enum DeviceTree<'a> {
@@ -35,11 +39,7 @@ pub struct Loader<'a> {
 }
 
 impl<'a> Loader<'a> {
-    pub(crate) fn admit<'b>(
-        &self,
-        hart: usize,
-        descriptions: &'b mut Descriptions<'b>,
-    ) -> Option<Boot<'b>>
+    pub(crate) fn admit<'b>(&self, descriptions: &mut Descriptions<'b>) -> Option<Facts<'b>>
     where
         'a: 'b,
     {
@@ -98,6 +98,9 @@ impl<'a> Loader<'a> {
                 .ok()?,
             );
         }
-        Some(Boot::new(hart, self.image, Some(map), descriptions))
+        Some(Facts {
+            image: self.image,
+            firmware_map: Some(map),
+        })
     }
 }

@@ -11,4 +11,5 @@ name = "module"
 path = "../mod.rs"
 
 [dependencies]
+kernel = { path = "../../../.." }
 limen-treaty = { path = "../../../../../treaty" }

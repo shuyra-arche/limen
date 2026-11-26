@@ -3,14 +3,14 @@ use super::regions::{RegionError, Regions};
 use super::{
     Boot, FirmwareMap, PhysicalAddress, PhysicalRange, Retirement, describe, image, range,
 };
-use crate::access::{Error as AccessError, MappedRange};
-use crate::allocator::{RegionDescription, RegionOrigin};
+use crate::metal::allocator::{RegionDescription, RegionOrigin};
+use crate::metal::mmu::internal::access::{Error as AccessError, MappedRange};
 use core::{alloc::Layout, mem::MaybeUninit};
 use limen_treaty::model::{Alignment, ByteLength};
 
 const GRANULE: ByteLength = ByteLength::new(4096);
 
-pub(super) fn retired(scope: PhysicalRange) -> Retirement {
+pub(crate) fn retired(scope: PhysicalRange) -> Retirement {
     let mut evidence = Retirement::new(scope);
     // Host fixtures model complete evidence for the given range.
     for condition in [

@@ -1,21 +1,24 @@
+use super::source::bootstrap;
 use core::{
     cell::Cell,
     mem::{MaybeUninit, size_of},
     ptr,
 };
+use std::vec::Vec;
 
 use crate::{
-    access::MappedRange,
-    allocator::{
-        Allocation, Allowance, Config, Initial, MappedStorage,
-        pool::{
-            Capacity, Error, Geometry, GroupSlot, Pool, REFERENCE_LIMIT, ReleaseCursor,
-            ReleaseProgress, Retirement, Stable,
+    entry::boot::tests::range,
+    metal::{
+        allocator::{
+            Allocation, Allowance, Config, Initial, MappedStorage,
+            pool::{
+                Capacity, Error, Geometry, GroupSlot, Pool, REFERENCE_LIMIT, ReleaseCursor,
+                ReleaseProgress, Retirement, Stable,
+            },
         },
+        mmu::internal::access::MappedRange,
+        sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
     },
-    metal::sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
-    range,
-    source::bootstrap,
 };
 
 use limen_treaty::model::ByteLength;
@@ -109,7 +112,7 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
         unsafe { MappedStorage::prepare(material.take().unwrap(), mapping) }
             .err()
             .unwrap();
-    assert_eq!(reason, crate::allocator::Error::Range);
+    assert_eq!(reason, crate::metal::allocator::Error::Range);
     assert_eq!(allocation.id(), first_id);
     assert_eq!(returned.physical(), short);
     assert_eq!(returned.bytes().as_mut_ptr().addr(), bytes_address);
@@ -120,7 +123,7 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
     let (allocation, mut returned, reason) = unsafe { MappedStorage::prepare(allocation, mapping) }
         .err()
         .unwrap();
-    assert_eq!(reason, crate::allocator::Error::Range);
+    assert_eq!(reason, crate::metal::allocator::Error::Range);
     assert_eq!(allocation.id(), first_id);
     assert_eq!(returned.physical(), second_physical);
     assert_eq!(returned.bytes().as_mut_ptr().addr(), bytes_address);
@@ -163,7 +166,7 @@ fn the_layout_counts_alignment_state_and_zero_sized_values() {
     assert_eq!(paired.as_ref().unwrap().id(), id);
     assert!(material.is_none());
 
-    use crate::allocator::pool::{VALUE_ALIGNMENT, VALUE_BYTES};
+    use crate::metal::allocator::pool::{VALUE_ALIGNMENT, VALUE_BYTES};
     #[repr(align(64))]
     struct Boundary([u8; VALUE_BYTES]);
     assert_eq!(size_of::<Boundary>(), VALUE_BYTES);
@@ -323,7 +326,7 @@ fn simultaneous_claims_do_not_share_a_slot() {
 
 #[test]
 fn reserve_and_publish_commit_into_the_held_consumer_record() {
-    use crate::allocator::Error as SourceError;
+    use crate::metal::allocator::Error as SourceError;
 
     let [mut material, _] = supplies();
     let mut directory = [GroupSlot::<u64>::EMPTY];
@@ -421,20 +424,20 @@ fn all_unique_handles_transfer_a_send_value_between_workers() {
             let mut receipt = None;
             pool.reserve(&mut receipt).unwrap();
             reserve.send(receipt.unwrap()).ok().unwrap();
-            let value: crate::allocator::pool::Prepared<'_, '_, Cell<u64>> =
+            let value: crate::metal::allocator::pool::Prepared<'_, '_, Cell<u64>> =
                 prepared.recv().unwrap();
             let mut receiver = None;
             value.publish(&mut receiver).ok().unwrap();
             occupy.send(receiver.unwrap()).ok().unwrap();
-            let destroyed: crate::allocator::pool::DestructionReceipt<'_, '_, Cell<u64>> =
+            let destroyed: crate::metal::allocator::pool::DestructionReceipt<'_, '_, Cell<u64>> =
                 vacant.recv().unwrap();
             destroyed.release().ok().unwrap();
         });
         let second = scope.spawn(move || {
-            let token: crate::allocator::pool::Reservation<'_, '_, Cell<u64>> =
+            let token: crate::metal::allocator::pool::Reservation<'_, '_, Cell<u64>> =
                 reserved.recv().unwrap();
             prepare.send(token.initialize(Cell::new(71))).ok().unwrap();
-            let object: crate::allocator::pool::Occupied<'_, '_, Cell<u64>> =
+            let object: crate::metal::allocator::pool::Occupied<'_, '_, Cell<u64>> =
                 occupied.recv().unwrap();
             assert_eq!(object.get().get(), 71);
             object.get().set(73);
@@ -450,7 +453,7 @@ fn all_unique_handles_transfer_a_send_value_between_workers() {
 
 #[test]
 fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles() {
-    use crate::allocator::pool::Reclamation;
+    use crate::metal::allocator::pool::Reclamation;
     use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
     use std::{sync::mpsc::sync_channel, thread};
 
@@ -744,7 +747,7 @@ fn a_destructor_with_unknown_outcome_does_not_make_the_slot_reusable() {
 
 #[test]
 fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
-    use crate::allocator::{Error as SourceError, Pending};
+    use crate::metal::allocator::{Error as SourceError, Pending};
 
     let ([mut a, mut b], allowance) = supply();
     let region = a.as_ref().unwrap().region();
@@ -776,7 +779,10 @@ fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
     assert_eq!(pool.shut(b), Err(Error::Busy));
     assert_eq!(pool.capacity().unwrap().groups, 1);
     assert_eq!(pool.capacity().unwrap().bytes, 2 * PAGE);
-    assert_eq!(allowance.balance().unwrap().occupied, 2 * PAGE as u64);
+    assert_eq!(
+        allowance.balance().unwrap().occupied().get(),
+        2 * PAGE as u64
+    );
     assert_eq!(source.pending(region, &mut 0, 64), Ok(Pending::End));
 
     let physical = {
@@ -800,7 +806,7 @@ fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
     assert_eq!(done.physical, physical);
     assert_eq!(done.allocation, original.allocation);
     assert_eq!(pool.capacity().unwrap().bytes, 2 * PAGE);
-    assert_eq!(allowance.balance().unwrap().occupied, PAGE as u64);
+    assert_eq!(allowance.balance().unwrap().occupied().get(), PAGE as u64);
     let Retirement::Returning(a) = pool.retirement(&mut 0, 1).unwrap() else {
         panic!("expected the handed-off group from the Pool root");
     };
@@ -836,7 +842,7 @@ fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
             free: 0
         }
     );
-    assert_eq!(allowance.balance().unwrap().occupied, 0);
+    assert_eq!(allowance.balance().unwrap().occupied().get(), 0);
 }
 
 #[test]

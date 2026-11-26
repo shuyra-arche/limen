@@ -1,5 +1,5 @@
 use core::mem::MaybeUninit;
-use kernel::{
+use kernel::metal::{
     address::{PhysicalAddress, PhysicalRange},
     allocator::buddy::{Buddy, Error, Geometry, Root},
 };

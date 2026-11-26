@@ -6,7 +6,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use kernel::module::Permissions;
+use kernel::metal::module::Permissions;
 
 pub const PAGE: u64 = 4096;
 const ENTRIES: usize = 512;

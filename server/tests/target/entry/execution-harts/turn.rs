@@ -6,8 +6,10 @@ use core::{
     },
 };
 use kernel::{
-    entry::execution::{Current, Error},
-    sync::{TURN_CAPACITY, TurnAcquireError, TurnLock, TurnMode, TurnPlanError, TurnWorkspace},
+    basis::execution::{Current, Error},
+    metal::sync::{
+        TURN_CAPACITY, TurnAcquireError, TurnLock, TurnMode, TurnPlanError, TurnWorkspace,
+    },
 };
 
 static TRANSFER: TurnLock<u64> = TurnLock::new(0);
@@ -155,7 +157,7 @@ pub(super) fn check_leave(current: &mut Current) {
     let result = LEAVE
         .acquire(|_| current.yield_now())
         .expect("occupied Unit can acquire an ordinary Turn");
-    assert_eq!(result, Err(Error::State));
+    assert_eq!(result, Err(Error::Protection));
 }
 
 fn increment(reverse: bool) {

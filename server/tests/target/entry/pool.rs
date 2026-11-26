@@ -1,10 +1,12 @@
 use kernel::{
-    address::PhysicalRange,
-    allocator::{
-        Allocation, Allocator, Allowance, Config, Initial, MappedStorage,
-        pool::{GroupId, GroupSlot, Pool},
-    },
     entry::boot::Boot,
+    metal::{
+        address::PhysicalRange,
+        allocator::{
+            Allocation, Allocator, Allowance, Config, Initial, MappedStorage,
+            pool::{GroupId, GroupSlot, Pool},
+        },
+    },
 };
 
 use super::memory::{extent, mapped, retirement};

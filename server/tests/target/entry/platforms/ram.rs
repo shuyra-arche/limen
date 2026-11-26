@@ -4,8 +4,8 @@ use core::{
 };
 
 use kernel::{
-    allocator::RegionOrigin,
     entry::boot::{Boot, Condition, Retirement},
+    metal::allocator::RegionOrigin,
 };
 use limen_treaty::model::ByteLength;
 use uefi::{

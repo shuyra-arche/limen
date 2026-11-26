@@ -3,7 +3,7 @@
 #[cfg(not(target_arch = "riscv64"))]
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, Source};
-use crate::{
+use crate::metal::{
     address::{PhysicalAddress, PhysicalRange},
     allocator::{Allocator, Error, Grant, RegionDescription},
 };

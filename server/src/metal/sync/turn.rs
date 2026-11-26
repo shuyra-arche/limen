@@ -66,6 +66,12 @@ impl<'object, const N: usize> TurnWorkspace<'object, N> {
     }
 }
 
+impl<const N: usize> Default for TurnWorkspace<'_, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A plan borrows the actual lock instances until the attempt is settled.
 pub struct TurnPlan<'object, 'work> {
     queues: &'work mut [Option<&'object Queue>],

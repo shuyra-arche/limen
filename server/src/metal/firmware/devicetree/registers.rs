@@ -1,5 +1,5 @@
 use super::{Error, Node};
-use crate::address::{PhysicalAddress, PhysicalRange, length};
+use crate::metal::address::{PhysicalAddress, PhysicalRange, length};
 use limen_treaty::model::ByteLength;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,13 +17,12 @@ impl Cells {
         if !(1..=2).contains(&cells.address) || !(1..=2).contains(&cells.size) {
             return Err(Error::Unsupported);
         }
-        let Some(parent) = node.parent_id() else {
+        let Some(root) = node.parent()? else {
             return Ok(cells);
         };
         // A cell count alone cannot distinguish scalar addresses from a
         // binding with address-space flags, such as ISA I/O space.
         if node.name() == b"reserved-memory" {
-            let root = node.tree.node(parent).ok_or(Error::Missing)?;
             if root.parent_id().is_some()
                 || node.property(b"#address-cells")?.is_none()
                 || node.property(b"#size-cells")?.is_none()
@@ -77,10 +76,7 @@ impl<'a> Node<'_, 'a> {
     pub fn registers(
         &self,
     ) -> Result<impl ExactSizeIterator<Item = Result<PhysicalRange, Error>> + '_, Error> {
-        let bus = self
-            .parent_id()
-            .and_then(|id| self.tree.node(id))
-            .ok_or(Error::Missing)?;
+        let bus = self.parent()?.ok_or(Error::Missing)?;
         let cells = Cells::read(&bus)?;
         let bytes = self.property(b"reg")?.ok_or(Error::Missing)?;
         let tuples = bytes.chunks_exact((cells.address + cells.size) * 4);
@@ -90,8 +86,7 @@ impl<'a> Node<'_, 'a> {
         Ok(tuples.map(move |tuple| {
             let mut range = cells.decode(tuple)?;
             let mut bus = bus;
-            while let Some(id) = bus.parent_id() {
-                let parent = self.tree.node(id).ok_or(Error::Missing)?;
+            while let Some(parent) = bus.parent()? {
                 range = translate(&bus, &parent, range)?;
                 bus = parent;
             }

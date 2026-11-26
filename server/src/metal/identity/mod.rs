@@ -363,3 +363,7 @@ impl<'storage, Scope: Copy + Eq, T> GenerationTable<'storage, Scope, T> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/metal/identity/mod.rs"]
+mod tests;

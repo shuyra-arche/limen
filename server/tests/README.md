@@ -7,9 +7,12 @@ cursor, fixed identity slots and RV64 page-table entry operations. The Identity
 suite exercises the table implementation with owner-supplied slot storage,
 distinct scopes and separate allocation and return tables. Its compiler tests
 cover token ownership, table categories and the lifetime of a lookup borrow.
-Each suite keeps its own
-`host/Cargo.toml`. The root workspace discovers these packages. Run the commands
-from the repository root so Rustup selects the fixed [toolchain](../../rust-toolchain.toml).
+The kernel library runs owner-local unit tests from `tests/` and links
+its public ACPI and device-tree suites as ordinary Cargo integration tests.
+The Module suite retains a Host package for its separately linked ELF
+fixtures. Identity’s compile-time cases retain a small compile fixture.
+Run the commands from the repository root so Rustup selects the fixed
+[toolchain](../../rust-toolchain.toml).
 
 ```sh
 RUSTFLAGS=-Dwarnings cargo test --locked --workspace --target x86_64-unknown-linux-gnu
@@ -17,7 +20,9 @@ cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_
 ```
 
 The Metal Sync Host suite exercises the production MCS queue with controlled
-publication and release interleavings. The compiler checks use the actual
+publication and release interleavings. Host Allocator tests use the
+production Turn and Hart participation with a per-thread local address
+and saved interrupt bit. The target tests cover machine entry and IRQ behavior. The compiler checks use the actual
 target library to verify scoped single-lock and heterogeneous access. They
 reject escaping or overlapping borrows, moving the access token out of the
 callback, and crossing Hart boundaries with it.
@@ -33,7 +38,7 @@ structural visit bounds. The target boot suites exercise the earlier physical
 handoff. Runtime admission of a Buddy region requires the Allocator source.
 
 ```sh
-RUSTFLAGS=-Dwarnings cargo test --locked -p kernel-host-allocator --target x86_64-unknown-linux-gnu
+RUSTFLAGS=-Dwarnings cargo test --locked -p kernel --lib --target x86_64-unknown-linux-gnu metal::allocator
 ```
 
 ## RV64 boot
@@ -109,7 +114,7 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --output /tmp/limen-execution --profile debug
 ```
 
-The guest verifies separate stacks in the shared Kernel Nest, Yield and resume,
+The guest verifies separate resident Unit stacks in RV64 Bare mode, Yield and resume,
 exact leave receipts, ending and reaping, and reuse with a new identity. It
 also exercises rejection before occupancy, Busy, stale identity and dormant
 cancellation. A rejected execution constructor returns the original boot handoff

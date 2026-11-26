@@ -12,9 +12,13 @@ use core::{
         Ordering::{Acquire, Relaxed, Release},
     },
 };
-use kernel::entry::{
-    boot::{Boot, Minor, shutdown, write},
-    execution::{Current, End, Error, Execution, Lifecycle, Occupancy, Stacks, UnitId},
+use kernel::{
+    basis::{
+        execution::{Current, Error, Execution},
+        room::Occupancy,
+        unit::{End, Lifecycle, Stacks, UnitId},
+    },
+    entry::boot::{Boot, Minor, shutdown, write},
 };
 
 mod snapshot;
@@ -131,7 +135,7 @@ fn finish(execution: &Execution, receipt: Occupancy, value: u64) {
     let unit = receipt.unit();
     assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Ending));
     assert_eq!(execution.finish_end(unit), Err(Error::Busy));
-    assert_eq!(execution.reap(unit), Err(Error::State));
+    assert_eq!(execution.reap(unit), Err(Error::UnitNotEnded));
     execution.vacate(receipt).expect("matching leave");
     execution.finish_end(unit).expect("released admission");
     assert_eq!(

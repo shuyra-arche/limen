@@ -1,10 +1,12 @@
 use super::{IMAGES, PAGE, SV39_ROOT};
-use crate::{
-    access::MappedRange,
+use kernel::metal::{
     address::PhysicalAddress,
-    mmu::internal::GEOMETRY,
+    mmu::internal::access::MappedRange,
+    mmu::internal::{
+        GEOMETRY,
+        riscv::sv39::{self, ROOT},
+    },
     module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, UseError},
-    sv39::{self, ROOT},
 };
 use std::{mem::MaybeUninit, sync::Barrier, thread};
 
@@ -56,7 +58,7 @@ fn shutting_denies_admission_and_retirement_requires_an_effect_witness() {
 
     module.shut();
     module.shut();
-    assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Closed)));
+    assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Shut)));
     assert!(matches!(module.retire(), Err(UseError::Busy)));
     assert_eq!(first.entry(), entry);
     drop(first);
@@ -68,7 +70,7 @@ fn shutting_denies_admission_and_retirement_requires_an_effect_witness() {
     // An abandoned attempt must leave the original obligations in place.
     drop(attempt);
     let module = module.reclaim().err().unwrap();
-    assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Closed)));
+    assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Shut)));
     let attempt = module.retire().unwrap();
     // The Host installed no target mapping and never executed the module.
     unsafe { attempt.complete() };
@@ -94,14 +96,14 @@ fn a_racing_admission_is_closed_or_counted_before_retirement() {
             module.shut();
             entrant.join().unwrap()
         });
-        assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Closed)));
+        assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Shut)));
         match raced {
             Ok(held) => {
                 assert_eq!(held.id(), module.id());
                 assert!(matches!(module.retire(), Err(UseError::Busy)));
                 drop(held);
             }
-            Err(error) => assert_eq!(error, UseError::Closed),
+            Err(error) => assert_eq!(error, UseError::Shut),
         }
     }
 

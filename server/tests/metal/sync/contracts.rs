@@ -1,6 +1,6 @@
 #![no_std]
 
-use kernel::sync::{TurnMode, TurnAcquireError, TurnLock, TurnWorkspace};
+use kernel::metal::sync::{TurnMode, TurnAcquireError, TurnLock, TurnWorkspace};
 
 pub fn transfer(count: &TurnLock<u32>, open: &TurnLock<bool>) -> Result<bool, TurnAcquireError> {
     let mut work = TurnWorkspace::<2>::new();
@@ -60,11 +60,11 @@ pub fn forget(lock: &TurnLock<u32>) {
 #[cfg(contract = "send")]
 pub fn send() {
     fn require_send<T: Send>() {}
-    require_send::<kernel::sync::TurnAccess<'static>>();
+    require_send::<kernel::metal::sync::TurnAccess<'static>>();
 }
 
 #[cfg(contract = "sync")]
 pub fn sync() {
     fn require_sync<T: Sync>() {}
-    require_sync::<kernel::sync::TurnAccess<'static>>();
+    require_sync::<kernel::metal::sync::TurnAccess<'static>>();
 }

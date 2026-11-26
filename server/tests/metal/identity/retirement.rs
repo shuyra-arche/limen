@@ -1,3 +1,9 @@
+use super::super::{
+    Entry, Generation, GenerationTable, Key, KeyError, Reclamation, Reservation, ReserveError,
+    Slot, State,
+};
+use core::num::NonZeroU32;
+
 pub(super) fn issued_generation<Scope>(key: Key<Scope>) -> u32 {
     key.generation.0.get()
 }

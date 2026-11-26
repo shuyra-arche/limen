@@ -1,11 +1,9 @@
 //! Admit the major CPU after the selected backend installs its stack and exception entry.
 use super::STACK_BYTES;
-use crate::{
-    entry::boot::{Boot, Descriptions},
-    metal::{
-        boot,
-        hart::{self, HartLocal, stack::Stack},
-    },
+use crate::metal::{
+    boot,
+    firmware::facts::{Descriptions, Facts},
+    hart::{self, HartLocal, stack::Stack},
 };
 use core::ops::Range;
 
@@ -25,8 +23,8 @@ pub fn stack_range() -> Range<usize> {
 pub(crate) unsafe fn admit<'a>(
     hart: usize,
     input: *const (),
-    descriptions: &'a mut Descriptions<'a>,
-) -> Boot<'a> {
+    descriptions: &mut Descriptions<'a>,
+) -> Facts<'a> {
     let services = boot::firmware::services_on_entry();
     if !stack_range().contains(&hart::stack_pointer()) || !boot::established() {
         services.reject(format_args!(
@@ -42,9 +40,9 @@ pub(crate) unsafe fn admit<'a>(
             "FAIL Limen boot: major CPU identity mismatch\n"
         ));
     }
-    let Some(boot) = (unsafe { boot::firmware::admit(hart, input, descriptions) }) else {
+    let Some(facts) = (unsafe { boot::firmware::admit(hart, input, descriptions) }) else {
         services.reject(format_args!("FAIL Limen boot: invalid firmware input\n"));
     };
     unsafe { LOCAL.install(hart) };
-    boot
+    facts
 }

@@ -5,12 +5,10 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering::Acquire},
 };
 
-use crate::{
+use crate::metal::{
     address::PhysicalRange,
-    metal::{
-        identity::Slot,
-        sync::{TurnAcquireError, TurnLock},
-    },
+    identity::Slot,
+    sync::{TurnAcquireError, TurnLock},
 };
 
 mod allocation;
@@ -135,3 +133,7 @@ impl Allocator {
         Ok(&self.regions[id.index()])
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/metal/allocator/mod.rs"]
+mod tests;

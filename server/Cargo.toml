@@ -9,9 +9,19 @@ autotests = false
 
 [lib]
 path = "src/lib.rs"
-test = false
 bench = false
 doctest = false
-
-[target.'cfg(any(target_arch = "riscv64", all(any(target_arch = "aarch64", target_arch = "x86_64"), any(target_os = "none", target_os = "uefi"))))'.dependencies]
+[dependencies]
 limen-treaty = { path = "../treaty" }
+
+[dev-dependencies]
+bitflags.workspace = true
+
+
+[[test]]
+name = "acpi"
+path = "tests/metal/firmware/acpi/mod.rs"
+
+[[test]]
+name = "devicetree"
+path = "tests/metal/firmware/devicetree/mod.rs"
