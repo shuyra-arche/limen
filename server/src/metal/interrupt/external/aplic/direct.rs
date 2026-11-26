@@ -1,8 +1,11 @@
 //! Exclusive direct-delivery domain. A single preallocated reception slot.
 
 use super::{Description, IDC_BASE, IDC_BYTES, Mode, Route, SOURCE_LIMIT};
-use crate::metal::processor::hart::local::current_hart;
-use core::{arch::asm, marker::PhantomData, ptr};
+use crate::metal::{
+    interrupt::internal::supervisor::{Cause, Reception as LocalReception},
+    memory::mmu::internal::device::DeviceWindow,
+};
+use core::{arch::asm, ptr};
 
 const DOMAIN: usize = 0;
 const DIRECT: u32 = 0x8000_0000;
@@ -17,7 +20,6 @@ const DELIVERY: usize = 0;
 const FORCE: usize = 4;
 const THRESHOLD: usize = 8;
 const CLAIM: usize = 28;
-const EXTERNAL: usize = 1 << 9;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Failure {
@@ -116,52 +118,52 @@ enum Reception {
 #[must_use]
 pub struct Direct<'a> {
     description: Description<'a>,
-    base: usize,
+    mapping: &'a mut DeviceWindow,
+    local: &'a mut LocalReception,
     sources: [Source; SOURCE_LIMIT as usize + 1],
     reception: Reception,
     next: u64,
     state: State,
-    local: PhantomData<*mut ()>,
 }
 
 impl<'a> Direct<'a> {
     /// # Safety
     /// The caller owns the entire supervisor direct-delivery domain and
-    /// exclusive accesses to the selected Hart's external IRQ path. `base`
-    /// maps the entire described physical window with valid device attributes
-    /// and access rights for this lifetime. Old delivery, programming and
+    /// exclusive accesses to the selected Hart's external IRQ path. The
+    /// borrowed mapping and local reception must remain valid through all
+    /// hardware effects, including failure. Old delivery, programming and
     /// device obligations are settled; no independent agent writes this
     /// domain. Preserve the original owner through shutdown and retirement.
     /// No old source may remain configured, enabled or pending.
     /// This first profile admits a single destination context and never
     /// accesses the machine-level parent domain.
-    pub unsafe fn admit(description: Description<'a>, base: usize) -> Result<Self, Failure> {
+    pub unsafe fn admit(
+        description: Description<'a>,
+        mapping: &'a mut DeviceWindow,
+        local: &'a mut LocalReception,
+    ) -> Result<Self, Failure> {
         if description.contexts() != 1
-            || base == 0
-            || !base.is_multiple_of(4096)
-            || description
-                .registers()
-                .length()
-                .as_usize()
-                .and_then(|length| base.checked_add(length))
-                .is_none()
+            || mapping.physical() != description.registers()
+            || !mapping.base().is_multiple_of(4096)
+            || local.hart() != description.hart()
+            || local.cause() != Cause::External
         {
             return Err(Failure::Scope);
         }
         let instance = Self {
             description,
-            base,
+            mapping,
+            local,
             sources: [Source::Vacant; SOURCE_LIMIT as usize + 1],
             reception: Reception::Empty,
             next: 1,
             state: State::Prepared,
-            local: PhantomData,
         };
         instance.context()?;
         if instance.read(DOMAIN) != DIRECT
             || instance.read(instance.idc(DELIVERY)) != 0
             || instance.read(instance.idc(FORCE)) != 0
-            || instance.local_enabled()
+            || instance.local.enabled()
         {
             return Err(Failure::Busy);
         }
@@ -177,9 +179,7 @@ impl<'a> Direct<'a> {
     }
 
     fn context(&self) -> Result<(), Failure> {
-        let status: usize;
-        unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nostack, nomem)) };
-        if current_hart().get() as u64 != self.description.hart() || status & 2 != 0 {
+        if !self.local.valid() {
             return Err(Failure::Context);
         }
         Ok(())
@@ -204,22 +204,6 @@ impl<'a> Direct<'a> {
         Ok(())
     }
 
-    fn local_enabled(&self) -> bool {
-        let enabled: usize;
-        unsafe { asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem)) };
-        enabled & EXTERNAL != 0
-    }
-
-    fn set_local(&mut self, enabled: bool) {
-        unsafe {
-            if enabled {
-                asm!("csrs sie, {}", in(reg) EXTERNAL, options(nostack));
-            } else {
-                asm!("csrc sie, {}", in(reg) EXTERNAL, options(nostack));
-            }
-        }
-    }
-
     fn idc(&self, register: usize) -> usize {
         IDC_BASE + self.description.index() * IDC_BYTES + register
     }
@@ -229,7 +213,7 @@ impl<'a> Direct<'a> {
         // bounded by its checked source/context geometry.
         unsafe {
             asm!("fence iorw, iorw", options(nostack));
-            let value = ptr::without_provenance::<u32>(self.base + offset).read_volatile();
+            let value = ptr::without_provenance::<u32>(self.mapping.word(offset).expect("checked APLIC offset")).read_volatile();
             asm!("fence iorw, iorw", options(nostack));
             value
         }
@@ -237,7 +221,7 @@ impl<'a> Direct<'a> {
 
     fn write(&mut self, offset: usize, value: u32) {
         unsafe {
-            ptr::without_provenance_mut::<u32>(self.base + offset).write_volatile(value);
+            ptr::without_provenance_mut::<u32>(self.mapping.word(offset).expect("checked APLIC offset")).write_volatile(value);
             asm!("fence iorw, iorw", options(nostack));
         }
     }
@@ -250,7 +234,7 @@ impl<'a> Direct<'a> {
         // Preserve the original operation and any source or claim transition.
         // Attempt to stop local delivery; this is not proof of isolation.
         self.state = State::Uncertain(effect);
-        self.set_local(false);
+        self.local.set(false);
         Failure::Unconfirmed
     }
 
@@ -334,8 +318,8 @@ impl<'a> Direct<'a> {
         {
             return Err(self.unconfirmed(Effect::Opening));
         }
-        self.set_local(true);
-        if !self.local_enabled() {
+        self.local.set(true);
+        if !self.local.enabled() {
             return Err(self.unconfirmed(Effect::Opening));
         }
         self.state = State::Open;
@@ -445,10 +429,10 @@ impl<'a> Direct<'a> {
             State::Shut => return Ok(()),
             State::Prepared | State::Open => {
                 self.state = State::Shutting;
-                self.set_local(false);
+                self.local.set(false);
                 self.write(DOMAIN, 0);
                 self.write(self.idc(DELIVERY), 0);
-                if self.local_enabled()
+                if self.local.enabled()
                     || self.read(DOMAIN) != DIRECT
                     || self.read(self.idc(DELIVERY)) != 0
                 {

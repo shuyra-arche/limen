@@ -5,11 +5,15 @@ use core::{arch::naked_asm, fmt::Write, ptr};
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
-        chrono::riscv::RiscvTimebase,
+        chrono::riscv::{Counter, RiscvTimebase},
         interrupt::{
             external::aplic::{self, Direct, Mode},
-            internal::aclint::timer::{self, State, Timer},
+            internal::{
+                aclint::timer::{self, State, Timer},
+                supervisor::{Cause, Reception},
+            },
         },
+        memory::mmu::internal::device::DeviceWindow,
     },
 };
 
@@ -71,7 +75,9 @@ fn timer_test(boot: &Boot<'_>) {
     // The runner's exact machine configuration has ACLINT and disables Sstc.
     // OpenSBI owns the machine comparator; the guest never maps or writes it.
     let service = boot.sbi_services().timer().expect("SBI TIME");
-    let mut timer = unsafe { Timer::admit(description, timebase, service) }.unwrap();
+    let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
+    let mut local = unsafe { Reception::admit(boot.hart() as u64, Cause::Timer) }.unwrap();
+    let mut timer = unsafe { Timer::admit(description, &counter, service, &mut local) }.unwrap();
     assert_eq!(timer.state(), State::Inherited);
     assert_eq!(timer.arm(1), Err(timer::Failure::Busy));
     assert_eq!(timer.rearm(1), Err(timer::Failure::Busy));
@@ -152,7 +158,10 @@ fn external_test(boot: &Boot<'_>) {
     let base = usize::try_from(description.registers().start().get()).unwrap();
     // The single-Hart QEMU board, initial bare mapping, quiet device and
     // supervisor domain delegated by OpenSBI establish this test's ownership.
-    let mut direct = unsafe { Direct::admit(description, base) }.unwrap();
+    let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
+    let mut mapping = unsafe { DeviceWindow::admit(description.registers(), base) }.unwrap();
+    let mut local = unsafe { Reception::admit(boot.hart() as u64, Cause::External) }.unwrap();
+    let mut direct = unsafe { Direct::admit(description, &mut mapping, &mut local) }.unwrap();
     assert_eq!(core::mem::size_of::<aplic::Source>(), 2);
     assert_eq!(direct.state(), aplic::State::Prepared);
     assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Vacant);
@@ -175,8 +184,8 @@ fn external_test(boot: &Boot<'_>) {
         // software pending injection and no SBI console calls in this window.
         uart_write(serial, 1, 2);
         uart_write(serial, 0, b' ');
-        let limit = unsafe { timebase.counter() }
-            .checked_add(u64::from(timebase.hertz()) * 2)
+        let limit = counter.read().unwrap()
+            .checked_add(u64::from(counter.hertz()) * 2)
             .unwrap();
         assert_eq!(unsafe { receive(limit) }, EXTERNAL, "supervisor external trap");
         {

@@ -2,13 +2,10 @@
 
 use super::Description;
 use crate::metal::{
-    chrono::riscv::RiscvTimebase,
+    chrono::riscv::Counter,
+    interrupt::internal::supervisor::{Cause, Reception},
     platform::firmware::sbi::TimerService,
-    processor::hart::local::current_hart,
 };
-use core::{arch::asm, marker::PhantomData};
-
-const TIMER: usize = 1 << 5;
 const OBSERVATIONS: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,10 +80,10 @@ pub enum State {
 #[must_use]
 pub struct Timer<'a> {
     description: Description<'a>,
-    timebase: RiscvTimebase<'a>,
+    counter: &'a Counter<'a>,
+    local: &'a mut Reception,
     service: TimerService,
     state: State,
-    local: PhantomData<*mut ()>,
 }
 
 impl<'a> Timer<'a> {
@@ -100,18 +97,23 @@ impl<'a> Timer<'a> {
     /// can handle the supervisor timer interrupt.
     pub unsafe fn admit(
         description: Description<'a>,
-        timebase: RiscvTimebase<'a>,
+        counter: &'a Counter<'a>,
         service: TimerService,
+        local: &'a mut Reception,
     ) -> Result<Self, Failure> {
-        if description.clock_scope() != timebase.source() {
+        if description.clock_scope() != counter.source()
+            || description.hart() != counter.hart()
+            || description.hart() != local.hart()
+            || local.cause() != Cause::Timer
+        {
             return Err(Failure::Scope);
         }
         let timer = Self {
             description,
-            timebase,
+            counter,
+            local,
             service,
             state: State::Inherited,
-            local: PhantomData,
         };
         timer.context()?;
         Ok(timer)
@@ -122,9 +124,7 @@ impl<'a> Timer<'a> {
     }
 
     fn context(&self) -> Result<(), Failure> {
-        let status: usize;
-        unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nostack, nomem)) };
-        if current_hart().get() as u64 != self.description.hart() || status & 2 != 0 {
+        if !self.local.valid() || self.local.hart() != self.description.hart() {
             return Err(Failure::Context);
         }
         Ok(())
@@ -133,14 +133,12 @@ impl<'a> Timer<'a> {
     /// Actual counter in the admitted domain, not a time-domain conversion.
     pub fn counter(&self) -> Result<u64, Failure> {
         self.context()?;
-        Ok(unsafe { self.timebase.counter() })
+        self.counter.read().ok_or(Failure::Context)
     }
 
     pub fn pending(&self) -> Result<bool, Failure> {
         self.context()?;
-        let pending: usize;
-        unsafe { asm!("csrr {}, sip", out(reg) pending, options(nostack, nomem)) };
-        Ok(pending & TIMER != 0)
+        Ok(self.local.pending())
     }
 
     /// Program an absolute future count. A previous comparison must have
@@ -179,12 +177,8 @@ impl<'a> Timer<'a> {
         }
         program.step = ProgramStep::Enable;
         self.state = State::Programming(program);
-        let enabled: usize;
-        unsafe {
-            asm!("csrs sie, {mask}", "csrr {enabled}, sie",
-                mask = in(reg) TIMER, enabled = out(reg) enabled, options(nostack));
-        }
-        if enabled & TIMER == 0 {
+        self.local.set(true);
+        if !self.local.enabled() {
             self.state = State::Uncertain(Effect::Programming(program));
             return Err(Failure::Unconfirmed);
         }
@@ -223,12 +217,8 @@ impl<'a> Timer<'a> {
             step: ClearStep::Mask,
         };
         self.state = State::Clearing(clear);
-        let enabled: usize;
-        unsafe {
-            asm!("csrc sie, {mask}", "csrr {enabled}, sie",
-                mask = in(reg) TIMER, enabled = out(reg) enabled, options(nostack));
-        }
-        if enabled & TIMER != 0 {
+        self.local.set(false);
+        if self.local.enabled() {
             self.state = State::Uncertain(Effect::Clearing(clear));
             return Err(Failure::Unconfirmed);
         }
@@ -246,9 +236,7 @@ impl<'a> Timer<'a> {
 
     fn observe_clear(&mut self, prior: Prior) -> Result<(), Failure> {
         // A retry after confirmed TIME only observes, never reissues the write.
-        let enabled: usize;
-        unsafe { asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem)) };
-        if enabled & TIMER != 0 {
+        if self.local.enabled() {
             self.state = State::Uncertain(Effect::Clearing(Clearing {
                 prior,
                 step: ClearStep::Observe,

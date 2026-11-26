@@ -1,4 +1,5 @@
 pub mod access;
+pub mod device;
 pub mod riscv;
 
 use crate::metal::module::Contract;
