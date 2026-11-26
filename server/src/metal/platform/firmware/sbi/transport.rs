@@ -3,8 +3,8 @@
 use core::arch::asm;
 
 use super::probe::{
-    DEBUG_CONSOLE, Extensions, HART_STATE_MANAGEMENT, HartService, SYSTEM_RESET, SbiServices,
-    TIMER, TimerService,
+    DEBUG_CONSOLE, Extensions, HART_STATE_MANAGEMENT, HartService, ProbeError, SYSTEM_RESET,
+    SbiServices, TIMER, TimerService,
 };
 
 const BASE: usize = 0x10;
@@ -17,7 +17,7 @@ pub(crate) fn extensions() -> Extensions {
 
 /// Probe the running SBI implementation for its HSM, timer and IPI services.
 /// The current CPU must be executing in the supported SBI supervisor environment.
-pub fn platform_services() -> SbiServices {
+pub fn platform_services() -> Result<SbiServices, ProbeError> {
     SbiServices::probe(|function, extension| call(BASE, function, extension, 0, 0))
 }
 
