@@ -22,7 +22,7 @@ use riscv as native;
 use x86_64 as native;
 
 pub(crate) fn cooperative_ready() -> bool {
-    crate::metal::platform::boot::established() && native::ready()
+    native::ready()
 }
 
 /// One continuation in the actual linked machine's native save shape.

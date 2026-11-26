@@ -25,6 +25,14 @@ pub struct PsciVersion {
     pub minor: u16,
 }
 
+/// An admitted PSCI call endpoint. Actual target ownership remains separate.
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Psci {
+    conduit: Conduit,
+    version: PsciVersion,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PsciError {
     Firmware(i32),

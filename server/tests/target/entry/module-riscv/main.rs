@@ -280,12 +280,13 @@ fn prepare(
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     let peer = harts::check(&boot, &MODES);
+    let service = boot.sbi_services().hart_state_management().expect("SBI HSM");
     let storage = NonNull::new((&raw mut STORAGE).cast::<Storage>()).unwrap();
     let start = storage.addr().get() as u64;
     let resident = Resident::from_boot(&boot, start..start + size_of::<[Storage; 2]>() as u64);
     for (mode, image) in MODES.into_iter().zip(ROOT_IMAGES) {
         prove_geometry(mode, &resident);
-        exercise(mode, image, peer, &resident, storage);
+        exercise(mode, image, peer, service, &resident, storage);
     }
     boot::write(
         "PASS riscv-module-execution virt modes=sv39,sv48,sv57 high-leaves=12 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2\n",
@@ -336,6 +337,7 @@ fn exercise(
     mode: Mode,
     image: &'static [u8],
     peer: usize,
+    service: kernel::metal::platform::firmware::sbi::HartService,
     resident: &Resident,
     storage: NonNull<Storage>,
 ) {
@@ -431,6 +433,7 @@ fn exercise(
     let replies = unsafe {
         harts::exercise(
             peer,
+            service,
             [initial.context(), context],
             &provider,
             &encoder,

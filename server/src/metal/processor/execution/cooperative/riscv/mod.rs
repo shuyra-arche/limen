@@ -7,10 +7,20 @@ use core::{
 
 /// The native integer-only switch is valid in the verified Bare environment.
 pub(super) fn ready() -> bool {
-    let status: usize;
-    unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nomem, nostack)) };
+    let (status, enabled, translation): (usize, usize, usize);
+    unsafe {
+        asm!(
+            "csrr {status}, sstatus",
+            "csrr {enabled}, sie",
+            "csrr {translation}, satp",
+            status = out(reg) status,
+            enabled = out(reg) enabled,
+            translation = out(reg) translation,
+            options(nomem, nostack),
+        );
+    }
     const EXTENSIONS: usize = (3 << 13) | (3 << 9);
-    status & EXTENSIONS == 0
+    status & (EXTENSIONS | 2) == 0 && enabled == 0 && translation == 0
 }
 
 #[repr(C)]

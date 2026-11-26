@@ -6,10 +6,10 @@ use core::{
     mem::offset_of,
 };
 
-use crate::metal::platform::firmware::psci::Conduit;
+use crate::metal::platform::firmware::psci::Psci;
 #[derive(Clone, Copy)]
 pub enum Startup {
-    Psci(Conduit),
+    Psci(Psci),
 }
 
 #[repr(C)]
@@ -37,7 +37,7 @@ pub(crate) const fn minor_context() -> MinorContext {
 pub(crate) unsafe fn wake_minor(
     slot: &Minor,
     hart: usize,
-    Startup::Psci(conduit): Startup,
+    Startup::Psci(service): Startup,
 ) -> Result<(), StartError> {
     let mut regs = Registers::default();
     unsafe {
@@ -56,7 +56,7 @@ pub(crate) unsafe fn wake_minor(
     for address in ((ptr & !(line - 1))..ptr + size_of::<Minor>()).step_by(line) {
         unsafe { asm!("dc cvac, {}", in(reg) address,options(nostack)) }
     }
-    unsafe { conduit.cpu_on(hart, minor as *const (), ptr) }.map_err(StartError::Rejected)
+    unsafe { service.cpu_on(hart, minor as *const (), ptr) }.map_err(StartError::Rejected)
 }
 
 #[unsafe(naked)]

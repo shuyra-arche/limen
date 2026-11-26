@@ -35,8 +35,11 @@ fn conduit() -> Conduit {
         Conduit::Smc
     }
 }
-pub(super) fn startup() -> boot::Startup {
-    boot::Startup::Psci(conduit())
+pub(super) fn startup(boot: &boot::Boot<'_>) -> boot::Startup {
+    let tree = boot.device_tree_description().expect("retained PSCI description");
+    let description = PsciDescription::read(&tree).unwrap().unwrap();
+    let service = unsafe { description.verify() }.expect("actual PSCI service");
+    boot::Startup::Psci(service)
 }
 pub(super) static SERVICES: boot::Services = boot::Services {
     output: Some(|b| unsafe { pl011::write_byte(UART.load(Ordering::Acquire), b) }),
@@ -63,7 +66,7 @@ fn discover(bytes: &[u8]) -> Result<(), Status> {
     // AAVMF's retained native tree describes the conduit of this running VM.
     // Probe the calls before installing PSCI as a startup and shutdown service.
     unsafe {
-        psci.verify().map_err(|_| Status::UNSUPPORTED)?;
+        let psci = psci.verify().map_err(|_| Status::UNSUPPORTED)?;
         psci.verify_affinity(major.affinity, true)
             .map_err(|_| Status::COMPROMISED_DATA)?;
         psci.verify_affinity(target.affinity, false)
@@ -200,7 +203,7 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
     assert!(tree.node(psci.source()).is_some());
     assert_eq!(psci.conduit(), conduit());
     unsafe {
-        psci.verify().expect("live PSCI version and calls");
+        let psci = psci.verify().expect("live PSCI version and calls");
         psci.verify_affinity(target, false)
             .expect("minor affinity before startup");
     }
@@ -239,6 +242,7 @@ pub(super) fn inspect_started(tree: &DeviceTree<'_>, target: usize) {
         .unwrap()
         .expect("PSCI declaration");
     unsafe {
+        let psci = psci.verify().expect("live PSCI service");
         psci.verify_affinity(target, true)
             .expect("live minor affinity");
     }

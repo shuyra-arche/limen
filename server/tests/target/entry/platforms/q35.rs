@@ -53,7 +53,7 @@ fn delay(microseconds: u32) -> bool {
     ticks != 0
 }
 
-pub(super) fn startup() -> boot::Startup {
+pub(super) fn startup(_: &boot::Boot<'_>) -> boot::Startup {
     boot::Startup::Xapic {
         trampoline: NonNull::new(TRAMPOLINE.load(Ordering::Acquire))
             .unwrap()

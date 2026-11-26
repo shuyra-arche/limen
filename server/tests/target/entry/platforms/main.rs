@@ -243,7 +243,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     assert_ne!(target, boot.hart());
     #[cfg(target_arch = "x86_64")]
     board::check_discovery(&boot, target);
-    let startup = board::startup();
+    let startup = board::startup(&boot);
     let major = boot.hart();
     board::inspect(&boot, &view);
     #[cfg(target_arch = "aarch64")]
