@@ -20,6 +20,7 @@
     "server/src/metal/firmware/sbi/**",
     "server/link.x",
     "server/src/basis/**",
+    "server/src/metal/sync/**",
     "server/src/entry/execution.rs",
     "server/src/metal/execution/riscv/**",
     "server/src/metal/boot/console.rs",

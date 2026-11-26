@@ -7,7 +7,7 @@ use kernel::{
         pool::{Error, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement, Stable},
     },
     entry::boot::{self, Boot},
-    sync::{Acquisition::Fast, TurnLock, Work},
+    sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
 };
 
 use super::{
@@ -37,12 +37,12 @@ pub(super) fn check(boot: &Boot<'_>) {
 
     let mut address = None;
     let receiver = TurnLock::new((None, None));
-    let mut work = Work::<2>::new();
+    let mut work = TurnWorkspace::<2>::new();
     for value in [37, 52] {
         let mut plan = work.plan();
         plan.insert(&receiver).unwrap();
         pool.plan(&mut plan).unwrap();
-        plan.execute(Fast, |held| {
+        plan.acquire(Fast, |held| {
             pool.reserve_held(held, &receiver, |record| &mut record.0)
                 .unwrap();
         })
@@ -51,7 +51,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         let mut plan = work.plan();
         plan.insert(&receiver).unwrap();
         let reserved = plan
-            .execute(Fast, |held| {
+            .acquire(Fast, |held| {
                 held.access(&receiver).unwrap().0.take().unwrap()
             })
             .unwrap();
@@ -59,7 +59,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         let mut plan = work.plan();
         plan.insert(&receiver).unwrap();
         pool.plan(&mut plan).unwrap();
-        plan.execute(Fast, |held| {
+        plan.acquire(Fast, |held| {
             prepared
                 .publish_held(held, &receiver, |record| &mut record.1)
                 .ok()
@@ -70,7 +70,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         let mut plan = work.plan();
         plan.insert(&receiver).unwrap();
         let object = plan
-            .execute(Fast, |held| {
+            .acquire(Fast, |held| {
                 held.access(&receiver).unwrap().1.take().unwrap()
             })
             .unwrap();
@@ -80,13 +80,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         let current = ptr::from_ref(entry).addr();
         assert!(physical.contains(PhysicalAddress::new(current as u64)));
         assert_eq!(*address.get_or_insert(current), current);
-        let mut object_work = Work::<1>::new();
-        let mut plan = object_work.plan();
-        plan.insert(entry).unwrap();
-        assert_eq!(
-            plan.execute(Fast, |held| *held.access(entry).unwrap()),
-            Ok(value)
-        );
+        assert_eq!(entry.acquire(|current| *current), Ok(value));
         let detached = original.detach();
         let mut reclaim = None;
         let (detached, error) = detached.claim(&mut reclaim).err().unwrap();

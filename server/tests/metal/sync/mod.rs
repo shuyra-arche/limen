@@ -40,7 +40,7 @@ mod queue {
     use spin::arm;
     pub use spin::observe as observe_spin;
 
-    include!("../../../src/basis/sync/queue.rs");
+    include!("../../../src/metal/sync/queue.rs");
 
     use std::{
         sync::atomic::{AtomicBool, AtomicU8},

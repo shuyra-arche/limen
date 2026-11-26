@@ -71,7 +71,7 @@ impl<T: Snapshot<WORDS>, const WORDS: usize> SnapLock<T, WORDS> {
     }
 
     /// Reads once with no retry, shared write, or lock participation.
-    pub fn read(&self) -> Result<Observation<'_, T, WORDS>, SnapshotBusy> {
+    pub fn observe(&self) -> Result<Observation<'_, T, WORDS>, SnapshotBusy> {
         let first = self.sequence.load(Acquire);
         if first & 1 != 0 {
             return Err(SnapshotBusy);
@@ -94,30 +94,30 @@ impl<T: Snapshot<WORDS>, const WORDS: usize> SnapLock<T, WORDS> {
     }
 
     /// Tries once to publish if the observation is still current.
-    pub fn attempt(
+    pub fn attempt_publish(
         &self,
         expected: &Observation<'_, T, WORDS>,
         value: T,
     ) -> Result<(), PublishError> {
         let words = value.encode();
         self.writer
-            .attempt(|()| self.publish(expected, words))
+            .attempt(|()| self.publish_held(expected, words))
             .map_err(PublishError::Access)?
     }
 
     /// Waits in ordinary context, then publishes if the observation is current.
-    pub fn acquire(
+    pub fn publish(
         &self,
         expected: &Observation<'_, T, WORDS>,
         value: T,
     ) -> Result<(), PublishError> {
         let words = value.encode();
         self.writer
-            .acquire(|()| self.publish(expected, words))
+            .acquire(|()| self.publish_held(expected, words))
             .map_err(PublishError::Access)?
     }
 
-    fn publish(
+    fn publish_held(
         &self,
         expected: &Observation<'_, T, WORDS>,
         words: [u64; WORDS],

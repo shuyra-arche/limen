@@ -1,4 +1,4 @@
-use crate::sync::{Acquisition, Work};
+use crate::metal::sync::{TurnMode, TurnWorkspace};
 
 use crate::address::{PhysicalRange, length};
 
@@ -8,7 +8,6 @@ use super::super::{
 use super::{
     Error, GroupId, Pool, SourceError,
     group::{Chain, Group},
-    with_turn,
 };
 
 pub(super) struct Material {
@@ -69,7 +68,7 @@ impl<T> Pool<'_, T> {
     /// at 64. A failed acquisition leaves the cursor intact. End resets it
     /// to revisit retained work. No mapped group bytes are accessed.
     pub fn retirement(&self, cursor: &mut usize, budget: usize) -> Result<Retirement, Error> {
-        Ok(with_turn(&self.state, |state| {
+        Ok(self.state.acquire(|state| {
             let stop = (*cursor).saturating_add(budget.min(64)).min(state.count);
             while *cursor < stop {
                 let index = *cursor;
@@ -97,7 +96,7 @@ impl<T> Pool<'_, T> {
     /// All old slot owners (including detached or reclaiming ones) must settle
     /// before the group can shut. The physical charge remains until refund.
     pub fn shut(&self, id: GroupId) -> Result<PhysicalRange, Error> {
-        with_turn(&self.state, |state| {
+        self.state.acquire(|state| {
             let capacity = match state.entry(id)? {
                 GroupRecord::Open(group) if group.free == group.geometry.slots => {
                     group.geometry.slots
@@ -130,8 +129,8 @@ impl<T> Pool<'_, T> {
     /// The caller must have retired every applicable map, translation, device
     /// access and other use for the exact physical extent returned by shut on
     /// this group. This evidence must remain valid through the handoff.
-    pub unsafe fn begin_return(&self, id: GroupId, mode: Acquisition) -> Result<(), Error> {
-        let receipt = with_turn(&self.state, |state| match state.entry(id)? {
+    pub unsafe fn begin_return(&self, id: GroupId, mode: TurnMode) -> Result<(), Error> {
+        let receipt = self.state.acquire(|state| match state.entry(id)? {
             GroupRecord::Open(_) => Err(Error::Busy),
             GroupRecord::Shutting(material) => Ok(Some(material.receipt())),
             GroupRecord::Returning(_) | GroupRecord::Retired(_) => Ok(None),
@@ -141,11 +140,11 @@ impl<T> Pool<'_, T> {
         };
 
         let region = receipt.source.return_state(receipt.retirement)?;
-        let mut work = Work::<2>::new();
+        let mut work = TurnWorkspace::<2>::new();
         let mut plan = work.plan();
         self.plan(&mut plan).expect("Pool");
         plan.insert(region).expect("original Region");
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             let (state, region) = held
                 .access_pair(&self.state, region)
                 .expect("complete return plan");
@@ -169,8 +168,8 @@ impl<T> Pool<'_, T> {
 
     /// Reconcile the group with its actual upstream refund. Failed attempts
     /// keep the exact receipt. Replays return the same settled result.
-    pub fn finish_return(&self, id: GroupId, mode: Acquisition) -> Result<Returned, Error> {
-        let receipt = match with_turn(&self.state, |state| match state.entry(id)? {
+    pub fn finish_return(&self, id: GroupId, mode: TurnMode) -> Result<Returned, Error> {
+        let receipt = match self.state.acquire(|state| match state.entry(id)? {
             GroupRecord::Returning(receipt) => Ok(Ok(*receipt)),
             GroupRecord::Retired(result) => Ok(Err(*result)),
             _ => Err(Error::Busy),
@@ -184,7 +183,7 @@ impl<T> Pool<'_, T> {
             Err(error) => {
                 // Another reclaimer can have finished and acknowledged the
                 // Return after the observation above.
-                return with_turn(&self.state, |state| match state.entry(id)? {
+                return self.state.acquire(|state| match state.entry(id)? {
                     GroupRecord::Retired(done) => Ok(*done),
                     _ => Err(error.into()),
                 })?;
@@ -194,11 +193,11 @@ impl<T> Pool<'_, T> {
         assert_eq!(done.physical, receipt.physical);
 
         let region = receipt.source.return_state(receipt.retirement)?;
-        let mut work = Work::<2>::new();
+        let mut work = TurnWorkspace::<2>::new();
         let mut plan = work.plan();
         self.plan(&mut plan).expect("Pool");
         plan.insert(region).expect("original Region");
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             let (state, region) = held
                 .access_pair(&self.state, region)
                 .expect("complete receipt plan");

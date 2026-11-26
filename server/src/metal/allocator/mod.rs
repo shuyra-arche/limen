@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicUsize, Ordering::Acquire};
 use crate::{
     address::PhysicalRange,
     entry::boot::Region as Description,
-    sync::{Acquisition, AcquisitionError, TurnLock, Work},
+    metal::sync::{TurnAcquireError, TurnLock},
 };
 
 mod allowance;
@@ -48,12 +48,12 @@ pub enum Error {
     Changed,
 }
 
-impl From<AcquisitionError> for Error {
-    fn from(error: AcquisitionError) -> Self {
+impl From<TurnAcquireError> for Error {
+    fn from(error: TurnAcquireError) -> Self {
         match error {
-            AcquisitionError::Busy => Self::Busy,
-            AcquisitionError::Capacity => Self::Capacity,
-            AcquisitionError::Empty | AcquisitionError::Context => Self::Protection,
+            TurnAcquireError::Busy => Self::Busy,
+            TurnAcquireError::Capacity => Self::Capacity,
+            TurnAcquireError::Empty | TurnAcquireError::Context => Self::Protection,
         }
     }
 }
@@ -94,16 +94,4 @@ impl Allocator {
         }
         Ok(&self.regions[id.0])
     }
-}
-
-pub(crate) fn with_turn<T, R>(
-    lock: &TurnLock<T>,
-    operation: impl FnOnce(&mut T) -> R,
-) -> Result<R, Error> {
-    let mut work = Work::<1>::new();
-    let mut plan = work.plan();
-    plan.insert(lock).expect("one Turn");
-    Ok(plan.execute(Acquisition::Fast, |held| {
-        operation(held.access(lock).expect("planned lock"))
-    })?)
 }

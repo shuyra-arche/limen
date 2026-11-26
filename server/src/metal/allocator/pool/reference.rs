@@ -4,9 +4,9 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::sync::{HeldLockSet, TurnLock};
+use crate::metal::sync::{TurnAccess, TurnLock};
 
-use super::{Error, Occupied, SourceError, Vacant, group::State, place::Claim, with_turn};
+use super::{Error, Occupied, SourceError, Vacant, group::State, place::Claim};
 
 /// Maximum simultaneous owners of a stable object, including its base owner.
 pub const REFERENCE_LIMIT: usize = 64;
@@ -128,9 +128,10 @@ impl<'pool, 'storage, T> Detached<'pool, 'storage, T> {
     ) -> Result<(), (Self, Error)> {
         let mut detached = Some(self);
         let pool = detached.as_ref().expect("original detach").0.pool;
-        match with_turn(&pool.state, |_| {
-            detached.take().expect("single claim").claim_to(receiver)
-        }) {
+        match pool
+            .state
+            .acquire(|_| detached.take().expect("single claim").claim_to(receiver))
+        {
             Ok(result) => result,
             Err(error) => Err((detached.expect("no claim accepted"), error.into())),
         }
@@ -139,7 +140,7 @@ impl<'pool, 'storage, T> Detached<'pool, 'storage, T> {
     /// Claim and transfer the destruction right in the existing joint plan.
     pub fn claim_held<R>(
         self,
-        held: &mut HeldLockSet<'_>,
+        held: &mut TurnAccess<'_>,
         receiver: &TurnLock<R>,
         select: impl FnOnce(&mut R) -> &mut Option<Reclaim<'pool, 'storage, T>>,
     ) -> Result<(), (Self, Error)> {

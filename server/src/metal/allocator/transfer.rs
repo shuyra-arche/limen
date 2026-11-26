@@ -7,12 +7,11 @@ use core::ptr;
 use crate::{
     address::{PhysicalAddress, PhysicalRange, length},
     metal::identity::{GenerationTable, Key, ReserveError},
-    sync::{Acquisition, HeldLockSet, LockPlan, TurnLock, Work},
+    metal::sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
 };
 
 use super::{
     Allocator, AllowanceId, Candidate, Error, RegionId, allowance::SlotState, region::State,
-    with_turn,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,9 +76,9 @@ impl Allocation {
     /// Learning its identity does not authorize handoff or completion.
     pub(super) fn return_position(&self) -> Result<ReturnId, Error> {
         let region = self.source.region(self.id.region)?;
-        with_turn(&region.state, |state| {
-            state.active(self).map(|record| record.retirement)
-        })?
+        region
+            .state
+            .acquire(|state| state.active(self).map(|record| record.retirement))?
     }
 
     /// Conclude the consumer's actual access lifecycle.
@@ -129,15 +128,15 @@ pub struct ReturnReceipt {
 
 impl ReturnReceipt {
     /// Finish the original refund or read its retained result.
-    pub fn finish(&self, mode: Acquisition) -> Result<Returned, Error> {
+    pub fn finish(&self, mode: TurnMode) -> Result<Returned, Error> {
         self.source.finish_return(self.id, mode)
     }
 
     /// Release the original owner's completed receipt position.
     pub fn acknowledge(&self) -> Result<(), Error> {
-        with_turn(self.source.return_state(self.id)?, |state| {
-            state.acknowledge_return(self.id, ReceiptOwner::Receiver)
-        })?
+        self.source
+            .return_state(self.id)?
+            .acquire(|state| state.acknowledge_return(self.id, ReceiptOwner::Receiver))?
     }
 }
 
@@ -237,7 +236,7 @@ impl Construction {
     }
 
     pub(crate) fn reservation(&self) -> Result<(RegionId, AllowanceId), Error> {
-        with_turn(&self.state, |state| match state {
+        self.state.acquire(|state| match state {
             Preparation::Reserved(reservation) => {
                 Ok((reservation.id.region, reservation.allowance))
             }
@@ -246,28 +245,28 @@ impl Construction {
     }
 
     /// Include this receiver in a joint operation without exposing its state.
-    pub fn plan<'a>(&'a self, plan: &mut LockPlan<'a, '_>) -> Result<(), Error> {
+    pub fn plan<'a>(&'a self, plan: &mut TurnPlan<'a, '_>) -> Result<(), Error> {
         plan.insert(&self.state).map_err(|_| Error::Capacity)
     }
 
     /// Close the original preparation to issuance.
     pub fn close(&self) -> Result<(), Error> {
-        with_turn(&self.state, Preparation::close)?
+        self.state.acquire(Preparation::close)?
     }
 
     /// Close the original preparation inside the consumer's complete plan.
-    pub fn close_held(&self, held: &mut HeldLockSet<'_>) -> Result<(), Error> {
+    pub fn close_held(&self, held: &mut TurnAccess<'_>) -> Result<(), Error> {
         held.access(&self.state).ok_or(Error::Protection)?.close()
     }
 
     /// Cancel a closed preparation through its original Region and Allowance.
     /// A settled cancellation can be replayed from the same receiver.
-    pub fn cancel(&'static self, mode: Acquisition) -> Result<(), Error> {
-        let Some(reservation) = with_turn(&self.state, |state| state.closed_reservation())?? else {
+    pub fn cancel(&'static self, mode: TurnMode) -> Result<(), Error> {
+        let Some(reservation) = self.state.acquire(|state| state.closed_reservation())?? else {
             return Ok(());
         };
         let source = reservation.source;
-        let mut work = Work::<3>::new();
+        let mut work = TurnWorkspace::<3>::new();
         let mut plan = work.plan();
         source.plan_construction(
             &mut plan,
@@ -275,7 +274,7 @@ impl Construction {
             reservation.allowance,
             self,
         )?;
-        plan.execute(mode, |held| source.cancel(held, self))?
+        plan.acquire(mode, |held| source.cancel(held, self))?
     }
 
     /// The owner either keeps the issued material here or moves it to the
@@ -289,7 +288,7 @@ impl Construction {
         if receiver.is_some() {
             return Err(Error::Receiver);
         }
-        with_turn(&self.state, |state| {
+        self.state.acquire(|state| {
             let Preparation::Issued(allocation) = state else {
                 return Err(Error::Receiver);
             };
@@ -385,7 +384,7 @@ fn remove<Scope: Copy + Eq, T>(table: &mut GenerationTable<'_, Scope, T>, key: K
 
 fn reservation(
     source: &Allocator,
-    held: &mut HeldLockSet<'_>,
+    held: &mut TurnAccess<'_>,
     construction: &'static Construction,
 ) -> Result<Reservation, Error> {
     let receiver = held.access(&construction.state).ok_or(Error::Protection)?;
@@ -401,7 +400,7 @@ fn reservation(
 impl Allocator {
     pub fn plan_construction<'a>(
         &'a self,
-        plan: &mut LockPlan<'a, '_>,
+        plan: &mut TurnPlan<'a, '_>,
         region: RegionId,
         allowance: AllowanceId,
         construction: &'static Construction,
@@ -421,7 +420,7 @@ impl Allocator {
     /// The construction is the real durable original request and receiver.
     pub(crate) unsafe fn reserve(
         &'static self,
-        held: &mut HeldLockSet<'_>,
+        held: &mut TurnAccess<'_>,
         candidate: Candidate,
         allowance: AllowanceId,
         construction: &'static Construction,
@@ -477,7 +476,7 @@ impl Allocator {
     /// take place only in the still open original construction.
     pub(crate) unsafe fn issue(
         &'static self,
-        held: &mut HeldLockSet<'_>,
+        held: &mut TurnAccess<'_>,
         construction: &'static Construction,
         spender: Option<Spender>,
     ) -> Result<AllocationId, Error> {
@@ -515,7 +514,7 @@ impl Allocator {
     /// its lock for the final authorization check before Issue.
     pub(crate) fn reserved_candidate(
         &self,
-        held: &mut HeldLockSet<'_>,
+        held: &mut TurnAccess<'_>,
         construction: &'static Construction,
     ) -> Result<Candidate, Error> {
         Ok(reservation(self, held, construction)?.candidate)
@@ -524,7 +523,7 @@ impl Allocator {
     /// Cancelling a closed preparation needs no new spending authority.
     fn cancel(
         &self,
-        held: &mut HeldLockSet<'_>,
+        held: &mut TurnAccess<'_>,
         construction: &'static Construction,
     ) -> Result<(), Error> {
         let receiver = held.access(&construction.state).ok_or(Error::Protection)?;
@@ -596,7 +595,7 @@ impl Allocator {
                 return Err(Error::Stale);
             }
             let region = self.region(allocation.id.region)?;
-            with_turn(&region.state, |state| {
+            region.state.acquire(|state| {
                 // The original Retired input certifies all prior uses ended.
                 record(unsafe { state.begin_retired(allocation, owner) }?);
                 Ok(())
@@ -607,20 +606,22 @@ impl Allocator {
 
     /// Finish a prepaid return once. Done can be replayed independently of
     /// the active slot and the original Allowance.
-    pub fn finish_return(&self, id: ReturnId, mode: Acquisition) -> Result<Returned, Error> {
+    pub fn finish_return(&self, id: ReturnId, mode: TurnMode) -> Result<Returned, Error> {
         let region = self.region(id.region)?;
-        let allowance = match with_turn(&region.state, |state| state.returns.get(id.key).copied())?
+        let allowance = match region
+            .state
+            .acquire(|state| state.returns.get(id.key).copied())?
         {
             Some(ReturnRecord::Pending(_, allowance, _)) => allowance,
             Some(ReturnRecord::Done(done, _)) => return Ok(done),
             _ => return Err(Error::Stale),
         };
         let slot = self.slot(allowance)?;
-        let mut work = Work::<2>::new();
+        let mut work = TurnWorkspace::<2>::new();
         let mut plan = work.plan();
         plan.insert(&region.state).expect("return Region");
         plan.insert(slot).expect("original Allowance");
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             let state = held.access(&region.state).expect("return Region");
             let (allocation, owner) = match state.returns.get(id.key) {
                 Some(ReturnRecord::Pending(allocation, original, owner))
@@ -678,7 +679,7 @@ impl Allocator {
         budget: usize,
     ) -> Result<Pending, Error> {
         let region = self.region(id)?;
-        with_turn(&region.state, |state| {
+        Ok(region.state.acquire(|state| {
             let end = state.returns.capacity();
             let stop = (*cursor).saturating_add(budget.min(64)).min(end);
             while *cursor < stop {
@@ -695,15 +696,14 @@ impl Allocator {
             } else {
                 Pending::More
             }
-        })
+        })?)
     }
 
     /// The trusted original receipt owner ends the independent history.
     /// A bound receipt retains acknowledgement authority at its original owner.
     pub fn acknowledge(&self, id: ReturnId) -> Result<(), Error> {
-        with_turn(self.return_state(id)?, |state| {
-            state.acknowledge_return(id, ReceiptOwner::Caller)
-        })?
+        self.return_state(id)?
+            .acquire(|state| state.acknowledge_return(id, ReceiptOwner::Caller))?
     }
 }
 
@@ -760,7 +760,7 @@ impl Allocator {
         input: Retired,
         boundary: PhysicalAddress,
         receivers: &mut [Option<Allocation>; 2],
-        mode: Acquisition,
+        mode: TurnMode,
     ) -> Result<(), (Retired, Error)> {
         if !boundary.is_aligned(self.config.granule_alignment()) {
             return Err((input, Error::Layout));
@@ -785,7 +785,7 @@ impl Allocator {
         left: Retired,
         right: Retired,
         receiver: &mut Option<Allocation>,
-        mode: Acquisition,
+        mode: TurnMode,
     ) -> Result<(), (Retired, Retired, Error)> {
         let fits = left.physical().end() == right.physical().start()
             && left.0.id.region == right.0.id.region;
@@ -810,7 +810,7 @@ impl Allocator {
         inputs: [&Retired; INPUTS],
         outputs: [PhysicalRange; OUTPUTS],
         receivers: &mut [Option<Allocation>; OUTPUTS],
-        mode: Acquisition,
+        mode: TurnMode,
     ) -> Result<(), Error> {
         if receivers.iter().any(Option::is_some) {
             return Err(Error::Receiver);
@@ -820,13 +820,16 @@ impl Allocator {
         }
         let id = inputs[0].0.id.region;
         let region = self.region(id)?;
-        let allowance = with_turn(&region.state, |state| state.active(&inputs[0].0))??.allowance;
+        let allowance = region
+            .state
+            .acquire(|state| state.active(&inputs[0].0))??
+            .allowance;
         let slot = self.slot(allowance)?;
-        let mut work = Work::<2>::new();
+        let mut work = TurnWorkspace::<2>::new();
         let mut plan = work.plan();
         plan.insert(&region.state).expect("conversion Region");
         plan.insert(slot).expect("original Allowance");
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             held.access(slot).expect("Allowance").open(allowance)?;
             let state = held.access(&region.state).expect("Region");
             let mut records = [None; INPUTS];

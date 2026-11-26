@@ -1,13 +1,14 @@
 use core::{
     cell::UnsafeCell,
     hint::spin_loop,
+    mem::DropGuard,
     sync::atomic::{
         AtomicBool,
         Ordering::{Acquire, Relaxed, Release},
     },
 };
 
-use crate::metal::hart::{self, LeafParticipation};
+use crate::metal::hart;
 
 /// Failure to enter a local leaf section or obtain its exclusive access.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,28 +90,16 @@ impl<T> LeafLock<T> {
             }
         }
 
-        participation.held();
-        let held = Held {
-            occupied: &self.occupied,
-            participation,
-        };
-        // The successful CAS grants exclusive access until Held drops. The
-        // callback's higher-ranked argument prevents this borrow from escaping.
+        let held = DropGuard::new(participation, |participation| {
+            participation.releasing();
+            self.occupied.store(false, Release);
+            // Dropping participation restores the local prefix.
+        });
+        held.held();
+        // The successful CAS grants exclusive access through this call.
+        // The callback's higher-ranked argument keeps the borrow scoped.
         let result = operation(unsafe { &mut *self.value.get() });
         drop(held);
         Ok(result)
-    }
-}
-
-struct Held<'lock> {
-    occupied: &'lock AtomicBool,
-    participation: LeafParticipation,
-}
-
-impl Drop for Held<'_> {
-    fn drop(&mut self) {
-        self.participation.releasing();
-        self.occupied.store(false, Release);
-        // Dropping participation after the store restores the local prefix.
     }
 }

@@ -19,6 +19,7 @@
     "server/src/metal/firmware/sbi/**",
     "server/link.x",
     "server/src/basis/**",
+    "server/src/metal/sync/**",
     "server/src/entry/execution.rs",
     "server/src/metal/allocator/**",
     "server/src/metal/mmu/internal/access.rs",

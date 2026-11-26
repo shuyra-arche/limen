@@ -14,7 +14,7 @@ trap 'rm -rf "$scratch"' EXIT
 
 compile=(rustc --edition 2024 --crate-type lib --emit metadata --error-format json
     --target "$target" -D warnings -C panic=abort --extern "kernel=$artifact"
-    "${dependencies[@]}" --out-dir "$scratch" server/tests/basis/sync/contracts.rs)
+    "${dependencies[@]}" --out-dir "$scratch" server/tests/metal/sync/contracts.rs)
 "${compile[@]}"
 
 reject() {
@@ -31,7 +31,9 @@ reject() {
 }
 
 reject escape E0521
+reject escape-single E0521
 reject alias E0499
+reject forget E0507
 reject send E0277
 reject sync E0277
 printf 'Sync compiler contracts passed on %s\n' "$target"

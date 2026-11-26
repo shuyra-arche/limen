@@ -1,11 +1,10 @@
 use core::ptr::NonNull;
 
-use crate::sync::{HeldLockSet, TurnLock};
+use crate::metal::sync::{TurnAccess, TurnLock};
 
 use super::{
     Error, GroupId, GroupRecord, Pool, SourceError,
     group::{Completion, Slot, SlotState, State},
-    with_turn,
 };
 
 pub(super) struct Claim<'pool, 'storage, T> {
@@ -49,7 +48,7 @@ impl<'pool, 'storage, T> Claim<'pool, 'storage, T> {
     }
 
     pub(super) fn destroy(self, from: State) -> Result<Vacant<'pool, 'storage, T>, (Self, Error)> {
-        let completion = match with_turn(&self.pool.state, |directory| {
+        let completion = match self.pool.state.acquire(|directory| {
             let slot = self.state();
             assert_eq!(slot.get(), from);
             slot.set(State::Reclaiming);
@@ -105,9 +104,10 @@ impl<'pool, 'storage, T> Reservation<'pool, 'storage, T> {
     }
 
     pub fn cancel(self) -> Result<(), (Self, Error)> {
-        let result = with_turn(&self.0.pool.state, |directory| {
-            directory.release(self.0.group, self.0.index, State::Reserved)
-        });
+        let result =
+            self.0.pool.state.acquire(|directory| {
+                directory.release(self.0.group, self.0.index, State::Reserved)
+            });
         result
             .map_err(Error::from)
             .flatten()
@@ -127,7 +127,7 @@ impl<'pool, 'storage, T> Prepared<'pool, 'storage, T> {
         }
         let pool = self.0.pool;
         let mut prepared = Some(self);
-        match with_turn(&pool.state, |_| {
+        match pool.state.acquire(|_| {
             prepared
                 .take()
                 .expect("single publication")
@@ -145,7 +145,7 @@ impl<'pool, 'storage, T> Prepared<'pool, 'storage, T> {
     /// and the original Pool from this same held plan.
     pub fn publish_held<R>(
         self,
-        held: &mut HeldLockSet<'_>,
+        held: &mut TurnAccess<'_>,
         receiver: &TurnLock<R>,
         select: impl FnOnce(&mut R) -> &mut Option<Occupied<'pool, 'storage, T>>,
     ) -> Result<(), (Self, Error)> {
@@ -173,7 +173,7 @@ impl<'pool, 'storage, T> Prepared<'pool, 'storage, T> {
     pub fn destroy(self) -> Result<Reservation<'pool, 'storage, T>, (Self, Error)> {
         // Check the ordinary execution context before running a destructor.
         // The original preparation retains exclusive ownership throughout.
-        if let Err(error) = with_turn(&self.0.pool.state, |_| {
+        if let Err(error) = self.0.pool.state.acquire(|_| {
             assert_eq!(self.0.state().get(), State::Reserved);
         }) {
             return Err((self, error.into()));
@@ -205,7 +205,7 @@ impl<T> Vacant<'_, '_, T> {
         if self.completion == Completion::UNTRACKED {
             return Err((self, SourceError::IdentityExhausted.into()));
         }
-        let result = with_turn(&self.pool.state, |directory| {
+        let result = self.pool.state.acquire(|directory| {
             directory.release(self.group, self.index, State::Destroyed(self.completion))
         });
         result
@@ -238,7 +238,7 @@ impl<T> Pool<'_, T> {
         cursor: &mut ReleaseCursor,
         budget: usize,
     ) -> Result<ReleaseProgress, Error> {
-        Ok(with_turn(&self.state, |state| {
+        Ok(self.state.acquire(|state| {
             for _ in 0..budget.min(64) {
                 if cursor.group >= state.count {
                     *cursor = ReleaseCursor::default();

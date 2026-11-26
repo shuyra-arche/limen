@@ -33,8 +33,8 @@ pub fn publish() {
     SHARED.store(ptr::from_ref(&snap).cast_mut(), Release);
 
     for number in 1..=LAST {
-        let expected = snap.read().unwrap();
-        snap.acquire(&expected, Pair([number, !number])).unwrap();
+        let expected = snap.observe().unwrap();
+        snap.publish(&expected, Pair([number, !number])).unwrap();
         if number.is_multiple_of(BATCH) {
             while OBSERVED.load(Acquire) < number {
                 spin_loop();
@@ -59,7 +59,7 @@ pub fn observe() {
     let snap = unsafe { &*source };
     let mut previous = 0;
     loop {
-        let Ok(sample) = snap.read() else {
+        let Ok(sample) = snap.observe() else {
             spin_loop();
             continue;
         };

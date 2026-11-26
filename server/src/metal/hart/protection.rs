@@ -1,12 +1,12 @@
 //! Ordinary execution protection owned by the initialized physical CPU.
 
-use core::{cell::Cell, marker::PhantomData, sync::atomic::AtomicBool};
+use core::{cell::Cell, marker::PhantomData, mem::DropGuard, sync::atomic::AtomicBool};
 
 use super::{HartLocal, QueueNode, backend, installed, ordinary_entry};
 
-// Opening an Allowance from all Regions takes their locks, the free index,
-// and the selected Allowance slot. Future Pend participants are separate.
-pub(crate) const TURN_CAPACITY: usize = crate::metal::allocator::REGION_LIMIT + 2;
+/// The fixed queue-node storage supplied by the current boot image per Hart.
+/// Owners check their maximum joint acquisition against this supply.
+pub(crate) const TURN_CAPACITY: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Error {
@@ -62,27 +62,23 @@ impl LocalProtection {
     }
 }
 
-fn protect() -> Result<(&'static HartLocal, usize), Error> {
+fn protect() -> Result<(&'static HartLocal, DropGuard<usize, impl FnOnce(usize)>), Error> {
     if !ordinary_entry() {
         return Err(Error::Context);
     }
-    let interrupt = unsafe { backend::mask_interrupts() };
-    if let Some(local) = installed() {
-        return Ok((local, interrupt));
-    }
-    unsafe { backend::restore_interrupts(interrupt) };
-    Err(Error::Context)
+    let interrupt = DropGuard::new(unsafe { backend::mask_interrupts() }, |saved| unsafe {
+        backend::restore_interrupts(saved)
+    });
+    Ok((installed().ok_or(Error::Context)?, interrupt))
 }
 
 #[cfg(target_arch = "riscv64")]
 pub(crate) fn can_switch() -> bool {
-    let Ok((local, interrupt)) = protect() else {
+    let Ok((local, _interrupt)) = protect() else {
         return false;
     };
-    let idle = local.protection.current.get() == Participation::Idle
-        && local.protection.interrupt.get().is_none();
-    unsafe { backend::restore_interrupts(interrupt) };
-    idle
+    local.protection.current.get() == Participation::Idle
+        && local.protection.interrupt.get().is_none()
 }
 
 pub(crate) struct TurnParticipation {
@@ -98,10 +94,9 @@ pub(crate) fn begin_turn(count: usize) -> Result<TurnParticipation, Error> {
     let (local, interrupt) = protect()?;
     let local = &local.protection;
     if local.current.get() != Participation::Idle {
-        unsafe { backend::restore_interrupts(interrupt) };
         return Err(Error::Context);
     }
-    local.save(interrupt);
+    local.save(DropGuard::dismiss(interrupt));
     local.current.set(Participation::Turn {
         count,
         phase: Phase::Acquiring,
@@ -161,17 +156,18 @@ pub(crate) fn begin_leaf(
     let local = &local.protection;
     let turn = match local.current.get() {
         Participation::Idle => {
-            local.save(interrupt);
+            local.save(DropGuard::dismiss(interrupt));
             None
         }
         Participation::Turn {
             count,
             phase: Phase::Held,
-        } if !wait => Some(count),
-        _ => {
-            unsafe { backend::restore_interrupts(interrupt) };
-            return Err(Error::Context);
+        } if !wait => {
+            // The enclosing Turn already owns the original interrupt state.
+            DropGuard::dismiss(interrupt);
+            Some(count)
         }
+        _ => return Err(Error::Context),
     };
     let participation = LeafParticipation {
         local,

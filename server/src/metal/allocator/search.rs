@@ -9,7 +9,6 @@ use crate::{
 use super::{
     Allocator, Description, Error, REGION_LIMIT, RegionId,
     buddy::{self, Revision, Scan},
-    with_turn,
 };
 
 /// The recipient's intended use, independent of the physical range selected.
@@ -136,7 +135,7 @@ impl Allocator {
             return Err(Error::Layout);
         }
         // This is the first directory observation for a possible NoRange.
-        let count = with_turn(&self.directory, |_| self.published.load(Acquire))?;
+        let count = self.directory.acquire(|_| self.published.load(Acquire))?;
         let first = start.filter(|id| id.0 < count).map_or(0, |id| id.0);
         Ok(Lookup {
             source: self,
@@ -173,13 +172,17 @@ impl Lookup {
             Pass::Verify => self.verify(),
             Pass::Directory => {
                 let source = self.source;
-                with_turn(&source.directory, |_| source.published.load(Acquire)).and_then(|count| {
-                    if count != self.count {
-                        return Err(Error::Changed);
-                    }
-                    self.pass = Pass::Finished;
-                    Ok(Search::NoRange)
-                })
+                source
+                    .directory
+                    .acquire(|_| source.published.load(Acquire))
+                    .map_err(Error::from)
+                    .and_then(|count| {
+                        if count != self.count {
+                            return Err(Error::Changed);
+                        }
+                        self.pass = Pass::Finished;
+                        Ok(Search::NoRange)
+                    })
             }
             Pass::Finished => Err(Error::Stale),
         };
@@ -228,20 +231,22 @@ impl Lookup {
 
         let request = self.request.buddy;
         let scan = self.scan.take();
-        let observation = with_turn(&region.state, |state| {
-            let buddy = state.buddy();
-            if let Some(scan) = scan {
-                return buddy.resume(scan, SCAN_STEPS);
-            }
-            if let Some(physical) = buddy.fast(request)? {
-                return Ok(buddy::Search::Found(physical));
-            }
-            buddy.scan(request, SCAN_STEPS)
-        })?
-        .map_err(|reason| match reason {
-            buddy::Error::Changed => Error::Changed,
-            _ => Error::Layout,
-        })?;
+        let observation = region
+            .state
+            .acquire(|state| {
+                let buddy = state.buddy();
+                if let Some(scan) = scan {
+                    return buddy.resume(scan, SCAN_STEPS);
+                }
+                if let Some(physical) = buddy.fast(request)? {
+                    return Ok(buddy::Search::Found(physical));
+                }
+                buddy.scan(request, SCAN_STEPS)
+            })?
+            .map_err(|reason| match reason {
+                buddy::Error::Changed => Error::Changed,
+                _ => Error::Layout,
+            })?;
 
         match observation {
             buddy::Search::Found(physical) => {
@@ -268,7 +273,7 @@ impl Lookup {
         self.visited += 1;
         if let Some(observed) = self.observations[index] {
             let region = &self.source.regions[index];
-            let current = with_turn(&region.state, |state| state.buddy().revision())?;
+            let current = region.state.acquire(|state| state.buddy().revision())?;
             if !current.preserves(observed) {
                 return Err(Error::Changed);
             }

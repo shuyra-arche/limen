@@ -13,9 +13,9 @@ use crate::{
             ReleaseProgress, Retirement, Stable,
         },
     },
+    metal::sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
     range,
     source::bootstrap,
-    sync::{Acquisition::Fast, TurnLock, Work},
 };
 
 use limen_treaty::model::ByteLength;
@@ -198,10 +198,7 @@ fn partial_groups_take_priority_and_destroyed_slots_wait_for_settlement() {
         fn drop(&mut self) {
             // A fresh Turn must be legal while the object's destructor runs.
             let own = TurnLock::new(());
-            let mut work = Work::<1>::new();
-            let mut plan = work.plan();
-            plan.insert(&own).unwrap();
-            plan.execute(Fast, |_| {}).unwrap();
+            own.acquire(|_| ()).unwrap();
             self.drops.set(self.drops.get() + 1);
         }
     }
@@ -335,11 +332,11 @@ fn reserve_and_publish_commit_into_the_held_consumer_record() {
     unsafe { pool.install(&mut mapped(&mut material, bytes.0.as_mut_slice())) }.unwrap();
     let free = pool.capacity().unwrap().free;
     let record = TurnLock::new((None, None));
-    let mut work = Work::<2>::new();
+    let mut work = TurnWorkspace::<2>::new();
 
     let mut plan = work.plan();
     plan.insert(&record).unwrap();
-    plan.execute(Fast, |held| {
+    plan.acquire(Fast, |held| {
         assert!(held.access_pair(&record, &record).is_none());
         assert_eq!(
             pool.reserve_held(held, &record, |record| &mut record.0),
@@ -353,7 +350,7 @@ fn reserve_and_publish_commit_into_the_held_consumer_record() {
     let mut plan = work.plan();
     plan.insert(&record).unwrap();
     pool.plan(&mut plan).unwrap();
-    plan.execute(Fast, |held| {
+    plan.acquire(Fast, |held| {
         pool.reserve_held(held, &record, |record| &mut record.0)
             .unwrap();
         assert_eq!(
@@ -367,14 +364,14 @@ fn reserve_and_publish_commit_into_the_held_consumer_record() {
     let mut plan = work.plan();
     plan.insert(&record).unwrap();
     let reservation = plan
-        .execute(Fast, |held| held.access(&record).unwrap().0.take().unwrap())
+        .acquire(Fast, |held| held.access(&record).unwrap().0.take().unwrap())
         .unwrap();
     let prepared = reservation.initialize(17);
 
     let mut plan = work.plan();
     pool.plan(&mut plan).unwrap();
     let (prepared, error) = plan
-        .execute(Fast, |held| {
+        .acquire(Fast, |held| {
             prepared.publish_held(held, &record, |record| &mut record.1)
         })
         .unwrap()
@@ -385,7 +382,7 @@ fn reserve_and_publish_commit_into_the_held_consumer_record() {
     let mut plan = work.plan();
     pool.plan(&mut plan).unwrap();
     plan.insert(&record).unwrap();
-    plan.execute(Fast, |held| {
+    plan.acquire(Fast, |held| {
         assert!(held.access(&record).unwrap().1.is_none());
         prepared
             .publish_held(held, &record, |record| &mut record.1)
@@ -398,7 +395,7 @@ fn reserve_and_publish_commit_into_the_held_consumer_record() {
     let mut plan = work.plan();
     plan.insert(&record).unwrap();
     let object = plan
-        .execute(Fast, |held| held.access(&record).unwrap().1.take().unwrap())
+        .acquire(Fast, |held| held.access(&record).unwrap().1.take().unwrap())
         .unwrap();
     object.destroy().ok().unwrap().release().ok().unwrap();
     assert_eq!(pool.capacity().unwrap().free, free);
@@ -461,11 +458,7 @@ fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles()
     impl Drop for Record<'_> {
         fn drop(&mut self) {
             let lock = TurnLock::new(());
-            let mut work = Work::<1>::new();
-            let mut plan = work.plan();
-            plan.insert(&lock).unwrap();
-            plan.execute(Fast, |_| self.0.fetch_add(1, Relaxed))
-                .unwrap();
+            lock.acquire(|_| self.0.fetch_add(1, Relaxed)).unwrap();
         }
     }
 
@@ -488,12 +481,9 @@ fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles()
         .unwrap();
 
     let original = TurnLock::new(occupied.take().map(|object| object.stabilize()));
-    let mut work = Work::<1>::new();
-    let mut plan = work.plan();
-    plan.insert(&original).unwrap();
-    let reference = plan
-        .execute(Fast, |held| {
-            let owner = held.access(&original).unwrap().as_ref().unwrap();
+    let reference = original
+        .acquire(|original| {
+            let owner = original.as_ref().unwrap();
             retain(|| owner.reference())
         })
         .unwrap();
@@ -504,12 +494,8 @@ fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles()
     }
     assert_eq!(reference.try_retain().err(), Some(Error::References));
     copies.clear();
-    let mut plan = work.plan();
-    plan.insert(&original).unwrap();
-    let detached = plan
-        .execute(Fast, |held| {
-            held.access(&original).unwrap().take().unwrap().detach()
-        })
+    let detached = original
+        .acquire(|original| original.take().unwrap().detach())
         .unwrap();
 
     let recovery = TurnLock::new(None::<Reclaim<'_, '_, Record<'_>>>);
@@ -521,12 +507,12 @@ fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles()
             assert_eq!(ptr::from_ref(old.get()).addr(), address);
             wait.recv().unwrap();
         });
-        let mut work = Work::<2>::new();
+        let mut work = TurnWorkspace::<2>::new();
         let mut plan = work.plan();
         pool.plan(&mut plan).unwrap();
         plan.insert(&recovery).unwrap();
         let result = plan
-            .execute(Fast, |held| {
+            .acquire(Fast, |held| {
                 detached.claim_held(held, &recovery, |slot| slot)
             })
             .unwrap();
@@ -541,7 +527,7 @@ fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles()
         let mut plan = work.plan();
         pool.plan(&mut plan).unwrap();
         plan.insert(&recovery).unwrap();
-        plan.execute(Fast, |held| {
+        plan.acquire(Fast, |held| {
             detached.claim_held(held, &recovery, |slot| slot)
         })
         .unwrap()
@@ -550,7 +536,7 @@ fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles()
         let mut plan = work.plan();
         plan.insert(&recovery).unwrap();
         let reclaimed = plan
-            .execute(Fast, |held| held.access(&recovery).unwrap().take().unwrap())
+            .acquire(Fast, |held| held.access(&recovery).unwrap().take().unwrap())
             .unwrap();
         scope.spawn(move || {
             let _receipt = reclaimed.destroy().ok().unwrap();
@@ -819,8 +805,8 @@ fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
         panic!("expected the handed-off group from the Pool root");
     };
     let (left, right) = std::thread::scope(|scope| {
-        let left = scope.spawn(|| pool.finish_return(a, crate::sync::Acquisition::Slow));
-        let right = scope.spawn(|| pool.finish_return(a, crate::sync::Acquisition::Slow));
+        let left = scope.spawn(|| pool.finish_return(a, crate::metal::sync::TurnMode::Slow));
+        let right = scope.spawn(|| pool.finish_return(a, crate::metal::sync::TurnMode::Slow));
         (left.join().unwrap(), right.join().unwrap())
     });
     assert_eq!(left, Ok(done));

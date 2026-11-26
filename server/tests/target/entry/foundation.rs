@@ -15,7 +15,7 @@ use kernel::{
     },
     entry::boot::{self, Boot, Retirement as PhysicalRetirement},
     pend::{Error, Handle, Initial as InitialPend, PendSpace, Revoker},
-    sync::Acquisition::Fast,
+    sync::TurnMode::Fast,
 };
 
 use super::memory::{extent, mapped};

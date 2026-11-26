@@ -230,11 +230,11 @@ mod identity;
 #[path = "../../../src/basis/pend.rs"]
 pub mod pend;
 mod pool;
-#[path = "../../../src/basis/sync/queue.rs"]
+#[path = "../../../src/metal/sync/queue.rs"]
 mod queue;
 mod source;
 #[allow(dead_code)]
-#[path = "../../../src/basis/sync/turn.rs"]
+#[path = "../../../src/metal/sync/turn.rs"]
 mod turn;
 
 mod entry {
@@ -246,12 +246,13 @@ mod entry {
     }
 }
 
-mod sync {
-    pub use crate::turn::*;
-}
-
 mod metal {
     pub(crate) use crate::identity;
+
+    pub(crate) mod sync {
+        pub const TURN_CAPACITY: usize = super::hart::TURN_CAPACITY;
+        pub use crate::turn::*;
+    }
 
     pub mod hart {
         include!("../../../src/metal/hart/node.rs");
@@ -265,10 +266,12 @@ mod metal {
             Context,
         }
 
-        pub(crate) struct TurnParticipation(Box<[QueueNode; crate::allocator::REGION_LIMIT + 2]>);
+        pub(super) const TURN_CAPACITY: usize = 5;
+
+        pub(crate) struct TurnParticipation(Box<[QueueNode; TURN_CAPACITY]>);
 
         pub(crate) fn begin_turn(count: usize) -> Result<TurnParticipation, Error> {
-            if count > crate::allocator::REGION_LIMIT + 2 {
+            if count == 0 || count > TURN_CAPACITY {
                 return Err(Error::Capacity);
             }
             if ACTIVE.with(|active| active.replace(true)) {

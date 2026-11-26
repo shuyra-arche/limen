@@ -5,7 +5,7 @@ use kernel::{
         Request, ReturnId, Search,
     },
     entry::boot::{self, Boot},
-    sync::Acquisition::{Fast, Slow},
+    sync::TurnMode::{Fast, Slow},
 };
 
 use super::memory::{extent, mapped, retirement};

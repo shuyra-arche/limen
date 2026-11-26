@@ -107,5 +107,5 @@ jobs:
           rustup target add riscv64gc-unknown-none-elf
           cargo build --locked --workspace --target riscv64gc-unknown-none-elf
           cargo build --locked --workspace --target riscv64gc-unknown-none-elf --release
-          bash server/tests/basis/sync/contracts.sh
+          bash server/tests/metal/sync/contracts.sh
           bash server/tests/entry/boot/contracts.sh

@@ -8,7 +8,7 @@ use crate::{
     address::length,
     entry::boot::Retirement,
     metal::identity::{Entry, GenerationTable},
-    sync::{Acquisition, TurnLock, Work},
+    metal::sync::{TurnLock, TurnMode, TurnWorkspace},
 };
 
 use super::{
@@ -135,7 +135,7 @@ impl Grant {
         })
     }
 
-    pub fn admit(&mut self, mode: Acquisition) -> Result<RegionId, Error> {
+    pub fn admit(&mut self, mode: TurnMode) -> Result<RegionId, Error> {
         if let Some(id) = self.admitted {
             return Ok(id);
         }
@@ -145,11 +145,11 @@ impl Grant {
         let description = self.description;
         let physical = description.physical;
         let geometry = source.config.geometry(description)?;
-        let mut work = Work::<2>::new();
+        let mut work = TurnWorkspace::<2>::new();
         let mut plan = work.plan();
         plan.insert(&source.directory).expect("directory");
         plan.insert(&region.state).expect("new Region");
-        plan.execute(mode, |held| {
+        plan.acquire(mode, |held| {
             if source.published.load(Acquire) != index {
                 return Err(Error::Changed);
             }
