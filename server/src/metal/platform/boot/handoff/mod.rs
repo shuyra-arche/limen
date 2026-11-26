@@ -1,9 +1,16 @@
 //! Facts retained from the firmware handoff.
 
-use super::acpi::Acpi;
-use super::{
-    devicetree::{self, memory::DtbMemory},
-    map::FirmwareMap,
+#[cfg(any(limen_firmware = "sbi", test))]
+pub(crate) mod sbi;
+#[cfg(any(limen_firmware = "uefi", test))]
+pub(crate) mod uefi;
+
+use crate::metal::platform::{
+    description::{
+        acpi::Acpi,
+        devicetree::{self, memory::DtbMemory},
+    },
+    firmware::uefi::map::FirmwareMap,
 };
 use limen_treaty::model::PhysicalRange;
 

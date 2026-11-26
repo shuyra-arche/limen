@@ -1,6 +1,6 @@
 //! RISC-V CPU descriptions keep hardware IDs in their original tree scope.
 
-use crate::metal::platform::firmware::devicetree::{DeviceTree, Error, Node, NodeId};
+use crate::metal::platform::description::devicetree::{DeviceTree, Error, Node, NodeId};
 
 const HART_LIMIT: usize = 256;
 

@@ -1,7 +1,7 @@
 //! Described RISC-V execution extensions and their exact Hart scope.
 
 use crate::metal::{
-    platform::firmware::devicetree::{Error, NodeId},
+    platform::description::devicetree::{Error, NodeId},
     processor::hart::riscv::description::RiscvCpu,
 };
 

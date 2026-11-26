@@ -1,13 +1,13 @@
 use super::{DeviceTree, Error, Fixture};
 
 use kernel::metal::{
+    chrono::riscv::RiscvTimebase,
     memory::mmu::internal::riscv::{
         Mode,
         description::{MaximumMode, RiscvMmu},
     },
     processor::execution::description::riscv::{RiscvExtension, RiscvIsa},
     processor::hart::riscv::description::RiscvCpus,
-    time::riscv::RiscvTimebase,
 };
 
 fn cpu_scope() -> Fixture {

@@ -88,15 +88,15 @@ bash "$checks" . "$base" | jq -e '.rv64 and ((.host or .runner) | not)' >/dev/nu
 change server/src/entry/boot/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/platform/firmware/uefi/mod.rs
-[[ $(boards) == 'q35 virt' ]]
-bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
+[[ $(bash "$discover" . "$base") == "$full" ]]
+bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 change server/src/metal/platform/firmware/uefi/loader.rs
 [[ $(boards) == 'q35 virt' ]]
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
-change server/src/metal/platform/firmware/acpi/madt.rs
+change server/src/metal/platform/description/acpi/madt.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
-change server/src/metal/platform/firmware/map.rs
+change server/src/metal/platform/firmware/uefi/map.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/entry/boot/handoff.rs
@@ -107,11 +107,19 @@ change server/src/metal/platform/boot/trap.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/platform/boot/major.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/platform/boot/handoff/mod.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+change server/src/metal/platform/boot/handoff/sbi.rs
+[[ $(boards) == rv64 ]]
+bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
+change server/src/metal/platform/boot/handoff/uefi.rs
+[[ $(boards) == 'q35 virt' ]]
+bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/platform/boot/minor.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution-harts","platform-boot","riscv-module-execution"]' >/dev/null
 change server/src/metal/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-for source in server/src/metal/platform/firmware/psci/native.rs server/src/metal/interrupt/gic/native.rs server/src/metal/time/aarch64/native.rs; do
+for source in server/src/metal/platform/firmware/psci/native.rs server/src/metal/interrupt/internal/gic/native.rs server/src/metal/chrono/aarch64/native.rs; do
     change "$source"
     [[ $(boards) == virt ]]
     bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
@@ -119,8 +127,11 @@ done
 for source in server/src/metal/processor/hart/aarch64/description.rs \
               server/src/metal/platform/firmware/psci/mod.rs \
               server/src/metal/interrupt/mod.rs \
-              server/src/metal/interrupt/gic/mod.rs \
-              server/src/metal/time/aarch64/mod.rs; do
+              server/src/metal/interrupt/internal/gic/mod.rs \
+              server/src/metal/interrupt/internal/mod.rs \
+              server/src/metal/interrupt/internal/timer/mod.rs \
+              server/src/metal/interrupt/internal/timer/architected.rs \
+              server/src/metal/chrono/aarch64/mod.rs; do
     change "$source"
     [[ $(boards) == virt ]]
     bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
@@ -136,12 +147,12 @@ bash "$checks" . "$base" | jq -e '.host' >/dev/null
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/platform/boot/services.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/platform/firmware/devicetree/mod.rs
+change server/src/metal/platform/description/devicetree/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 for source in server/src/metal/processor/hart/riscv/description.rs \
               server/src/metal/processor/execution/description/riscv.rs \
-              server/src/metal/time/riscv/mod.rs; do
+              server/src/metal/chrono/riscv/mod.rs; do
     change "$source"
     [[ $(boards) == rv64 ]]
     bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
@@ -213,7 +224,7 @@ bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/nu
 # without requiring a new manifest or path-specific CI entry.
 for source in server/tests/contracts.rs \
               server/tests/metal/mod.rs \
-              server/tests/metal/platform/firmware/mod.rs \
+              server/tests/metal/platform/description/mod.rs \
               server/tests/basis/cell/mod.rs; do
     change "$source"
     bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null

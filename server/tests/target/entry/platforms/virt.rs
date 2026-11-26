@@ -1,11 +1,14 @@
 use core::{arch::asm, fmt::Write};
 use kernel::entry::boot;
 use kernel::metal::{
-    interrupt::gic::{GicV3, Trigger},
-    platform::firmware::devicetree::{DeviceTree, Error as TreeError},
+    chrono::aarch64::GenericCounter,
+    interrupt::internal::{
+        gic::{GicV3, PrivateInterrupts, Trigger},
+        timer::architected::GenericTimer,
+    },
+    platform::description::devicetree::{DeviceTree, Error as TreeError},
     platform::firmware::psci::{Conduit, PsciDescription},
     processor::hart::aarch64::description::Aarch64Cpus,
-    time::aarch64::GenericTimer,
 };
 use uefi::{
     Status,
@@ -202,26 +205,32 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
             .expect("minor affinity before startup");
     }
 
-    let timer = GenericTimer::read(tree)
+    let counter = GenericCounter::read(tree)
         .unwrap()
-        .expect("generic timer declaration");
-    assert_eq!(tree.node(timer.source).unwrap().name(), b"timer");
-    assert_eq!(timer.virtual_intid, 27);
-    assert_eq!(timer.virtual_trigger, Trigger::LevelHigh);
-    assert!(timer.always_on);
-    assert!(tree.node(timer.controller.source).is_some());
+        .expect("generic counter declaration");
+    assert_eq!(tree.node(counter.source()).unwrap().name(), b"timer");
+    let interrupts =
+        PrivateInterrupts::read(tree, counter.source()).expect("GIC private interrupts");
+    let timer = GenericTimer::describe(tree, &interrupts).expect("virtual timer role");
+    let controller = interrupts.controller();
+    assert_eq!(timer.source(), counter.source());
+    assert_eq!(timer.domain(), controller.source);
+    let interrupt = timer.virtual_interrupt();
+    assert_eq!(interrupt.intid, 27);
+    assert_eq!(interrupt.trigger, Trigger::LevelHigh);
+    assert!(timer.always_on());
+    assert!(tree.node(controller.source).is_some());
     assert_eq!(
-        timer.controller.distributor,
+        controller.distributor,
         memory::extent(0x0800_0000, 0x0801_0000)
     );
     assert!(
-        timer
-            .controller
+        controller
             .redistributor
             .covers(memory::extent(0x080a_0000, 0x080c_0000))
     );
     assert!(unsafe { GicV3::cpu_interface_available() });
-    let _frequency = unsafe { timer.counter_frequency() }.expect("live generic timer frequency");
+    let _frequency = unsafe { counter.counter_frequency() }.expect("live generic timer frequency");
 }
 
 /// Recheck the original PSCI target only after the minor has entered.

@@ -1,7 +1,7 @@
 use core::arch::asm;
 use kernel::metal::module::Machine;
 use kernel::metal::{
-    platform::firmware::devicetree::DeviceTree, platform::firmware::psci::Conduit, platform::firmware::psci::PsciDescription,
+    platform::description::devicetree::DeviceTree, platform::firmware::psci::Conduit, platform::firmware::psci::PsciDescription,
     platform::firmware::uefi::DeviceTree as LoaderTree,
     processor::hart::aarch64::description::Aarch64Cpus,
 };

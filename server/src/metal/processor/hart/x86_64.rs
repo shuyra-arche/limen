@@ -7,7 +7,7 @@ pub(crate) fn boot_identity() -> usize {
 /// Compare the admitted boot CPU and its active local controller to MADT.
 pub(in crate::metal) fn matches_madt(
     hart: usize,
-    madt: crate::metal::platform::firmware::acpi::Madt<'_>,
+    madt: crate::metal::platform::description::acpi::Madt<'_>,
 ) -> bool {
     let features = __cpuid(1);
     const MSR_AND_APIC: u32 = (1 << 5) | (1 << 9);

@@ -1,9 +1,5 @@
 use super::{DeviceTree, Error, Node, registers::Cells};
 use crate::devicetree::RESERVATION_LIMIT;
-#[cfg(any(limen_firmware = "sbi", test))]
-use crate::devicetree::{ALIGNMENT, HEADER_SIZE, MAX_BLOCK_BYTES, header_layout};
-#[cfg(any(limen_firmware = "sbi", test))]
-use core::{ops::Range, slice};
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 const RAM_LIMIT: usize = 16;
@@ -66,65 +62,6 @@ impl DtbMemory {
         self.reservation_count += 1;
         Ok(())
     }
-}
-
-/// # Safety
-///
-/// The trusted firmware must supply immutable readable storage for the header
-/// at a nonzero aligned address. This check reads only the fixed-size header.
-#[cfg(any(limen_firmware = "sbi", test))]
-unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Option<Range<usize>> {
-    let address = header.addr();
-    let header_end = address.checked_add(HEADER_SIZE)?;
-    if header.is_null()
-        || !address.is_multiple_of(ALIGNMENT)
-        || overlaps_extent(&(address..header_end), &image)
-    {
-        return None;
-    }
-
-    let header = header_layout(unsafe { header.read_volatile() }.map(u32::from_be))?;
-    let extent = address..address.checked_add(header.size as usize)?;
-    (!overlaps_extent(&extent, &image)).then_some(extent)
-}
-
-#[cfg(any(limen_firmware = "sbi", test))]
-fn overlaps_extent(first: &Range<usize>, second: &Range<usize>) -> bool {
-    !first.is_empty() && !second.is_empty() && first.start < second.end && second.start < first.end
-}
-
-/// # Safety
-///
-/// The trusted platform provides a readable, identity-mapped window and
-/// guarantees that the firmware's initialized DTB storage remains readable
-/// and immutable for the returned view's lifetime. The DTB cannot supply any
-/// part of that window bound.
-#[cfg(any(limen_firmware = "sbi", test))]
-pub(crate) unsafe fn read<'a>(
-    input: *const (),
-    window: Range<usize>,
-    image: Range<usize>,
-    memory: &mut Option<DtbMemory>,
-) -> Result<DeviceTree<'a>, Error> {
-    *memory = None;
-    let start = input.addr();
-    let header_end = start.checked_add(HEADER_SIZE).ok_or(Error::Window)?;
-    if !window.contains(&start) || header_end > window.end {
-        return Err(Error::Window);
-    }
-    let range = unsafe { extent(input.cast(), image) }.ok_or(Error::Format)?;
-    if range.end > window.end {
-        return Err(Error::Window);
-    }
-    if range.len() > MAX_BLOCK_BYTES {
-        return Err(Error::Capacity);
-    }
-    // Only the exact DTB is borrowed. The enclosing window can contain
-    // unrelated allocations, firmware storage and uninitialized bytes.
-    let blob = unsafe { slice::from_raw_parts(input.cast(), range.len()) };
-    let tree = DeviceTree::new(blob)?;
-    describe(tree, memory)?;
-    Ok(tree)
 }
 
 /// Populate the caller's fixed storage before it leaves the firmware adapter.
@@ -254,7 +191,3 @@ fn describe_reservation(node: &Node<'_, '_>, memory: &mut DtbMemory) -> Result<(
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "../../../../../tests/metal/platform/firmware/devicetree/retained.rs"]
-mod tests;

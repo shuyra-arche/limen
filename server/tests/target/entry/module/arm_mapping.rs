@@ -1,7 +1,7 @@
 //! Inspect the firmware-owned EL1 stage-1 root of the singleton Arm virt guest.
 
 use core::arch::asm;
-use kernel::{metal::platform::firmware::map::FirmwareMap, metal::module::SegmentPermissions};
+use kernel::{metal::platform::firmware::uefi::map::FirmwareMap, metal::module::SegmentPermissions};
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 pub const PAGE: u64 = 4096;

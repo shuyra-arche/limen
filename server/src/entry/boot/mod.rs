@@ -14,16 +14,16 @@ use core::fmt::Write;
 use limen_treaty::model::ByteLength;
 
 #[cfg(limen_target)]
-pub use crate::metal::platform::boot::{Startup, console::Console, services::Services};
-use crate::metal::platform::firmware::acpi;
+use crate::metal::platform::boot::handoff::Descriptions;
 #[cfg(limen_target)]
-use crate::metal::platform::firmware::facts::Descriptions;
-use crate::metal::platform::firmware::{
-    devicetree::{
+pub use crate::metal::platform::boot::{Startup, console::Console, services::Services};
+use crate::metal::platform::description::acpi;
+use crate::metal::platform::{
+    description::devicetree::{
         self,
         memory::{DtbMemory, Source},
     },
-    map::{FirmwareMap, FirmwareRegion},
+    firmware::uefi::map::{FirmwareMap, FirmwareRegion},
 };
 pub use handoff::Boot;
 #[cfg(limen_target)]

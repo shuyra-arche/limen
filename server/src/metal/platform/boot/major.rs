@@ -2,7 +2,7 @@
 use super::STACK_BYTES;
 use crate::metal::{
     platform::boot,
-    platform::firmware::facts::{Descriptions, Facts},
+    platform::boot::handoff::{Descriptions, Facts},
     processor::hart::local::{self, HartLocal, stack::Stack},
 };
 use core::ops::Range;

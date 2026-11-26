@@ -1,6 +1,6 @@
 //! AArch64 CPU affinity descriptions, without reading native registers.
 
-use crate::metal::platform::firmware::devicetree::{DeviceTree, Error, Node, NodeId};
+use crate::metal::platform::description::devicetree::{DeviceTree, Error, Node, NodeId};
 
 pub(super) const AFFINITY_MASK: u64 = 0xff00ffffff;
 const CPU_LIMIT: usize = 64;
