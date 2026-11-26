@@ -1,9 +1,10 @@
 use crate::metal::platform::boot::minor::{self, Minor, StartError};
 use crate::metal::platform::boot::trap as diagnostic;
+use crate::metal::platform::firmware::sbi::HartService;
 use core::arch::naked_asm;
 
 pub enum Startup {
-    Sbi,
+    Sbi(HartService),
 }
 pub(crate) struct MinorContext;
 pub(crate) const fn minor_context() -> MinorContext {
@@ -13,9 +14,9 @@ pub(crate) const fn minor_context() -> MinorContext {
 pub(crate) unsafe fn wake_minor(
     slot: &Minor,
     hart: usize,
-    Startup::Sbi: Startup,
+    Startup::Sbi(service): Startup,
 ) -> Result<(), StartError> {
-    crate::metal::platform::firmware::sbi::start_hart(
+    service.start(
         hart,
         minor as *const () as usize,
         core::ptr::from_ref(slot).expose_provenance(),

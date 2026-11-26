@@ -5,8 +5,8 @@ mod probe;
 #[cfg(limen_firmware = "sbi")]
 mod transport;
 #[cfg(limen_firmware = "sbi")]
-pub use probe::SbiServices;
+pub use probe::{HartService, SbiServices, TimerService};
 #[cfg(limen_firmware = "sbi")]
 pub use transport::platform_services;
 #[cfg(limen_firmware = "sbi")]
-pub(crate) use transport::{extensions, hart_started, reset, set_timer, start_hart, write_byte};
+pub(crate) use transport::{extensions, reset, write_byte};

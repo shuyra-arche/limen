@@ -59,7 +59,6 @@ global_asm!(
 );
 
 fn check_discovery(boot: &Boot<'_>) {
-    let tree = boot.device_tree_description().expect("OpenSBI source tree");
     let cpus = boot.riscv_cpus();
     let hart = boot.hart() as u64;
     let cpu = cpus.cpu(hart).unwrap().expect("actual Hart description");
@@ -94,7 +93,7 @@ fn check_discovery(boot: &Boot<'_>) {
     assert_eq!(timebase.hertz(), 10_000_000);
     assert!(boot.acpi().is_none(), "SBI supplied a DTB, not ACPI");
     let sbi = boot.sbi_services();
-    assert!(sbi.hart_state_management() && sbi.timer() && sbi.inter_processor_interrupt());
+    assert!(sbi.hart_state_management().is_some() && sbi.timer().is_some() && sbi.inter_processor_interrupt());
     write("PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1\n");
 }
 

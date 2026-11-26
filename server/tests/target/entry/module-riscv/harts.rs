@@ -66,7 +66,7 @@ pub fn check(boot: &Boot<'_>, modes: &[Mode]) -> usize {
         let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
         assert!(isa.has(RiscvExtension::InstructionFence));
     }
-    assert!(boot.sbi_services().hart_state_management());
+    assert!(boot.sbi_services().hart_state_management().is_some());
     assert_eq!(status(major), STARTED);
     assert_eq!(status(minor), STOPPED);
     minor
@@ -95,6 +95,7 @@ fn wait(phase: Phase) {
 /// the stop receipt. The held interface has the scalar geometry entry ABI.
 pub unsafe fn exercise(
     peer: usize,
+    service: kernel::metal::platform::firmware::sbi::HartService,
     roots: [Context; 2],
     held: &ModuleUse<'_>,
     encoder: &Encoder<'_>,
@@ -111,7 +112,7 @@ pub unsafe fn exercise(
     ENTRY.store(held.entry().get(), Relaxed);
     ENCODER.store(shared_pointer(encoder), Relaxed);
     advance(Phase::Initial);
-    unsafe { minor.start(peer, run, peer, Startup::Sbi) }.unwrap();
+    unsafe { minor.start(peer, run, peer, Startup::Sbi(service)) }.unwrap();
     wait(Phase::FirstReturned);
     assert!(minor.ready());
     assert_eq!(status(peer), STARTED);

@@ -199,6 +199,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let major = boot.hart();
     let minor_hart = usize::from(major == 0);
     assert!(major < 4, "unexpected QEMU Boot Hart");
+    let service = boot.sbi_services().hart_state_management().expect("SBI HSM");
     let runtime = Execution::with_minor(boot, unsafe { &mut *(&raw mut STACKS) }, &MINOR)
         .map_err(|failure| failure.reason)
         .expect("Bare scalar execution");
@@ -210,7 +211,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let pinned = unsafe { execution.create(pinned) }.expect("create on major");
     execution.submit(pinned).expect("admit pinned Unit");
     assert!(matches!(
-        unsafe { execution.start_minor(8, run_minor, Startup::Sbi) },
+        unsafe { execution.start_minor(8, run_minor, Startup::Sbi(service)) },
         Err(Error::Firmware(_))
     ));
     unsafe {
@@ -220,7 +221,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
             minor: minor_hart,
         });
         execution
-            .start_minor(minor_hart, run_minor, Startup::Sbi)
+            .start_minor(minor_hart, run_minor, Startup::Sbi(service))
             .expect("start actual minor Hart");
     }
     turn::major();

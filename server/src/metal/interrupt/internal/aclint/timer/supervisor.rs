@@ -3,7 +3,7 @@
 use super::Description;
 use crate::metal::{
     chrono::riscv::RiscvTimebase,
-    platform::firmware::sbi::{SbiServices, set_timer},
+    platform::firmware::sbi::TimerService,
     processor::hart::local::current_hart,
 };
 use core::{arch::asm, marker::PhantomData};
@@ -84,6 +84,7 @@ pub enum State {
 pub struct Timer<'a> {
     description: Description<'a>,
     timebase: RiscvTimebase<'a>,
+    service: TimerService,
     state: State,
     local: PhantomData<*mut ()>,
 }
@@ -100,14 +101,15 @@ impl<'a> Timer<'a> {
     pub unsafe fn admit(
         description: Description<'a>,
         timebase: RiscvTimebase<'a>,
-        services: SbiServices,
+        service: TimerService,
     ) -> Result<Self, Failure> {
-        if !services.timer() || description.clock_scope() != timebase.source() {
+        if description.clock_scope() != timebase.source() {
             return Err(Failure::Scope);
         }
         let timer = Self {
             description,
             timebase,
+            service,
             state: State::Inherited,
             local: PhantomData,
         };
@@ -171,7 +173,7 @@ impl<'a> Timer<'a> {
             step: ProgramStep::Compare,
         };
         self.state = State::Programming(program);
-        if let Err(error) = set_timer(count) {
+        if let Err(error) = self.service.set(count) {
             self.state = State::Uncertain(Effect::Programming(program));
             return Err(Failure::Firmware(error));
         }
@@ -234,7 +236,7 @@ impl<'a> Timer<'a> {
         self.state = State::Clearing(clear);
         // SBI TIME is synchronous. Once the original call has returned,
         // this confirmed replacement covers the previous possible values.
-        if let Err(error) = set_timer(u64::MAX) {
+        if let Err(error) = self.service.set(u64::MAX) {
             self.state = State::Uncertain(Effect::Clearing(clear));
             return Err(Failure::Firmware(error));
         }

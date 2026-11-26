@@ -1,5 +1,5 @@
 //! Physical target indices, source scope and machine timer geometry.
-use crate::metal::processor::hart::riscv::description::RiscvCpus;
+use kernel::metal::processor::hart::riscv::description::RiscvCpus;
 use super::Fixture;
 use kernel::metal::{
     interrupt::{external::aplic, internal::aclint::timer},
@@ -102,7 +102,7 @@ fn malformed_or_mixed_targets_are_not_admitted() {
     ] {
         let bytes = fixture(targets, &[2, 7, 1, 7], 10, 5, 0x8000);
         let tree = DeviceTree::new(&bytes).unwrap();
-    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+        let cpus = RiscvCpus::new(tree).unwrap().unwrap();
         assert_eq!(aplic::Description::read(&tree, &cpus, 3).err(), Some(error));
     }
     for (targets, error) in [
@@ -112,7 +112,7 @@ fn malformed_or_mixed_targets_are_not_admitted() {
     ] {
         let bytes = fixture(&[2, 9, 1, 9], targets, 10, 5, 0x8000);
         let tree = DeviceTree::new(&bytes).unwrap();
-    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+        let cpus = RiscvCpus::new(tree).unwrap().unwrap();
         assert_eq!(timer::Description::read(&tree, &cpus, 3).err(), Some(error));
     }
 }
@@ -126,7 +126,7 @@ fn routes_and_windows_are_checked_before_native_access() {
     ] {
         let bytes = fixture(&[2, 9, 1, 9], &[2, 7, 1, 7], source, parent, 0x8000);
         let tree = DeviceTree::new(&bytes).unwrap();
-    let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+        let cpus = RiscvCpus::new(tree).unwrap().unwrap();
         let description = aplic::Description::read(&tree, &cpus, 3).unwrap().unwrap();
         let device = tree.find_path(b"/device").unwrap().unwrap();
         assert_eq!(description.route(&tree, device).err(), Some(error));

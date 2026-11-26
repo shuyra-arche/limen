@@ -11,7 +11,7 @@ use crate::metal::platform::description::devicetree::{
 };
 #[cfg(limen_firmware = "sbi")]
 use crate::metal::{
-    platform::firmware::sbi::{extensions, hart_started, platform_services, reset, write_byte},
+    platform::firmware::sbi::{extensions, platform_services, reset, write_byte},
     processor::hart::riscv::description::RiscvCpus,
 };
 use core::{ops::Range, slice};
@@ -82,7 +82,7 @@ pub(crate) unsafe fn admit<'a>(
     // The entry ABI supplies the current Hart identity in a0. HSM can also
     // report the state of that named Hart when the extension is available.
     let sbi = platform_services();
-    if sbi.hart_state_management() && !hart_started(hart) {
+    if sbi.hart_state_management().is_some_and(|service| !service.started(hart)) {
         Services::active().reject(format_args!("FAIL Limen boot: SBI Hart status mismatch\n"));
     }
     descriptions.cpus = Some(cpus);
