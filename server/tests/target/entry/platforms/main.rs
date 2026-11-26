@@ -3,9 +3,9 @@
 
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use kernel::metal::{
-    firmware::uefi::AcpiInput, firmware::uefi::DeviceTree as LoaderTree, firmware::uefi::Loader,
-};
+#[cfg(target_arch = "x86_64")]
+use kernel::metal::firmware::uefi::AcpiInput;
+use kernel::metal::firmware::uefi::{DeviceTree as LoaderTree, Loader};
 use kernel::{entry::boot, metal::address::PhysicalAddress};
 use limen_treaty::model::ByteLength;
 

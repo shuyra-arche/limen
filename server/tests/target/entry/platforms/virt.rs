@@ -1,11 +1,9 @@
 use core::{arch::asm, fmt::Write};
-use kernel::entry::boot::{
-    self,
-    arm::{GenericTimer, GicV3, Trigger},
-};
+use kernel::entry::boot;
 use kernel::metal::{
+    firmware::arm::{GenericTimer, GicV3, Trigger},
     firmware::devicetree::{DeviceTree, Error as TreeError},
-    firmware::psci::PsciDescription,
+    firmware::psci::{Conduit, PsciDescription},
     hart::Aarch64Cpus,
 };
 use uefi::{
@@ -26,11 +24,11 @@ static FIRMWARE_VECTORS: AtomicUsize = AtomicUsize::new(0);
 static UART: AtomicUsize = AtomicUsize::new(0);
 static USE_HVC: AtomicBool = AtomicBool::new(false);
 
-fn conduit() -> boot::Conduit {
+fn conduit() -> Conduit {
     if USE_HVC.load(Ordering::Acquire) {
-        boot::Conduit::Hvc
+        Conduit::Hvc
     } else {
-        boot::Conduit::Smc
+        Conduit::Smc
     }
 }
 pub(super) fn startup() -> boot::Startup {
@@ -90,7 +88,7 @@ fn discover(bytes: &[u8]) -> Result<(), Status> {
     if start == 0 || !start.is_multiple_of(4) || range.end().get() - start < 0x1c {
         return Err(Status::COMPROMISED_DATA);
     }
-    USE_HVC.store(psci.conduit() == boot::Conduit::Hvc, Ordering::Release);
+    USE_HVC.store(psci.conduit() == Conduit::Hvc, Ordering::Release);
     UART.store(
         usize::try_from(start).map_err(|_| Status::COMPROMISED_DATA)?,
         Ordering::Release,
