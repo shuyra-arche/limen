@@ -8,16 +8,32 @@ suite exercises the table implementation with owner-supplied slot storage,
 distinct scopes and separate allocation and return tables. Its compiler tests
 cover token ownership, table categories and the lifetime of a lookup borrow.
 The kernel library runs owner-local unit tests from `tests/` and links
-its public ACPI and device-tree suites as ordinary Cargo integration tests.
+its public ACPI and device-tree contracts through the single ordinary Cargo
+integration target `contracts`. The root `tests/contracts.rs` declares the
+owner module tree; add public contract cases to their owner modules rather than
+adding a Cargo target or editing the manifest. Private unit tests remain
+declared by the actual production owner and live under `tests/`.
 The Module suite retains a Host package for its separately linked ELF
 fixtures. Identity’s compile-time cases retain a small compile fixture.
 Run the commands from the repository root so Rustup selects the fixed
 [toolchain](../../rust-toolchain.toml).
 
 ```sh
-RUSTFLAGS=-Dwarnings cargo test --locked --workspace --target x86_64-unknown-linux-gnu
+RUSTFLAGS=-Dwarnings cargo test --locked --workspace
 cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
 ```
+
+The workspace defaults to the native host target. Ordinary tests use Rust's
+native harness; firmware and guest commands explicitly select their target.
+Run a single integration domain with the native module-path filter:
+
+```sh
+cargo test --locked -p kernel --test contracts -- metal::firmware::acpi
+cargo test --locked -p kernel --test contracts -- metal::firmware::devicetree
+```
+
+Keep independent build fixtures, compiler contracts and target guests separate
+only when they require their own compilation or execution boundary.
 
 The Metal Sync Host suite exercises the production MCS queue with controlled
 publication and release interleavings. Host Allocator tests use the

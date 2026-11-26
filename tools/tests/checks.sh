@@ -21,7 +21,9 @@ for path in "${changed[@]}"; do
             rv64=true ;;
         server/tests/runner/*|server/tests/qemu.version|server/tests/target/*/suite.json)
             runner=true ;;
-        server/tests/metal/*|server/tests/entry/*)
+        server/tests/target/*)
+            ;;
+        server/tests/*)
             host=true ;;
     esac
 done
