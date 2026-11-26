@@ -1,11 +1,17 @@
 //! Fixed physical sources and their local allocation and settlement records.
 
-use core::sync::atomic::{AtomicUsize, Ordering::Acquire};
+use core::{
+    ptr,
+    sync::atomic::{AtomicUsize, Ordering::Acquire},
+};
 
 use crate::{
     address::PhysicalRange,
     entry::boot::Region as Description,
-    metal::sync::{TurnAcquireError, TurnLock},
+    metal::{
+        identity::Slot,
+        sync::{TurnAcquireError, TurnLock},
+    },
 };
 
 mod allowance;
@@ -17,7 +23,7 @@ mod search;
 mod storage;
 mod transfer;
 
-pub use allowance::{Allowance, AllowanceId, Balance};
+pub use allowance::{Allowance, AllowanceCandidate, AllowanceId, Balance};
 pub use region::Grant;
 pub use search::{Candidate, Lookup, RamPurpose, Request, Search};
 pub use storage::{Config, Initial, MappedStorage};
@@ -26,7 +32,7 @@ pub use transfer::{
     Allocation, AllocationId, Construction, Pending, Retired, ReturnId, ReturnReceipt, Returned,
 };
 
-use allowance::{Free, Slot};
+use allowance::{AllowanceSlot, Free};
 use region::Region;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,7 +69,27 @@ impl From<TurnAcquireError> for Error {
 pub const REGION_LIMIT: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegionId(usize);
+struct SourceId(usize);
+
+/// A permanent position within the exact Allocator that admitted it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegionId {
+    source: SourceId,
+    slot: Slot,
+}
+
+impl RegionId {
+    fn new(source: SourceId, index: usize) -> Self {
+        Self {
+            source,
+            slot: Slot::new(index).expect("checked Region capacity"),
+        }
+    }
+
+    fn index(self) -> usize {
+        self.slot.index()
+    }
+}
 
 /// A fixed source. Its root and canonical locks live for the runtime's lifetime.
 pub struct Allocator {
@@ -72,7 +98,7 @@ pub struct Allocator {
     directory: TurnLock<()>,
     published: AtomicUsize,
     regions: &'static [Region],
-    allowances: &'static [TurnLock<Slot>],
+    allowances: &'static [TurnLock<AllowanceSlot>],
     free: TurnLock<Free>,
 }
 
@@ -82,16 +108,23 @@ impl Allocator {
     }
 
     pub fn regions(&self) -> impl Iterator<Item = (RegionId, Description)> + '_ {
-        (0..self.published.load(Acquire)).map(|index| {
-            let id = RegionId(index);
+        let source = self.source_id();
+        (0..self.published.load(Acquire)).map(move |index| {
+            let id = RegionId::new(source, index);
             (id, self.regions[index].description())
         })
     }
 
+    fn source_id(&self) -> SourceId {
+        // A published Allocator remains at the same root address for its
+        // whole lifetime. The identity is used only for comparison.
+        SourceId(ptr::from_ref(self).addr())
+    }
+
     fn region(&self, id: RegionId) -> Result<&Region, Error> {
-        if id.0 >= self.published.load(Acquire) {
+        if id.source != self.source_id() || id.index() >= self.published.load(Acquire) {
             return Err(Error::Stale);
         }
-        Ok(&self.regions[id.0])
+        Ok(&self.regions[id.index()])
     }
 }

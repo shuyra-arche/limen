@@ -71,8 +71,10 @@ pub(super) fn check(boot: &Boot<'_>) {
     let allowance = allowance_receiver.take().unwrap();
     let source = allowance.source();
     assert!(mapping.is_none() && regions.entries().next().is_none());
-    assert_eq!(source.root(), backing);
-    assert_eq!(source.budget(Slow), Ok((11 * PAGE, PAGE)));
+    let root_pages = CONFIG.layout().unwrap().size().div_ceil(PAGE as usize) as u64;
+    assert_eq!(source.root(), pages(4, 4 + root_pages));
+    let capacity = (13 - root_pages) * PAGE;
+    assert_eq!(source.budget(Slow), Ok((capacity, capacity - 10 * PAGE)));
 
     let mut lookup = source
         .lookup(
@@ -154,7 +156,8 @@ pub(super) fn check(boot: &Boot<'_>) {
     let receipt = receipt.take().unwrap();
     assert_eq!(receipt, pending);
     assert_eq!(done.physical, pages(0, 3));
-    assert_eq!(source.budget(Fast), Ok((15 * PAGE, 15 * PAGE)));
+    let capacity = capacity + 4 * PAGE;
+    assert_eq!(source.budget(Fast), Ok((capacity, capacity)));
     allowance.reclaim(Slow).ok().unwrap();
     assert_eq!(source.finish_return(receipt, Fast), Ok(done));
     source.acknowledge(receipt).unwrap();

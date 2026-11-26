@@ -68,17 +68,16 @@ impl Region {
         backing: Backing,
         allocations: &'static mut [Entry<AllocationRecord>],
         returns: &'static mut [Entry<ReturnRecord>],
-        source: usize,
-        index: usize,
+        id: RegionId,
     ) -> Self {
         Self {
             description: UnsafeCell::new(MaybeUninit::uninit()),
             state: TurnLock::new(State {
                 geometry: Some(GeometryState::Prepaid(backing)),
                 unassigned: 0,
-                allocations: GenerationTable::new(AllocationScope(source, index), allocations)
+                allocations: GenerationTable::new(AllocationScope(id), allocations)
                     .expect("checked fresh Allocation slots"),
-                returns: GenerationTable::new(ReturnScope(source, index), returns)
+                returns: GenerationTable::new(ReturnScope(id), returns)
                     .expect("checked fresh Return slots"),
             }),
         }
@@ -173,7 +172,7 @@ impl Grant {
             state.initialize(geometry, source.config.edits, length(physical).get());
             // The directory owns the only write to this unpublished slot.
             unsafe { (*region.description.get()).write(description) };
-            let id = RegionId(index);
+            let id = RegionId::new(source.source_id(), index);
             self.admitted = Some(id);
             source.published.store(index + 1, Release);
             Ok(id)

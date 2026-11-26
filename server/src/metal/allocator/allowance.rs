@@ -1,17 +1,32 @@
-use core::{ptr, sync::atomic::Ordering::Acquire};
+use core::sync::atomic::Ordering::Acquire;
 
 use crate::{
     address::length,
-    metal::sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
+    metal::{
+        identity::{Generation, Key, Slot},
+        sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
+    },
 };
 
-use super::{Allocator, Error, REGION_LIMIT, RegionId};
+use super::{Allocator, Error, REGION_LIMIT, RegionId, SourceId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AllowanceId {
-    pub(super) source: usize,
-    pub(super) index: usize,
-    pub(super) generation: u32,
+struct AllowanceScope(SourceId);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AllowanceId(Key<AllowanceScope>);
+
+impl AllowanceId {
+    pub(super) fn new(source: SourceId, slot: Slot, generation: Generation) -> Self {
+        Self(Key::new(AllowanceScope(source), slot, generation))
+    }
+}
+
+/// An observation of the original source's current free-chain head.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AllowanceCandidate {
+    source: SourceId,
+    slot: Slot,
 }
 
 /// Actual Allowance close responsibility, issued once to its receiver.
@@ -35,25 +50,43 @@ impl Balance {
 }
 
 pub(super) struct Free {
-    pub(super) head: Option<usize>,
+    pub(super) head: Option<Slot>,
     pub(super) retired: usize,
 }
 
-pub(super) struct Slot {
-    pub(super) generation: u32,
+pub(super) struct AllowanceSlot {
+    generation: Option<Generation>,
     pub(super) state: SlotState,
 }
 
 pub(super) enum SlotState {
-    Free(Option<usize>),
+    Free(Option<Slot>),
     Open(Balance),
     Shutting { reserved: u64, occupied: u64 },
     Retired,
 }
 
-impl Slot {
+impl AllowanceSlot {
+    pub(super) fn initial(balance: Balance) -> Self {
+        Self::open_generation(Generation::FIRST, balance)
+    }
+
+    pub(super) fn free(next: Option<Slot>) -> Self {
+        Self {
+            generation: None,
+            state: SlotState::Free(next),
+        }
+    }
+
+    fn open_generation(generation: Generation, balance: Balance) -> Self {
+        Self {
+            generation: Some(generation),
+            state: SlotState::Open(balance),
+        }
+    }
+
     pub(super) fn live(&self, id: AllowanceId) -> Result<(Balance, bool), Error> {
-        if self.generation != id.generation {
+        if self.generation != Some(id.0.generation()) {
             return Err(Error::Stale);
         }
         match self.state {
@@ -173,11 +206,19 @@ impl Allowance {
 }
 
 impl Allocator {
-    pub(super) fn slot(&self, id: AllowanceId) -> Result<&TurnLock<Slot>, Error> {
-        if ptr::from_ref(self).addr() != id.source {
+    pub(super) fn slot(&self, id: AllowanceId) -> Result<&TurnLock<AllowanceSlot>, Error> {
+        self.allowance_slot(id.0.scope().0, id.0.slot())
+    }
+
+    fn allowance_slot(
+        &self,
+        source: SourceId,
+        slot: Slot,
+    ) -> Result<&TurnLock<AllowanceSlot>, Error> {
+        if source != self.source_id() {
             return Err(Error::Stale);
         }
-        self.allowances.get(id.index).ok_or(Error::Stale)
+        self.allowances.get(slot.index()).ok_or(Error::Stale)
     }
 
     /// Coherent managed RAM and unassigned budget. The trusted kernel's
@@ -211,26 +252,30 @@ impl Allocator {
     }
 
     /// Observe the free-chain head before constructing the complete plan.
-    pub fn allowance_candidate(&self) -> Result<usize, Error> {
-        self.free.acquire(|free| {
+    pub fn allowance_candidate(&self) -> Result<AllowanceCandidate, Error> {
+        let slot = self.free.acquire(|free| {
             free.head.ok_or(if free.retired == self.allowances.len() {
                 Error::IdentityExhausted
             } else {
                 Error::AllowanceCapacity
             })
-        })?
+        })??;
+        Ok(AllowanceCandidate {
+            source: self.source_id(),
+            slot,
+        })
     }
 
     pub fn plan_allowance<'a>(
         &'a self,
         plan: &mut TurnPlan<'a, '_>,
-        index: usize,
+        candidate: AllowanceCandidate,
         debits: &[(RegionId, u64)],
     ) -> Result<(), Error> {
         if debits.len() > self.config.regions {
             return Err(Error::Capacity);
         }
-        let slot = self.allowances.get(index).ok_or(Error::Stale)?;
+        let slot = self.allowance_slot(candidate.source, candidate.slot)?;
         plan.insert(&self.free).map_err(|_| Error::Capacity)?;
         plan.insert(slot).map_err(|_| Error::Capacity)?;
         for &(region, _) in debits {
@@ -247,11 +292,11 @@ impl Allocator {
     ///
     /// The caller holds and has revalidated the actual live assignment and
     /// first-publication authority and guarantees durable close responsibility
-    /// at the supplied receiver. The index is only a transient candidate.
+    /// at the supplied receiver. The candidate only observes the free chain.
     pub unsafe fn open_allowance(
         &'static self,
         held: &mut TurnAccess<'_>,
-        index: usize,
+        candidate: AllowanceCandidate,
         debits: &[(RegionId, u64)],
         receiver: &mut Option<Allowance>,
     ) -> Result<(), Error> {
@@ -261,18 +306,15 @@ impl Allocator {
         if debits.len() > self.config.regions {
             return Err(Error::Capacity);
         }
-        let slot = self.allowances.get(index).ok_or(Error::Stale)?;
-        if held.access(&self.free).ok_or(Error::Protection)?.head != Some(index) {
+        let slot = self.allowance_slot(candidate.source, candidate.slot)?;
+        if held.access(&self.free).ok_or(Error::Protection)?.head != Some(candidate.slot) {
             return Err(Error::Changed);
         }
         let entry = held.access(slot).ok_or(Error::Protection)?;
         let SlotState::Free(next) = entry.state else {
             return Err(Error::Changed);
         };
-        let generation = entry
-            .generation
-            .checked_add(1)
-            .ok_or(Error::IdentityExhausted)?;
+        let generation = Generation::next(entry.generation).ok_or(Error::IdentityExhausted)?;
         let mut capacity = 0u64;
         for (position, &(id, amount)) in debits.iter().enumerate() {
             if !amount.is_multiple_of(self.config.granule.get())
@@ -290,26 +332,22 @@ impl Allocator {
         }
         for &(id, amount) in debits {
             let state = held
-                .access(&self.regions[id.0].state)
+                .access(&self.regions[id.index()].state)
                 .expect("checked debit");
             state.unassigned -= amount;
         }
         held.access(&self.free).expect("free index").head = next;
-        *held.access(slot).expect("Allowance") = Slot {
+        *held.access(slot).expect("Allowance") = AllowanceSlot::open_generation(
             generation,
-            state: SlotState::Open(Balance {
+            Balance {
                 capacity,
                 reserved: 0,
                 occupied: 0,
-            }),
-        };
+            },
+        );
         *receiver = Some(Allowance::initial(
             self,
-            AllowanceId {
-                source: ptr::from_ref(self).addr(),
-                index,
-                generation,
-            },
+            AllowanceId::new(candidate.source, candidate.slot, generation),
         ));
         Ok(())
     }
@@ -366,12 +404,12 @@ impl Allocator {
             if open || balance.capacity != 0 {
                 return Err(Error::Balance);
             }
-            if entry.generation == u32::MAX {
+            if id.0.generation().exhausted() {
                 entry.state = SlotState::Retired;
                 held.access(&self.free).expect("free index").retired += 1;
             } else {
                 let free = held.access(&self.free).expect("free index");
-                let next = free.head.replace(id.index);
+                let next = free.head.replace(id.0.slot());
                 held.access(slot).expect("Allowance").state = SlotState::Free(next);
             }
             Ok(())

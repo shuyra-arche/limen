@@ -5,19 +5,60 @@ use core::{mem, num::NonZeroU32};
 pub(crate) struct Slot(u32);
 
 impl Slot {
-    fn index(self) -> usize {
-        self.0 as usize
+    pub(crate) fn new(index: usize) -> Option<Self> {
+        u32::try_from(index).ok().map(Self)
+    }
+
+    pub(crate) fn index(self) -> usize {
+        usize::try_from(self.0).expect("issued slot fits the machine")
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Generation(NonZeroU32);
 
+impl Generation {
+    pub(crate) const FIRST: Self = Self(NonZeroU32::MIN);
+
+    pub(crate) fn next(previous: Option<Self>) -> Option<Self> {
+        match previous {
+            Some(previous) => previous.0.checked_add(1).map(Self),
+            None => Some(Self::FIRST),
+        }
+    }
+
+    pub(crate) fn exhausted(self) -> bool {
+        self.0.get() == u32::MAX
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Key<Scope> {
     scope: Scope,
     slot: Slot,
     generation: Generation,
+}
+
+impl<Scope: Copy> Key<Scope> {
+    pub(crate) const fn new(scope: Scope, slot: Slot, generation: Generation) -> Self {
+        Self {
+            scope,
+            slot,
+            generation,
+        }
+    }
+
+    pub(crate) fn scope(self) -> Scope {
+        self.scope
+    }
+
+    pub(crate) fn slot(self) -> Slot {
+        self.slot
+    }
+
+    pub(crate) fn generation(self) -> Generation {
+        self.generation
+    }
 }
 
 #[derive(Debug)]
@@ -72,13 +113,13 @@ enum State<T> {
 
 /// Caller-provided slot storage. Generation zero is never issued as a key.
 pub(crate) struct Entry<T> {
-    generation: u32,
+    generation: Option<Generation>,
     state: State<T>,
 }
 
 impl<T> Entry<T> {
     pub(crate) const EMPTY: Self = Self {
-        generation: 0,
+        generation: None,
         state: State::Free { next: None },
     };
 }
@@ -102,16 +143,16 @@ impl<'storage, Scope: Copy + Eq, T> GenerationTable<'storage, Scope, T> {
         scope: Scope,
         entries: &'storage mut [Entry<T>],
     ) -> Result<Self, InitializeError> {
-        if u32::try_from(entries.len().saturating_sub(1)).is_err() {
+        if Slot::new(entries.len().saturating_sub(1)).is_none() {
             return Err(InitializeError::Capacity);
         }
-        if entries.iter().any(|entry| entry.generation != 0) {
+        if entries.iter().any(|entry| entry.generation.is_some()) {
             return Err(InitializeError::UsedStorage);
         }
         let mut free = None;
         for (index, entry) in entries.iter_mut().enumerate().rev() {
             entry.state = State::Free { next: free };
-            free = Some(Slot(index as u32));
+            free = Some(Slot::new(index).expect("table capacity checked"));
         }
         Ok(Self {
             scope,
@@ -215,15 +256,9 @@ impl<'storage, Scope: Copy + Eq, T> GenerationTable<'storage, Scope, T> {
         let State::Published(value) = &entry.state else {
             return None;
         };
-        let generation = Generation(NonZeroU32::new(entry.generation)?);
-        Some((
-            Key {
-                scope: self.scope,
-                slot: Slot(index as u32),
-                generation,
-            },
-            value,
-        ))
+        let generation = entry.generation.expect("published slots have a generation");
+        let slot = Slot::new(index).expect("table capacity checked");
+        Some((Key::new(self.scope, slot, generation), value))
     }
 
     pub(crate) fn get_mut(&mut self, key: Key<Scope>) -> Option<&mut T> {
@@ -276,53 +311,46 @@ impl<'storage, Scope: Copy + Eq, T> GenerationTable<'storage, Scope, T> {
         if !matches!(entry.state, State::Reclaiming) {
             return Err((reclamation, KeyError::WrongState));
         }
-        if entry.generation == u32::MAX {
+        if key.generation().exhausted() {
             entry.state = State::Retired;
             self.retired += 1;
         } else {
             entry.state = State::Free { next: self.free };
-            self.free = Some(key.slot);
+            self.free = Some(key.slot());
         }
         Ok(())
     }
 
     fn locate(&self, key: Key<Scope>) -> Result<usize, KeyError> {
-        if self.scope != key.scope {
+        if self.scope != key.scope() {
             return Err(KeyError::WrongScope);
         }
-        let index = key.slot.index();
+        let index = key.slot().index();
         let entry = self.entries.get(index).ok_or(KeyError::OutsideTable)?;
-        if entry.generation != key.generation.0.get() {
+        if entry.generation != Some(key.generation()) {
             return Err(KeyError::Stale);
         }
         Ok(index)
     }
 
-    fn free_entry(&self, slot: Slot) -> (Option<Slot>, NonZeroU32) {
+    fn free_entry(&self, slot: Slot) -> (Option<Slot>, Generation) {
         let entry = &self.entries[slot.index()];
         let State::Free { next } = entry.state else {
             unreachable!("free chain contains only Free entries");
         };
-        let generation = entry
-            .generation
-            .checked_add(1)
-            .and_then(NonZeroU32::new)
-            .expect("exhausted slots are retired at release");
+        let generation =
+            Generation::next(entry.generation).expect("exhausted slots are retired at release");
         (next, generation)
     }
 
     fn reserve_front(&mut self, slot: Slot) -> Reservation<Scope> {
         let (next, generation) = self.free_entry(slot);
         self.entries[slot.index()] = Entry {
-            generation: generation.get(),
+            generation: Some(generation),
             state: State::Reserved,
         };
         self.free = next;
-        Reservation(Key {
-            scope: self.scope,
-            slot,
-            generation: Generation(generation),
-        })
+        Reservation(Key::new(self.scope, slot, generation))
     }
 
     fn unavailable(&self) -> ReserveError {

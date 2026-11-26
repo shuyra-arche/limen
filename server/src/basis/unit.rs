@@ -1,16 +1,20 @@
 //! Identity, continuation lifetime and the single terminal decision.
 
+use core::num::NonZeroU64;
+
+use crate::metal::identity::Slot;
+
 pub(crate) const CAPACITY: usize = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnitId {
-    slot: usize,
-    generation: u64,
+    slot: Slot,
+    generation: NonZeroU64,
 }
 
 impl UnitId {
     pub(crate) fn slot(self) -> usize {
-        self.slot
+        self.slot.index()
     }
 }
 
@@ -41,19 +45,19 @@ enum State<Binding> {
     Ended(End),
 }
 
-struct Slot<Binding> {
-    generation: u64,
+struct Record<Binding> {
+    generation: Option<NonZeroU64>,
     state: State<Binding>,
 }
 
-pub(crate) struct Units<Binding>([Slot<Binding>; CAPACITY]);
+pub(crate) struct Units<Binding>([Record<Binding>; CAPACITY]);
 
 impl<Binding> Units<Binding> {
     pub(crate) const fn new() -> Self {
         Self(
             [const {
-                Slot {
-                    generation: 0,
+                Record {
+                    generation: None,
                     state: State::Vacant,
                 }
             }; CAPACITY],
@@ -68,7 +72,11 @@ impl<Binding> Units<Binding> {
                 if !matches!(record.state, State::Vacant) {
                     return None;
                 }
-                let generation = record.generation.checked_add(1)?;
+                let slot = Slot::new(slot)?;
+                let generation = match record.generation {
+                    Some(previous) => previous.checked_add(1)?,
+                    None => NonZeroU64::MIN,
+                };
                 Some(UnitId { slot, generation })
             })
             .ok_or(Error::Capacity)
@@ -76,15 +84,15 @@ impl<Binding> Units<Binding> {
 
     /// Commit the slot reserved by `vacant` in the same protected scope.
     pub(crate) fn publish(&mut self, id: UnitId, binding: Binding) {
-        self.0[id.slot] = Slot {
-            generation: id.generation,
+        self.0[id.slot()] = Record {
+            generation: Some(id.generation),
             state: State::Live(binding),
         };
     }
 
     fn record(&mut self, id: UnitId) -> Result<&mut State<Binding>, Error> {
-        let slot = &mut self.0[id.slot];
-        if slot.generation != id.generation || matches!(slot.state, State::Vacant) {
+        let slot = self.0.get_mut(id.slot()).ok_or(Error::Gone)?;
+        if slot.generation != Some(id.generation) || matches!(slot.state, State::Vacant) {
             return Err(Error::Gone);
         }
         Ok(&mut slot.state)
