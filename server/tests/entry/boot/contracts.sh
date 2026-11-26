@@ -16,10 +16,11 @@ compile=(rustc --edition 2024 --crate-type lib --emit metadata --error-format js
     --target "$target" -D warnings -C panic=abort --extern "kernel=$artifact"
     "${dependencies[@]}" --out-dir "$scratch" server/tests/entry/boot/contracts.rs)
 "${compile[@]}"
-for contract in receiver role mapping material mapping-move material-move; do
+for contract in receiver role mapping material grant mapping-move material-move; do
     expected=E0616
     case "$contract" in
         *-move) expected=E0382 ;;
+        grant) expected=E0624 ;;
     esac
     if "${compile[@]}" --cfg "contract=\"$contract\"" 2>"$scratch/errors.jsonl"; then
         printf 'Boot contract %s unexpectedly compiled\n' "$contract" >&2

@@ -1,8 +1,8 @@
 use kernel::{
     address::PhysicalRange,
     allocator::{
-        Allocation, Allowance, Config, Error, Grant, Initial, Pending, RamPurpose::Metadata,
-        Request, ReturnId, Search,
+        Allocation, Allowance, Config, Error, Initial, Pending, RamPurpose::Metadata, Request,
+        ReturnId, Search,
     },
     entry::boot::{self, Boot},
     sync::TurnMode::{Fast, Slow},
@@ -117,7 +117,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         .unwrap();
     let description = regions.entries().next().unwrap();
     assert_eq!(description.physical, later);
-    let mut grant = unsafe { Grant::new(source, description, &evidence) }.unwrap();
+    let mut grant = unsafe { evidence.grant(source, description) }.unwrap();
     let added = grant.admit(Fast).unwrap();
     assert_eq!(grant.admit(Slow), Ok(added));
     loop {

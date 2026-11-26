@@ -1,10 +1,11 @@
 use super::organization::retired;
-use super::regions::{RegionSource, Regions};
+use super::regions::Regions;
 use super::{
     DeviceTree, DtbMemory, FirmwareRegion, Loader,
     devicetree::memory::{Error, Source, describe as describe_into, read},
     image, range,
 };
+use crate::allocator::RegionOrigin;
 use limen_treaty::model::ByteLength;
 
 fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
@@ -191,11 +192,11 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
     assert!(
         ready
             .entries()
-            .map(|r| (r.physical.start().get(), r.source))
+            .map(|r| (r.physical.start().get(), r.origin))
             .eq([
-                (0x2000, RegionSource::DeviceTreeAndUefi { attributes: 8 }),
-                (0x7000, RegionSource::DeviceTreeAndUefi { attributes: 8 }),
-                (0xc000, RegionSource::DeviceTreeAndUefi { attributes: 0x0f }),
+                (0x2000, RegionOrigin::DeviceTreeAndUefi { attributes: 8 }),
+                (0x7000, RegionOrigin::DeviceTreeAndUefi { attributes: 8 }),
+                (0xc000, RegionOrigin::DeviceTreeAndUefi { attributes: 0x0f }),
             ])
     );
 }
@@ -278,7 +279,7 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
     assert!(
         ready
             .entries()
-            .all(|entry| entry.source == RegionSource::DeviceTree)
+            .all(|entry| entry.origin == RegionOrigin::DeviceTree)
     );
     assert!(ready.entries().map(|entry| entry.physical).eq([
         range(0x8000_3000, 0x8080_0000),

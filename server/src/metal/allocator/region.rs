@@ -5,20 +5,35 @@ use core::{
 };
 
 use crate::{
-    address::length,
-    entry::boot::Retirement,
+    address::{PhysicalRange, length},
     metal::identity::{Entry, GenerationTable},
     metal::sync::{TurnLock, TurnMode, TurnWorkspace},
 };
 
 use super::{
-    Allocator, Description, Error, RegionId,
+    Allocator, Error, RegionId,
+    allocation::{AllocationRecord, AllocationScope},
     buddy::{Buddy, Geometry, Root},
-    transfer::{AllocationRecord, AllocationScope, ReturnRecord, ReturnScope},
+    returns::{ReturnRecord, ReturnScope},
 };
 
+/// Provenance and raw attributes of the accepted RAM description.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegionOrigin {
+    DeviceTree,
+    Uefi { attributes: u64 },
+    DeviceTreeAndUefi { attributes: u64 },
+}
+
+/// Checked physical geometry and its origin. This value carries no custody.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegionDescription {
+    pub physical: PhysicalRange,
+    pub origin: RegionOrigin,
+}
+
 pub(super) struct Region {
-    description: UnsafeCell<MaybeUninit<Description>>,
+    description: UnsafeCell<MaybeUninit<RegionDescription>>,
     pub(super) state: TurnLock<State>,
 }
 
@@ -85,7 +100,7 @@ impl Region {
 
     pub(super) fn initialize(
         &mut self,
-        description: Description,
+        description: RegionDescription,
         geometry: Geometry,
         edits: usize,
     ) {
@@ -95,7 +110,7 @@ impl Region {
         self.description.get_mut().write(description);
     }
 
-    pub(super) fn description(&self) -> Description {
+    pub(super) fn description(&self) -> RegionDescription {
         // Callers only reach this slot through the published prefix.
         unsafe { (*self.description.get()).assume_init() }
     }
@@ -106,26 +121,21 @@ impl Region {
 #[must_use]
 pub struct Grant {
     source: &'static Allocator,
-    description: Description,
+    description: RegionDescription,
     admitted: Option<RegionId>,
 }
 
 impl Grant {
     /// # Safety
     ///
-    /// The original owner must have exclusive custody of the ordinary RAM
-    /// described here, including the right to give it to this source. It
-    /// must never have been admitted to any source, and must exclude fixed
-    /// metadata, other commitments, retained firmware and MMIO. The
-    /// handoff must remain unique and the retirement evidence remain valid.
-    pub unsafe fn new(
+    /// The original exclusive RAM owner must have verified that all old
+    /// accesses covering this description are retired and that the RAM was
+    /// never admitted, reused, or covered by a fixed claim. This is the
+    /// unique handoff to the given source.
+    pub(crate) unsafe fn from_retired(
         source: &'static Allocator,
-        description: Description,
-        evidence: &Retirement,
+        description: RegionDescription,
     ) -> Result<Self, Error> {
-        if !evidence.covers(description.physical) {
-            return Err(Error::Range);
-        }
         source.config.geometry(description)?;
         Ok(Self {
             source,

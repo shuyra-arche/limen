@@ -4,7 +4,7 @@ use kernel::{
     access::MappedRange,
     address::{PhysicalAddress, PhysicalRange, length},
     allocator::{
-        Allocation, AllocationId, Allocator, Allowance, Candidate, Config, Construction,
+        Allocation, AllocationConstruction, AllocationId, Allocator, Allowance, Candidate, Config,
         Error as SourceError, Initial, MappedStorage, Pending,
         RamPurpose::Metadata,
         Request, ReturnId, ReturnReceipt, Returned, Search,
@@ -45,9 +45,9 @@ static mut ALLOWANCE: Option<Allowance> = None;
 static mut SPACE: Option<Occupied<'static, 'static, PendSpace>> = None;
 static mut SPENDING: Option<Handle> = None;
 static mut CLOSING: Option<Revoker> = None;
-static FIRST: Construction = Construction::new();
-static HISTORY: Construction = Construction::new();
-static SECOND: Construction = Construction::new();
+static FIRST: AllocationConstruction = AllocationConstruction::new();
+static HISTORY: AllocationConstruction = AllocationConstruction::new();
+static SECOND: AllocationConstruction = AllocationConstruction::new();
 static mut MATERIAL: Option<Allocation> = None;
 static mut HISTORY_RECEIPT: Option<ReturnId> = None;
 static mut RECEIPT: Option<ReturnReceipt> = None;
@@ -90,7 +90,7 @@ fn search(source: &'static Allocator, length: u64, physical: PhysicalRange) -> O
 fn issue(
     handle: Handle,
     candidate: Candidate,
-    construction: &'static Construction,
+    construction: &'static AllocationConstruction,
 ) -> AllocationId {
     let id = handle.reserve(candidate, construction, Fast).unwrap();
     assert_eq!(handle.issue(construction, Fast), Ok(id));

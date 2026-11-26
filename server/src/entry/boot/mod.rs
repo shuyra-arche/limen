@@ -3,7 +3,7 @@
 mod handoff;
 mod physical;
 mod regions;
-use crate::metal::allocator::bump;
+use crate::metal::allocator::{RegionDescription, bump};
 use crate::metal::boot::major;
 use core::fmt::Write;
 use limen_treaty::model::ByteLength;
@@ -18,7 +18,7 @@ pub use crate::metal::firmware::uefi::{DeviceTree, Loader, major};
 pub use handoff::Boot;
 pub use major::stack_range;
 pub use physical::{Condition, Exclusion, Exclusions, Occupant, Retirement};
-pub use regions::{Region, RegionError, RegionSource, Regions, RootStorage};
+pub use regions::{RegionError, Regions};
 
 /// The firmware adapter supplies a stable DTB (OpenSBI) or Loader (UEFI).
 /// All referenced storage and mappings remain reserved until the consumer is done.
@@ -38,7 +38,7 @@ impl Boot<'_> {
         &'a self,
         granule: ByteLength,
         retirement: Option<&'a Retirement>,
-        storage: &'a mut [Option<Region>],
+        storage: &'a mut [Option<RegionDescription>],
     ) -> Result<Regions<'a>, RegionError> {
         Regions::organize(self, &self.exclusions(), granule, retirement, storage)
     }

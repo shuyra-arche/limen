@@ -1,21 +1,23 @@
 //! Fixed, mapped storage for a consumer's typed objects.
 
 mod group;
-mod place;
 mod reference;
 mod retirement;
+mod slot;
 
 use crate::metal::sync::{TurnAccess, TurnAcquireError, TurnLock, TurnPlan, TurnPlanError};
 
 use super::{AllocationId, Error as SourceError, MappedStorage};
-use group::{Chain, Completion, Group, Links, State};
+use group::{Chain, Group, Links};
 
 pub use group::{Geometry, Supply};
-use place::Claim;
-pub use place::{Occupied, Prepared, ReleaseCursor, ReleaseProgress, Reservation, Vacant};
-pub use reference::{Detached, REFERENCE_LIMIT, Reclaim, Reference, Stable, StableOwner};
+pub use reference::{Detached, REFERENCE_LIMIT, Reclamation, Reference, Stable, StableOwner};
 use retirement::GroupRecord;
 pub use retirement::Retirement;
+use slot::{Claim, Completion, SlotPosition, State};
+pub use slot::{
+    DestructionReceipt, Occupied, Prepared, ReleaseCursor, ReleaseProgress, Reservation,
+};
 
 /// Largest value supported by this increment's by-value initializer.
 pub const VALUE_BYTES: usize = 512;
@@ -241,13 +243,18 @@ impl<'storage, T> Pool<'storage, T> {
         slot_state.set(State::Reserved);
         state.free -= 1;
         state.reclassify(id, before);
-        *receiver = Some(Reservation(Claim::new(self, id, index, slot)));
+        *receiver = Some(Reservation(Claim::new(
+            self,
+            SlotPosition { group: id, index },
+            slot,
+        )));
         Ok(())
     }
 }
 
 impl<'storage, T> Directory<'storage, T> {
-    fn release(&mut self, id: GroupId, index: usize, expected: State) -> Result<(), Error> {
+    fn release(&mut self, position: SlotPosition, expected: State) -> Result<(), Error> {
+        let SlotPosition { group: id, index } = position;
         let GroupRecord::Open(group) = self.entry(id)? else {
             return Err(Error::Stale);
         };

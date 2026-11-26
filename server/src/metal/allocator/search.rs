@@ -1,13 +1,10 @@
 use core::sync::atomic::Ordering::Acquire;
 use limen_treaty::model::{Alignment, ByteLength};
 
-use crate::{
-    address::{PhysicalRange, length},
-    entry::boot::RegionSource,
-};
+use crate::address::{PhysicalRange, length};
 
 use super::{
-    Allocator, Description, Error, REGION_LIMIT, RegionId,
+    Allocator, Error, REGION_LIMIT, RegionDescription, RegionId, RegionOrigin,
     buddy::{self, Revision, Scan},
 };
 
@@ -25,7 +22,7 @@ pub enum RamPurpose {
 #[derive(Clone, Copy, Debug)]
 pub struct Request {
     buddy: buddy::Request,
-    attributes: Option<RegionSource>,
+    attributes: Option<RegionOrigin>,
     purpose: RamPurpose,
 }
 
@@ -34,7 +31,7 @@ impl Request {
         length: ByteLength,
         alignment: Alignment,
         window: PhysicalRange,
-        attributes: Option<RegionSource>,
+        attributes: Option<RegionOrigin>,
         purpose: RamPurpose,
     ) -> Result<Self, Error> {
         let buddy = buddy::Request::new(length, alignment)
@@ -59,13 +56,13 @@ impl Request {
         self.purpose
     }
 
-    fn accepts(self, region: Description) -> bool {
+    fn accepts(self, region: RegionDescription) -> bool {
         self.buddy
             .window()
             .is_some_and(|window| window.overlaps(region.physical))
             && self
                 .attributes
-                .is_none_or(|attributes| attributes == region.source)
+                .is_none_or(|attributes| attributes == region.origin)
     }
 }
 
