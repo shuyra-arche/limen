@@ -5,10 +5,10 @@ use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use kernel::metal::{
+    chrono::riscv::RiscvTimebase,
     processor::execution::description::riscv::RiscvExtension, processor::execution::description::riscv::RiscvIsa,
     platform::description::devicetree::memory::Source, processor::hart::riscv::description::RiscvCpus,
     memory::mmu::internal::riscv::description::{MaximumMode, RiscvMmu},
-    chrono::riscv::RiscvTimebase,
 };
 use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 use limen_treaty::model::{ByteLength, PhysicalAddress};

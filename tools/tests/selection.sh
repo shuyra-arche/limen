@@ -119,7 +119,7 @@ change server/src/metal/platform/boot/minor.rs
 bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution-harts","platform-boot","riscv-module-execution"]' >/dev/null
 change server/src/metal/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-for source in server/src/metal/platform/firmware/psci/native.rs server/src/metal/interrupt/gic/native.rs server/src/metal/chrono/aarch64/native.rs; do
+for source in server/src/metal/platform/firmware/psci/native.rs server/src/metal/interrupt/internal/gic/native.rs server/src/metal/chrono/aarch64/native.rs; do
     change "$source"
     [[ $(boards) == virt ]]
     bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
@@ -127,8 +127,8 @@ done
 for source in server/src/metal/processor/hart/aarch64/description.rs \
               server/src/metal/platform/firmware/psci/mod.rs \
               server/src/metal/interrupt/mod.rs \
-              server/src/metal/interrupt/gic/mod.rs \
-              server/src/metal/interrupt/internal/gic.rs \
+              server/src/metal/interrupt/internal/gic/mod.rs \
+              server/src/metal/interrupt/internal/mod.rs \
               server/src/metal/chrono/aarch64/mod.rs; do
     change "$source"
     [[ $(boards) == virt ]]

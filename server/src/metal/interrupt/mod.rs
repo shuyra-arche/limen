@@ -1,4 +1,3 @@
-//! Interrupt hardware and delivery ownership.
+//! Actual local and external interrupt hardware mechanisms.
 
-pub mod gic;
 pub mod internal;

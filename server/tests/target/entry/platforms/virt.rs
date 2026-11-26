@@ -1,11 +1,11 @@
 use core::{arch::asm, fmt::Write};
 use kernel::entry::boot;
 use kernel::metal::{
-    interrupt::{gic::GicV3, internal::gic::Trigger},
+    chrono::aarch64::GenericTimer,
+    interrupt::internal::gic::{GicV3, PrivateInterrupts, Trigger},
     platform::description::devicetree::{DeviceTree, Error as TreeError},
     platform::firmware::psci::{Conduit, PsciDescription},
     processor::hart::aarch64::description::Aarch64Cpus,
-    chrono::aarch64::GenericTimer,
 };
 use uefi::{
     Status,
@@ -206,17 +206,25 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
         .unwrap()
         .expect("generic timer declaration");
     assert_eq!(tree.node(timer.source).unwrap().name(), b"timer");
-    assert_eq!(timer.virtual_intid, 27);
-    assert_eq!(timer.virtual_trigger, Trigger::LevelHigh);
+    // Compose the two checked descriptions without a controller dependency
+    // in Chrono or a timer dependency in the interrupt backend.
+    let interrupts = PrivateInterrupts::read(tree, timer.source).expect("GIC private interrupts");
+    assert_eq!(interrupts.source(), timer.source);
+    let index = timer
+        .virtual_interrupt_index(tree, interrupts.entries().len())
+        .expect("virtual timer role");
+    let interrupt = interrupts.entries()[index];
+    let controller = interrupts.controller();
+    assert_eq!(interrupt.intid, 27);
+    assert_eq!(interrupt.trigger, Trigger::LevelHigh);
     assert!(timer.always_on);
-    assert!(tree.node(timer.controller.source).is_some());
+    assert!(tree.node(controller.source).is_some());
     assert_eq!(
-        timer.controller.distributor,
+        controller.distributor,
         memory::extent(0x0800_0000, 0x0801_0000)
     );
     assert!(
-        timer
-            .controller
+        controller
             .redistributor
             .covers(memory::extent(0x080a_0000, 0x080c_0000))
     );

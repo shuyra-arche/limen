@@ -1,13 +1,13 @@
 //! Interpret Arm platform descriptions on the ordinary Host, without native calls.
 use super::fixture::Fixture;
 use kernel::metal::{
-    interrupt::internal::gic::Trigger,
+    chrono::aarch64::GenericTimer,
+    interrupt::internal::gic::{PrivateInterrupts, Trigger},
     platform::{
         description::devicetree::{DeviceTree, Error},
         firmware::psci::{Conduit, PsciDescription, PsciVersion},
     },
     processor::hart::aarch64::description::Aarch64Cpus,
-    chrono::aarch64::GenericTimer,
 };
 
 fn cpus(affinities: &[u64]) -> Vec<u8> {
@@ -95,6 +95,14 @@ fn psci_description_is_not_a_live_conduit_probe() {
 }
 
 fn timer(virtual_ppi: u32) -> Vec<u8> {
+    timer_with(
+        &[1, 13, 4, 1, 14, 4, 1, virtual_ppi, 4, 1, 10, 4],
+        None,
+        false,
+    )
+}
+
+fn timer_with(interrupts: &[u32], names: Option<&[u8]>, extended: bool) -> Vec<u8> {
     let mut fixture = Fixture::root();
     fixture.node(b"gic@8000000");
     fixture.property(b"compatible", b"arm,gic-v3\0");
@@ -106,10 +114,14 @@ fn timer(virtual_ppi: u32) -> Vec<u8> {
     fixture.node(b"timer");
     fixture.property(b"compatible", b"arm,armv8-timer\0");
     fixture.cells(b"interrupt-parent", &[7]);
-    fixture.cells(
-        b"interrupts",
-        &[1, 13, 4, 1, 14, 4, 1, virtual_ppi, 4, 1, 10, 4],
-    );
+    if extended {
+        fixture.cells(b"interrupts-extended", interrupts);
+    } else {
+        fixture.cells(b"interrupts", interrupts);
+    }
+    if let Some(names) = names {
+        fixture.property(b"interrupt-names", names);
+    }
     fixture.cells(b"clock-frequency", &[62_500_000]);
     fixture.property(b"always-on", b"");
     fixture.end();
@@ -121,14 +133,19 @@ fn timer_description_resolves_its_actual_interrupt_domain() {
     let bytes = timer(11);
     let tree = DeviceTree::new(&bytes).unwrap();
     let timer = GenericTimer::read(&tree).unwrap().unwrap();
-    assert_eq!(timer.virtual_intid, 27);
-    assert_eq!(timer.virtual_trigger, Trigger::LevelHigh);
-    assert_eq!(timer.controller.distributor.start().get(), 0x0800_0000);
-    assert_eq!(timer.controller.redistributor.length().get(), 0x2_0000);
+    let interrupts = PrivateInterrupts::read(&tree, timer.source).unwrap();
+    assert_eq!(interrupts.source(), timer.source);
+    let index = timer.virtual_interrupt_index(&tree, interrupts.entries().len()).unwrap();
+    let interrupt = interrupts.entries()[index];
+    let controller = interrupts.controller();
+    assert_eq!(interrupt.intid, 27);
+    assert_eq!(interrupt.trigger, Trigger::LevelHigh);
+    assert_eq!(controller.distributor.start().get(), 0x0800_0000);
+    assert_eq!(controller.redistributor.length().get(), 0x2_0000);
     assert_eq!(timer.described_frequency().unwrap().get(), 62_500_000);
     assert!(timer.always_on);
     assert_eq!(
-        timer.controller.source,
+        controller.source,
         tree.phandle(7).unwrap().unwrap().id()
     );
 }
@@ -138,6 +155,41 @@ fn timer_rejects_out_of_range_or_duplicate_ppi() {
     for (ppi, error) in [(16, Error::Range), (13, Error::Conflict)] {
         let bytes = timer(ppi);
         let tree = DeviceTree::new(&bytes).unwrap();
-        assert_eq!(GenericTimer::read(&tree).err(), Some(error));
+        let timer = GenericTimer::read(&tree).unwrap().unwrap();
+        assert_eq!(timer.described_frequency().unwrap().get(), 62_500_000);
+        assert_eq!(PrivateInterrupts::read(&tree, timer.source).err(), Some(error));
     }
+}
+
+#[test]
+fn timer_roles_select_only_from_the_checked_interrupt_list() {
+    let bytes = timer_with(
+        &[7, 1, 14, 4, 7, 1, 11, 1],
+        Some(b"phys\0virt\0"),
+        true,
+    );
+    let tree = DeviceTree::new(&bytes).unwrap();
+    let timer = GenericTimer::read(&tree).unwrap().unwrap();
+    let interrupts = PrivateInterrupts::read(&tree, timer.source).unwrap();
+    let index = timer.virtual_interrupt_index(&tree, interrupts.entries().len()).unwrap();
+    assert_eq!(index, 1);
+    assert_eq!(interrupts.entries()[index].intid, 27);
+    assert_eq!(interrupts.entries()[index].trigger, Trigger::EdgeRising);
+
+    let foreign = bytes.clone();
+    let foreign_tree = DeviceTree::new(&foreign).unwrap();
+    assert_eq!(PrivateInterrupts::read(&foreign_tree, timer.source).err(), Some(Error::Missing));
+    assert_eq!(timer.virtual_interrupt_index(&foreign_tree, 2).err(), Some(Error::Missing));
+
+    let bytes = timer_with(&[1, 14, 4, 1, 11, 4], None, false);
+    let tree = DeviceTree::new(&bytes).unwrap();
+    let timer = GenericTimer::read(&tree).unwrap().unwrap();
+    let interrupts = PrivateInterrupts::read(&tree, timer.source).unwrap();
+    assert_eq!(timer.virtual_interrupt_index(&tree, interrupts.entries().len()), Err(Error::Missing));
+    assert_eq!(timer.virtual_interrupt_index(&tree, 6), Err(Error::Unsupported));
+
+    let bytes = timer_with(&[7, 1, 14, 4, 8, 1, 11, 4], Some(b"phys\0virt\0"), true);
+    let tree = DeviceTree::new(&bytes).unwrap();
+    let timer = GenericTimer::read(&tree).unwrap().unwrap();
+    assert_eq!(PrivateInterrupts::read(&tree, timer.source).err(), Some(Error::Unsupported));
 }
