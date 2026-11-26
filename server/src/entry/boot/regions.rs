@@ -1,10 +1,6 @@
 //! Organize early physical ranges and reserve explicitly mapped root storage.
 
-use super::{
-    Boot, Exclusions, Physical, Retirement,
-    bump::Bump,
-    physical::contains,
-};
+use super::{Boot, Exclusions, Physical, Retirement, bump::Bump, physical::contains};
 use crate::access::MappedRange;
 use core::{alloc::Layout, mem::MaybeUninit};
 
