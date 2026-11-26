@@ -63,7 +63,7 @@ fn timer_test(boot: &Boot<'_>) {
     let tree = boot.device_tree_description().expect("trusted RV64 DTB");
     let cpus = RiscvCpus::new(tree).unwrap().unwrap();
     let timebase = RiscvTimebase::describe(&cpus).unwrap().unwrap();
-    let description = aclint::Description::read(&tree, boot.hart() as u64)
+    let description = timer::Description::read(&tree, boot.hart() as u64)
         .unwrap()
         .expect("ACLINT machine timer");
     assert_eq!(description.clock_scope(), timebase.source());
@@ -85,7 +85,7 @@ fn timer_test(boot: &Boot<'_>) {
         if round == 0 {
             let later = limit.checked_add(hertz).unwrap();
             timer.arm(later).unwrap();
-            assert!(matches!(timer.arm(target), Err(aclint::Failure::Busy)));
+            assert!(matches!(timer.arm(target), Err(timer::Failure::Busy)));
         }
         // Replace the old comparison directly. In round two this also clears
         // the pending interrupt from round one without an intervening shut.

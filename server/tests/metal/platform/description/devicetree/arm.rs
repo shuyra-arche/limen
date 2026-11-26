@@ -3,8 +3,8 @@ use super::fixture::Fixture;
 use kernel::metal::{
     chrono::aarch64::GenericCounter,
     interrupt::internal::{
-        gic::{PrivateInterrupts, Trigger},
         architected::GenericTimer,
+        gic::{PrivateInterrupts, Trigger},
     },
     platform::{
         description::devicetree::{DeviceTree, Error},

@@ -3,8 +3,8 @@ use kernel::entry::boot;
 use kernel::metal::{
     chrono::aarch64::GenericCounter,
     interrupt::internal::{
-        gic::{GicV3, PrivateInterrupts, Trigger},
         architected::GenericTimer,
+        gic::{GicV3, PrivateInterrupts, Trigger},
     },
     platform::description::devicetree::{DeviceTree, Error as TreeError},
     platform::firmware::psci::{Conduit, PsciDescription},
