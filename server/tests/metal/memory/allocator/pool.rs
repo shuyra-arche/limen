@@ -801,10 +801,6 @@ fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
         Ok(Pending::Found(original.retirement))
     );
     let done = source.finish_return(original.retirement, Fast).unwrap();
-    assert_eq!(
-        source.acknowledge(original.retirement),
-        Err(SourceError::Protection)
-    );
     assert_eq!(source.finish_return(original.retirement, Fast), Ok(done));
     assert_eq!(done.physical, physical);
     assert_eq!(done.allocation, original.allocation);
@@ -822,7 +818,7 @@ fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
     assert_eq!(right, Ok(done));
     assert_eq!(pool.finish_return(a, Fast), Ok(done));
     assert_eq!(
-        source.acknowledge(original.retirement),
+        source.finish_return(original.retirement, Fast),
         Err(SourceError::Stale)
     );
     assert_eq!(pool.capacity().unwrap().bytes, PAGE);

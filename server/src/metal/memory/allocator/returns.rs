@@ -88,6 +88,11 @@ pub struct ReturnReceipt {
 }
 
 impl ReturnReceipt {
+    /// Locate the original return for recovery, without acknowledgement authority.
+    pub fn id(&self) -> ReturnId {
+        self.id
+    }
+
     /// Finish the original refund or read its retained result.
     pub fn finish(&self, mode: TurnMode) -> Result<Returned, Error> {
         self.source.finish_return(self.id, mode)
@@ -110,7 +115,6 @@ pub(super) enum ReturnRecord {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum ReceiptOwner {
-    Caller,
     Pool,
     Receiver,
 }
@@ -131,23 +135,6 @@ pub enum Pending {
 impl Allocator {
     pub(super) fn return_state(&self, id: ReturnId) -> Result<&TurnLock<State>, Error> {
         Ok(&self.region(id.region())?.state)
-    }
-
-    /// Move the exact retired input to its prepaid Return slot and record that
-    /// identity in the original owner's durable receipt position before releasing
-    /// the Region. Pending discovery can then finish even if the caller loses
-    /// the success response. Rejection retains both the input and the receipt.
-    pub fn begin_return(
-        &self,
-        retired: Retired,
-        receipt: &mut Option<ReturnId>,
-    ) -> Result<(), (Retired, Error)> {
-        if receipt.is_some() {
-            return Err((retired, Error::Receiver));
-        }
-        self.accept_return(retired, ReceiptOwner::Caller, |id| {
-            *receipt = Some(id);
-        })
     }
 
     fn accept_return(
@@ -264,13 +251,6 @@ impl Allocator {
                 Pending::More
             }
         })?)
-    }
-
-    /// The trusted original receipt owner ends the independent history.
-    /// A bound receipt retains acknowledgement authority at its original owner.
-    pub fn acknowledge(&self, id: ReturnId) -> Result<(), Error> {
-        self.return_state(id)?
-            .acquire(|state| state.acknowledge_return(id, ReceiptOwner::Caller))?
     }
 }
 
