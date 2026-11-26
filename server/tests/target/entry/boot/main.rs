@@ -12,6 +12,7 @@ mod synchronization;
 mod allocator;
 #[path = "../memory.rs"]
 mod memory;
+mod pend;
 mod pool;
 #[path = "../pool.rs"]
 mod pool_material;
@@ -199,6 +200,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
     allocator::check(&boot);
     pool::check(&boot);
+    pend::check(&boot);
     synchronization::check();
     synchronization::check_enabled();
     write("PASS synchronization\n");

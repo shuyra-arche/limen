@@ -144,7 +144,12 @@ struct Reservation {
     id: AllocationId,
     allowance: AllowanceId,
     candidate: Candidate,
+    spender: Option<Spender>,
 }
+
+/// The canonical lock address of the original, permanently installed Pend.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct Spender(pub(crate) usize);
 
 enum Preparation {
     Open,
@@ -325,12 +330,13 @@ impl Allocator {
     /// caller must revalidate its live role, ancestry, requested purpose and
     /// the exact candidate's layout and Allowance against that authorization.
     /// The construction is the real durable original request and receiver.
-    pub unsafe fn reserve(
+    pub(crate) unsafe fn reserve(
         &'static self,
         held: &mut HeldLockSet<'_>,
         candidate: Candidate,
         allowance: AllowanceId,
         construction: &'static TurnLock<Construction>,
+        spender: Option<Spender>,
     ) -> Result<AllocationId, Error> {
         if !ptr::eq(self, candidate.source) {
             return Err(Error::Stale);
@@ -373,6 +379,7 @@ impl Allocator {
                 id,
                 allowance,
                 candidate,
+                spender,
             });
         Ok(id)
     }
@@ -382,12 +389,16 @@ impl Allocator {
     /// Revalidate the same actual spending authority, purpose, layout and
     /// receiving responsibility under the complete live plan. Issuance may
     /// take place only in the still open original construction.
-    pub unsafe fn issue(
+    pub(crate) unsafe fn issue(
         &'static self,
         held: &mut HeldLockSet<'_>,
         construction: &'static TurnLock<Construction>,
+        spender: Option<Spender>,
     ) -> Result<AllocationId, Error> {
         let reservation = reservation(self, held, construction, false)?;
+        if reservation.spender != spender {
+            return Err(Error::Protection);
+        }
         let region = self.region(reservation.id.region)?;
         let slot = self.slot(reservation.allowance)?;
         let mut balance = held
@@ -416,7 +427,7 @@ impl Allocator {
 
     /// Read the immutable request of the actual reserved construction under
     /// its lock for the final authorization check before Issue.
-    pub fn reserved_candidate(
+    pub(crate) fn reserved_candidate(
         &self,
         held: &mut HeldLockSet<'_>,
         construction: &'static TurnLock<Construction>,

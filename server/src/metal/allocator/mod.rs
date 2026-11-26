@@ -20,6 +20,7 @@ pub use allowance::{Allowance, AllowanceId, Balance};
 pub use region::Grant;
 pub use search::{Candidate, Lookup, RamPurpose, Request, Search};
 pub use storage::{Config, Initial};
+pub(crate) use transfer::Spender;
 pub use transfer::{Allocation, AllocationId, Construction, Pending, Retired, ReturnId, Returned};
 
 use allowance::{Free, Slot};
@@ -108,7 +109,10 @@ fn range(physical: Physical) -> core::ops::Range<u64> {
     physical.start..physical.end
 }
 
-fn with_turn<T, R>(lock: &TurnLock<T>, operation: impl FnOnce(&mut T) -> R) -> Result<R, Error> {
+pub(crate) fn with_turn<T, R>(
+    lock: &TurnLock<T>,
+    operation: impl FnOnce(&mut T) -> R,
+) -> Result<R, Error> {
     let mut work = Work::<1>::new();
     let mut plan = work.plan();
     plan.insert(lock).expect("one Turn");
