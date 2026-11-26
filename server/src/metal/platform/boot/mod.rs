@@ -1,6 +1,7 @@
 //! Common startup admission and launch with the selected machine entry.
 
 pub(crate) mod console;
+pub(crate) mod handoff;
 #[cfg(limen_target)]
 pub(crate) mod major;
 #[cfg(limen_target)]
@@ -27,9 +28,9 @@ use self::riscv as backend;
 use self::x86_64 as backend;
 
 #[cfg(limen_firmware = "sbi")]
-use super::firmware::sbi as firmware;
+use handoff::sbi as firmware;
 #[cfg(limen_firmware = "uefi")]
-use super::firmware::uefi as firmware;
+use handoff::uefi as firmware;
 
 #[cfg(limen_target)]
 pub use backend::Startup;

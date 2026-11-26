@@ -1,6 +1,6 @@
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, FirmwareRegion, devicetree, physical::Exclusions};
-use crate::metal::platform::firmware::facts::Descriptions;
+use crate::metal::platform::boot::handoff::Descriptions;
 use core::ops::Range;
 use limen_treaty::model::PhysicalRange;
 
@@ -69,9 +69,7 @@ impl<'a> Boot<'a> {
     /// An empty iterator means the two descriptions yield no such pages.
     pub fn conventional_ram(&self) -> Option<impl Iterator<Item = FirmwareRegion> + '_> {
         Some(
-            self.firmware_map
-                .as_ref()?
-                .conventional_ram(self.dtb_memory()?),
+            super::regions::conventional_ram(self.firmware_map.as_ref()?, self.dtb_memory()?),
         )
     }
 

@@ -1,8 +1,8 @@
 use core::{arch::asm, fmt::Write};
 use kernel::entry::boot;
 use kernel::metal::{
-    interrupt::gic::{GicV3, Trigger},
-    platform::firmware::devicetree::{DeviceTree, Error as TreeError},
+    interrupt::{gic::GicV3, internal::gic::Trigger},
+    platform::description::devicetree::{DeviceTree, Error as TreeError},
     platform::firmware::psci::{Conduit, PsciDescription},
     processor::hart::aarch64::description::Aarch64Cpus,
     time::aarch64::GenericTimer,

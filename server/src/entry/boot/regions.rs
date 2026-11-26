@@ -7,8 +7,12 @@ use crate::metal::{
         RootInitialization, RootStorage,
     },
     memory::mmu::internal::access::MappedRange,
+    platform::{
+        description::devicetree::memory::DtbMemory,
+        firmware::uefi::map::{FirmwareMap, FirmwareRegion, PAGE_ALIGNMENT},
+    },
 };
-use core::alloc::Layout;
+use core::{alloc::Layout, iter};
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -380,4 +384,65 @@ fn root_error(reason: RegionError) -> Error {
         RegionError::Range => Error::Range,
         RegionError::Granule | RegionError::Layout => Error::Layout,
     }
+}
+
+/// Cross-description reconciliation. The original descriptors retain their
+/// classification; this yields only candidate ranges, never allocation rights.
+pub(super) fn conventional_ram<'a>(
+    map: &'a FirmwareMap<'_>,
+    memory: &'a DtbMemory,
+) -> impl Iterator<Item = FirmwareRegion> + 'a {
+    map.conventional().flat_map(move |region| {
+        memory
+            .ram()
+            .filter_map(move |bank| {
+                // Keep only complete UEFI pages supported by the DTB.
+                complete_pages(region.physical.intersect(bank)?)
+            })
+            .flat_map(move |pages| unreserved(pages, memory))
+            .map(move |physical| FirmwareRegion {
+                kind: region.kind,
+                physical,
+                attributes: region.attributes,
+            })
+    })
+}
+
+fn complete_pages(range: PhysicalRange) -> Option<PhysicalRange> {
+    let start = range.start().align_up(PAGE_ALIGNMENT)?;
+    let end = range.end().align_down(PAGE_ALIGNMENT);
+    PhysicalRange::new(start, end)
+}
+
+/// Walk one intersection using a cursor over a bounded reservation list.
+/// All reservations, including overlapping ones, cover any page they touch.
+fn unreserved(
+    range: PhysicalRange,
+    memory: &DtbMemory,
+) -> impl Iterator<Item = PhysicalRange> + '_ {
+    let mut start = range.start();
+    let end = range.end();
+    iter::from_fn(move || {
+        while start < end {
+            let mut next = end;
+            let mut blocked = start;
+            for reservation in memory.reservations() {
+                let base = reservation.physical.start().align_down(PAGE_ALIGNMENT);
+                if base > start {
+                    next = next.min(base);
+                } else {
+                    let last = reservation.physical.end().align_up(PAGE_ALIGNMENT);
+                    blocked = blocked.max(last.unwrap_or(end).min(end));
+                }
+            }
+            if blocked > start {
+                start = blocked;
+            } else {
+                let segment = PhysicalRange::new(start, next).expect("nonempty unreserved segment");
+                start = next;
+                return Some(segment);
+            }
+        }
+        None
+    })
 }

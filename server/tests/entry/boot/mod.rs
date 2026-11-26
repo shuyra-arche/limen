@@ -1,9 +1,8 @@
 use super::{Boot, Retirement, physical, regions};
-use crate::metal::platform::firmware::{
-    devicetree::{self, memory::DtbMemory},
-    facts::Descriptions,
-    map::{FirmwareMap, FirmwareRegion, MapError},
-    uefi::{AcpiInput, DeviceTree, Loader},
+use crate::metal::platform::{
+    boot::handoff::{Descriptions, uefi::describe as describe_loader},
+    description::devicetree::{self, memory::DtbMemory},
+    firmware::uefi::{AcpiInput, DeviceTree, Loader, map::{FirmwareMap, FirmwareRegion, MapError}},
 };
 use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
@@ -193,6 +192,6 @@ fn admit_loader<'a>(
     loader: &Loader<'a>,
     descriptions: &'a mut Descriptions<'a>,
 ) -> Option<Boot<'a>> {
-    let facts = loader.admit(descriptions)?;
+    let facts = describe_loader(loader, descriptions)?;
     Some(Boot::new(7, facts.image, facts.firmware_map, descriptions))
 }

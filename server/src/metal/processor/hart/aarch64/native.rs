@@ -1,7 +1,7 @@
 use core::arch::asm;
 
 use super::description::{AFFINITY_MASK, Aarch64Cpus, CpuCandidate};
-use crate::metal::platform::firmware::devicetree::Error;
+use crate::metal::platform::description::devicetree::Error;
 
 impl<'tree, 'a> Aarch64Cpus<'tree, 'a> {
     /// Find the enabled declaration belonging to the executing PE.

@@ -2,7 +2,7 @@
 
 use super::Mode;
 use crate::metal::{
-    platform::firmware::devicetree::{Error, NodeId},
+    platform::description::devicetree::{Error, NodeId},
     processor::hart::riscv::description::RiscvCpu,
 };
 

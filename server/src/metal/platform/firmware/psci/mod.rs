@@ -1,6 +1,6 @@
 //! PSCI protocol declarations and the advertised conduit.
 
-use super::devicetree::{DeviceTree, Error, NodeId};
+use crate::metal::platform::description::devicetree::{DeviceTree, Error, NodeId};
 
 #[cfg(all(limen_target, target_arch = "aarch64"))]
 mod native;

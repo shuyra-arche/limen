@@ -15,7 +15,7 @@ mod mapping;
 mod mapping;
 
 use core::fmt::{self, Write};
-use kernel::metal::{platform::firmware::map::FirmwareMap, platform::firmware::uefi::Loader};
+use kernel::metal::{platform::firmware::uefi::map::FirmwareMap, platform::firmware::uefi::Loader};
 use kernel::{
     entry::boot,
     metal::{

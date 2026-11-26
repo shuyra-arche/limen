@@ -3,7 +3,7 @@
 use core::num::NonZeroU32;
 
 use crate::metal::{
-    platform::firmware::devicetree::{Error, NodeId},
+    platform::description::devicetree::{Error, NodeId},
     processor::hart::riscv::description::RiscvCpus,
 };
 

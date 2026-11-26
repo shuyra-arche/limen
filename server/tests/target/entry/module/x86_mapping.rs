@@ -1,7 +1,7 @@
 //! Inspect the live four-level x86 root used by this singleton QEMU guest.
 
 use core::arch::{asm, x86_64::__cpuid};
-use kernel::{metal::platform::firmware::map::FirmwareMap, metal::module::SegmentPermissions};
+use kernel::{metal::platform::firmware::uefi::map::FirmwareMap, metal::module::SegmentPermissions};
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 pub const PAGE: u64 = 4096;

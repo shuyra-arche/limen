@@ -6,7 +6,7 @@ use core::fmt::Write;
 use core::panic::PanicInfo;
 use kernel::metal::{
     processor::execution::description::riscv::RiscvExtension, processor::execution::description::riscv::RiscvIsa,
-    platform::firmware::devicetree::memory::Source, processor::hart::riscv::description::RiscvCpus,
+    platform::description::devicetree::memory::Source, processor::hart::riscv::description::RiscvCpus,
     memory::mmu::internal::riscv::description::{MaximumMode, RiscvMmu},
     time::riscv::RiscvTimebase,
 };

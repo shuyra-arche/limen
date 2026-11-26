@@ -1,10 +1,10 @@
 //! Interpret Arm platform descriptions on the ordinary Host, without native calls.
 use super::fixture::Fixture;
 use kernel::metal::{
-    interrupt::gic::Trigger,
-    platform::firmware::{
-        devicetree::{DeviceTree, Error},
-        psci::{Conduit, PsciDescription, PsciVersion},
+    interrupt::internal::gic::Trigger,
+    platform::{
+        description::devicetree::{DeviceTree, Error},
+        firmware::psci::{Conduit, PsciDescription, PsciVersion},
     },
     processor::hart::aarch64::description::Aarch64Cpus,
     time::aarch64::GenericTimer,

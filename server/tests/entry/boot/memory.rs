@@ -4,11 +4,12 @@ use super::{
     DeviceTree, DtbMemory, FirmwareRegion, Loader,
     devicetree::{
         Error,
-        memory::{Source, describe as describe_into, read},
+        memory::{Source, describe as describe_into},
     },
     image, range,
 };
 use crate::metal::memory::allocator::RegionOrigin;
+use crate::metal::platform::boot::handoff::sbi::read;
 use limen_treaty::model::ByteLength;
 use std::vec::Vec;
 
