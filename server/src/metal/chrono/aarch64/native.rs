@@ -1,10 +1,10 @@
 //! Privileged counter frequency inspection on the executing PE.
 use core::{arch::asm, num::NonZeroU32};
 
-use super::GenericTimer;
+use super::GenericCounter;
 use crate::metal::platform::description::devicetree::Error;
 
-impl GenericTimer<'_> {
+impl GenericCounter<'_> {
     /// Read the frequency from the current PE and compare an explicit DT value.
     ///
     /// # Safety

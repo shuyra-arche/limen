@@ -129,6 +129,8 @@ for source in server/src/metal/processor/hart/aarch64/description.rs \
               server/src/metal/interrupt/mod.rs \
               server/src/metal/interrupt/internal/gic/mod.rs \
               server/src/metal/interrupt/internal/mod.rs \
+              server/src/metal/interrupt/internal/timer/mod.rs \
+              server/src/metal/interrupt/internal/timer/architected.rs \
               server/src/metal/chrono/aarch64/mod.rs; do
     change "$source"
     [[ $(boards) == virt ]]
