@@ -5,14 +5,14 @@
 use core::ptr;
 
 use crate::{
-    address::{PhysicalAddress, PhysicalRange},
+    address::{PhysicalAddress, PhysicalRange, length},
     metal::identity::{GenerationTable, Key, ReserveError},
     sync::{Acquisition, HeldLockSet, LockPlan, TurnLock, Work},
 };
 
 use super::{
-    Allocator, AllowanceId, Candidate, Error, RegionId, allowance::SlotState, buddy_range, length,
-    region::State, with_turn,
+    Allocator, AllowanceId, Candidate, Error, RegionId, allowance::SlotState, region::State,
+    with_turn,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -438,7 +438,7 @@ impl Allocator {
         }
         let region = self.region(candidate.region)?;
         let slot = self.slot(allowance)?;
-        let amount = length(candidate.physical);
+        let amount = length(candidate.physical).get();
         let mut balance = held
             .access(slot)
             .ok_or(Error::Protection)?
@@ -450,7 +450,7 @@ impl Allocator {
         state.capacity(1)?;
         state
             .buddy()
-            .occupy(buddy_range(candidate.physical))
+            .occupy(candidate.physical)
             .map_err(|_| Error::Changed)?;
         let id = state.record(
             candidate.region,
@@ -502,7 +502,7 @@ impl Allocator {
         assert_eq!(record.physical, reservation.candidate.physical);
         let physical = record.physical;
         record.phase = Phase::Issued;
-        let amount = length(physical);
+        let amount = length(physical).get();
         balance.reserved -= amount;
         balance.occupied += amount;
         held.access(slot).expect("Allowance").state = SlotState::Open(balance);
@@ -548,12 +548,12 @@ impl Allocator {
         if !matches!(record.phase, Phase::Reserved(owner) if ptr::eq(owner, construction)) {
             return Err(Error::Stale);
         }
-        let amount = length(record.physical);
+        let amount = length(record.physical).get();
         let credit = if open { 0 } else { amount };
         let unassigned = state.unassigned.checked_add(credit).ok_or(Error::Balance)?;
         state
             .buddy()
-            .release(buddy_range(record.physical))
+            .release(record.physical)
             .expect("reserved physical range");
         state.settle_reserved(reservation.id, record);
         state.unassigned = unassigned;
@@ -643,13 +643,13 @@ impl Allocator {
                 .access(slot)
                 .expect("original Allowance")
                 .live(allowance)?;
-            let amount = length(record.physical);
+            let amount = length(record.physical).get();
             let state = held.access(&region.state).expect("return Region");
             let credit = if open { 0 } else { amount };
             let unassigned = state.unassigned.checked_add(credit).ok_or(Error::Balance)?;
             state
                 .buddy()
-                .release(buddy_range(record.physical))
+                .release(record.physical)
                 .expect("original occupied range");
             state.unassigned = unassigned;
             remove(&mut state.allocations, allocation.key);
@@ -762,7 +762,7 @@ impl Allocator {
         receivers: &mut [Option<Allocation>; 2],
         mode: Acquisition,
     ) -> Result<(), (Retired, Error)> {
-        if !boundary.get().is_multiple_of(self.config.granule) {
+        if !boundary.is_aligned(self.config.granule_alignment()) {
             return Err((input, Error::Layout));
         }
         let Some((left, right)) = input.physical().split(boundary) else {

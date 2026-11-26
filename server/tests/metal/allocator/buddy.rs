@@ -1,16 +1,31 @@
 use core::{mem::MaybeUninit, ops::Range};
+use limen_treaty::model::{Alignment, ByteLength};
+
+use crate::address::{PhysicalAddress, PhysicalRange};
 
 #[path = "../../../src/metal/allocator/buddy/mod.rs"]
 mod implementation;
 
 use implementation::{Buddy, Error, Geometry, Request, Revision, Root, Search};
 
+fn physical(range: Range<u64>) -> PhysicalRange {
+    PhysicalRange::new(
+        PhysicalAddress::new(range.start),
+        PhysicalAddress::new(range.end),
+    )
+    .unwrap()
+}
+
+fn request(length: u64, alignment: u64) -> Request {
+    Request::new(ByteLength::new(length), Alignment::new(alignment).unwrap()).unwrap()
+}
+
 fn with_forest<R>(
-    physical: Range<u64>,
+    range: Range<u64>,
     granule: u64,
     run: impl FnOnce(&mut Buddy<'_>, &Geometry) -> R,
 ) -> R {
-    let geometry = Geometry::new(physical, granule).unwrap();
+    let geometry = Geometry::new(physical(range), ByteLength::new(granule)).unwrap();
     let mut roots = [const { MaybeUninit::<Root>::uninit() }; 16];
     let mut nodes = [MaybeUninit::uninit(); 128];
     let mut buddy = Buddy::new(
@@ -27,7 +42,7 @@ fn seed(buddy: &mut Buddy<'_>, base: u64, count: u64, granule: u64, occupied: u6
     for grain in 0..count {
         if occupied & (1 << grain) != 0 {
             let address = (base + grain) * granule;
-            buddy.occupy(address..address + granule).unwrap();
+            buddy.occupy(physical(address..address + granule)).unwrap();
         }
     }
 }
@@ -62,7 +77,7 @@ fn complete_search(
     geometry: &Geometry,
     request: Request,
     batch: usize,
-) -> Option<Range<u64>> {
+) -> Option<PhysicalRange> {
     let mut observation = buddy.scan(request, 0).unwrap();
     let mut remaining = geometry.scan_bound();
     loop {
@@ -101,14 +116,14 @@ fn geometries_and_fragmented_search_match_the_flat_model() {
                         assert_eq!(buddy.largest_free_order(), largest);
                         for length in 1..=count + 1 {
                             for alignment in [1, 8, 16, 32, 64, 128] {
-                                let request = Request::new(length * GRANULE, alignment).unwrap();
+                                let request = request(length * GRANULE, alignment);
                                 let expected = flat_candidate(
                                     base, count, occupied, length, alignment, GRANULE,
                                 );
                                 let batch = 1 + (occupied as usize % 5);
                                 assert_eq!(
                                     complete_search(buddy, geometry, request, batch),
-                                    expected
+                                    expected.map(physical)
                                 );
 
                                 let block = length.max(alignment / GRANULE).next_power_of_two();
@@ -123,11 +138,16 @@ fn geometries_and_fragmented_search_match_the_flat_model() {
                                 let fast = buddy.fast(request).unwrap();
                                 assert_eq!(fast.is_some(), summary_hit.is_some());
                                 if let Some(found) = fast {
-                                    assert_eq!(found.end - found.start, length * GRANULE);
-                                    assert_eq!(found.start % alignment, 0);
-                                    assert!(found.start / GRANULE >= base);
-                                    assert!(found.end / GRANULE <= base + count);
-                                    assert!(free(occupied, found.start / GRANULE - base, length));
+                                    let start = found.start().get();
+                                    let end = found.end().get();
+                                    assert_eq!(
+                                        crate::address::length(found),
+                                        ByteLength::new(length * GRANULE)
+                                    );
+                                    assert_eq!(start % alignment, 0);
+                                    assert!(start / GRANULE >= base);
+                                    assert!(end / GRANULE <= base + count);
+                                    assert!(free(occupied, start / GRANULE - base, length));
                                 }
                             }
                         }
@@ -141,10 +161,10 @@ fn geometries_and_fragmented_search_match_the_flat_model() {
 fn check_cells(buddy: &mut Buddy<'_>, base: u64, count: u64, occupied: u64) {
     for offset in 0..count {
         let address = base + offset;
-        let result = buddy.occupy(address..address + 1);
+        let result = buddy.occupy(physical(address..address + 1));
         if free(occupied, offset, 1) {
             result.unwrap();
-            buddy.release(address..address + 1).unwrap();
+            buddy.release(physical(address..address + 1)).unwrap();
         } else {
             assert_eq!(result, Err(Error::State));
         }
@@ -160,7 +180,7 @@ fn exact_edits_are_all_or_nothing_and_fit_the_visit_bound() {
                     seed(buddy, base, count, 1, occupied);
                     for first in 0..count {
                         for end in first + 1..=count {
-                            let physical = base + first..base + end;
+                            let physical = physical(base + first..base + end);
                             let mask = ((1 << (end - first)) - 1) << first;
                             for releasing in [false, true] {
                                 let before = buddy.revision();
@@ -170,18 +190,18 @@ fn exact_edits_are_all_or_nothing_and_fit_the_visit_bound() {
                                     occupied & mask == 0
                                 };
                                 let result = if releasing {
-                                    buddy.release(physical.clone())
+                                    buddy.release(physical)
                                 } else {
-                                    buddy.occupy(physical.clone())
+                                    buddy.occupy(physical)
                                 };
                                 if expected {
                                     assert!(result.unwrap() <= geometry.edit_bound());
                                     assert_eq!(buddy.revision(), before.next());
                                     check_cells(buddy, base, count, occupied ^ mask);
                                     if releasing {
-                                        buddy.occupy(physical.clone()).unwrap();
+                                        buddy.occupy(physical).unwrap();
                                     } else {
-                                        buddy.release(physical.clone()).unwrap();
+                                        buddy.release(physical).unwrap();
                                     }
                                 } else {
                                     assert_eq!(result, Err(Error::State));
@@ -203,17 +223,23 @@ fn an_exact_three_granule_run_can_cross_roots() {
         // Absolute roots are [3, 4) and [4, 8).
         assert_eq!(geometry.root_count(), 2);
         assert_eq!(geometry.node_count(), 8);
-        buddy.occupy(6..8).unwrap();
-        let request = Request::new(3, 1).unwrap();
+        buddy.occupy(physical(6..8)).unwrap();
+        let request = request(3, 1);
         assert_eq!(buddy.largest_free_order(), Some(1));
         assert_eq!(buddy.fast(request).unwrap(), None);
-        assert_eq!(complete_search(buddy, geometry, request, 1), Some(3..6));
-        assert_eq!(buddy.occupy(2..4), Err(Error::Range));
-        assert_eq!(buddy.occupy(7..9), Err(Error::Range));
-        buddy.occupy(3..6).unwrap();
+        assert_eq!(
+            complete_search(buddy, geometry, request, 1),
+            Some(physical(3..6))
+        );
+        assert_eq!(buddy.occupy(physical(2..4)), Err(Error::Range));
+        assert_eq!(buddy.occupy(physical(7..9)), Err(Error::Range));
+        buddy.occupy(physical(3..6)).unwrap();
         assert_eq!(buddy.largest_free_order(), None);
-        buddy.release(3..6).unwrap();
-        assert_eq!(complete_search(buddy, geometry, request, 2), Some(3..6));
+        buddy.release(physical(3..6)).unwrap();
+        assert_eq!(
+            complete_search(buddy, geometry, request, 2),
+            Some(physical(3..6))
+        );
     });
 }
 
@@ -226,21 +252,21 @@ fn pending<'storage>(search: Search<'storage>) -> implementation::Scan<'storage>
 
 #[test]
 fn progress_belongs_to_one_current_region_and_a_failed_edit_keeps_it_valid() {
-    let request = Request::new(3, 1).unwrap();
+    let request = request(3, 1);
     with_forest(3..8, 1, |buddy, _| {
         let scan = pending(buddy.scan(request, 1).unwrap());
         with_forest(3..8, 1, |other, _| {
             assert!(matches!(other.resume(scan, 20), Err(Error::Foreign)));
         });
         let scan = pending(buddy.scan(request, 1).unwrap());
-        assert_eq!(buddy.release(4..5), Err(Error::State));
+        assert_eq!(buddy.release(physical(4..5)), Err(Error::State));
         assert!(
-            matches!(buddy.resume(scan, 20), Ok(Search::Found(physical)) if physical == (3..6))
+            matches!(buddy.resume(scan, 20), Ok(Search::Found(found)) if found == physical(3..6))
         );
 
         let scan = pending(buddy.scan(request, 1).unwrap());
-        buddy.occupy(3..4).unwrap();
-        buddy.release(3..4).unwrap();
+        buddy.occupy(physical(3..4)).unwrap();
+        buddy.release(physical(3..4)).unwrap();
         assert!(matches!(buddy.resume(scan, 20), Err(Error::Changed)));
     });
 }
@@ -258,12 +284,21 @@ fn exhausted_revision_cannot_certify_resumed_progress() {
 
 #[test]
 fn construction_rejects_bad_endpoints_overflow_and_short_prepaid_storage() {
-    assert_eq!(Geometry::new(0..0, 1), Err(Error::Range));
-    assert_eq!(Geometry::new(0..10, 4), Err(Error::Range));
-    assert_eq!(Geometry::new(0..8, 3), Err(Error::Granule));
-    assert_eq!(Geometry::new(0..u64::MAX, 1), Err(Error::Capacity));
+    assert!(PhysicalRange::new(PhysicalAddress::new(0), PhysicalAddress::new(0)).is_none());
+    assert_eq!(
+        Geometry::new(physical(0..10), ByteLength::new(4)),
+        Err(Error::Range)
+    );
+    assert_eq!(
+        Geometry::new(physical(0..8), ByteLength::new(3)),
+        Err(Error::Granule)
+    );
+    assert_eq!(
+        Geometry::new(physical(0..u64::MAX), ByteLength::new(1)),
+        Err(Error::Capacity)
+    );
 
-    let geometry = Geometry::new(3..8, 1).unwrap();
+    let geometry = Geometry::new(physical(3..8), ByteLength::new(1)).unwrap();
     let mut roots = [const { MaybeUninit::<Root>::uninit() }; 4];
     let mut nodes = [MaybeUninit::new(0xa5); 9];
     assert!(matches!(
@@ -313,13 +348,16 @@ fn construction_rejects_bad_endpoints_overflow_and_short_prepaid_storage() {
 fn reports_missing_when_rounding_or_candidate_end_exceeds_physical_addresses() {
     let start = (1u64 << 63) + 16;
     with_forest(start..start + 64, 4, |buddy, geometry| {
-        assert_eq!(Request::new(0, 1), Err(Error::Layout));
-        assert_eq!(Request::new(4, 3), Err(Error::Layout));
-        assert_eq!(buddy.fast(Request::new(3, 1).unwrap()), Err(Error::Layout));
-        let high_alignment = Request::new(4, 1u64 << 63).unwrap();
+        assert_eq!(
+            Request::new(ByteLength::new(0), Alignment::new(1).unwrap()),
+            Err(Error::Layout)
+        );
+        assert!(Alignment::new(3).is_none());
+        assert_eq!(buddy.fast(request(3, 1)), Err(Error::Layout));
+        let high_alignment = request(4, 1u64 << 63);
         assert_eq!(buddy.fast(high_alignment).unwrap(), None);
         assert_eq!(complete_search(buddy, geometry, high_alignment, 1), None);
-        let high_length = Request::new(u64::MAX - 3, 1).unwrap();
+        let high_length = request(u64::MAX - 3, 1);
         assert_eq!(buddy.fast(high_length).unwrap(), None);
         assert_eq!(complete_search(buddy, geometry, high_length, 1), None);
     });
@@ -327,14 +365,20 @@ fn reports_missing_when_rounding_or_candidate_end_exceeds_physical_addresses() {
 
 #[test]
 fn lookup_clips_an_aligned_candidate_to_its_access_window() {
-    let geometry = Geometry::new(0..64, 1).unwrap();
+    let geometry = Geometry::new(physical(0..64), ByteLength::new(1)).unwrap();
     let mut roots = [const { MaybeUninit::uninit() }; 1];
     let mut nodes = [const { MaybeUninit::uninit() }; 127];
     let buddy = Buddy::new(geometry, &mut roots, &mut nodes, 64).unwrap();
-    let request = Request::new(5, 4).unwrap().restrict(7..14).unwrap();
-    assert_eq!(buddy.fast(request).unwrap(), Some(8..13));
-    let request = request.restrict(0..12).unwrap();
+    let request = request(5, 4).restrict(physical(7..14));
+    assert_eq!(request.length(), ByteLength::new(5));
+    assert_eq!(request.alignment(), Alignment::new(4).unwrap());
+    assert_eq!(request.window(), Some(physical(7..14)));
+    assert_eq!(buddy.fast(request).unwrap(), Some(physical(8..13)));
+    let request = request.restrict(physical(0..12));
     assert!(buddy.fast(request).unwrap().is_none());
+    let disjoint = request.restrict(physical(12..32));
+    assert_eq!(disjoint.window(), None);
+    assert!(buddy.fast(disjoint).unwrap().is_none());
     assert!(matches!(
         buddy.scan(request, 16).unwrap(),
         Search::Missing(_)
@@ -344,14 +388,14 @@ fn lookup_clips_an_aligned_candidate_to_its_access_window() {
 #[test]
 fn both_search_paths_return_an_occupiable_grain_inside_a_clipped_window() {
     with_forest(0..16_384, 4096, |buddy, geometry| {
-        let request = Request::new(4096, 1).unwrap().restrict(1..12_288).unwrap();
+        let request = request(4096, 1).restrict(physical(1..12_288));
         let fast = buddy.fast(request).unwrap().unwrap();
-        assert_eq!(fast, 4096..8192);
-        buddy.occupy(fast.clone()).unwrap();
+        assert_eq!(fast, physical(4096..8192));
+        buddy.occupy(fast).unwrap();
         buddy.release(fast).unwrap();
 
         let scanned = complete_search(buddy, geometry, request, 1).unwrap();
-        assert_eq!(scanned, 4096..8192);
+        assert_eq!(scanned, physical(4096..8192));
         buddy.occupy(scanned).unwrap();
     });
 }

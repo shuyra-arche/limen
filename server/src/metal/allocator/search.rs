@@ -1,14 +1,15 @@
 use core::sync::atomic::Ordering::Acquire;
+use limen_treaty::model::{Alignment, ByteLength};
 
 use crate::{
-    address::{PhysicalAddress, PhysicalRange},
+    address::{PhysicalRange, length},
     entry::boot::RegionSource,
 };
 
 use super::{
     Allocator, Description, Error, REGION_LIMIT, RegionId,
     buddy::{self, Revision, Scan},
-    buddy_range, length, with_turn,
+    with_turn,
 };
 
 /// The recipient's intended use, independent of the physical range selected.
@@ -25,40 +26,34 @@ pub enum RamPurpose {
 #[derive(Clone, Copy, Debug)]
 pub struct Request {
     buddy: buddy::Request,
-    length: u64,
-    alignment: u64,
-    window: PhysicalRange,
     attributes: Option<RegionSource>,
     purpose: RamPurpose,
 }
 
 impl Request {
     pub fn new(
-        length: u64,
-        alignment: u64,
+        length: ByteLength,
+        alignment: Alignment,
         window: PhysicalRange,
         attributes: Option<RegionSource>,
         purpose: RamPurpose,
     ) -> Result<Self, Error> {
         let buddy = buddy::Request::new(length, alignment)
-            .and_then(|request| request.restrict(buddy_range(window)))
-            .map_err(|_| Error::Layout)?;
+            .map_err(|_| Error::Layout)?
+            .restrict(window);
         Ok(Self {
             buddy,
-            length,
-            alignment,
-            window,
             attributes,
             purpose,
         })
     }
 
-    pub fn length(self) -> u64 {
-        self.length
+    pub fn length(self) -> ByteLength {
+        self.buddy.length()
     }
 
-    pub fn alignment(self) -> u64 {
-        self.alignment
+    pub fn alignment(self) -> Alignment {
+        self.buddy.alignment()
     }
 
     pub fn purpose(self) -> RamPurpose {
@@ -66,7 +61,9 @@ impl Request {
     }
 
     fn accepts(self, region: Description) -> bool {
-        self.window.overlaps(region.physical)
+        self.buddy
+            .window()
+            .is_some_and(|window| window.overlaps(region.physical))
             && self
                 .attributes
                 .is_none_or(|attributes| attributes == region.source)
@@ -135,7 +132,7 @@ impl Allocator {
         request: Request,
         start: Option<RegionId>,
     ) -> Result<Lookup, Error> {
-        if !request.length.is_multiple_of(self.config.granule) {
+        if !self.config.granule_alignment().is_aligned(request.length()) {
             return Err(Error::Layout);
         }
         // This is the first directory observation for a possible NoRange.
@@ -222,7 +219,8 @@ impl Lookup {
         let index = self.index();
         let region = &self.source.regions[index];
         let description = region.description();
-        if !self.request.accepts(description) || length(description.physical) < self.request.length
+        if !self.request.accepts(description)
+            || length(description.physical) < self.request.length()
         {
             self.visited += 1;
             return Ok(Search::Pending);
@@ -246,12 +244,7 @@ impl Lookup {
         })?;
 
         match observation {
-            buddy::Search::Found(found) => {
-                let physical = PhysicalRange::new(
-                    PhysicalAddress::new(found.start),
-                    PhysicalAddress::new(found.end),
-                )
-                .expect("Buddy produces nonempty ranges");
+            buddy::Search::Found(physical) => {
                 self.pass = Pass::Candidate(physical);
                 Ok(self.candidate(physical))
             }

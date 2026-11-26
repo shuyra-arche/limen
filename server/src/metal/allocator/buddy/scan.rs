@@ -1,52 +1,68 @@
 //! Summary search and budgeted, revision-checked physical-order traversal.
 
-use core::{ops::Range, ptr};
+use core::ptr;
+use limen_treaty::model::{Alignment, ByteLength};
+
+use crate::address::{PhysicalAddress, PhysicalRange};
 
 use super::{Buddy, Error, Root, State, geometry::Block};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Request {
-    length: u64,
-    alignment: u64,
-    first: u64,
-    limit: u64,
+    length: ByteLength,
+    alignment: Alignment,
+    window: Option<PhysicalRange>,
 }
 
 impl Request {
-    pub fn new(length: u64, alignment: u64) -> Result<Self, Error> {
-        if length == 0 || !alignment.is_power_of_two() {
+    pub fn new(length: ByteLength, alignment: Alignment) -> Result<Self, Error> {
+        if length.get() == 0 {
             return Err(Error::Layout);
         }
         Ok(Self {
             length,
             alignment,
-            first: 0,
-            limit: u64::MAX,
+            window: PhysicalAddress::new(0).range(ByteLength::new(u64::MAX)),
         })
     }
 
-    pub fn restrict(mut self, window: Range<u64>) -> Result<Self, Error> {
-        if window.is_empty() {
-            return Err(Error::Range);
-        }
-        self.first = self.first.max(window.start);
-        self.limit = self.limit.min(window.end);
-        Ok(self)
+    /// Narrow eligibility to the intersection with the preceding window.
+    pub fn restrict(mut self, window: PhysicalRange) -> Self {
+        self.window = self.window.and_then(|current| current.intersect(window));
+        self
     }
 
-    fn validate(self, granule: u64) -> Result<(), Error> {
-        if !self.length.is_multiple_of(granule) {
+    pub(in super::super) fn length(self) -> ByteLength {
+        self.length
+    }
+
+    pub(in super::super) fn alignment(self) -> Alignment {
+        self.alignment
+    }
+
+    pub(in super::super) fn window(self) -> Option<PhysicalRange> {
+        self.window
+    }
+
+    fn validate(self, granule: Alignment) -> Result<(), Error> {
+        if !granule.is_aligned(self.length) {
             return Err(Error::Layout);
         }
         Ok(())
     }
 
-    fn within(self, start: u64, stop: u64, granule: u64) -> Option<Range<u64>> {
+    fn within(
+        self,
+        start: PhysicalAddress,
+        stop: PhysicalAddress,
+        granule: Alignment,
+    ) -> Option<PhysicalRange> {
+        let window = self.window?;
         let start = start
-            .max(self.first)
-            .checked_next_multiple_of(self.alignment.max(granule))?;
-        let end = start.checked_add(self.length)?;
-        (end <= stop.min(self.limit)).then_some(start..end)
+            .max(window.start())
+            .align_up(self.alignment.max(granule))?;
+        let candidate = start.range(self.length)?;
+        (candidate.end() <= stop.min(window.end())).then_some(candidate)
     }
 }
 
@@ -72,7 +88,7 @@ impl Revision {
 
 /// A result is local to this physical region and the observed revision.
 pub enum Search<'storage> {
-    Found(Range<u64>),
+    Found(PhysicalRange),
     Pending(Scan<'storage>),
     /// Exhausted can certify a complete single observation only.
     Missing(Revision),
@@ -87,7 +103,7 @@ pub struct Scan<'storage> {
     root: usize,
     block: Block,
     phase: Phase,
-    run: Option<u64>,
+    run: Option<PhysicalAddress>,
 }
 
 enum Phase {
@@ -97,10 +113,10 @@ enum Phase {
 
 impl<'storage> Buddy<'storage> {
     /// A summary hit supplies an exact candidate. A miss is inconclusive.
-    pub fn fast(&self, request: Request) -> Result<Option<Range<u64>>, Error> {
+    pub fn fast(&self, request: Request) -> Result<Option<PhysicalRange>, Error> {
         let granule = self.geometry.granule;
         request.validate(granule)?;
-        let grains = (request.length / granule).max(request.alignment / granule);
+        let grains = request.length.get().max(request.alignment.get()) / granule.get();
         let Some(required) = grains.checked_next_power_of_two().map(u64::ilog2) else {
             return Ok(None);
         };
@@ -128,8 +144,9 @@ impl<'storage> Buddy<'storage> {
                     state = self.state(root.first, block);
                 }
             }
-            let start = block.base * granule;
-            return Ok(request.within(start, block.end() * granule, granule));
+            let start = self.geometry.address(block.base);
+            let stop = self.geometry.address(block.end());
+            return Ok(request.within(start, stop, granule));
         }
         Ok(None)
     }
@@ -168,10 +185,9 @@ impl<'storage> Buddy<'storage> {
             match scan.phase {
                 Phase::Visit => match self.state(self.roots[scan.root].first, block) {
                     State::Free => {
-                        let start = *scan.run.get_or_insert(block.base * granule);
-                        if let Some(found) =
-                            scan.request.within(start, block.end() * granule, granule)
-                        {
+                        let start = *scan.run.get_or_insert(self.geometry.address(block.base));
+                        let stop = self.geometry.address(block.end());
+                        if let Some(found) = scan.request.within(start, stop, granule) {
                             return Search::Found(found);
                         }
                         scan.phase = Phase::Advance;

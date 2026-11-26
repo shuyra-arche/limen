@@ -1,8 +1,11 @@
 use core::{ptr, sync::atomic::Ordering::Acquire};
 
-use crate::sync::{Acquisition, HeldLockSet, LockPlan, TurnLock, Work};
+use crate::{
+    address::length,
+    sync::{Acquisition, HeldLockSet, LockPlan, TurnLock, Work},
+};
 
-use super::{Allocator, Error, REGION_LIMIT, RegionId, length, with_turn};
+use super::{Allocator, Error, REGION_LIMIT, RegionId, with_turn};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AllowanceId {
@@ -197,7 +200,7 @@ impl Allocator {
                     let state = held.access(&region.state).expect("published Region");
                     Ok((
                         total
-                            .checked_add(length(region.description().physical))
+                            .checked_add(length(region.description().physical).get())
                             .ok_or(Error::Balance)?,
                         unassigned
                             .checked_add(state.unassigned)
@@ -272,7 +275,7 @@ impl Allocator {
             .ok_or(Error::IdentityExhausted)?;
         let mut capacity = 0u64;
         for (position, &(id, amount)) in debits.iter().enumerate() {
-            if !amount.is_multiple_of(self.config.granule)
+            if !amount.is_multiple_of(self.config.granule.get())
                 || debits[..position].iter().any(|&(prior, _)| prior == id)
             {
                 return Err(Error::Layout);
@@ -334,7 +337,7 @@ impl Allocator {
         to: AllowanceId,
         amount: u64,
     ) -> Result<(), Error> {
-        if from == to || !amount.is_multiple_of(self.config.granule) {
+        if from == to || !amount.is_multiple_of(self.config.granule.get()) {
             return Err(Error::Layout);
         }
         let sender = self.slot(from)?;

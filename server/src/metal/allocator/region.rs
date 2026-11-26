@@ -5,6 +5,7 @@ use core::{
 };
 
 use crate::{
+    address::length,
     entry::boot::Retirement,
     metal::identity::{Entry, GenerationTable},
     sync::{Acquisition, TurnLock, Work},
@@ -13,7 +14,6 @@ use crate::{
 use super::{
     Allocator, Description, Error, RegionId,
     buddy::{Buddy, Geometry, Root},
-    buddy_range, length,
     transfer::{AllocationRecord, AllocationScope, ReturnRecord, ReturnScope},
 };
 
@@ -92,7 +92,7 @@ impl Region {
     ) {
         self.state
             .get_mut()
-            .initialize(geometry, edits, length(description.physical));
+            .initialize(geometry, edits, length(description.physical).get());
         self.description.get_mut().write(description);
     }
 
@@ -170,7 +170,7 @@ impl Grant {
                 return Err(Error::Capacity);
             }
             let state = held.access(&region.state).expect("new Region");
-            state.initialize(geometry, source.config.edits, length(physical));
+            state.initialize(geometry, source.config.edits, length(physical).get());
             // The directory owns the only write to this unpublished slot.
             unsafe { (*region.description.get()).write(description) };
             let id = RegionId(index);
@@ -179,9 +179,4 @@ impl Grant {
             Ok(id)
         })?
     }
-}
-
-/// Physical geometry does not itself establish exclusive source custody.
-pub(super) fn geometry(description: Description, granule: u64) -> Result<Geometry, Error> {
-    Geometry::new(buddy_range(description.physical), granule).map_err(|_| Error::Range)
 }

@@ -4,6 +4,7 @@ use core::{
 };
 
 use kernel::entry::boot::{Boot, Condition, RegionSource, Retirement};
+use limen_treaty::model::ByteLength;
 use uefi::{
     Status,
     boot::{self as firmware, AllocateType, MemoryType, PAGE_SIZE},
@@ -85,8 +86,9 @@ pub(super) fn check(boot: &Boot<'_>) {
     ] {
         unsafe { evidence.record(condition) };
     }
+    let granule = ByteLength::new(PAGE_SIZE as u64);
     assert!(
-        boot.regions(PAGE_SIZE as u64, Some(&evidence), &mut descriptions)
+        boot.regions(granule, Some(&evidence), &mut descriptions)
             .unwrap()
             .entries()
             .next()
@@ -94,7 +96,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     );
     unsafe { evidence.record(Condition::DevicesIsolated) };
     let qualified = boot
-        .regions(PAGE_SIZE as u64, Some(&evidence), &mut descriptions)
+        .regions(granule, Some(&evidence), &mut descriptions)
         .unwrap();
     let region = qualified.entries().next().unwrap();
     assert_eq!(region.physical, scope);

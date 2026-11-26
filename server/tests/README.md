@@ -166,7 +166,7 @@ Each board retains its boot image, input hashes, QEMU version, guest log,
 QMP transcript and exit status. Both test images use the same UEFI entry and
 retain the final memory map after exiting Boot Services. Arm checks the
 configured 256 MiB RAM bank and verifies that the DTB and the UEFI map
-corroborate the reported whole-page spans, excluding the retained DTB and
+corroborate the reported whole-page ranges, excluding the retained DTB and
 firmware reservations. q35 checks the handoff without a DTB. The Boot Host
 suite covers overlapping reservations, partial pages, absent coverage and
 conflicting UEFI types and runtime attributes.
@@ -174,7 +174,7 @@ conflicting UEFI types and runtime attributes.
 
 The three board fixtures also check the real image, major and trap stacks,
 and the retained firmware inputs that their boot paths supply. Each checks
-that missing retirement evidence retains a RAM span. Host cases exercise
+that missing retirement evidence retains a RAM range. Host cases exercise
 overlapping claims, partial-page exclusions and the four independent
 retirement conditions for a checked physical scope.
 The target fixtures also check zero organized regions and zero Bump roots

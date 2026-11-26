@@ -9,6 +9,8 @@ use kernel::{
 
 use super::memory::{extent, mapped, retirement};
 
+use limen_treaty::model::ByteLength;
+
 pub(super) const PAGE: usize = 4096;
 const BASE: u64 = 0x8420_0000;
 
@@ -17,8 +19,8 @@ pub(super) fn group_extent() -> PhysicalRange {
 }
 
 const CONFIG: Config = Config {
-    granule: PAGE as u64,
-    maximum: PAGE as u64,
+    granule: ByteLength::new(PAGE as u64),
+    maximum: ByteLength::new(PAGE as u64),
     regions: 1,
     grains: 1,
     roots: 1,
@@ -41,7 +43,7 @@ pub(super) unsafe fn install<T>(
     let evidence = retirement(boot, scope);
     let mut scratch = [None; 1];
     let mut regions = boot
-        .regions(PAGE as u64, Some(&evidence), &mut scratch)
+        .regions(ByteLength::new(PAGE as u64), Some(&evidence), &mut scratch)
         .unwrap();
     // Bare RV64 has a canonical identity mapping for these disjoint, checked
     // RAM pages. Neither has an alias or a prior owner in this fixture.

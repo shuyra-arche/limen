@@ -49,6 +49,7 @@ version = "0.0.0"
 dependencies = [
  "fdt",
  "kernel",
+ "limen-treaty",
  "uefi",
 ]
 

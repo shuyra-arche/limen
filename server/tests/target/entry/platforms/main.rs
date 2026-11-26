@@ -3,10 +3,8 @@
 
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use kernel::{
-    address::{PhysicalAddress, PhysicalRange},
-    entry::boot,
-};
+use kernel::{address::PhysicalAddress, entry::boot};
+use limen_treaty::model::ByteLength;
 
 #[path = "../foundation.rs"]
 mod foundation;
@@ -68,12 +66,8 @@ fn main() -> Status {
     };
     let (base, size) = loaded.info();
     drop(loaded);
-    let start = base.addr() as u64;
-    let Some(end) = start.checked_add(size) else {
-        return Status::COMPROMISED_DATA;
-    };
-    let Some(image) = PhysicalRange::new(PhysicalAddress::new(start), PhysicalAddress::new(end))
-    else {
+    let start = PhysicalAddress::new(base.addr() as u64);
+    let Some(image) = start.range(ByteLength::new(size)) else {
         return Status::COMPROMISED_DATA;
     };
     let board = match board::capture() {
@@ -147,9 +141,8 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     let scope = candidate.physical;
     assert!(early.retains(scope, None));
     let mut storage = [None; 4];
-    let mut regions = boot
-        .regions(uefi::boot::PAGE_SIZE as u64, None, &mut storage)
-        .unwrap();
+    let granule = ByteLength::new(uefi::boot::PAGE_SIZE as u64);
+    let mut regions = boot.regions(granule, None, &mut storage).unwrap();
     assert!(regions.entries().next().is_none());
     assert!(
         regions
@@ -158,8 +151,8 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
             .is_none()
     );
     let configuration = kernel::allocator::Config {
-        granule: uefi::boot::PAGE_SIZE as u64,
-        maximum: 0,
+        granule,
+        maximum: ByteLength::new(0),
         regions: 1,
         grains: 1,
         roots: 1,
