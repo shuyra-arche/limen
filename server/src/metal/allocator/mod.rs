@@ -29,6 +29,7 @@ mod storage;
 pub use allocation::{Allocation, AllocationId};
 pub use allowance::{Allowance, AllowanceCandidate, AllowanceId, Balance};
 pub use construction::AllocationConstruction;
+pub use permit::InitialAccess;
 pub(crate) use permit::{AllocationPermit, AllocationPermitSlot, LayoutLimit};
 pub use region::{Grant, RegionDescription, RegionOrigin};
 pub use returns::{Pending, Retired, ReturnId, ReturnReceipt, Returned};

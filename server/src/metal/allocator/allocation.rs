@@ -11,7 +11,8 @@ use crate::{
 };
 
 use super::{
-    AllocationConstruction, Allocator, AllowanceId, Error, RegionId, Retired, ReturnId,
+    AllocationConstruction, AllocationPermitSlot, Allocator, AllowanceId, Error, InitialAccess,
+    RegionId, Retired, ReturnId,
     region::State,
     returns::{ReturnRecord, ReturnScope},
 };
@@ -35,6 +36,7 @@ pub struct Allocation {
     source: &'static Allocator,
     pub(super) id: AllocationId,
     pub(super) physical: PhysicalRange,
+    initial_issuer: Option<&'static AllocationPermitSlot>,
 }
 
 impl Allocation {
@@ -42,11 +44,13 @@ impl Allocation {
         source: &'static Allocator,
         id: AllocationId,
         physical: PhysicalRange,
+        initial_issuer: Option<&'static AllocationPermitSlot>,
     ) -> Self {
         Self {
             source,
             id,
             physical,
+            initial_issuer,
         }
     }
 
@@ -60,6 +64,13 @@ impl Allocation {
 
     pub fn physical(&self) -> PhysicalRange {
         self.physical
+    }
+
+    /// Observe the exact original issuer's ceiling for first access.
+    /// Publication must revalidate the live issuing holding.
+    pub fn initial_access(&self) -> Option<InitialAccess> {
+        self.initial_issuer
+            .and_then(AllocationPermitSlot::initial_access)
     }
 
     pub(super) fn source(&self) -> &'static Allocator {
@@ -295,7 +306,7 @@ impl Allocator {
                     allowance,
                     Phase::Issued,
                 );
-                *receiver = Some(Allocation::issued(self, allocation_id, physical));
+                *receiver = Some(Allocation::issued(self, allocation_id, physical, None));
             }
             for (input, record) in inputs.into_iter().zip(records) {
                 state.settle_reserved(input.0.id, record.expect("all inputs preflighted"));
