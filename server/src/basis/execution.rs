@@ -17,7 +17,7 @@ use crate::{
     },
     metal::{
         execution::{Hart, LeaveReceipt, LocalHart, cooperative_ready},
-        hart::{self, HartId},
+        hart::local::{self, HartId},
         sync::{TurnAcquireError, TurnLock},
     },
 };
@@ -139,7 +139,7 @@ impl Execution {
         stacks: &'static mut Stacks,
         minor: Option<&'static Minor>,
     ) -> Result<Self, EstablishFailure<'a>> {
-        if hart::current_hart() != HartId::new(boot.hart()) {
+        if local::current_hart() != HartId::new(boot.hart()) {
             return Err(EstablishFailure {
                 boot,
                 stacks,
@@ -175,7 +175,7 @@ impl Execution {
     }
 
     fn local(&self) -> Result<(HartId, LocalHart<'_, Occupancy>), Error> {
-        let id = hart::current_hart();
+        let id = local::current_hart();
         if id == self.major_id {
             return Ok((id, unsafe { self.major.local() }));
         }
@@ -205,7 +205,7 @@ impl Execution {
         method: boot::Startup,
     ) -> Result<(), Error> {
         let minor = self.minor_boot.ok_or(Error::Unsupported)?;
-        if hart::current_hart() != self.major_id || !cooperative_ready() {
+        if local::current_hart() != self.major_id || !cooperative_ready() {
             return Err(Error::Unsupported);
         }
         if HartId::new(hart) == self.major_id {
@@ -301,7 +301,7 @@ impl Execution {
         if !cooperative_ready() {
             return Err(Error::Unsupported);
         }
-        if !hart::can_switch() {
+        if !local::can_switch() {
             return Err(Error::Protection);
         }
         let Some((occupancy, context, entry)) = self.dispatch(|dispatch| {
@@ -372,7 +372,7 @@ impl Execution {
         if !cooperative_ready() {
             return Err(Error::Unsupported);
         }
-        if !hart::can_switch() {
+        if !local::can_switch() {
             return Err(Error::Protection);
         }
         let occupancy = hart
@@ -422,7 +422,7 @@ impl Current {
 
     /// The physical Hart executing this continuation when called.
     pub fn hart(&self) -> usize {
-        hart::current_hart().get()
+        local::current_hart().get()
     }
 
     /// Yield the Hart. Success is returned after a new dispatch resumes this
@@ -457,7 +457,7 @@ extern "C" fn start(argument: *const ()) -> ! {
 fn admit_minor(hart: usize, argument: usize) -> ! {
     // The firmware launch holds a resident Execution for this callback.
     let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
-    let id = hart::current_hart();
+    let id = local::current_hart();
     assert_eq!(id.get(), hart);
     assert!(cooperative_ready());
     execution

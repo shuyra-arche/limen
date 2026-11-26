@@ -13,7 +13,7 @@ use kernel::{
     entry::boot::{Boot, Minor, Startup},
     metal::{
         execution::riscv::description::{RiscvExtension, RiscvIsa},
-        hart::description::RiscvCpus,
+        hart::riscv::description::RiscvCpus,
         mmu::internal::riscv::{Mode, context::Context, description::RiscvMmu, root::Root},
         module::ModuleUse,
     },

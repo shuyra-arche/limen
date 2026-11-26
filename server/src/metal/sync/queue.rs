@@ -1,17 +1,13 @@
 use core::{
-    ptr::{self, null_mut},
+    hint::spin_loop,
+    ptr::{self, NonNull, null_mut},
     sync::atomic::{
         AtomicPtr,
         Ordering::{AcqRel, Acquire, Relaxed, Release},
     },
 };
 
-use crate::metal::hart::QueueNode;
-
-#[cfg(not(test))]
-use core::hint::spin_loop;
-#[cfg(test)]
-use tests::observe_spin as spin_loop;
+use crate::metal::hart::local::QueueNode;
 
 #[cfg(test)]
 #[path = "../../../tests/metal/sync/mod.rs"]
@@ -48,27 +44,49 @@ impl Queue {
     }
 
     pub(super) fn release(&self, node: &QueueNode) {
+        self.departure(node).finish();
+    }
+
+    /// A strong clear-tail CAS either detaches this node or proves that a
+    /// successor already owns the queue tail. The link can arrive later.
+    fn departure<'a>(&self, node: &'a QueueNode) -> Departure<'a> {
+        if let Some(successor) = NonNull::new(node.next.load(Acquire)) {
+            return Departure::Linked(successor);
+        }
         let current = ptr::from_ref(node).cast_mut();
-        let mut successor = node.next.load(Acquire);
-        if successor.is_null() {
-            if self
-                .tail
-                .compare_exchange(current, null_mut(), Release, Relaxed)
-                .is_ok()
-            {
-                return;
-            }
-            // A successor has exchanged the tail. It can link while the
-            // outgoing Hart waits, since linking takes no other lock.
-            loop {
-                successor = node.next.load(Acquire);
-                if !successor.is_null() {
-                    break;
+        if self
+            .tail
+            .compare_exchange(current, null_mut(), Release, Relaxed)
+            .is_ok()
+        {
+            Departure::Detached
+        } else {
+            Departure::AwaitLink(node)
+        }
+    }
+}
+
+// This is the local result of one real release decision, not a retained
+// queue state. Only the original release path can finish the decision.
+enum Departure<'a> {
+    Detached,
+    Linked(NonNull<QueueNode>),
+    AwaitLink(&'a QueueNode),
+}
+
+impl Departure<'_> {
+    fn finish(self) {
+        let successor = match self {
+            Self::Detached => return,
+            Self::Linked(successor) => successor,
+            Self::AwaitLink(node) => loop {
+                if let Some(successor) = NonNull::new(node.next.load(Acquire)) {
+                    break successor;
                 }
                 spin_loop();
-            }
-        }
+            },
+        };
         // The successor cannot leave or reuse its node before taking the baton.
-        unsafe { (*successor).waiting.store(false, Release) };
+        unsafe { successor.as_ref().waiting.store(false, Release) };
     }
 }

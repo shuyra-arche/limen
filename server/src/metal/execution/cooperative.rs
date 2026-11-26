@@ -3,7 +3,7 @@
 use core::{cell::Cell, marker::PhantomData};
 
 use super::Context;
-use crate::metal::hart;
+use crate::metal::hart::local;
 
 #[derive(Clone, Copy)]
 pub(crate) struct LeaveReceipt<Occupancy>(Occupancy);
@@ -69,7 +69,7 @@ impl<Occupancy: Copy + Eq> LocalHart<'_, Occupancy> {
         argument: *const (),
     ) {
         assert!(matches!(self.hart.state.get(), State::Idle));
-        assert!(hart::can_switch());
+        assert!(local::can_switch());
         self.hart.state.set(State::Running(occupancy));
         unsafe { self.hart.dispatcher.switch(context, argument) };
         // The dispatcher is executing on its original stack again. The old
@@ -81,7 +81,7 @@ impl<Occupancy: Copy + Eq> LocalHart<'_, Occupancy> {
     /// Requires invocation on the stack of this exact running occupancy.
     pub(crate) unsafe fn leave(&self, occupancy: Occupancy, context: &Context) {
         assert!(self.running() == Some(occupancy));
-        assert!(hart::can_switch());
+        assert!(local::can_switch());
         unsafe { context.switch(&self.hart.dispatcher, core::ptr::null()) };
     }
 

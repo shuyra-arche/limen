@@ -8,7 +8,7 @@ use core::{
 
 use crate::metal::{
     boot,
-    hart::{self, HartLocal, stack::Stack},
+    hart::local::{self, HartLocal, stack::Stack},
 };
 use core::ops::Range;
 
@@ -99,7 +99,7 @@ impl Minor {
         argument: usize,
         method: boot::Startup,
     ) -> Result<(), StartError> {
-        if hart == hart::current_hart().get() {
+        if hart == local::current_hart().get() {
             return Err(StartError::Busy);
         }
         self.state
@@ -136,12 +136,13 @@ impl Default for Minor {
 
 pub(crate) extern "C" fn arrive(hart: usize, minor: &'static Minor) -> ! {
     let launch = unsafe { (&*minor.launch.get()).assume_init_ref() };
-    let sp = hart::stack_pointer();
+    let sp = local::stack_pointer();
     assert!(hart == launch.hart && minor.stack_range().contains(&sp));
     assert!(minor.established(hart));
     // `Entered` identifies this CPU as the sole initializer of this resident
     // local record. The terminal vectors cannot observe its partial setup.
     unsafe { minor.local.install(hart) };
+    assert!(local::can_switch(), "minor Hart protection is not idle");
     minor.state.store(State::Ready as u32, Ordering::Release);
     (launch.entry)(hart, launch.argument)
 }

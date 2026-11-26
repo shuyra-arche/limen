@@ -1,4 +1,8 @@
-use super::{entry::PageTableEntry, flags::PteFlags};
+//! Exploratory atomic PTE activity model; no real hardware page walk or retirement.
+mod entry;
+mod flags;
+
+use self::{entry::PageTableEntry, flags::PteFlags};
 use core::mem::{align_of, size_of};
 use std::sync::{
     Barrier,
@@ -6,7 +10,7 @@ use std::sync::{
 };
 
 // Model the hardware participant's full-width atomic updates, without adding
-// a hardware-write method to the production PTE interface.
+// a hardware-write method to the candidate PTE interface.
 fn hardware(entry: &PageTableEntry) -> &AtomicU64 {
     assert_eq!(size_of::<PageTableEntry>(), 8);
     assert_eq!(align_of::<PageTableEntry>(), 8);

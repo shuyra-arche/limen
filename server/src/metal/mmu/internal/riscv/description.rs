@@ -3,7 +3,7 @@
 use super::Mode;
 use crate::metal::{
     firmware::devicetree::{Error, NodeId},
-    hart::description::RiscvCpu,
+    hart::riscv::description::RiscvCpu,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

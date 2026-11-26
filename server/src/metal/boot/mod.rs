@@ -12,15 +12,19 @@ pub(in crate::metal) mod trap;
 #[cfg(limen_target)]
 pub(crate) use trap::stack_range as trap_stack_range;
 
-#[cfg(all(limen_target, target_arch = "riscv64"))]
-#[path = "riscv/mod.rs"]
-mod backend;
-#[cfg(all(limen_target, target_arch = "x86_64"))]
-#[path = "x86_64/mod.rs"]
-mod backend;
 #[cfg(all(limen_target, target_arch = "aarch64"))]
-#[path = "aarch64/mod.rs"]
-mod backend;
+mod aarch64;
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+mod riscv;
+#[cfg(all(limen_target, target_arch = "x86_64"))]
+mod x86_64;
+
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+use self::aarch64 as backend;
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+use self::riscv as backend;
+#[cfg(all(limen_target, target_arch = "x86_64"))]
+use self::x86_64 as backend;
 
 #[cfg(limen_firmware = "sbi")]
 use super::firmware::sbi as firmware;
@@ -48,5 +52,5 @@ pub(in crate::metal) const STACK_BYTES: usize = 32 * 1024;
 #[cfg(limen_target)]
 pub(crate) fn ordinary_entry() -> bool {
     backend::entry_installed()
-        && !trap::stack_range().contains(&crate::metal::hart::stack_pointer())
+        && !trap::stack_range().contains(&crate::metal::hart::local::stack_pointer())
 }

@@ -1,29 +1,4 @@
-use super::{AcqRel, Acquire, Queue, QueueNode, Relaxed, Release, null_mut, ptr};
-
-mod spin {
-    use std::{
-        cell::Cell,
-        sync::atomic::{AtomicBool, Ordering::Release},
-    };
-
-    std::thread_local! {
-        static SIGNAL: Cell<Option<&'static AtomicBool>> = const { Cell::new(None) };
-    }
-
-    pub(super) fn arm(signal: &'static AtomicBool) {
-        SIGNAL.set(Some(signal));
-    }
-
-    pub fn observe() {
-        if let Some(signal) = SIGNAL.take() {
-            signal.store(true, Release);
-        }
-        ::core::hint::spin_loop();
-    }
-}
-
-use spin::arm;
-pub use spin::observe as observe_spin;
+use super::{AcqRel, Acquire, Departure, Queue, QueueNode, Relaxed, Release, null_mut, ptr};
 
 use std::{
     sync::atomic::{AtomicBool, AtomicU8},
@@ -50,31 +25,35 @@ fn prepare(node: &QueueNode) {
 }
 
 #[test]
-fn release_waits_for_an_exchanged_successor_to_link() {
+fn release_requires_the_link_from_an_exchanged_successor() {
     static QUEUE: Queue = Queue::new();
     static OWNER: QueueNode = QueueNode::new();
     static SUCCESSOR: QueueNode = QueueNode::new();
     static CONTENDER: QueueNode = QueueNode::new();
-    static RELEASING: AtomicBool = AtomicBool::new(false);
+
+    static DECIDED: AtomicBool = AtomicBool::new(false);
 
     prepare(&OWNER);
     prepare(&SUCCESSOR);
     prepare(&CONTENDER);
     assert!(QUEUE.attempt(&OWNER));
 
-    // Publish exactly the first atomic effect of a successor and defer
-    // publishing its link until the real release reaches the wait.
+    // Publish the first atomic effect of a successor, but not its link.
+    // Execute the real release decision once at this exact boundary.
     let successor = ptr::from_ref(&SUCCESSOR).cast_mut();
     assert_eq!(
         QUEUE.tail.swap(successor, AcqRel),
         ptr::from_ref(&OWNER).cast_mut(),
     );
     let owner = thread::spawn(|| {
-        arm(&RELEASING);
-        QUEUE.release(&OWNER);
+        let departure = QUEUE.departure(&OWNER);
+        assert!(matches!(&departure, Departure::AwaitLink(_)));
+        // Observe a completed real decision, not an injected spin hook.
+        DECIDED.store(true, Release);
+        departure.finish();
     });
-    until("owner to wait for the link", || RELEASING.load(Acquire));
-    assert!(!owner.is_finished());
+    until("release decision", || DECIDED.load(Acquire));
+    assert!(OWNER.next.load(Acquire).is_null());
     assert!(SUCCESSOR.waiting.load(Acquire));
     assert!(!QUEUE.attempt(&CONTENDER), "attempt must not bypass a link");
 
@@ -97,8 +76,6 @@ fn two_linked_successors_take_the_baton_in_fifo_order() {
     static FIRST: QueueNode = QueueNode::new();
     static SECOND: QueueNode = QueueNode::new();
     static CONTENDER: QueueNode = QueueNode::new();
-    static FIRST_WAITING: AtomicBool = AtomicBool::new(false);
-    static SECOND_WAITING: AtomicBool = AtomicBool::new(false);
     static ORDER: AtomicU8 = AtomicU8::new(0);
 
     for node in [&OWNER, &FIRST, &SECOND, &CONTENDER] {
@@ -106,19 +83,21 @@ fn two_linked_successors_take_the_baton_in_fifo_order() {
     }
     assert!(QUEUE.attempt(&OWNER));
     let first = thread::spawn(|| {
-        arm(&FIRST_WAITING);
         QUEUE.acquire(&FIRST);
         assert_eq!(ORDER.fetch_add(1, Relaxed), 0);
         QUEUE.release(&FIRST);
     });
-    until("first successor to wait", || FIRST_WAITING.load(Acquire));
+    until("first successor to link", || {
+        OWNER.next.load(Acquire) == ptr::from_ref(&FIRST).cast_mut()
+    });
     let second = thread::spawn(|| {
-        arm(&SECOND_WAITING);
         QUEUE.acquire(&SECOND);
         assert_eq!(ORDER.fetch_add(1, Relaxed), 1);
         QUEUE.release(&SECOND);
     });
-    until("second successor to wait", || SECOND_WAITING.load(Acquire));
+    until("second successor to link", || {
+        FIRST.next.load(Acquire) == ptr::from_ref(&SECOND).cast_mut()
+    });
 
     assert!(!QUEUE.attempt(&CONTENDER));
     join(thread::spawn(|| QUEUE.release(&OWNER)));

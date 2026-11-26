@@ -75,7 +75,6 @@ fn protect() -> Result<(&'static HartLocal, InterruptGuard), Error> {
     Ok((installed().ok_or(Error::Context)?, interrupt))
 }
 
-#[cfg(any(limen_cooperative, test))]
 pub(crate) fn can_switch() -> bool {
     let Ok((local, _interrupt)) = protect() else {
         return false;

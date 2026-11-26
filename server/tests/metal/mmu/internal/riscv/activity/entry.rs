@@ -1,5 +1,5 @@
-//! RV64 PTE storage and coherent decoded snapshots. Software mutation remains
-//! serialized by the Nest owner; hardware may atomically set A/D concurrently.
+//! Exploratory RV64 PTE word model; not an installed PageTable or CellAccess.
+//! Software mutation is externally serialized; a Host atomic models A/D writes.
 use core::{
     fmt,
     sync::atomic::{AtomicU64, Ordering},

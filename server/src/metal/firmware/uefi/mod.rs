@@ -10,12 +10,13 @@ pub use loader::{AcpiInput, DeviceTree, Loader};
 #[cfg(limen_firmware = "uefi")]
 pub(crate) unsafe fn admit<'a>(
     hart: usize,
+    observed: usize,
     input: *const (),
     descriptions: &mut Descriptions<'a>,
 ) -> Option<Facts<'a>> {
     // The current loader handoff supplies an identity checked against the
     // physical CPU, rather than the trusted SBI entry's current-Hart ABI.
-    if hart != crate::metal::hart::boot_identity() {
+    if hart != observed {
         Services::active().reject(format_args!(
             "FAIL Limen boot: major CPU identity mismatch\n"
         ));

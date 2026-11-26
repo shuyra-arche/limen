@@ -8,7 +8,7 @@ use core::{
     },
 };
 
-use crate::metal::hart;
+use crate::metal::hart::local;
 
 /// Failure to enter a local leaf section or obtain its exclusive access.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,11 +18,11 @@ pub enum LeafError {
     Capacity,
 }
 
-impl From<hart::Error> for LeafError {
-    fn from(error: hart::Error) -> Self {
+impl From<local::Error> for LeafError {
+    fn from(error: local::Error) -> Self {
         match error {
-            hart::Error::Context => Self::Context,
-            hart::Error::Capacity => Self::Capacity,
+            local::Error::Context => Self::Context,
+            local::Error::Capacity => Self::Capacity,
         }
     }
 }
@@ -73,7 +73,7 @@ impl<T> LeafLock<T> {
         wait: bool,
         operation: impl for<'value> FnOnce(&'value mut T) -> R,
     ) -> Result<R, LeafError> {
-        let participation = hart::begin_leaf(&raw const self.occupied, wait)?;
+        let participation = local::begin_leaf(&raw const self.occupied, wait)?;
         loop {
             if self
                 .occupied

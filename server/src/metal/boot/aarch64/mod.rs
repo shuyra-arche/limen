@@ -1,9 +1,23 @@
-use crate::metal::boot::trap as diagnostic;
-pub(crate) use crate::metal::firmware::uefi::admit;
+use crate::metal::{
+    boot::trap as diagnostic,
+    firmware::{
+        facts::{Descriptions, Facts},
+        uefi,
+    },
+    hart::aarch64::native,
+};
 mod major;
 pub(crate) use major::major as enter_major;
 
 use core::arch::{asm, naked_asm};
+
+pub(crate) unsafe fn admit<'a>(
+    hart: usize,
+    input: *const (),
+    descriptions: &mut Descriptions<'a>,
+) -> Option<Facts<'a>> {
+    unsafe { uefi::admit(hart, native::boot_identity(), input, descriptions) }
+}
 
 pub(crate) fn established() -> bool {
     let (daif, spsel): (usize, usize);

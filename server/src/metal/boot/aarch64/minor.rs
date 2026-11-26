@@ -126,6 +126,6 @@ unsafe extern "C" fn minor(slot: *const Minor) -> ! {
 
 impl Minor {
     pub(in crate::metal) fn established(&self, hart: usize) -> bool {
-        hart == crate::metal::hart::boot_identity() && super::established()
+        hart == crate::metal::hart::aarch64::native::boot_identity() && super::established()
     }
 }

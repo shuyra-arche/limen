@@ -6,7 +6,7 @@ use core::{
     sync::atomic::Ordering::Relaxed,
 };
 
-use crate::metal::hart::{self, TurnParticipation};
+use crate::metal::hart::local::{self, TurnParticipation};
 
 use super::queue::Queue;
 
@@ -159,9 +159,9 @@ fn acquire<R>(
     mode: TurnMode,
     operation: impl FnOnce() -> R,
 ) -> Result<R, TurnAcquireError> {
-    let local = hart::begin_turn(queues.len()).map_err(|error| match error {
-        hart::Error::Capacity => TurnAcquireError::Capacity,
-        hart::Error::Context => TurnAcquireError::Context,
+    let local = local::begin_turn(queues.len()).map_err(|error| match error {
+        local::Error::Capacity => TurnAcquireError::Capacity,
+        local::Error::Context => TurnAcquireError::Context,
     })?;
     let mut held = DropGuard::new(
         Held {

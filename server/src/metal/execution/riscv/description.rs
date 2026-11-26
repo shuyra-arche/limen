@@ -2,7 +2,7 @@
 
 use crate::metal::{
     firmware::devicetree::{Error, NodeId},
-    hart::description::RiscvCpu,
+    hart::riscv::description::RiscvCpu,
 };
 
 const EXTENSION_LIMIT: usize = 192;
