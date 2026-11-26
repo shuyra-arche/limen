@@ -15,7 +15,7 @@ use crate::metal::{
 use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 use super::{
-    AllocationConstruction, Allocator, AllowanceId, Error, RegionId, Retired, ReturnId,
+    Allocator, AllowanceId, Error, RegionId, Retired, ReturnId,
     region::State,
     returns::{ReturnRecord, ReturnScope},
 };
