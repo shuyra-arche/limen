@@ -21,11 +21,20 @@ pub enum Failure {
     Unconfirmed,
 }
 
+/// The comparison write has not been confirmed, or the comparison is
+/// confirmed but the local timer enable is still owed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProgramStep {
+    Compare,
+    Enable,
+}
+
 /// One synchronous replacement of the actual comparator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Write {
+pub struct Programming {
     pub previous: Option<u64>,
     pub requested: u64,
+    pub step: ProgramStep,
 }
 
 /// The original comparison facts that a clearing operation must retain.
@@ -34,23 +43,37 @@ pub enum Prior {
     Inherited,
     Idle,
     Armed(u64),
-    Programming(Write),
+    Programming(Programming),
+}
+
+/// The stage of the original clear whose effect is still owed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClearStep {
+    Mask,
+    Compare,
+    Observe,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Clearing {
+    pub prior: Prior,
+    pub step: ClearStep,
 }
 
 /// The specific operation that returned without confirmation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Effect {
-    Programming(Write),
-    Clearing(Prior),
+    Programming(Programming),
+    Clearing(Clearing),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum State {
     Inherited,
     Idle,
-    Programming(Write),
+    Programming(Programming),
     Armed(u64),
-    Clearing(Prior),
+    Clearing(Clearing),
     AwaitingClear(Prior),
     Uncertain(Effect),
 }
@@ -142,22 +165,25 @@ impl<'a> Timer<'a> {
         if count == u64::MAX || count <= self.counter()? {
             return Err(Failure::Range);
         }
-        let write = Write {
+        let mut program = Programming {
             previous,
             requested: count,
+            step: ProgramStep::Compare,
         };
-        self.state = State::Programming(write);
+        self.state = State::Programming(program);
         if let Err(error) = set_timer(count) {
-            self.state = State::Uncertain(Effect::Programming(write));
+            self.state = State::Uncertain(Effect::Programming(program));
             return Err(Failure::Firmware(error));
         }
+        program.step = ProgramStep::Enable;
+        self.state = State::Programming(program);
         let enabled: usize;
         unsafe {
             asm!("csrs sie, {mask}", "csrr {enabled}, sie",
                 mask = in(reg) TIMER, enabled = out(reg) enabled, options(nostack));
         }
         if enabled & TIMER == 0 {
-            self.state = State::Uncertain(Effect::Programming(write));
+            self.state = State::Uncertain(Effect::Programming(program));
             return Err(Failure::Unconfirmed);
         }
         self.state = State::Armed(count);
@@ -184,26 +210,32 @@ impl<'a> Timer<'a> {
             State::Inherited => Prior::Inherited,
             State::Idle => Prior::Idle,
             State::Armed(count) => Prior::Armed(count),
-            State::Uncertain(Effect::Programming(write)) => Prior::Programming(write),
-            State::Uncertain(Effect::Clearing(prior)) => prior,
+            State::Uncertain(Effect::Programming(program)) => Prior::Programming(program),
+            State::Uncertain(Effect::Clearing(clear)) => clear.prior,
             State::AwaitingClear(prior) => return self.observe_clear(prior),
             // An actual operation must return to this exclusive owner first.
             State::Programming(_) | State::Clearing(_) => return Err(Failure::Busy),
         };
-        self.state = State::Clearing(prior);
+        let mut clear = Clearing {
+            prior,
+            step: ClearStep::Mask,
+        };
+        self.state = State::Clearing(clear);
         let enabled: usize;
         unsafe {
             asm!("csrc sie, {mask}", "csrr {enabled}, sie",
                 mask = in(reg) TIMER, enabled = out(reg) enabled, options(nostack));
         }
         if enabled & TIMER != 0 {
-            self.state = State::Uncertain(Effect::Clearing(prior));
+            self.state = State::Uncertain(Effect::Clearing(clear));
             return Err(Failure::Unconfirmed);
         }
+        clear.step = ClearStep::Compare;
+        self.state = State::Clearing(clear);
         // SBI TIME is synchronous. Once the original call has returned,
         // this confirmed replacement covers the previous possible values.
         if let Err(error) = set_timer(u64::MAX) {
-            self.state = State::Uncertain(Effect::Clearing(prior));
+            self.state = State::Uncertain(Effect::Clearing(clear));
             return Err(Failure::Firmware(error));
         }
         self.state = State::AwaitingClear(prior);
@@ -215,7 +247,10 @@ impl<'a> Timer<'a> {
         let enabled: usize;
         unsafe { asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem)) };
         if enabled & TIMER != 0 {
-            self.state = State::Uncertain(Effect::Clearing(prior));
+            self.state = State::Uncertain(Effect::Clearing(Clearing {
+                prior,
+                step: ClearStep::Observe,
+            }));
             return Err(Failure::Unconfirmed);
         }
         for _ in 0..OBSERVATIONS {

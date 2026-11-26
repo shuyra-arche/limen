@@ -402,9 +402,10 @@ impl<'a> Direct<'a> {
         match self.reception {
             Reception::Uncertain(round, raw) => Some((round, raw)),
             Reception::Receiving(round) => Some((round, 0)),
-            Reception::Received(record) if matches!(self.state, State::Uncertain(_)) => {
-                Some((record.round, (record.source << 16) | u32::from(record.priority)))
-            }
+            Reception::Received(record) if matches!(self.state, State::Uncertain(_)) => Some((
+                record.round,
+                (record.source << 16) | u32::from(record.priority),
+            )),
             _ => None,
         }
     }
