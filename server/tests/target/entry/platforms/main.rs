@@ -3,13 +3,13 @@
 
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use kernel::entry::boot;
 #[cfg(target_arch = "x86_64")]
 use kernel::metal::firmware::uefi::AcpiInput;
 use kernel::metal::firmware::uefi::{DeviceTree as LoaderTree, Loader};
-use kernel::entry::boot;
-use limen_treaty::model::{ByteLength, PhysicalAddress};
 #[cfg(target_arch = "x86_64")]
 use limen_treaty::model::PhysicalRange;
+use limen_treaty::model::{ByteLength, PhysicalAddress};
 
 #[path = "../foundation.rs"]
 mod foundation;
