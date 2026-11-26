@@ -426,7 +426,7 @@ fn all_unique_handles_transfer_a_send_value_between_workers() {
             let mut receiver = None;
             value.publish(&mut receiver).ok().unwrap();
             occupy.send(receiver.unwrap()).ok().unwrap();
-            let destroyed: crate::allocator::pool::Vacant<'_, '_, Cell<u64>> =
+            let destroyed: crate::allocator::pool::DestructionReceipt<'_, '_, Cell<u64>> =
                 vacant.recv().unwrap();
             destroyed.release().ok().unwrap();
         });
@@ -450,7 +450,7 @@ fn all_unique_handles_transfer_a_send_value_between_workers() {
 
 #[test]
 fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles() {
-    use crate::allocator::pool::Reclaim;
+    use crate::allocator::pool::Reclamation;
     use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
     use std::{sync::mpsc::sync_channel, thread};
 
@@ -498,7 +498,7 @@ fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles()
         .acquire(|original| original.take().unwrap().detach())
         .unwrap();
 
-    let recovery = TurnLock::new(None::<Reclaim<'_, '_, Record<'_>>>);
+    let recovery = TurnLock::new(None::<Reclamation<'_, '_, Record<'_>>>);
     let (release, wait) = sync_channel(0);
     thread::scope(|scope| {
         let old = scope.spawn(move || {

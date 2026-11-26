@@ -237,15 +237,6 @@ mod source;
 #[path = "../../../src/metal/sync/turn.rs"]
 mod turn;
 
-mod entry {
-    pub mod boot {
-        pub use crate::{
-            physical::Retirement,
-            regions::{Region, RegionError, RegionSource, Regions, RootStorage},
-        };
-    }
-}
-
 mod metal {
     pub(crate) use crate::identity;
 

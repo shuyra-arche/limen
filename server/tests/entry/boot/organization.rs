@@ -1,9 +1,10 @@
 use super::physical::Condition;
-use super::regions::{Region, RegionError, RegionSource, Regions};
+use super::regions::{RegionError, Regions};
 use super::{
     Boot, FirmwareMap, PhysicalAddress, PhysicalRange, Retirement, describe, image, range,
 };
 use crate::access::{Error as AccessError, MappedRange};
+use crate::allocator::{RegionDescription, RegionOrigin};
 use core::{alloc::Layout, mem::MaybeUninit};
 use limen_treaty::model::{Alignment, ByteLength};
 
@@ -62,17 +63,17 @@ fn sorts_sources_clips_the_evidence_and_excludes_partial_reserved_pages() {
     let exclusions = boot.exclusions_for(image(), image());
     let evidence = retired(range(0x2fff, 0xa001));
     let expected = [
-        Region {
+        RegionDescription {
             physical: range(0x3000, 0x4000),
-            source: RegionSource::Uefi { attributes: 8 },
+            origin: RegionOrigin::Uefi { attributes: 8 },
         },
-        Region {
+        RegionDescription {
             physical: range(0x5000, 0x6000),
-            source: RegionSource::Uefi { attributes: 8 },
+            origin: RegionOrigin::Uefi { attributes: 8 },
         },
-        Region {
+        RegionDescription {
             physical: range(0x8000, 0xa000),
-            source: RegionSource::Uefi { attributes: 0x21 },
+            origin: RegionOrigin::Uefi { attributes: 0x21 },
         },
     ];
     let mut regions = [None; 3];
@@ -163,17 +164,17 @@ fn a_root_consumes_a_mapped_grant_and_removes_its_whole_physical_page() {
     assert!(mapping.is_none());
     assert_eq!(root.physical(), range(0x3040, 0x3051));
     assert_eq!(root.reserved(), range(0x3000, 0x4000));
-    assert_eq!(root.source(), RegionSource::Uefi { attributes: 8 });
+    assert_eq!(root.origin(), RegionOrigin::Uefi { attributes: 8 });
     assert_eq!(root.bytes().len(), 17);
     root.bytes()[0].write(0xaa);
     assert!(geometry.entries().eq([
-        Region {
+        RegionDescription {
             physical: range(0x2000, 0x3000),
-            source: root.source(),
+            origin: root.origin(),
         },
-        Region {
+        RegionDescription {
             physical: range(0x4000, 0x9000),
-            source: root.source(),
+            origin: root.origin(),
         },
     ]));
 }

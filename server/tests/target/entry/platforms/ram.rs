@@ -3,7 +3,10 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use kernel::entry::boot::{Boot, Condition, RegionSource, Retirement};
+use kernel::{
+    allocator::RegionOrigin,
+    entry::boot::{Boot, Condition, Retirement},
+};
 use limen_treaty::model::ByteLength;
 use uefi::{
     Status,
@@ -101,11 +104,11 @@ pub(super) fn check(boot: &Boot<'_>) {
     let region = qualified.entries().next().unwrap();
     assert_eq!(region.physical, scope);
     #[cfg(target_arch = "x86_64")]
-    assert!(matches!(region.source, RegionSource::Uefi { .. }));
+    assert!(matches!(region.origin, RegionOrigin::Uefi { .. }));
     #[cfg(target_arch = "aarch64")]
     assert!(matches!(
-        region.source,
-        RegionSource::DeviceTreeAndUefi { .. }
+        region.origin,
+        RegionOrigin::DeviceTreeAndUefi { .. }
     ));
 
     unsafe { foundation::check(boot, scope.start().get(), &evidence) };

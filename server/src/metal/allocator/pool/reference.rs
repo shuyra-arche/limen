@@ -6,7 +6,10 @@ use core::{
 
 use crate::metal::sync::{TurnAccess, TurnLock};
 
-use super::{Error, Occupied, SourceError, Vacant, group::State, place::Claim};
+use super::{
+    DestructionReceipt, Error, Occupied, SourceError,
+    slot::{Claim, State},
+};
 
 /// Maximum simultaneous owners of a stable object, including its base owner.
 pub const REFERENCE_LIMIT: usize = 64;
@@ -36,7 +39,7 @@ pub struct Detached<'pool, 'storage, T>(Claim<'pool, 'storage, Stable<T>>);
 
 /// The only right to destroy this detached value.
 #[must_use]
-pub struct Reclaim<'pool, 'storage, T>(Claim<'pool, 'storage, Stable<T>>);
+pub struct Reclamation<'pool, 'storage, T>(Claim<'pool, 'storage, Stable<T>>);
 
 /// One counted borrow of an object that cannot move or be reused.
 #[must_use]
@@ -124,7 +127,7 @@ impl<'pool, 'storage, T> Detached<'pool, 'storage, T> {
     /// Claim into the original exclusive recovery position.
     pub fn claim(
         self,
-        receiver: &mut Option<Reclaim<'pool, 'storage, T>>,
+        receiver: &mut Option<Reclamation<'pool, 'storage, T>>,
     ) -> Result<(), (Self, Error)> {
         let mut detached = Some(self);
         let pool = detached.as_ref().expect("original detach").0.pool;
@@ -142,7 +145,7 @@ impl<'pool, 'storage, T> Detached<'pool, 'storage, T> {
         self,
         held: &mut TurnAccess<'_>,
         receiver: &TurnLock<R>,
-        select: impl FnOnce(&mut R) -> &mut Option<Reclaim<'pool, 'storage, T>>,
+        select: impl FnOnce(&mut R) -> &mut Option<Reclamation<'pool, 'storage, T>>,
     ) -> Result<(), (Self, Error)> {
         let Some((_state, receiver)) = held.access_pair(&self.0.pool.state, receiver) else {
             return Err((self, SourceError::Protection.into()));
@@ -152,7 +155,7 @@ impl<'pool, 'storage, T> Detached<'pool, 'storage, T> {
 
     fn claim_to(
         self,
-        receiver: &mut Option<Reclaim<'pool, 'storage, T>>,
+        receiver: &mut Option<Reclamation<'pool, 'storage, T>>,
     ) -> Result<(), (Self, Error)> {
         if receiver.is_some() {
             return Err((self, Error::Receiver));
@@ -168,16 +171,16 @@ impl<'pool, 'storage, T> Detached<'pool, 'storage, T> {
         let slot = self.0.state();
         assert_eq!(slot.get(), State::Occupied);
         slot.set(State::Reclaiming);
-        *receiver = Some(Reclaim(self.0));
+        *receiver = Some(Reclamation(self.0));
         Ok(())
     }
 }
 
-impl<'pool, 'storage, T> Reclaim<'pool, 'storage, T> {
+impl<'pool, 'storage, T> Reclamation<'pool, 'storage, T> {
     /// Finish the unique destructor outside the Turn and publish completion
     /// in the original slot before returning. An interrupted or panicking
     /// destructor retains the slot; it cannot be run again from the Pool.
-    pub fn destroy(self) -> Result<Vacant<'pool, 'storage, Stable<T>>, (Self, Error)> {
+    pub fn destroy(self) -> Result<DestructionReceipt<'pool, 'storage, Stable<T>>, (Self, Error)> {
         self.0
             .destroy(State::Reclaiming)
             .map_err(|(claim, error)| (Self(claim), error))

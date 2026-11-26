@@ -1,16 +1,110 @@
-use core::ptr::NonNull;
+//! Slot storage and the original rights to prepare, destroy, and release it.
+use core::{
+    cell::UnsafeCell,
+    mem::MaybeUninit,
+    ptr::NonNull,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use crate::metal::sync::{TurnAccess, TurnLock};
 
-use super::{
-    Error, GroupId, GroupRecord, Pool, SourceError,
-    group::{Completion, Slot, SlotState, State},
-};
+use super::{Error, GroupId, GroupRecord, Pool, SourceError};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum State {
+    Free(Option<usize>),
+    Reserved,
+    Occupied,
+    Reclaiming,
+    Destroyed(Completion),
+}
+
+const DESTROYED: usize = 1 << (usize::BITS - 1);
+
+/// A completion number issued once by the original Pool.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Completion(usize);
+
+impl Completion {
+    pub(super) const FIRST: Self = Self(1);
+    pub(super) const UNTRACKED: Self = Self(0);
+
+    pub(super) fn take(&mut self) -> Self {
+        if self.0 == DESTROYED {
+            // Leave slot reuse available through recovery after the direct
+            // completion numbers have been exhausted.
+            return Self::UNTRACKED;
+        }
+        let issued = *self;
+        self.0 += 1;
+        issued
+    }
+}
+
+/// The Pool Turn protects state transitions and the free chain. The unique
+/// destroyer publishes completion with Release outside the Pool Turn.
+pub(super) struct SlotState(AtomicUsize);
+
+impl SlotState {
+    pub(super) fn new(state: State) -> Self {
+        Self(AtomicUsize::new(Self::encode(state)))
+    }
+
+    fn encode(state: State) -> usize {
+        match state {
+            State::Free(None) => 0,
+            State::Reserved => 1,
+            State::Occupied => 2,
+            State::Reclaiming => 3,
+            State::Destroyed(completion) => DESTROYED | completion.0,
+            // The validated array fits in isize and each slot holds an atomic
+            // word, so adding the phase offset leaves the top bit clear.
+            State::Free(Some(next)) => next + 4,
+        }
+    }
+
+    pub(super) fn get(&self) -> State {
+        match self.0.load(Ordering::Acquire) {
+            0 => State::Free(None),
+            1 => State::Reserved,
+            2 => State::Occupied,
+            3 => State::Reclaiming,
+            completed if completed & DESTROYED != 0 => {
+                State::Destroyed(Completion(completed & !DESTROYED))
+            }
+            next => State::Free(Some(next - 4)),
+        }
+    }
+
+    pub(super) fn set(&self, state: State) {
+        self.0.store(Self::encode(state), Ordering::Relaxed);
+    }
+
+    pub(super) fn complete_destruction(&self, completion: Completion) {
+        self.0.store(
+            Self::encode(State::Destroyed(completion)),
+            Ordering::Release,
+        );
+    }
+}
+
+/// Neither a slot transition nor an object access borrows the group bytes
+/// as an exclusive slice after publication.
+pub(super) struct Slot<T> {
+    pub(super) state: SlotState,
+    pub(super) value: UnsafeCell<MaybeUninit<T>>,
+}
+
+/// A slot index within one exact generation of a Pool group.
+#[derive(Clone, Copy)]
+pub(super) struct SlotPosition {
+    pub(super) group: GroupId,
+    pub(super) index: usize,
+}
 
 pub(super) struct Claim<'pool, 'storage, T> {
     pub(super) pool: &'pool Pool<'storage, T>,
-    pub(super) group: GroupId,
-    pub(super) index: usize,
+    position: SlotPosition,
     slot: NonNull<Slot<T>>,
 }
 
@@ -22,14 +116,12 @@ unsafe impl<T: Send> Send for Claim<'_, '_, T> {}
 impl<'pool, 'storage, T> Claim<'pool, 'storage, T> {
     pub(super) fn new(
         pool: &'pool Pool<'storage, T>,
-        group: GroupId,
-        index: usize,
+        position: SlotPosition,
         slot: NonNull<Slot<T>>,
     ) -> Self {
         Self {
             pool,
-            group,
-            index,
+            position,
             slot,
         }
     }
@@ -47,7 +139,10 @@ impl<'pool, 'storage, T> Claim<'pool, 'storage, T> {
         unsafe { self.slot.as_ref().value.get().cast::<T>() }
     }
 
-    pub(super) fn destroy(self, from: State) -> Result<Vacant<'pool, 'storage, T>, (Self, Error)> {
+    pub(super) fn destroy(
+        self,
+        from: State,
+    ) -> Result<DestructionReceipt<'pool, 'storage, T>, (Self, Error)> {
         let completion = match self.pool.state.acquire(|directory| {
             let slot = self.state();
             assert_eq!(slot.get(), from);
@@ -57,10 +152,9 @@ impl<'pool, 'storage, T> Claim<'pool, 'storage, T> {
             Ok(completion) => completion,
             Err(error) => return Err((self, error.into())),
         };
-        let vacant = Vacant {
+        let receipt = DestructionReceipt {
             pool: self.pool,
-            group: self.group,
-            index: self.index,
+            position: self.position,
             completion,
         };
         // The unique claim excludes all borrows and a second destroyer.
@@ -68,7 +162,7 @@ impl<'pool, 'storage, T> Claim<'pool, 'storage, T> {
         // This is the final mapped-slot access. A recovery worker may release
         // the slot, and the group may shut, before the receipt is returned.
         self.state().complete_destruction(completion);
-        Ok(vacant)
+        Ok(receipt)
     }
 }
 
@@ -87,10 +181,9 @@ pub struct Occupied<'pool, 'storage, T>(pub(super) Claim<'pool, 'storage, T>);
 /// Direct receipt for one completed destructor. The Pool can also recover
 /// the slot independently. This receipt keeps no pointer to the slot's bytes.
 #[must_use = "release the slot directly or let the Pool recover it"]
-pub struct Vacant<'pool, 'storage, T> {
+pub struct DestructionReceipt<'pool, 'storage, T> {
     pool: &'pool Pool<'storage, T>,
-    group: GroupId,
-    index: usize,
+    position: SlotPosition,
     completion: Completion,
 }
 
@@ -104,10 +197,11 @@ impl<'pool, 'storage, T> Reservation<'pool, 'storage, T> {
     }
 
     pub fn cancel(self) -> Result<(), (Self, Error)> {
-        let result =
-            self.0.pool.state.acquire(|directory| {
-                directory.release(self.0.group, self.0.index, State::Reserved)
-            });
+        let result = self
+            .0
+            .pool
+            .state
+            .acquire(|directory| directory.release(self.0.position, State::Reserved));
         result
             .map_err(Error::from)
             .flatten()
@@ -190,14 +284,14 @@ impl<'pool, 'storage, T> Occupied<'pool, 'storage, T> {
         unsafe { &*self.0.value() }
     }
 
-    pub fn destroy(self) -> Result<Vacant<'pool, 'storage, T>, (Self, Error)> {
+    pub fn destroy(self) -> Result<DestructionReceipt<'pool, 'storage, T>, (Self, Error)> {
         self.0
             .destroy(State::Occupied)
             .map_err(|(claim, error)| (Self(claim), error))
     }
 }
 
-impl<T> Vacant<'_, '_, T> {
+impl<T> DestructionReceipt<'_, '_, T> {
     /// Settle the original slot directly under the Pool Turn. If recovery
     /// already settled it, return Stale without touching any later lifetime.
     /// Exhausting the Pool's non-reusing numbers leaves scan recovery available.
@@ -206,7 +300,7 @@ impl<T> Vacant<'_, '_, T> {
             return Err((self, SourceError::IdentityExhausted.into()));
         }
         let result = self.pool.state.acquire(|directory| {
-            directory.release(self.group, self.index, State::Destroyed(self.completion))
+            directory.release(self.position, State::Destroyed(self.completion))
         });
         result
             .map_err(Error::from)
@@ -254,9 +348,12 @@ impl<T> Pool<'_, T> {
                     if let State::Destroyed(completion) =
                         unsafe { group.slot(index).as_ref().state.get() }
                     {
-                        let id = GroupId(cursor.group, group.material.allocation.id());
+                        let position = SlotPosition {
+                            group: GroupId(cursor.group, group.material.allocation.id()),
+                            index,
+                        };
                         state
-                            .release(id, index, State::Destroyed(completion))
+                            .release(position, State::Destroyed(completion))
                             .expect("completion observed under the same Turn");
                         return ReleaseProgress::Released;
                     }

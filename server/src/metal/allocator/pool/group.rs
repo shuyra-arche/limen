@@ -1,99 +1,11 @@
-use core::{
-    alloc::Layout,
-    cell::UnsafeCell,
-    marker::PhantomData,
-    mem::MaybeUninit,
-    ptr::NonNull,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use core::{alloc::Layout, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
 
 use super::super::{Allocation, AllocationId, ReturnId};
-use super::{Error, GroupId, VALUE_ALIGNMENT, VALUE_BYTES, retirement::Material};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum State {
-    Free(Option<usize>),
-    Reserved,
-    Occupied,
-    Reclaiming,
-    Destroyed(Completion),
-}
-
-const DESTROYED: usize = 1 << (usize::BITS - 1);
-
-/// A completion number issued once by the original Pool.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct Completion(usize);
-
-impl Completion {
-    pub(super) const FIRST: Self = Self(1);
-    pub(super) const UNTRACKED: Self = Self(0);
-
-    pub(super) fn take(&mut self) -> Self {
-        if self.0 == DESTROYED {
-            // Leave slot reuse available through recovery after the direct
-            // completion numbers have been exhausted.
-            return Self::UNTRACKED;
-        }
-        let issued = *self;
-        self.0 += 1;
-        issued
-    }
-}
-
-/// The Pool Turn protects state transitions and the free chain. The unique
-/// destroyer publishes completion with Release outside the Pool Turn.
-pub(super) struct SlotState(AtomicUsize);
-
-impl SlotState {
-    fn new(state: State) -> Self {
-        Self(AtomicUsize::new(Self::encode(state)))
-    }
-
-    fn encode(state: State) -> usize {
-        match state {
-            State::Free(None) => 0,
-            State::Reserved => 1,
-            State::Occupied => 2,
-            State::Reclaiming => 3,
-            State::Destroyed(completion) => DESTROYED | completion.0,
-            // The validated array fits in isize and each slot holds an atomic
-            // word, so adding the phase offset leaves the top bit clear.
-            State::Free(Some(next)) => next + 4,
-        }
-    }
-
-    pub(super) fn get(&self) -> State {
-        match self.0.load(Ordering::Acquire) {
-            0 => State::Free(None),
-            1 => State::Reserved,
-            2 => State::Occupied,
-            3 => State::Reclaiming,
-            completed if completed & DESTROYED != 0 => {
-                State::Destroyed(Completion(completed & !DESTROYED))
-            }
-            next => State::Free(Some(next - 4)),
-        }
-    }
-
-    pub(super) fn set(&self, state: State) {
-        self.0.store(Self::encode(state), Ordering::Relaxed);
-    }
-
-    pub(super) fn complete_destruction(&self, completion: Completion) {
-        self.0.store(
-            Self::encode(State::Destroyed(completion)),
-            Ordering::Release,
-        );
-    }
-}
-
-/// Neither a slot transition nor an object access borrows the group bytes
-/// as an exclusive slice after publication.
-pub(super) struct Slot<T> {
-    pub(super) state: SlotState,
-    pub(super) value: UnsafeCell<MaybeUninit<T>>,
-}
+use super::{
+    Error, GroupId, VALUE_ALIGNMENT, VALUE_BYTES,
+    retirement::Material,
+    slot::{Slot, SlotState, State},
+};
 
 /// Actual per-group geometry, including the in-slot state and padding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

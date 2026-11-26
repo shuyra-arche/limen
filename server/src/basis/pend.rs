@@ -5,8 +5,8 @@ use limen_treaty::model::{Alignment, ByteLength};
 
 use crate::{
     allocator::{
-        self, AllocationId, Allocator, Allowance, AllowanceId, Candidate, Construction, RamPurpose,
-        Spender,
+        self, AllocationConstruction, AllocationId, Allocator, Allowance, AllowanceId, Candidate,
+        RamPurpose, Spender,
     },
     metal::sync::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
 };
@@ -209,7 +209,7 @@ impl Handle {
     pub fn reserve(
         self,
         candidate: Candidate,
-        receiver: &'static Construction,
+        receiver: &'static AllocationConstruction,
         mode: TurnMode,
     ) -> Result<AllocationId, Error> {
         let permit = self.space.state.acquire(|state| state.resolve())??;
@@ -242,7 +242,7 @@ impl Handle {
 
     pub fn issue(
         self,
-        receiver: &'static Construction,
+        receiver: &'static AllocationConstruction,
         mode: TurnMode,
     ) -> Result<AllocationId, Error> {
         let permit = self.space.state.acquire(|state| state.resolve())??;

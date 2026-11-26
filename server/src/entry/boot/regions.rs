@@ -4,8 +4,12 @@ use super::{Boot, Exclusions, Retirement, bump::Bump};
 use crate::{
     access::MappedRange,
     address::{PhysicalRange, length},
+    allocator::{
+        Allocator, Allowance, Config, Error, Initial, RegionDescription, RegionOrigin,
+        RootInitialization, RootStorage,
+    },
 };
-use core::{alloc::Layout, mem::MaybeUninit};
+use core::alloc::Layout;
 use limen_treaty::model::{Alignment, ByteLength};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,71 +21,28 @@ pub enum RegionError {
     Layout,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RegionSource {
-    DeviceTree,
-    Uefi { attributes: u64 },
-    DeviceTreeAndUefi { attributes: u64 },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Region {
-    pub physical: PhysicalRange,
-    pub source: RegionSource,
-}
-
 /// Checked geometry in borrowed scratch storage. The ranges describe physical
 /// candidates for the next handoff and grant no addressability or ownership.
 pub struct Regions<'a> {
-    entries: &'a mut [Option<Region>],
+    entries: &'a mut [Option<RegionDescription>],
     length: usize,
     granule: Alignment,
 }
 
-/// Storage reserved for a root layout. Its entire backing granules have
-/// already been removed from the geometry.
-pub struct RootStorage<'a> {
-    mapping: MappedRange<'a>,
-    reserved: PhysicalRange,
-    source: RegionSource,
-}
-
-impl<'a> RootStorage<'a> {
-    pub fn physical(&self) -> PhysicalRange {
-        self.mapping.physical()
-    }
-
-    pub fn reserved(&self) -> PhysicalRange {
-        self.reserved
-    }
-
-    pub fn source(&self) -> RegionSource {
-        self.source
-    }
-
-    pub(crate) fn into_bytes(self) -> &'a mut [MaybeUninit<u8>] {
-        self.mapping.into_bytes()
-    }
-
-    pub fn bytes(&mut self) -> &mut [MaybeUninit<u8>] {
-        self.mapping.bytes()
-    }
-}
-
-pub(crate) struct RootPlan {
+struct RootPlan {
     index: usize,
-    region: Region,
+    region: RegionDescription,
     physical: PhysicalRange,
     reserved: PhysicalRange,
 }
 
 impl RootPlan {
-    fn remainder(&self) -> [Option<Region>; 2] {
+    fn remainder(&self) -> [Option<RegionDescription>; 2] {
         let physical = self.region.physical;
         let part = |start, end| {
-            PhysicalRange::new(start, end).map(|physical| Region {
+            PhysicalRange::new(start, end).map(|physical| RegionDescription {
                 physical,
-                source: self.region.source,
+                origin: self.region.origin,
             })
         };
         [
@@ -97,7 +58,7 @@ impl<'a> Regions<'a> {
         exclusions: &Exclusions<'_>,
         granule: ByteLength,
         retirement: Option<&Retirement>,
-        storage: &'a mut [Option<Region>],
+        storage: &'a mut [Option<RegionDescription>],
     ) -> Result<Self, RegionError> {
         storage.fill(None);
         let granule = Alignment::new(granule.get()).ok_or(RegionError::Granule)?;
@@ -116,7 +77,7 @@ impl<'a> Regions<'a> {
         Ok(regions)
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = Region> + '_ {
+    pub fn entries(&self) -> impl Iterator<Item = RegionDescription> + '_ {
         self.entries[..self.length].iter().flatten().copied()
     }
 
@@ -130,7 +91,7 @@ impl<'a> Regions<'a> {
             for region in regions {
                 self.exclude(
                     region.physical,
-                    RegionSource::DeviceTreeAndUefi {
+                    RegionOrigin::DeviceTreeAndUefi {
                         attributes: region.attributes,
                     },
                     exclusions,
@@ -141,7 +102,7 @@ impl<'a> Regions<'a> {
             for region in map.conventional() {
                 self.exclude(
                     region.physical,
-                    RegionSource::Uefi {
+                    RegionOrigin::Uefi {
                         attributes: region.attributes,
                     },
                     exclusions,
@@ -150,7 +111,7 @@ impl<'a> Regions<'a> {
             }
         } else if let Some(memory) = boot.dtb_memory() {
             for region in memory.ram() {
-                self.exclude(region, RegionSource::DeviceTree, exclusions, scope)?;
+                self.exclude(region, RegionOrigin::DeviceTree, exclusions, scope)?;
             }
         }
         Ok(())
@@ -159,7 +120,7 @@ impl<'a> Regions<'a> {
     fn exclude(
         &mut self,
         candidate: PhysicalRange,
-        source: RegionSource,
+        origin: RegionOrigin,
         exclusions: &Exclusions<'_>,
         scope: PhysicalRange,
     ) -> Result<(), RegionError> {
@@ -188,9 +149,9 @@ impl<'a> Regions<'a> {
             if blocked > cursor {
                 cursor = blocked;
             } else {
-                self.insert(Region {
+                self.insert(RegionDescription {
                     physical: PhysicalRange::new(cursor, next).expect("nonempty candidate"),
-                    source,
+                    origin,
                 })?;
                 cursor = next;
             }
@@ -198,7 +159,7 @@ impl<'a> Regions<'a> {
         Ok(())
     }
 
-    fn insert(&mut self, region: Region) -> Result<(), RegionError> {
+    fn insert(&mut self, region: RegionDescription) -> Result<(), RegionError> {
         let position = self.entries[..self.length].partition_point(|entry| {
             entry.expect("occupied region").physical.start() < region.physical.start()
         });
@@ -237,14 +198,55 @@ impl<'a> Regions<'a> {
             .map(|plan| self.take_root(mapping, plan)))
     }
 
-    pub(crate) fn granule(&self) -> ByteLength {
-        ByteLength::new(self.granule.get())
+    /// Establish the fixed root and deliver initial Issued allocations before
+    /// publishing the source. Deposit the initial Allowance's close handle
+    /// in its owner's receiver before publication as well. Rejection leaves
+    /// the mapping, ranges and both receivers with the caller. Absent qualified
+    /// mapping yields no source.
+    ///
+    /// # Safety
+    ///
+    /// This is the first handoff of the described RAM by its exclusive boot
+    /// owner. The RAM must remain isolated, excluded from other sources and
+    /// uncommitted except for the listed initial receivers. The mapping must
+    /// be canonical permanent root storage. Receiver slots belong to their
+    /// actual initial consumers and must remain recoverable after handoff.
+    pub unsafe fn allocator(
+        &mut self,
+        mapping: &mut Option<MappedRange<'static>>,
+        config: Config,
+        capacity: u64,
+        allowance_receiver: &mut Option<Allowance>,
+        initial: &mut [Initial<'_>],
+    ) -> Result<Option<&'static Allocator>, Error> {
+        if config.granule != ByteLength::new(self.granule.get()) {
+            return Err(Error::Layout);
+        }
+        let Some(plan) = self
+            .plan_root(mapping.as_ref(), config.layout()?)
+            .map_err(root_error)?
+        else {
+            return Ok(None);
+        };
+        let prepared = RootInitialization::prepare(
+            config,
+            self.after_root(&plan),
+            capacity,
+            allowance_receiver,
+            initial,
+        )?;
+        let storage = self.take_root(mapping, plan);
+        // The same root plan chose this mapping with config.layout() and
+        // removed its whole reservation from the prepared region list.
+        let source = unsafe { prepared.install(storage) };
+        self.clear();
+        Ok(Some(source))
     }
 
-    pub(crate) fn after_root<'r>(
+    fn after_root<'r>(
         &'r self,
         plan: &'r RootPlan,
-    ) -> impl Iterator<Item = Region> + 'r {
+    ) -> impl Iterator<Item = RegionDescription> + 'r {
         self.entries[..plan.index]
             .iter()
             .flatten()
@@ -258,12 +260,12 @@ impl<'a> Regions<'a> {
             )
     }
 
-    pub(crate) fn clear(&mut self) {
+    fn clear(&mut self) {
         self.entries[..self.length].fill(None);
         self.length = 0;
     }
 
-    pub(crate) fn plan_root(
+    fn plan_root(
         &self,
         mapping: Option<&MappedRange<'_>>,
         layout: Layout,
@@ -322,7 +324,7 @@ impl<'a> Regions<'a> {
         }))
     }
 
-    pub(crate) fn take_root<'m>(
+    fn take_root<'m>(
         &mut self,
         mapping: &mut Option<MappedRange<'m>>,
         plan: RootPlan,
@@ -368,10 +370,15 @@ impl<'a> Regions<'a> {
                 self.entries[self.length] = None;
             }
         }
-        RootStorage {
-            mapping: storage,
-            reserved,
-            source: region.source,
-        }
+        RootStorage::new(storage, reserved, region.origin)
+    }
+}
+
+fn root_error(reason: RegionError) -> Error {
+    match reason {
+        RegionError::Capacity => Error::Capacity,
+        RegionError::Overlap => Error::Overlap,
+        RegionError::Range => Error::Range,
+        RegionError::Granule | RegionError::Layout => Error::Layout,
     }
 }

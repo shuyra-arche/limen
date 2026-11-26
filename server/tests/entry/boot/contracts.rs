@@ -1,13 +1,13 @@
 #![no_std]
 
 use kernel::{
-    allocator::{self, Construction},
+    allocator::{self, AllocationConstruction},
     pend::{self, Revoker},
     sync::TurnMode,
 };
 
-pub fn cancel(receiver: &'static Construction) -> Result<(), allocator::Error> {
-    receiver.close()?;
+pub fn cancel(receiver: &'static AllocationConstruction) -> Result<(), allocator::Error> {
+    receiver.shut()?;
     receiver.cancel(TurnMode::Fast)
 }
 
@@ -17,7 +17,7 @@ pub fn revoke(revoker: &Revoker) -> Result<bool, pend::Error> {
 }
 
 #[cfg(contract = "receiver")]
-pub fn raw_receiver(receiver: &'static Construction) {
+pub fn raw_receiver(receiver: &'static AllocationConstruction) {
     let _ = &receiver.state;
 }
 
@@ -48,4 +48,9 @@ pub fn reuse_mapping(mapping: kernel::access::MappedRange<'_>) {
 pub fn reuse_material(material: kernel::allocator::MappedStorage<'_>) {
     let _ = material.into_parts();
     let _ = material.id();
+}
+
+#[cfg(contract = "grant")]
+pub fn raw_grant(source: &'static allocator::Allocator, description: allocator::RegionDescription) {
+    let _ = unsafe { allocator::Grant::from_retired(source, description) };
 }

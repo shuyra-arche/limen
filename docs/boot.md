@@ -64,6 +64,12 @@ original borrow to produce two disjoint borrows of the same backing storage.
 An invalid offset returns the original borrow. Root reservation retains the
 selected mapping and accounts for its whole reserved granules.
 
+Entry checks retirement evidence and organizes RAM before it hands Allocator
+the permanent `RootStorage` and the resulting `RegionDescription` values.
+Allocator validates the root layout, reserved supply and initial receivers
+before Entry consumes the mapping. A delayed region is admitted through the
+original owner's `Retirement::grant` and its unique allocator `Grant`.
+
 An owner starting with a raw pointer from the original identity mapping can
 use `MappedRange::from_identity`. It checks both machine-width endpoints,
 nonempty slice length and the base address before borrowing. It derives the

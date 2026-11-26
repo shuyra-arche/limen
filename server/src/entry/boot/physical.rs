@@ -1,7 +1,10 @@
 //! Physical exclusions and the conditions for retiring early use.
 
 use super::{DtbMemory, FirmwareMap, Source};
-use crate::address::{PhysicalAddress, PhysicalRange};
+use crate::{
+    address::{PhysicalAddress, PhysicalRange},
+    allocator::{Allocator, Error, Grant, RegionDescription},
+};
 use core::ops::Range;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,7 +89,26 @@ impl Retirement {
         (self.observed == COMPLETE).then_some(self.physical)
     }
 
-    pub(crate) fn covers(&self, physical: PhysicalRange) -> bool {
+    /// Prepare the original owner's delayed admission handoff.
+    ///
+    /// # Safety
+    ///
+    /// The caller must still have exclusive custody of this ordinary RAM,
+    /// must be entitled to hand it over to the given source, and must
+    /// exclude all fixed and already admitted RAM. The retirement evidence
+    /// and unique handoff must both remain valid through admission.
+    pub unsafe fn grant(
+        &self,
+        source: &'static Allocator,
+        description: RegionDescription,
+    ) -> Result<Grant, Error> {
+        if !self.covers(description.physical) {
+            return Err(Error::Range);
+        }
+        unsafe { Grant::from_retired(source, description) }
+    }
+
+    fn covers(&self, physical: PhysicalRange) -> bool {
         self.completed().is_some_and(|scope| scope.covers(physical))
     }
 }

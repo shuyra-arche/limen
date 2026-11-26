@@ -2,21 +2,21 @@ use crate::{
     Boot, FirmwareMap, PhysicalRange, Retirement,
     access::MappedRange,
     allocator::{
-        Allocation, Allocator, Allowance, Config, Error, Grant, Initial, Pending,
-        RamPurpose::Metadata, Request, Retired, ReturnId, Search,
+        Allocation, Allocator, Allowance, Config, Error, Initial, Pending, RamPurpose::Metadata,
+        RegionDescription, RegionOrigin, Request, Retired, ReturnId, Search,
     },
     describe, image,
     metal::sync::TurnMode::{Fast, Slow},
     organization::retired,
     range,
-    regions::{Region, RegionSource, Regions},
+    regions::Regions,
 };
 use core::mem::MaybeUninit;
 use limen_treaty::model::{Alignment, ByteLength};
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x100_000;
-const ATTRIBUTES: RegionSource = RegionSource::Uefi { attributes: 8 };
+const ATTRIBUTES: RegionOrigin = RegionOrigin::Uefi { attributes: 8 };
 const CONFIG: Config = Config {
     granule: ByteLength::new(PAGE),
     maximum: ByteLength::new(16 * PAGE),
@@ -196,14 +196,14 @@ fn only_the_original_source_can_resolve_region_and_allowance_slots() {
 #[test]
 fn initial_pend_limits_and_revalidates_the_original_spender() {
     use crate::{
-        allocator::{Construction, RamPurpose},
+        allocator::{AllocationConstruction, RamPurpose},
         metal::sync::TurnWorkspace,
         pend::{Error as PendError, Initial as InitialPend, PendSpace},
     };
     use std::{sync::mpsc::sync_channel, thread};
 
-    let cancelled = &*Box::leak(Box::new(Construction::new()));
-    let issued = Box::leak(Box::new(Construction::new()));
+    let cancelled = &*Box::leak(Box::new(AllocationConstruction::new()));
+    let issued = Box::leak(Box::new(AllocationConstruction::new()));
     let mut initial = None;
     let (allowance, before, issued_id) = {
         let (source, allowance) = source(&mut initial, 8 * PAGE);
@@ -369,7 +369,7 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
 
     // The recovery owner starts with the original receivers. The boot source
     // binding and both spending holdings are gone.
-    cancelled.close().unwrap();
+    cancelled.shut().unwrap();
     assert_eq!(cancelled.cancel(Fast), Ok(()));
     assert_eq!(cancelled.cancel(Fast), Ok(()));
     assert_eq!(allowance.balance().unwrap().reserved, 0);
@@ -584,15 +584,21 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
             None,
         )
         .unwrap();
-    let description = Region {
+    let description = RegionDescription {
         physical: later,
-        source: ATTRIBUTES,
+        origin: ATTRIBUTES,
     };
+    let budget_before_grant = source.budget(Fast).unwrap();
     assert_eq!(
-        unsafe { Grant::new(source, description, &Retirement::new(later)) }.err(),
+        unsafe { Retirement::new(later).grant(source, description) }.err(),
         Some(Error::Range)
     );
-    let mut grant = unsafe { Grant::new(source, description, &retired(later)) }.unwrap();
+    assert_eq!(
+        unsafe { retired(pages(16, 19)).grant(source, description) }.err(),
+        Some(Error::Range)
+    );
+    assert_eq!(source.budget(Fast), Ok(budget_before_grant));
+    let mut grant = unsafe { retired(later).grant(source, description) }.unwrap();
     let region = grant.admit(Fast).unwrap();
     assert_eq!(grant.admit(Slow), Ok(region));
     loop {
@@ -610,7 +616,7 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
 #[test]
 fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     use crate::{
-        allocator::Construction,
+        allocator::AllocationConstruction,
         metal::sync::{TurnAcquireError, TurnLock, TurnWorkspace},
     };
     use std::{sync::mpsc::sync_channel, thread};
@@ -621,7 +627,7 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     let (source, allowance) = source(&mut initial, 8 * PAGE);
     let id = allowance.id();
     let spending = TurnLock::new(Some(id));
-    let construction = Box::leak(Box::new(Construction::new()));
+    let construction = Box::leak(Box::new(AllocationConstruction::new()));
     let construction = &*construction;
     let request = Request::new(
         ByteLength::new(PAGE),
@@ -695,7 +701,7 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
             pages(3, 4)
         );
         *locks.access(&spending).unwrap() = None;
-        construction.close_held(locks).unwrap();
+        construction.shut_held(locks).unwrap();
     })
     .unwrap();
     allowance.shut(Some(candidate.region()), Fast).unwrap();
@@ -774,7 +780,7 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
 #[test]
 fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation() {
     use crate::{
-        allocator::Construction,
+        allocator::AllocationConstruction,
         metal::sync::{TurnLock, TurnWorkspace},
     };
 
@@ -822,7 +828,7 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
         else {
             panic!("exact grain was not refunded");
         };
-        let construction = &*Box::leak(Box::new(Construction::new()));
+        let construction = &*Box::leak(Box::new(AllocationConstruction::new()));
         let mut work = TurnWorkspace::<4>::new();
         let mut plan = work.plan();
         source
@@ -863,7 +869,7 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
     let Search::Candidate(candidate) = source.lookup(request, None).unwrap().step().unwrap() else {
         panic!("metadata saturation cannot rule out a physical range");
     };
-    let construction = &*Box::leak(Box::new(Construction::new()));
+    let construction = &*Box::leak(Box::new(AllocationConstruction::new()));
     let mut work = TurnWorkspace::<4>::new();
     let mut plan = work.plan();
     source
