@@ -50,7 +50,7 @@ static FIRST: AllocationConstruction = AllocationConstruction::new();
 static HISTORY: AllocationConstruction = AllocationConstruction::new();
 static SECOND: AllocationConstruction = AllocationConstruction::new();
 static mut MATERIAL: Option<Allocation> = None;
-static mut HISTORY_RECEIPT: Option<ReturnId> = None;
+static mut HISTORY_RECEIPT: Option<ReturnReceipt> = None;
 static mut RECEIPT: Option<ReturnReceipt> = None;
 
 type Payload = [u64; 32];
@@ -209,7 +209,7 @@ fn exhaust_history(
     let retired = unsafe { allocation.retire() };
     let receipt = unsafe { &mut *(&raw mut HISTORY_RECEIPT) };
     // The recovery scan consumes no notification or immediate return result.
-    let outcome = source.begin_return(retired, receipt);
+    let outcome = unsafe { retired.begin_return(receipt) };
     assert!(outcome.is_ok());
     let mut cursor = 0;
     let pending = (0..CONFIG.returns)
@@ -228,8 +228,9 @@ fn exhaust_history(
         Err(Error::Source(SourceError::ReturnCapacity))
     );
     assert_eq!(allowance.balance(), Ok(before));
-    assert_eq!(receipt.take(), Some(pending));
-    source.acknowledge(pending).unwrap();
+    let receipt = receipt.take().unwrap();
+    assert_eq!(receipt.id(), pending);
+    receipt.acknowledge().unwrap();
 }
 
 /// # Safety

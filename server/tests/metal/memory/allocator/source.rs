@@ -119,7 +119,9 @@ fn source(initial: &mut Option<Allocation>, capacity: u64) -> (&'static Allocato
 fn begin_return(material: Retired) -> ReturnReceipt {
     let mut receiver = None;
     // The fixture retains the original receipt through settlement.
-    unsafe { material.begin_return(&mut receiver) }.ok().unwrap();
+    unsafe { material.begin_return(&mut receiver) }
+        .ok()
+        .unwrap();
     receiver.unwrap()
 }
 
@@ -1083,7 +1085,10 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
     owner_receipt.acknowledge().unwrap();
     let reserved = spending.reserve(candidate, construction, Slow).unwrap();
     assert_eq!(spending.issue(construction, Slow), Ok(reserved));
-    assert_eq!(source.finish_return(owner_receipt.id(), Fast), Err(Error::Stale));
+    assert_eq!(
+        source.finish_return(owner_receipt.id(), Fast),
+        Err(Error::Stale)
+    );
     let mut issued = None;
     unsafe { construction.take(&mut issued) }.unwrap();
     let issued = issued.unwrap();
