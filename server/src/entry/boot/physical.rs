@@ -157,8 +157,8 @@ impl<'a> Exclusions<'a> {
             .chain(firmware)
     }
 
-    /// Test a candidate physical span against the current exclusions. Any
-    /// overlap retains the whole queried span. The caller still validates RAM
+    /// Test a candidate physical range against the current exclusions. Any
+    /// overlap retains the whole queried range. The caller still validates RAM
     /// provenance, granularity and access before handing it to an allocator.
     pub fn retains(&self, physical: PhysicalRange, retirement: Option<&Retirement>) -> bool {
         if !retirement.is_some_and(|evidence| evidence.covers(physical)) {

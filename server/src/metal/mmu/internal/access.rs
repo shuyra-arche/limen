@@ -87,17 +87,16 @@ impl<'a> MappedRange<'a> {
     /// Consume one exclusive borrow and derive two disjoint borrows. This
     /// does not divide the source Allocation or create independent refund
     /// rights. Invalid offsets return the unchanged original borrow.
-    pub fn split(self, offset: usize) -> Result<(Self, Self), (Self, Error)> {
-        if offset == 0 || offset >= self.length() {
-            return Err((self, Error::Split));
-        }
-        let Some((left, right)) = u64::try_from(offset)
-            .ok()
-            .and_then(|offset| self.physical.start().advance(ByteLength::new(offset)))
+    pub fn split(self, offset: ByteLength) -> Result<(Self, Self), (Self, Error)> {
+        let Some((left, right)) = self
+            .physical
+            .start()
+            .advance(offset)
             .and_then(|mid| self.physical.split(mid))
         else {
             return Err((self, Error::Split));
         };
+        let offset = offset.as_usize().expect("offset within the mapped slice");
         let (prefix, suffix) = self.bytes.split_at_mut(offset);
         Ok((
             Self {

@@ -58,10 +58,11 @@ addresses and startup resources. [Platform contracts](platforms.md) · [Early ex
 
 A physical extent is a coordinate, not a Rust pointer or an access grant.
 The actual mapping owner supplies an exclusive `access::MappedRange` with
-valid storage and physical correspondence for the entire borrow. Splitting
-it consumes the original borrow, produces disjoint subranges, and does not
-split an Allocation or issue a new refund right. Root reservation retains
-the actual selected mapping and accounts for its whole reserved granules.
+valid storage and physical correspondence for the entire borrow.
+`MappedRange::split` takes a strictly interior `ByteLength` and consumes the
+original borrow to produce two disjoint borrows of the same backing storage.
+An invalid offset returns the original borrow. Root reservation retains the
+selected mapping and accounts for its whole reserved granules.
 
 An owner starting with a raw pointer from the original identity mapping can
 use `MappedRange::from_identity`. It checks both machine-width endpoints,

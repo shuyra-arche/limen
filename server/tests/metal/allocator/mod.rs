@@ -2,6 +2,9 @@
 
 use core::alloc::Layout;
 
+#[allow(dead_code)]
+#[path = "../../../src/metal/address.rs"]
+mod address;
 #[path = "../../../src/metal/allocator/bump.rs"]
 mod bump;
 

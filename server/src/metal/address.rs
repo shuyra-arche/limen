@@ -28,15 +28,15 @@ impl PhysicalAddress {
         self.0.checked_sub(start.0).map(ByteLength::new)
     }
 
-    pub fn span(self, length: ByteLength) -> Option<PhysicalRange> {
+    pub fn range(self, length: ByteLength) -> Option<PhysicalRange> {
         PhysicalRange::new(self, self.advance(length)?)
     }
 
-    pub fn is_aligned(self, alignment: Alignment) -> bool {
+    pub const fn is_aligned(self, alignment: Alignment) -> bool {
         alignment.is_aligned(ByteLength::new(self.0))
     }
 
-    pub fn align_down(self, alignment: Alignment) -> Self {
+    pub const fn align_down(self, alignment: Alignment) -> Self {
         Self(alignment.align_down(ByteLength::new(self.0)).get())
     }
 

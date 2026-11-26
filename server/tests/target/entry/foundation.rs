@@ -20,11 +20,13 @@ use kernel::{
 
 use super::memory::{extent, mapped};
 
+use limen_treaty::model::{Alignment, ByteLength};
+
 const PAGE: u64 = 4096;
 pub(super) const PAGES: usize = 6;
 const CONFIG: Config = Config {
-    granule: PAGE,
-    maximum: 8 * PAGE,
+    granule: ByteLength::new(PAGE),
+    maximum: ByteLength::new(8 * PAGE),
     regions: 1,
     grains: 8,
     roots: 4,
@@ -67,7 +69,14 @@ pub(super) fn reference<'pool, T: Sync>(owner: &StableOwner<'pool, '_, T>) -> Re
 }
 
 fn search(source: &'static Allocator, length: u64, physical: PhysicalRange) -> Option<Candidate> {
-    let request = Request::new(length, PAGE, physical, None, Metadata).unwrap();
+    let request = Request::new(
+        ByteLength::new(length),
+        Alignment::new(PAGE).unwrap(),
+        physical,
+        None,
+        Metadata,
+    )
+    .unwrap();
     let mut lookup = source.lookup(request, None).unwrap();
     loop {
         match lookup.step().unwrap() {
@@ -229,7 +238,9 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     let pages = |first, end| extent(start + first * PAGE, start + end * PAGE);
     let scope = pages(0, PAGES as u64);
     let mut scratch = [None; 1];
-    let mut regions = boot.regions(PAGE, Some(evidence), &mut scratch).unwrap();
+    let mut regions = boot
+        .regions(ByteLength::new(PAGE), Some(evidence), &mut scratch)
+        .unwrap();
     assert!(regions.entries().map(|entry| entry.physical).eq([scope]));
     let backing = pages(0, 2);
     let mut mapping = Some(unsafe { mapped(backing) });
@@ -294,8 +305,8 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     unsafe {
         space.publish_initial(
             allowance,
-            PAGE,
-            PAGE,
+            ByteLength::new(PAGE),
+            Alignment::new(PAGE).unwrap(),
             InitialPend { spending, closing },
             Fast,
         )

@@ -120,10 +120,10 @@ delivering the handoff.
 retained DTB and UEFI map bytes, and the original firmware reservations.
 It walks the existing bounded descriptions without allocating a second range
 table. Separate claims can overlap. An overlap with a live byte range retains
-the queried physical span, including a whole page that contains only some
+the queried physical range, including a whole page that contains only some
 of those bytes. Image-owned minor stacks remain covered by the image.
 
-`Exclusions::retains` keeps spans reserved unless retirement evidence covers
+`Exclusions::retains` keeps ranges reserved unless retirement evidence covers
 the whole query. The permanent stack must be active, the relevant readers
 and Harts must have left the old storage, and the owners must confirm old
 CPU translations and page-table walks have retired and old device access
@@ -135,7 +135,7 @@ pool described by a DTB keeps its reservation until its owner can hand it off.
 ACPI reclaimable memory stays reserved until ACPI has been enabled.
 Reclaimable firmware claims become eligible for later admission when all
 their conditions hold. The caller still establishes RAM provenance,
-granularity and actual access before handing a span to Allocator.
+granularity and actual access before handing a range to Allocator.
 
 ## Organizing early physical regions
 

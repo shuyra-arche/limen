@@ -6,6 +6,7 @@ mod regions;
 use crate::metal::allocator::bump;
 use crate::metal::boot::major;
 use core::fmt::Write;
+use limen_treaty::model::ByteLength;
 
 pub use crate::metal::boot::{Startup, console::Console, services::Services};
 pub use crate::metal::firmware::devicetree::memory::{DtbMemory, Reservation, Source};
@@ -35,7 +36,7 @@ impl Boot<'_> {
     /// Organize the part of the firmware RAM backed by retirement evidence.
     pub fn regions<'a>(
         &'a self,
-        granule: u64,
+        granule: ByteLength,
         retirement: Option<&'a Retirement>,
         storage: &'a mut [Option<Region>],
     ) -> Result<Regions<'a>, RegionError> {

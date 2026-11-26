@@ -12,14 +12,14 @@ use crate::{
     sync::Acquisition::{Fast, Slow},
 };
 use core::mem::MaybeUninit;
-use limen_treaty::model::ByteLength;
+use limen_treaty::model::{Alignment, ByteLength};
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x100_000;
 const ATTRIBUTES: RegionSource = RegionSource::Uefi { attributes: 8 };
 const CONFIG: Config = Config {
-    granule: PAGE,
-    maximum: 16 * PAGE,
+    granule: ByteLength::new(PAGE),
+    maximum: ByteLength::new(16 * PAGE),
     regions: 3,
     grains: 16,
     roots: 8,
@@ -50,8 +50,14 @@ pub(super) fn bootstrap(
     let exclusions = boot.exclusions_for(image(), image());
     let evidence = retired(scope);
     let mut scratch = [None; 3];
-    let mut regions =
-        Regions::organize(&boot, &exclusions, PAGE, Some(&evidence), &mut scratch).unwrap();
+    let mut regions = Regions::organize(
+        &boot,
+        &exclusions,
+        ByteLength::new(PAGE),
+        Some(&evidence),
+        &mut scratch,
+    )
+    .unwrap();
     let backing = Box::leak(Box::new(Mapped([MaybeUninit::uninit(); 2 * PAGE as usize])));
     let mut mapping = Some(unsafe { MappedRange::new(pages(4, 6), &mut backing.0) }.unwrap());
     operation(&mut regions, &mut mapping);
@@ -121,8 +127,8 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
             assert_eq!(
                 space.publish_initial(
                     &allowance,
-                    0,
-                    PAGE,
+                    ByteLength::new(0),
+                    Alignment::new(PAGE).unwrap(),
                     InitialPend {
                         spending: &mut spending,
                         closing: &mut closing,
@@ -135,8 +141,8 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
             space
                 .publish_initial(
                     &allowance,
-                    PAGE,
-                    PAGE,
+                    ByteLength::new(PAGE),
+                    Alignment::new(PAGE).unwrap(),
                     InitialPend {
                         spending: &mut spending,
                         closing: &mut closing,
@@ -147,8 +153,8 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
             assert_eq!(
                 other.publish_initial(
                     &allowance,
-                    PAGE,
-                    PAGE,
+                    ByteLength::new(PAGE),
+                    Alignment::new(PAGE).unwrap(),
                     InitialPend {
                         spending: &mut different,
                         closing: &mut closing,
@@ -161,8 +167,8 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
             other
                 .publish_initial(
                     &allowance,
-                    PAGE,
-                    PAGE,
+                    ByteLength::new(PAGE),
+                    Alignment::new(PAGE).unwrap(),
                     InitialPend {
                         spending: &mut different,
                         closing: &mut other_closing,
@@ -176,7 +182,14 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
         let different = different.unwrap();
         let other_revoker = other_closing.unwrap();
         let candidate = |length, alignment, purpose| {
-            let request = Request::new(length, alignment, pages(6, 13), None, purpose).unwrap();
+            let request = Request::new(
+                ByteLength::new(length),
+                Alignment::new(alignment).unwrap(),
+                pages(6, 13),
+                None,
+                purpose,
+            )
+            .unwrap();
             let mut lookup = source.lookup(request, None).unwrap();
             loop {
                 match lookup.step().unwrap() {
@@ -241,8 +254,8 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
             unsafe {
                 space.publish_initial(
                     &allowance,
-                    PAGE,
-                    PAGE,
+                    ByteLength::new(PAGE),
+                    Alignment::new(PAGE).unwrap(),
                     InitialPend {
                         spending: &mut None,
                         closing: &mut None,
@@ -373,7 +386,14 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
     let mut initial = None;
     let (source, allowance) = source(&mut initial, 3 * PAGE);
     let left = initial.as_ref().unwrap().region();
-    let request = Request::new(2 * PAGE, PAGE, pages(0, 4), Some(ATTRIBUTES), Metadata).unwrap();
+    let request = Request::new(
+        ByteLength::new(2 * PAGE),
+        Alignment::new(PAGE).unwrap(),
+        pages(0, 4),
+        Some(ATTRIBUTES),
+        Metadata,
+    )
+    .unwrap();
     let mut lookup = source.lookup(request, None).unwrap();
     loop {
         match lookup.step().unwrap() {
@@ -406,7 +426,14 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
     let later = pages(16, 20);
     let mut adding = source
         .lookup(
-            Request::new(PAGE, PAGE, later, None, Metadata).unwrap(),
+            Request::new(
+                ByteLength::new(PAGE),
+                Alignment::new(PAGE).unwrap(),
+                later,
+                None,
+                Metadata,
+            )
+            .unwrap(),
             None,
         )
         .unwrap();
@@ -448,7 +475,14 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     let spending = TurnLock::new(Some(id));
     let construction = Box::leak(Box::new(Construction::new()));
     let construction = &*construction;
-    let request = Request::new(PAGE, PAGE, pages(3, 4), Some(ATTRIBUTES), Metadata).unwrap();
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(PAGE).unwrap(),
+        pages(3, 4),
+        Some(ATTRIBUTES),
+        Metadata,
+    )
+    .unwrap();
     let mut lookup = source.lookup(request, None).unwrap();
     let Search::Candidate(candidate) = lookup.step().unwrap() else {
         panic!("free granule")
@@ -488,8 +522,11 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     plan.insert(&spending).unwrap();
     plan.execute(Slow, |locks| {
         assert_eq!(*locks.access(&spending).unwrap(), Some(id));
-        assert_eq!(candidate.request().length(), PAGE);
-        assert_eq!(candidate.request().alignment(), PAGE);
+        assert_eq!(candidate.request().length(), ByteLength::new(PAGE));
+        assert_eq!(
+            candidate.request().alignment(),
+            Alignment::new(PAGE).unwrap()
+        );
         assert_eq!(candidate.request().purpose(), Metadata);
         unsafe { source.reserve(locks, candidate, id, construction, None) }.unwrap()
     })
@@ -620,7 +657,14 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
     assert_eq!(original_return.allocation, original_id);
     let owner_receipt = receipts[0].unwrap();
     assert_eq!(owner_receipt, pending);
-    let request = Request::new(PAGE, PAGE, pages(0, 1), None, Metadata).unwrap();
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(PAGE).unwrap(),
+        pages(0, 1),
+        None,
+        Metadata,
+    )
+    .unwrap();
 
     for receipt in &mut receipts[1..] {
         let Search::Candidate(candidate) = source.lookup(request, None).unwrap().step().unwrap()
@@ -725,7 +769,14 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
 fn skip_only_advances_the_lookup_with_an_outstanding_candidate() {
     let mut initial = None;
     let (source, _allowance) = source(&mut initial, 3 * PAGE);
-    let request = Request::new(PAGE, PAGE, pages(3, 4), None, Metadata).unwrap();
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(PAGE).unwrap(),
+        pages(3, 4),
+        None,
+        Metadata,
+    )
+    .unwrap();
     let mut first = source.lookup(request, None).unwrap();
     let mut second = source.lookup(request, None).unwrap();
     let Search::Candidate(observed) = first.step().unwrap() else {

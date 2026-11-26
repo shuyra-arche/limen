@@ -8,6 +8,7 @@ use kernel::{
     address::PhysicalAddress,
     entry::boot::{Boot, Source, shutdown, stack_range, write},
 };
+use limen_treaty::model::ByteLength;
 
 #[path = "../synchronization.rs"]
 mod synchronization;
@@ -136,7 +137,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     );
 
     // The production handoff has already checked the firmware header and
-    // bounded span. Verify that the witness names the actual virt RAM blob.
+    // bounded extent. Verify that the witness names the actual virt RAM blob.
     assert!(boot.firmware_map().is_none());
     let device_tree = boot.device_tree().expect("OpenSBI DTB");
     assert!(
@@ -169,7 +170,9 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert!(memory.ram().eq([bank]));
     assert!(early.retains(bank, None));
     let mut storage = [None; 4];
-    let mut regions = boot.regions(4096, None, &mut storage).unwrap();
+    let mut regions = boot
+        .regions(ByteLength::new(4096), None, &mut storage)
+        .unwrap();
     assert!(regions.entries().next().is_none());
     assert!(
         regions

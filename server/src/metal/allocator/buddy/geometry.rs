@@ -1,14 +1,17 @@
 //! Checked geometry and node locations for one physical region.
 
 use core::{alloc::Layout, ops::Range};
+use limen_treaty::model::{Alignment, ByteLength};
+
+use crate::address::{PhysicalAddress, PhysicalRange};
 
 use super::Error;
 
 /// A checked, nonempty region in absolute physical bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Geometry {
-    pub(super) region: Range<u64>,
-    pub(super) granule: u64,
+    region: PhysicalRange,
+    pub(super) granule: Alignment,
     roots: usize,
     nodes: usize,
     edit_bound: usize,
@@ -22,19 +25,14 @@ pub struct Root {
 }
 
 impl Geometry {
-    pub fn new(region: Range<u64>, granule: u64) -> Result<Self, Error> {
-        if !granule.is_power_of_two() {
-            return Err(Error::Granule);
-        }
-        if region.is_empty()
-            || !region.start.is_multiple_of(granule)
-            || !region.end.is_multiple_of(granule)
-        {
+    pub fn new(region: PhysicalRange, granule: ByteLength) -> Result<Self, Error> {
+        let granule = Alignment::new(granule.get()).ok_or(Error::Granule)?;
+        if !region.start().is_aligned(granule) || !region.end().is_aligned(granule) {
             return Err(Error::Range);
         }
 
-        let first = region.start / granule;
-        let end = region.end / granule;
+        let first = region.start().get() / granule.get();
+        let end = region.end().get() / granule.get();
         let mut roots = 0usize;
         let mut height = 0usize;
         for (_, order) in blocks(first..end) {
@@ -84,27 +82,29 @@ impl Geometry {
 
     pub(super) fn roots(&self) -> impl Iterator<Item = Root> {
         let mut first = 0;
-        blocks(self.region.start / self.granule..self.region.end / self.granule).map(
-            move |(base, order)| {
-                let root = Root { base, order, first };
-                // The aggregate node count and the array layout were checked.
-                let grains = (1u64 << order) as usize;
-                first += grains + (grains - 1);
-                root
-            },
-        )
+        let range = self.grains(self.region).expect("checked region geometry");
+        blocks(range).map(move |(base, order)| {
+            let root = Root { base, order, first };
+            // The aggregate node count and the array layout were checked.
+            let grains = (1u64 << order) as usize;
+            first += grains + (grains - 1);
+            root
+        })
     }
 
-    pub(super) fn grains(&self, physical: Range<u64>) -> Result<Range<u64>, Error> {
-        if physical.is_empty()
-            || physical.start < self.region.start
-            || physical.end > self.region.end
-            || !physical.start.is_multiple_of(self.granule)
-            || !physical.end.is_multiple_of(self.granule)
+    pub(super) fn grains(&self, physical: PhysicalRange) -> Result<Range<u64>, Error> {
+        if !self.region.covers(physical)
+            || !physical.start().is_aligned(self.granule)
+            || !physical.end().is_aligned(self.granule)
         {
             return Err(Error::Range);
         }
-        Ok(physical.start / self.granule..physical.end / self.granule)
+        Ok(physical.start().get() / self.granule.get()..physical.end().get() / self.granule.get())
+    }
+
+    pub(super) fn address(&self, grain: u64) -> PhysicalAddress {
+        // Forest positions never exceed the checked region's exclusive end.
+        PhysicalAddress::new(grain * self.granule.get())
     }
 }
 

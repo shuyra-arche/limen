@@ -18,10 +18,12 @@ use crate::{
     sync::{Acquisition::Fast, TurnLock, Work},
 };
 
+use limen_treaty::model::ByteLength;
+
 const PAGE: usize = 4096;
 const CONFIG: Config = Config {
-    granule: PAGE as u64,
-    maximum: 16 * PAGE as u64,
+    granule: ByteLength::new(PAGE as u64),
+    maximum: ByteLength::new(16 * PAGE as u64),
     regions: 3,
     grains: 16,
     roots: 8,

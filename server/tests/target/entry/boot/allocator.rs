@@ -10,11 +10,13 @@ use kernel::{
 
 use super::memory::{extent, mapped, retirement};
 
+use limen_treaty::model::{Alignment, ByteLength};
+
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x8400_0000;
 const CONFIG: Config = Config {
-    granule: PAGE,
-    maximum: 16 * PAGE,
+    granule: ByteLength::new(PAGE),
+    maximum: ByteLength::new(16 * PAGE),
     regions: 3,
     grains: 16,
     roots: 8,
@@ -37,7 +39,9 @@ pub(super) fn check(boot: &Boot<'_>) {
     let backing = pages(4, 6);
     let evidence = retirement(boot, scope);
     let mut scratch = [None; 3];
-    let mut regions = boot.regions(PAGE, Some(&evidence), &mut scratch).unwrap();
+    let mut regions = boot
+        .regions(ByteLength::new(PAGE), Some(&evidence), &mut scratch)
+        .unwrap();
     assert!(regions.entries().map(|entry| entry.physical).eq([scope]));
     assert!(
         unsafe { regions.allocator(&mut None, CONFIG, 0, &mut None, &mut []) }
@@ -72,7 +76,14 @@ pub(super) fn check(boot: &Boot<'_>) {
 
     let mut lookup = source
         .lookup(
-            Request::new(2 * PAGE, PAGE, pages(0, 4), None, Metadata).unwrap(),
+            Request::new(
+                ByteLength::new(2 * PAGE),
+                Alignment::new(PAGE).unwrap(),
+                pages(0, 4),
+                None,
+                Metadata,
+            )
+            .unwrap(),
             None,
         )
         .unwrap();
@@ -87,12 +98,21 @@ pub(super) fn check(boot: &Boot<'_>) {
     let later = pages(16, 20);
     let mut absent = source
         .lookup(
-            Request::new(PAGE, PAGE, later, None, Metadata).unwrap(),
+            Request::new(
+                ByteLength::new(PAGE),
+                Alignment::new(PAGE).unwrap(),
+                later,
+                None,
+                Metadata,
+            )
+            .unwrap(),
             None,
         )
         .unwrap();
     let evidence = retirement(boot, later);
-    let regions = boot.regions(PAGE, Some(&evidence), &mut scratch).unwrap();
+    let regions = boot
+        .regions(ByteLength::new(PAGE), Some(&evidence), &mut scratch)
+        .unwrap();
     let description = regions.entries().next().unwrap();
     assert_eq!(description.physical, later);
     let mut grant = unsafe { Grant::new(source, description, &evidence) }.unwrap();
@@ -107,7 +127,14 @@ pub(super) fn check(boot: &Boot<'_>) {
     }
 
     let window = extent(later.start().get() + 1, later.end().get());
-    let request = Request::new(PAGE, 1, window, None, Metadata).unwrap();
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(1).unwrap(),
+        window,
+        None,
+        Metadata,
+    )
+    .unwrap();
     let Search::Candidate(aligned) = source.lookup(request, Some(added)).unwrap().step().unwrap()
     else {
         panic!("the new Region has an eligible aligned grain");

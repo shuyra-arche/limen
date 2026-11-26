@@ -5,10 +5,11 @@ use core::{
     ptr, slice,
     sync::atomic::{AtomicUsize, Ordering::Release},
 };
+use limen_treaty::model::{Alignment, ByteLength};
 
 use crate::{
     access::MappedRange,
-    address::PhysicalRange,
+    address::{PhysicalRange, length},
     entry::boot::{RegionError, Regions, RootStorage},
     metal::identity::Entry,
     sync::TurnLock,
@@ -19,16 +20,15 @@ use super::{
     allowance::{Allowance, Balance, Free, Slot, SlotState},
     buddy::{Geometry, Root},
     bump::Bump,
-    length,
-    region::{self, Backing},
+    region::Backing,
     transfer::{Allocation, AllocationId, AllocationRecord, Phase, ReturnRecord},
 };
 
 /// Per-position maximum capacities include unpublished Region positions.
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
-    pub granule: u64,
-    pub maximum: u64,
+    pub granule: ByteLength,
+    pub maximum: ByteLength,
     pub regions: usize,
     pub grains: usize,
     pub roots: usize,
@@ -40,7 +40,8 @@ pub struct Config {
 
 impl Config {
     fn check(self) -> Result<(), Error> {
-        if !self.granule.is_power_of_two() || !self.maximum.is_multiple_of(self.granule) {
+        let alignment = Alignment::new(self.granule.get()).ok_or(Error::Layout)?;
+        if !alignment.is_aligned(self.maximum) {
             return Err(Error::Layout);
         }
         if !(1..=REGION_LIMIT).contains(&self.regions)
@@ -55,6 +56,10 @@ impl Config {
             return Err(Error::Capacity);
         }
         Ok(())
+    }
+
+    pub(super) fn granule_alignment(self) -> Alignment {
+        Alignment::new(self.granule.get()).expect("validated Allocator configuration")
     }
 
     fn nodes(self) -> Result<usize, Error> {
@@ -86,8 +91,9 @@ impl Config {
     }
 
     pub(super) fn geometry(self, description: Description) -> Result<Geometry, Error> {
-        let geometry = region::geometry(description, self.granule)?;
-        if length(description.physical) / self.granule > self.grains as u64
+        let geometry =
+            Geometry::new(description.physical, self.granule).map_err(|_| Error::Range)?;
+        if length(description.physical).get() / self.granule.get() > self.grains as u64
             || geometry.root_count() > self.roots
             || geometry.edit_bound() > self.edits
         {
@@ -209,14 +215,15 @@ impl Regions<'_> {
         if allowance_receiver.is_some() {
             return Err(Error::Receiver);
         }
+        let alignment = config.granule_alignment();
         if initial.len() > config.regions.saturating_mul(config.allocations)
-            || !capacity.is_multiple_of(config.granule)
+            || !alignment.is_aligned(ByteLength::new(capacity))
         {
             return Err(Error::Capacity);
         }
         let mut regions = 0;
         let mut committed = 0u64;
-        let mut total = 0u64;
+        let mut total = ByteLength::new(0);
         for description in self.after_root(&plan) {
             regions += 1;
             if regions > config.regions {
@@ -232,8 +239,8 @@ impl Regions<'_> {
                     continue;
                 }
                 if item.receiver.is_some()
-                    || !item.physical.start().get().is_multiple_of(config.granule)
-                    || !item.physical.end().get().is_multiple_of(config.granule)
+                    || !item.physical.start().is_aligned(alignment)
+                    || !item.physical.end().is_aligned(alignment)
                 {
                     return Err(Error::Receiver);
                 }
@@ -244,7 +251,7 @@ impl Regions<'_> {
                     return Err(Error::Overlap);
                 }
                 committed = committed
-                    .checked_add(length(item.physical))
+                    .checked_add(length(item.physical).get())
                     .ok_or(Error::Capacity)?;
                 count += 1;
             }
@@ -252,7 +259,7 @@ impl Regions<'_> {
                 return Err(Error::AllocationCapacity);
             }
         }
-        if total > config.maximum || capacity > total || committed > capacity {
+        if total > config.maximum || ByteLength::new(capacity) > total || committed > capacity {
             return Err(Error::Balance);
         }
         if initial.iter().any(|item| {
@@ -391,7 +398,7 @@ fn initialize(
         {
             state
                 .buddy()
-                .occupy(super::buddy_range(item.physical))
+                .occupy(item.physical)
                 .expect("initial ranges preflighted");
             item.staged =
                 Some(state.record(RegionId(index), item.physical, allowance, Phase::Issued));

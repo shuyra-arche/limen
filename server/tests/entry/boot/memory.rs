@@ -5,6 +5,7 @@ use super::{
     devicetree::memory::{Error, Source, describe as describe_into, read},
     image, range,
 };
+use limen_treaty::model::ByteLength;
 
 fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
     let mut memory = None;
@@ -179,7 +180,14 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
     );
     let evidence = retired(range(0x1000, 0x10000));
     let mut space = [None; 3];
-    let ready = Regions::organize(&boot, &early, 4096, Some(&evidence), &mut space).unwrap();
+    let ready = Regions::organize(
+        &boot,
+        &early,
+        ByteLength::new(4096),
+        Some(&evidence),
+        &mut space,
+    )
+    .unwrap();
     assert!(
         ready
             .entries()
@@ -259,7 +267,14 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
     let early = boot.exclusions_for(image(), image());
     let evidence = retired(range(0x8000_0000, 0x1_0040_0000));
     let mut space = [None; 3];
-    let ready = Regions::organize(&boot, &early, 4096, Some(&evidence), &mut space).unwrap();
+    let ready = Regions::organize(
+        &boot,
+        &early,
+        ByteLength::new(4096),
+        Some(&evidence),
+        &mut space,
+    )
+    .unwrap();
     assert!(
         ready
             .entries()

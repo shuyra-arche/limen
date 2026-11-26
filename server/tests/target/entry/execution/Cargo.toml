@@ -14,6 +14,7 @@ bench = false
 
 [dependencies]
 kernel = { path = "../../../.." }
+limen-treaty = { path = "../../../../../treaty" }
 
 [profile.dev]
 panic = "abort"

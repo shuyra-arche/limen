@@ -1,7 +1,10 @@
 //! Organize early physical ranges and reserve explicitly mapped root storage.
 
 use super::{Boot, Exclusions, Retirement, bump::Bump};
-use crate::{access::MappedRange, address::PhysicalRange};
+use crate::{
+    access::MappedRange,
+    address::{PhysicalRange, length},
+};
 use core::{alloc::Layout, mem::MaybeUninit};
 use limen_treaty::model::{Alignment, ByteLength};
 
@@ -70,7 +73,6 @@ pub(crate) struct RootPlan {
     region: Region,
     physical: PhysicalRange,
     reserved: PhysicalRange,
-    offset: core::ops::Range<usize>,
 }
 
 impl RootPlan {
@@ -93,12 +95,12 @@ impl<'a> Regions<'a> {
     pub(super) fn organize(
         boot: &Boot<'_>,
         exclusions: &Exclusions<'_>,
-        granule: u64,
+        granule: ByteLength,
         retirement: Option<&Retirement>,
         storage: &'a mut [Option<Region>],
     ) -> Result<Self, RegionError> {
         storage.fill(None);
-        let granule = Alignment::new(granule).ok_or(RegionError::Granule)?;
+        let granule = Alignment::new(granule.get()).ok_or(RegionError::Granule)?;
         let mut regions = Self {
             entries: storage,
             length: 0,
@@ -235,8 +237,8 @@ impl<'a> Regions<'a> {
             .map(|plan| self.take_root(mapping, plan)))
     }
 
-    pub(crate) fn granule(&self) -> u64 {
-        self.granule.get()
+    pub(crate) fn granule(&self) -> ByteLength {
+        ByteLength::new(self.granule.get())
     }
 
     pub(crate) fn after_root<'r>(
@@ -288,14 +290,15 @@ impl<'a> Regions<'a> {
         }
         let mut bump = Bump::new(address..limit).ok_or(RegionError::Layout)?;
         let bytes = bump.reserve(layout).ok_or(RegionError::Layout)?;
-        let offset = bytes.start - address..bytes.end - address;
+        let offset = u64::try_from(bytes.start - address).map_err(|_| RegionError::Range)?;
+        let length = u64::try_from(bytes.len()).map_err(|_| RegionError::Range)?;
         // Bump proved the offsets within the slice, whose length matches
         // the checked physical extent.
         let physical = mapped
             .physical()
             .start()
-            .advance(ByteLength::new(offset.start as u64))
-            .and_then(|start| start.span(ByteLength::new(offset.len() as u64)))
+            .advance(ByteLength::new(offset))
+            .and_then(|start| start.range(ByteLength::new(length)))
             .ok_or(RegionError::Range)?;
         let reserved = PhysicalRange::new(
             physical.start().align_down(self.granule),
@@ -316,7 +319,6 @@ impl<'a> Regions<'a> {
             region,
             physical,
             reserved,
-            offset,
         }))
     }
 
@@ -331,19 +333,22 @@ impl<'a> Regions<'a> {
             region,
             physical,
             reserved,
-            offset,
         } = plan;
         let mut storage = mapping.take().expect("checked mapping");
-        let length = offset.end - offset.start;
-        if offset.start != 0 {
-            let (_, suffix) = storage
-                .split(offset.start)
-                .ok()
-                .expect("checked root start");
+        let start = storage.physical().start();
+        if physical.start() != start {
+            let offset = physical
+                .start()
+                .distance(start)
+                .expect("checked root offset");
+            let (_, suffix) = storage.split(offset).ok().expect("checked root start");
             storage = suffix;
         }
-        if length != storage.length() {
-            let (prefix, _) = storage.split(length).ok().expect("checked root end");
+        if physical.end() != storage.physical().end() {
+            let (prefix, _) = storage
+                .split(length(physical))
+                .ok()
+                .expect("checked root end");
             storage = prefix;
         }
         assert_eq!(storage.physical(), physical);

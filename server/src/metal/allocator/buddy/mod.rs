@@ -9,6 +9,8 @@ mod scan;
 
 use core::{mem::MaybeUninit, ops::Range, slice};
 
+use crate::address::PhysicalRange;
+
 pub use geometry::{Geometry, Root};
 pub use scan::{Request, Revision, Scan, Search};
 
@@ -158,17 +160,17 @@ impl<'storage> Buddy<'storage> {
     }
 
     /// Circle exactly this free range. The result counts structural visits.
-    pub fn occupy(&mut self, physical: Range<u64>) -> Result<usize, Error> {
+    pub fn occupy(&mut self, physical: PhysicalRange) -> Result<usize, Error> {
         self.edit(physical, State::Free, State::Occupied)
     }
 
     /// Return exactly this occupied range. The owner validates its ownership
     /// and retirement before calling. The result counts structural visits.
-    pub fn release(&mut self, physical: Range<u64>) -> Result<usize, Error> {
+    pub fn release(&mut self, physical: PhysicalRange) -> Result<usize, Error> {
         self.edit(physical, State::Occupied, State::Free)
     }
 
-    fn edit(&mut self, physical: Range<u64>, old: State, new: State) -> Result<usize, Error> {
+    fn edit(&mut self, physical: PhysicalRange, old: State, new: State) -> Result<usize, Error> {
         let range = self.geometry.grains(physical)?;
         let mut visits = 0;
         for root in self.roots {

@@ -3,7 +3,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering::Acquire};
 
 use crate::{
-    address::{self, PhysicalRange},
+    address::PhysicalRange,
     entry::boot::Region as Description,
     sync::{Acquisition, AcquisitionError, TurnLock, Work},
 };
@@ -94,14 +94,6 @@ impl Allocator {
         }
         Ok(&self.regions[id.0])
     }
-}
-
-fn length(physical: PhysicalRange) -> u64 {
-    address::length(physical).get()
-}
-
-fn buddy_range(physical: PhysicalRange) -> core::ops::Range<u64> {
-    physical.start().get()..physical.end().get()
 }
 
 pub(crate) fn with_turn<T, R>(

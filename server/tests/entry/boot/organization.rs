@@ -1,8 +1,13 @@
 use super::physical::Condition;
 use super::regions::{Region, RegionError, RegionSource, Regions};
-use super::{Boot, FirmwareMap, PhysicalRange, Retirement, describe, image, range};
+use super::{
+    Boot, FirmwareMap, PhysicalAddress, PhysicalRange, Retirement, describe, image, range,
+};
 use crate::access::{Error as AccessError, MappedRange};
 use core::{alloc::Layout, mem::MaybeUninit};
+use limen_treaty::model::{Alignment, ByteLength};
+
+const GRANULE: ByteLength = ByteLength::new(4096);
 
 pub(super) fn retired(scope: PhysicalRange) -> Retirement {
     let mut evidence = Retirement::new(scope);
@@ -20,6 +25,31 @@ pub(super) fn retired(scope: PhysicalRange) -> Retirement {
 
 #[repr(align(8))]
 struct Descriptors<const N: usize>([u8; N]);
+
+#[test]
+fn physical_ranges_check_length_endpoints_and_upper_alignment() {
+    let zero = PhysicalAddress::new(0);
+    let last = PhysicalAddress::new(u64::MAX);
+    let one = ByteLength::new(1);
+    let maximum = ByteLength::new(u64::MAX);
+    assert_eq!(zero.range(ByteLength::new(0)), None);
+    assert_eq!(last.range(one), None);
+    assert_eq!(last.distance(zero), Some(maximum));
+    assert_eq!(zero.distance(last), None);
+
+    let whole = zero.range(maximum).unwrap();
+    assert_eq!(whole, range(0, u64::MAX));
+    assert!(whole.contains(zero));
+    assert!(!whole.contains(last));
+
+    let alignment = Alignment::new(4096).unwrap();
+    let upper = PhysicalAddress::new(u64::MAX - 4095);
+    assert!(upper.is_aligned(alignment));
+    assert!(!last.is_aligned(alignment));
+    assert_eq!(last.align_down(alignment), upper);
+    assert_eq!(upper.align_up(alignment), Some(upper));
+    assert_eq!(last.align_up(alignment), None);
+}
 
 #[test]
 fn sorts_sources_clips_the_evidence_and_excludes_partial_reserved_pages() {
@@ -46,17 +76,34 @@ fn sorts_sources_clips_the_evidence_and_excludes_partial_reserved_pages() {
         },
     ];
     let mut regions = [None; 3];
-    let ready = Regions::organize(&boot, &exclusions, 4096, Some(&evidence), &mut regions).unwrap();
+    let ready =
+        Regions::organize(&boot, &exclusions, GRANULE, Some(&evidence), &mut regions).unwrap();
     assert!(ready.entries().eq(expected));
-    let result = Regions::organize(&boot, &exclusions, 4096, Some(&evidence), &mut regions[..2]);
+    let result = Regions::organize(
+        &boot,
+        &exclusions,
+        GRANULE,
+        Some(&evidence),
+        &mut regions[..2],
+    );
     assert_eq!(result.err(), Some(RegionError::Capacity));
     assert_eq!(&regions[..2], &[None, None]);
-    assert_eq!(
-        Regions::organize(&boot, &exclusions, 3, Some(&evidence), &mut regions).err(),
-        Some(RegionError::Granule)
-    );
+    for invalid in [0, 3] {
+        assert_eq!(
+            Regions::organize(
+                &boot,
+                &exclusions,
+                ByteLength::new(invalid),
+                Some(&evidence),
+                &mut regions,
+            )
+            .err(),
+            Some(RegionError::Granule)
+        );
+    }
     let partial = Retirement::new(range(0x2000, 0xa000));
-    let held = Regions::organize(&boot, &exclusions, 4096, Some(&partial), &mut regions).unwrap();
+    let held =
+        Regions::organize(&boot, &exclusions, GRANULE, Some(&partial), &mut regions).unwrap();
     assert_eq!(held.entries().count(), 0);
 }
 
@@ -77,7 +124,7 @@ fn a_root_consumes_a_mapped_grant_and_removes_its_whole_physical_page() {
 
     let mut small = [None; 1];
     let mut geometry =
-        Regions::organize(&boot, &exclusions, 4096, Some(&evidence), &mut small).unwrap();
+        Regions::organize(&boot, &exclusions, GRANULE, Some(&evidence), &mut small).unwrap();
     assert!(geometry.reserve_root(&mut None, layout).unwrap().is_none());
     assert_eq!(
         geometry.reserve_root(&mut mapping, layout).err(),
@@ -92,12 +139,12 @@ fn a_root_consumes_a_mapped_grant_and_removes_its_whole_physical_page() {
     );
 
     let mut space = [None; 2];
-    let mut held = Regions::organize(&boot, &exclusions, 4096, None, &mut space).unwrap();
+    let mut held = Regions::organize(&boot, &exclusions, GRANULE, None, &mut space).unwrap();
     assert!(held.reserve_root(&mut mapping, layout).unwrap().is_none());
     assert!(mapping.is_some());
 
     let mut geometry =
-        Regions::organize(&boot, &exclusions, 4096, Some(&evidence), &mut space).unwrap();
+        Regions::organize(&boot, &exclusions, GRANULE, Some(&evidence), &mut space).unwrap();
     let mismatched = Layout::from_size_align(17, 8192).unwrap();
     assert_eq!(
         geometry.reserve_root(&mut mapping, mismatched).err(),
@@ -119,12 +166,16 @@ fn a_root_consumes_a_mapped_grant_and_removes_its_whole_physical_page() {
     assert_eq!(root.source(), RegionSource::Uefi { attributes: 8 });
     assert_eq!(root.bytes().len(), 17);
     root.bytes()[0].write(0xaa);
-    assert!(
-        geometry
-            .entries()
-            .map(|r| r.physical)
-            .eq([range(0x2000, 0x3000), range(0x4000, 0x9000)])
-    );
+    assert!(geometry.entries().eq([
+        Region {
+            physical: range(0x2000, 0x3000),
+            source: root.source(),
+        },
+        Region {
+            physical: range(0x4000, 0x9000),
+            source: root.source(),
+        },
+    ]));
 }
 
 #[test]
@@ -138,21 +189,22 @@ fn exclusive_mapping_checks_extent_and_splits_without_losing_the_original() {
         ));
     }
 
-    let physical = range(0x2000, 0x2010);
+    let start = u64::MAX - 16;
+    let physical = range(start, u64::MAX);
     // This Host fixture models the exact physical correspondence of the
     // exclusive backing. No target mapping or hardware evidence is inferred.
     let mut mapping = unsafe { MappedRange::new(physical, &mut bytes) }.unwrap();
-    for offset in [0, 16, usize::MAX] {
-        let (mut original, error) = mapping.split(offset).err().unwrap();
+    for offset in [0, 16, 17, u64::MAX] {
+        let (mut original, error) = mapping.split(ByteLength::new(offset)).err().unwrap();
         assert_eq!(error, AccessError::Split);
         assert_eq!(original.physical(), physical);
         assert_eq!(original.length(), 16);
         assert_eq!(original.bytes().as_mut_ptr().addr(), address);
         mapping = original;
     }
-    let (mut left, mut right) = mapping.split(5).ok().unwrap();
-    assert_eq!(left.physical(), range(0x2000, 0x2005));
-    assert_eq!(right.physical(), range(0x2005, 0x2010));
+    let (mut left, mut right) = mapping.split(ByteLength::new(5)).ok().unwrap();
+    assert_eq!(left.physical(), range(start, start + 5));
+    assert_eq!(right.physical(), range(start + 5, u64::MAX));
     assert_eq!(left.length(), 5);
     assert_eq!(right.length(), 11);
     assert_eq!(left.bytes().as_mut_ptr().addr(), address);

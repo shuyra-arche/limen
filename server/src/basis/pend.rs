@@ -1,6 +1,7 @@
 //! Root allocation authority installed in the kernel's initial PendSpace.
 
 use core::ptr;
+use limen_treaty::model::{Alignment, ByteLength};
 
 use crate::{
     allocator::{
@@ -32,8 +33,8 @@ impl From<allocator::Error> for Error {
 struct AllocationPermit {
     source: &'static Allocator,
     allowance: AllowanceId,
-    maximum: u64,
-    alignment: u64,
+    maximum: ByteLength,
+    alignment: Alignment,
 }
 
 impl AllocationPermit {
@@ -113,12 +114,12 @@ impl PendSpace {
     pub unsafe fn publish_initial(
         &'static self,
         allowance: &Allowance,
-        maximum: u64,
-        alignment: u64,
+        maximum: ByteLength,
+        alignment: Alignment,
         roles: Initial<'_>,
         mode: Acquisition,
     ) -> Result<(), Error> {
-        if maximum == 0 || !alignment.is_power_of_two() {
+        if maximum.get() == 0 {
             return Err(Error::Limit);
         }
         if roles.spending.is_some() || roles.closing.is_some() {

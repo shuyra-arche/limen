@@ -173,7 +173,7 @@ fn decode(entry: &[u8]) -> Option<FirmwareRegion> {
     if !start.is_aligned(PAGE_ALIGNMENT) {
         return None;
     }
-    let physical = start.span(PAGE_SIZE.bytes(PageCount::new(pages))?)?;
+    let physical = start.range(PAGE_SIZE.bytes(PageCount::new(pages))?)?;
     Some(FirmwareRegion {
         kind,
         physical,

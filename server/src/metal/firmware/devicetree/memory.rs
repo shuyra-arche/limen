@@ -168,7 +168,7 @@ fn parse(blob: &[u8], memory: &mut DtbMemory) -> Result<(), Error> {
             break;
         }
         let physical = PhysicalAddress::new(base)
-            .span(ByteLength::new(size))
+            .range(ByteLength::new(size))
             .ok_or(Error::Range)?;
         if memory
             .reservations()
@@ -262,7 +262,7 @@ impl Cells {
         for tuple in tuples {
             let (address, size) = tuple.split_at(self.address);
             let physical = PhysicalAddress::new(number(address))
-                .span(ByteLength::new(number(size)))
+                .range(ByteLength::new(number(size)))
                 .ok_or(Error::Range)?;
             record(physical)?;
         }
