@@ -24,7 +24,9 @@ release tag or full revision. [Releases](https://github.com/shuyra-arche/limen/r
 Use Rustup from the repository root on x86-64 Linux. The toolchain is fixed in
 [`rust-toolchain.toml`](rust-toolchain.toml). The RV64 and AArch64 early exception
 entry points currently need nightly function alignment. The host tests also
-require a C linker.
+require a C linker. Ordinary Cargo commands use the host target; kernel and
+QEMU guest builds must select their hardware target explicitly. The RV64 flags
+in `.cargo/config.toml` still apply to explicit RV64 builds.
 
 ```sh
 rustc -Vv
@@ -38,7 +40,7 @@ RUSTFLAGS=-Dwarnings cargo build --locked -p kernel --target aarch64-unknown-uef
 
 ```sh
 cargo fmt --all -- --check
-RUSTFLAGS=-Dwarnings cargo test --locked --workspace --target x86_64-unknown-linux-gnu
+RUSTFLAGS=-Dwarnings cargo test --locked --workspace
 cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
 bash tools/check-layout.sh
 bash tools/check-tooling.sh

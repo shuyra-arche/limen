@@ -179,6 +179,19 @@ change server/src/metal/hart/hardware.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/metal/allocator/source.rs
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
+# Host integration roots and new owner modules use the same host selection,
+# without requiring a new manifest or path-specific CI entry.
+for source in server/tests/contracts.rs \
+              server/tests/metal/mod.rs \
+              server/tests/metal/firmware/mod.rs \
+              server/tests/basis/cell/mod.rs; do
+    change "$source"
+    bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
+    [[ $(bash "$discover" . "$base") == '[]' ]]
+done
+change .cargo/config.toml
+bash "$checks" . "$base" | jq -e '.host and .runner and .rv64' >/dev/null
+[[ $(bash "$discover" . "$base") == "$full" ]]
 change docs/README.md
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 [[ $(bash "$discover" . "$base") == '[]' ]]

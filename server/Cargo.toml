@@ -17,11 +17,6 @@ limen-treaty = { path = "../treaty" }
 [dev-dependencies]
 bitflags.workspace = true
 
-
 [[test]]
-name = "acpi"
-path = "tests/metal/firmware/acpi/mod.rs"
-
-[[test]]
-name = "devicetree"
-path = "tests/metal/firmware/devicetree/mod.rs"
+name = "contracts"
+path = "tests/contracts.rs"
