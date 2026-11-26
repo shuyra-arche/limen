@@ -1,245 +1,262 @@
-//! Checks and prepares independently linked kernel module images.
+//! Publication and retained uses of modules in the boot owner's fixed slots.
 
-mod description;
-mod elf;
-mod lifetime;
+mod image;
+mod interface;
 
-pub use description::{Contract, Description, DescriptionError, Interface};
-pub use elf::{Machine, Permissions};
-pub use lifetime::{Module, ModuleId, ModuleSlots, ModuleUse, Retirement, UseError};
+pub use image::{
+    Description, DescriptionError, Error, Image, ImageAddress, Layout, Machine, ModuleImage,
+    PlacedSegment, SegmentPermissions,
+};
+pub use interface::{Contract, Interface, ModuleUse};
 
-use crate::metal::mmu::internal::access::MappedRange;
-use core::mem::MaybeUninit;
-use limen_treaty::model::{
-    Alignment, ByteCoordinate, ByteLength, InternalAddress, InternalRange, PageSize, PhysicalRange,
-    Range,
+use core::{
+    fmt,
+    mem::{self, ManuallyDrop},
+    ptr,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
-/// Coordinates in the link-time image, not in an installed address space.
-pub enum Image {}
-pub type ImageAddress = ByteCoordinate<Image>;
-type ImageRange = Range<ImageAddress>;
+use limen_treaty::model::{InternalRange, PhysicalRange};
 
-const MAX_IMAGES: usize = 16;
+// Closing admission and observing the final release cover the same
+// population because the phase and use count share a modification order.
+const PHASE: usize = 0b111;
+const USE: usize = PHASE + 1;
+const VACANT: usize = 0;
+const OPEN: usize = 1;
+const SHUTTING: usize = 2;
+const RETIRING: usize = 3;
+const SETTLING: usize = 4;
+const RETIRED: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Error {
-    Format,
-    Unsupported,
+pub enum UseError {
+    Interface,
     Capacity,
-    Range,
-    Conflict,
-    Description(DescriptionError),
+    Shut,
+    Open,
+    Busy,
+    Retired,
 }
 
-/// A checked, immutable image and the metadata read from that same image.
-#[derive(Clone)]
-pub struct ModuleImage<'a> {
-    elf: elf::Elf<'a>,
-    description: Description<'a>,
-    page_size: PageSize,
-    machine: Machine,
+/// Fixed boot identity storage. Each position is issued once for the
+/// life of this table. The owner supplies capacity for its boot sequence.
+pub struct ModuleSlots<const SLOTS: usize> {
+    states: [AtomicUsize; SLOTS],
 }
 
-impl<'a> ModuleImage<'a> {
-    /// Interpret the file within its independently supplied byte extent.
-    /// The caller establishes the source's trust and supplies the target
-    /// machine and actual initial page granule.
-    pub fn read(bytes: &'a [u8], machine: Machine, page_size: PageSize) -> Result<Self, Error> {
-        let elf = elf::Elf::read(bytes, machine, page_size)?;
-        let description = Description::read(&elf).map_err(Error::Description)?;
-        Ok(Self {
-            elf,
-            description,
-            page_size,
-            machine,
-        })
+impl<const SLOTS: usize> Default for ModuleSlots<SLOTS> {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    /// Select a unique provider from the retained images for this target.
-    /// Each image carries its own declaration. The source supplies its own
-    /// bounded bytes and establishes their provenance and lifetime.
-    pub fn select(
-        source: &[&'a [u8]],
-        machine: Machine,
-        page_size: PageSize,
-        contract: Contract<'_>,
-    ) -> Result<Option<Self>, Error> {
-        if source.len() > MAX_IMAGES {
-            return Err(Error::Capacity);
+impl<const SLOTS: usize> ModuleSlots<SLOTS> {
+    pub const fn new() -> Self {
+        Self {
+            states: [const { AtomicUsize::new(VACANT) }; SLOTS],
         }
-        let mut selected = None;
-        for bytes in source {
-            let image = Self::read(bytes, machine, page_size)?;
-            if image.description.interface(contract).is_some() && selected.replace(image).is_some()
-            {
-                return Err(Error::Conflict);
-            }
-        }
-        Ok(selected)
     }
 
-    pub fn description(&self) -> Description<'a> {
-        self.description
-    }
-
-    pub fn required_length(&self) -> ByteLength {
-        self.elf.span().length()
-    }
-
-    /// Copy and relocate into a private mapped range of exactly the required
-    /// length. The storage owner establishes its initial writable, non-
-    /// executable protection and keeps custody after this operation.
+    /// Publish the exact prepared image with its material and its immutable
+    /// direct dependencies. Each dependency already has a live provider,
+    /// giving the graph a publication order. Slot exhaustion returns the
+    /// caller's original layout, material and uses.
     ///
-    /// A placement failure leaves the original bytes untouched. The layout
-    /// describes the bytes and intended permissions for the supplied Internal
-    /// start. Before calling any entry, the mapping owner must publish the
-    /// permissions, close conflicting aliases and establish instruction
-    /// visibility for the target Hart.
-    pub fn prepare(
-        &self,
-        storage: &mut MappedRange<'_>,
-        internal_start: InternalAddress,
-    ) -> Result<Layout<'a>, Error> {
-        let span = self.elf.span();
-        let length = self.required_length();
-        let physical = storage.physical();
-        let page = Alignment::new(self.page_size.get()).expect("page alignment");
-        let alignment = self.elf.alignment().get();
-        let internal = internal_start.range(length).ok_or(Error::Range)?;
-        if length.as_usize() != Some(storage.length())
-            || !physical.start().is_aligned(page)
-            || internal_start.get() % alignment != span.start().get() % alignment
-        {
-            return Err(Error::Range);
-        }
-
-        // The bounded ELF plan establishes every file and placement offset
-        // within this exact range before any write takes place.
-        let bytes = storage.bytes();
-        bytes.fill(MaybeUninit::new(0));
-        for segment in self.elf.segments() {
-            let offset = segment
-                .address
-                .distance(span.start())
-                .and_then(ByteLength::as_usize)
-                .expect("checked segment offset");
-            for (target, source) in bytes[offset..offset + segment.file.len()]
-                .iter_mut()
-                .zip(segment.file)
+    /// # Safety
+    ///
+    /// The owner must hold the supplied material and the exact original
+    /// mapping. The image and dependencies must satisfy the caller's domain
+    /// contracts. Effective permissions, absence of conflicting aliases and
+    /// instruction visibility must cover the actual execution scope. The
+    /// owner must keep these conditions true while entry or cleanup is
+    /// possible, including across root changes. It must keep the returned
+    /// module in durable owner storage until settlement and must not recover
+    /// its backing or source through another route while it is retained.
+    // Failure returns each owned input inline without allocating a recovery record.
+    #[allow(clippy::result_large_err)]
+    pub unsafe fn publish<'slot, 'source, 'provider, Material, const DEPENDENCIES: usize>(
+        &'slot self,
+        layout: Layout<'source>,
+        material: Material,
+        dependencies: [ModuleUse<'provider>; DEPENDENCIES],
+    ) -> Result<
+        Module<'slot, 'source, 'provider, Material, DEPENDENCIES>,
+        (
+            Layout<'source>,
+            Material,
+            [ModuleUse<'provider>; DEPENDENCIES],
+        ),
+    > {
+        for state in &self.states {
+            if state
+                .compare_exchange(VACANT, OPEN, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
             {
-                target.write(*source);
+                return Ok(Module {
+                    state,
+                    layout,
+                    material: ManuallyDrop::new(material),
+                    dependencies: ManuallyDrop::new(dependencies),
+                });
             }
         }
-        for relocation in self.elf.relocations() {
-            let offset = relocation
-                .address
-                .distance(span.start())
-                .and_then(ByteLength::as_usize)
-                .expect("checked relocation offset");
-            let value = internal_start
-                .advance(
-                    relocation
-                        .addend
-                        .distance(span.start())
-                        .expect("checked addend"),
-                )
-                .expect("checked placement")
-                .get();
-            for (target, source) in bytes[offset..offset + 8]
-                .iter_mut()
-                .zip(value.to_le_bytes())
-            {
-                target.write(source);
-            }
-        }
-
-        Ok(Layout {
-            image: self.clone(),
-            physical,
-            internal,
-        })
+        Err((layout, material, dependencies))
     }
 }
 
-/// The placement of prepared bytes. The backing range remains with its owner.
-pub struct Layout<'source> {
-    image: ModuleImage<'source>,
-    physical: PhysicalRange,
-    internal: InternalRange,
+/// Exact boot module identity. The borrowed slot cannot move while an identity
+/// is observable, and it never identifies a later publication.
+#[derive(Clone, Copy)]
+pub struct ModuleId<'slot>(&'slot AtomicUsize);
+
+impl PartialEq for ModuleId<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        ptr::eq(self.0, other.0)
+    }
 }
 
-impl Layout<'_> {
-    pub fn machine(&self) -> Machine {
-        self.image.machine
+impl Eq for ModuleId<'_> {}
+
+impl fmt::Debug for ModuleId<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ModuleId")
+            .field(&ptr::from_ref(self.0))
+            .finish()
+    }
+}
+
+/// The actual installed module and its outstanding material and dependencies.
+/// Dropping the owner without settlement retains the material and provider
+/// obligations. Only reclaim may hand them back.
+#[must_use = "an installed module owns material and must be kept until retirement"]
+pub struct Module<'slot, 'source, 'provider, Material, const DEPENDENCIES: usize> {
+    state: &'slot AtomicUsize,
+    layout: Layout<'source>,
+    material: ManuallyDrop<Material>,
+    dependencies: ManuallyDrop<[ModuleUse<'provider>; DEPENDENCIES]>,
+}
+
+impl<'slot, Material, const DEPENDENCIES: usize> Module<'slot, '_, '_, Material, DEPENDENCIES> {
+    pub fn id(&self) -> ModuleId<'slot> {
+        ModuleId(self.state)
     }
 
     pub fn physical(&self) -> PhysicalRange {
-        self.physical
+        self.layout.physical()
     }
 
     pub fn internal(&self) -> InternalRange {
-        self.internal
+        self.layout.internal()
     }
 
-    /// Page-sized permission ranges. Gaps in the layout have no entry here.
-    pub fn segments(&self) -> impl Iterator<Item = PlacedSegment> + '_ {
-        let alignment = Alignment::new(self.image.page_size.get()).expect("page alignment");
-        let start = self.image.elf.span().start();
-        self.image.elf.segments().map(move |segment| {
-            let first = segment
-                .address
-                .align_down(alignment)
-                .distance(start)
-                .expect("checked segment start");
-            let last = segment
-                .address
-                .advance(segment.memory_size)
-                .and_then(|end| end.align_up(alignment))
-                .and_then(|end| end.distance(start))
-                .expect("checked segment end");
-            let length = last.checked_sub(first).expect("checked segment length");
-            let physical = self
-                .physical
-                .start()
-                .advance(first)
-                .and_then(|start| start.range(length))
-                .expect("segment is within the physical placement");
-            let internal = self
-                .internal
-                .start()
-                .advance(first)
-                .and_then(|start| start.range(length))
-                .expect("segment is within the Internal placement");
-            PlacedSegment {
-                physical,
-                internal,
-                permissions: segment.permissions,
+    /// Borrow the exact direct uses retained by this installed image.
+    pub fn dependencies(&self) -> &[ModuleUse<'_>] {
+        self.dependencies.as_slice()
+    }
+
+    /// Acquire the exact published interface for a persistent consumer.
+    /// Ordinary calls use this borrow and do not change the use count.
+    pub fn acquire(&self, contract: Contract<'_>) -> Result<ModuleUse<'_>, UseError> {
+        let (interface, entry) = self.layout.resolve(contract).ok_or(UseError::Interface)?;
+
+        let mut state = self.state.load(Ordering::Relaxed);
+        loop {
+            if state & PHASE != OPEN {
+                return Err(UseError::Shut);
             }
-        })
+            let next = state.checked_add(USE).ok_or(UseError::Capacity)?;
+            match self.state.compare_exchange_weak(
+                state,
+                next,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Ok(ModuleUse::new(
+                        self.state,
+                        entry,
+                        interface.contract(),
+                        self.layout.machine(),
+                    ));
+                }
+                Err(observed) => state = observed,
+            }
+        }
     }
 
-    /// An Internal entry coordinate for the exact interface in this image.
-    pub fn entry(&self, contract: Contract<'_>) -> Option<InternalAddress> {
-        let interface = self.image.description.interface(contract)?;
-        Some(self.place_entry(interface))
+    /// Close new admission. Existing uses keep their cleanup rights and
+    /// continue to retain the exact image.
+    pub fn shut(&self) {
+        let _ = self
+            .state
+            .try_update(Ordering::AcqRel, Ordering::Relaxed, |state| {
+                (state & PHASE == OPEN).then_some((state & !PHASE) | SHUTTING)
+            });
     }
 
-    fn place_entry(&self, interface: Interface<'_>) -> InternalAddress {
-        let offset = interface
-            .entry()
-            .distance(self.image.elf.span().start())
-            .expect("checked interface offset");
-        self.internal
-            .start()
-            .advance(offset)
-            .expect("checked placement")
+    /// Obtain exclusive retirement authority after every retained consumer
+    /// has completed. This permits withdrawal. Actual completion remains the
+    /// mapping owner's responsibility.
+    pub fn retire(&self) -> Result<Retirement<'_>, UseError> {
+        let mut state = self.state.load(Ordering::Acquire);
+        loop {
+            match state {
+                SHUTTING | RETIRING => {}
+                RETIRED => return Err(UseError::Retired),
+                _ if state & PHASE == OPEN => return Err(UseError::Open),
+                _ => return Err(UseError::Busy),
+            }
+            match self.state.compare_exchange_weak(
+                state,
+                SETTLING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(Retirement { state: self.state }),
+                Err(observed) => state = observed,
+            }
+        }
+    }
+
+    /// Return the original material once effects have settled and release the
+    /// immutable provider uses. Early attempts return the same module owner.
+    // An early return moves back the original custodian without allocating.
+    #[allow(clippy::result_large_err)]
+    pub fn reclaim(self) -> Result<Material, Self> {
+        if self.state.load(Ordering::Acquire) != RETIRED {
+            return Err(self);
+        }
+        drop(ManuallyDrop::into_inner(self.dependencies));
+        Ok(ManuallyDrop::into_inner(self.material))
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PlacedSegment {
-    pub physical: PhysicalRange,
-    pub internal: InternalRange,
-    pub permissions: Permissions,
+/// Exclusive scope for withdrawal of the exact module. Dropping this before
+/// completion retains its material and lets the same owner resume retirement.
+#[must_use = "retirement needs real mapping settlement before material can be reclaimed"]
+pub struct Retirement<'module> {
+    state: &'module AtomicUsize,
+}
+
+impl Retirement<'_> {
+    /// Settle the exact module after withdrawal.
+    ///
+    /// # Safety
+    ///
+    /// The original mapping owner must have excluded every future entry and
+    /// settled cleanup, all in-flight effects, old translations and instruction
+    /// fetch across the module's real execution and mapping scope. The
+    /// retained material must be safe for its original owner to take back.
+    pub unsafe fn complete(self) {
+        self.state.store(RETIRED, Ordering::Release);
+        mem::forget(self);
+    }
+}
+
+impl Drop for Retirement<'_> {
+    fn drop(&mut self) {
+        self.state.store(RETIRING, Ordering::Release);
+    }
 }

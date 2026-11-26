@@ -1,7 +1,7 @@
 //! Inspect the live four-level x86 root used by this singleton QEMU guest.
 
 use core::arch::{asm, x86_64::__cpuid};
-use kernel::{metal::firmware::map::FirmwareMap, metal::module::Permissions};
+use kernel::{metal::platform::firmware::map::FirmwareMap, metal::module::SegmentPermissions};
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 pub const PAGE: u64 = 4096;
@@ -72,7 +72,7 @@ impl Root {
         self,
         map: FirmwareMap<'_>,
         physical: PhysicalRange,
-        expected: impl Fn(u64) -> Permissions,
+        expected: impl Fn(u64) -> SegmentPermissions,
     ) -> Result<(), Error> {
         if Self::current()? != self {
             return Err(Error::Context);
@@ -144,7 +144,7 @@ struct Walk<'a, Expected> {
     observed: u64,
 }
 
-impl<Expected: Fn(u64) -> Permissions> Walk<'_, Expected> {
+impl<Expected: Fn(u64) -> SegmentPermissions> Walk<'_, Expected> {
     unsafe fn table(
         &mut self,
         address: u64,
@@ -219,9 +219,9 @@ impl<Expected: Fn(u64) -> Permissions> Walk<'_, Expected> {
         }
         for page in (first..last).step_by(PAGE as usize) {
             let (write, execute) = match (self.expected)(page) {
-                Permissions::ReadOnly => (false, false),
-                Permissions::ReadWrite => (true, false),
-                Permissions::ReadExecute => (false, true),
+                SegmentPermissions::ReadOnly => (false, false),
+                SegmentPermissions::ReadWrite => (true, false),
+                SegmentPermissions::ReadExecute => (false, true),
             };
             if flags.user || flags.writable != write || flags.executable != execute {
                 return Err(Error::Permissions);

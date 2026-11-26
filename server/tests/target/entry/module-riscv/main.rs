@@ -8,9 +8,9 @@ use core::{arch::asm, fmt::Write, mem::MaybeUninit, ops::Range, ptr::NonNull};
 use kernel::{
     entry::boot::{self, Boot, Occupant},
     metal::{
-        mmu::internal::access::MappedRange,
-        mmu::internal::{GEOMETRY, riscv::{Mode, context::Context, root}},
-        module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, Permissions, UseError},
+        memory::mmu::internal::access::MappedRange,
+        memory::mmu::internal::{GEOMETRY, riscv::{LeafAccess, Mode, context::Context, encoder}},
+        module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, SegmentPermissions, UseError},
     },
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
@@ -152,16 +152,16 @@ impl Resident {
         resident
     }
 
-    fn ranges(&self) -> [(Range<u64>, Permissions); 4] {
+    fn ranges(&self) -> [(Range<u64>, LeafAccess); 4] {
         [
-            (self.text.clone(), Permissions::ReadExecute),
-            (self.read_only.clone(), Permissions::ReadOnly),
-            (self.writable.clone(), Permissions::ReadWrite),
-            (self.tree.clone(), Permissions::ReadOnly),
+            (self.text.clone(), LeafAccess::ReadExecute),
+            (self.read_only.clone(), LeafAccess::ReadOnly),
+            (self.writable.clone(), LeafAccess::ReadWrite),
+            (self.tree.clone(), LeafAccess::ReadOnly),
         ]
     }
 
-    fn permission(&self, page: u64) -> Option<Permissions> {
+    fn permission(&self, page: u64) -> Option<LeafAccess> {
         self.ranges()
             .into_iter()
             .find_map(|(range, permission)| range.contains(&page).then_some(permission))
@@ -177,7 +177,7 @@ impl Resident {
 
 struct ImagePages {
     range: Range<u64>,
-    permissions: [Option<Permissions>; MAX_PAGES],
+    permissions: [Option<LeafAccess>; MAX_PAGES],
 }
 
 impl ImagePages {
@@ -185,11 +185,11 @@ impl ImagePages {
         (self.range.end - self.range.start) / PAGE
     }
 
-    fn entries(&self) -> &[Option<Permissions>] {
+    fn entries(&self) -> &[Option<LeafAccess>] {
         &self.permissions[..self.count() as usize]
     }
 
-    fn permission(&self, page: u64) -> Option<Permissions> {
+    fn permission(&self, page: u64) -> Option<LeafAccess> {
         self.permissions[((page - self.range.start) / PAGE) as usize]
     }
 
@@ -201,7 +201,7 @@ impl ImagePages {
         assert_eq!(material.physical, physical(self.range.clone()));
         root.publish(
             self.range.start,
-            &[Some(Permissions::ReadWrite); MAX_PAGES][..self.count() as usize],
+            &[Some(LeafAccess::ReadWrite); MAX_PAGES][..self.count() as usize],
         );
         // Reuse the same physical byte that held the old executable entry.
         let mut reused =
@@ -262,13 +262,18 @@ fn prepare(
         for page in
             &mut permissions[((first - start) / PAGE) as usize..((last - start) / PAGE) as usize]
         {
-            assert!(page.replace(segment.permissions).is_none());
+            let access = match segment.permissions {
+                SegmentPermissions::ReadOnly => LeafAccess::ReadOnly,
+                SegmentPermissions::ReadWrite => LeafAccess::ReadWrite,
+                SegmentPermissions::ReadExecute => LeafAccess::ReadExecute,
+            };
+            assert!(page.replace(access).is_none());
         }
     }
     let entry = layout.entry(contract).unwrap().get();
     let pages = ImagePages { range, permissions };
     assert!(pages.range.contains(&entry));
-    assert_eq!(pages.permission(entry), Some(Permissions::ReadExecute));
+    assert_eq!(pages.permission(entry), Some(LeafAccess::ReadExecute));
     (layout, material, pages)
 }
 
@@ -334,7 +339,7 @@ fn exercise(
     resident: &Resident,
     storage: NonNull<Storage>,
 ) {
-    let contract = root::contract(mode);
+    let contract = encoder::contract(mode);
     let mut initial = mapping::Root::new(mode);
     for (range, permission) in resident.ranges() {
         initial.map(range, permission);
@@ -362,7 +367,7 @@ fn exercise(
     // Revoke writable staging translations before publishing either image.
     // Only the major can access this initial root at this point.
     for pages in images {
-        initial.withdraw(pages.range.clone(), |_| Some(Permissions::ReadWrite));
+        initial.withdraw(pages.range.clone(), |_| Some(LeafAccess::ReadWrite));
     }
     initial.verify_active(reserved, outside_images);
     for pages in images {
@@ -383,11 +388,11 @@ fn exercise(
         .unwrap();
     let provider = geometry.acquire(GEOMETRY).unwrap();
     let retained = geometry.acquire(GEOMETRY).unwrap();
-    root::check(mode, &root_layout, core::slice::from_ref(&retained)).unwrap();
+    encoder::check(mode, &root_layout, core::slice::from_ref(&retained)).unwrap();
     let backend = unsafe { slots.publish(root_layout, root_material, [retained]) }
         .ok()
         .unwrap();
-    let encoder = root::bind(mode, &backend).unwrap();
+    let encoder = encoder::bind(mode, &backend).unwrap();
     let mut successor = initial.successor();
 
     for (range, _) in resident.ranges() {
@@ -416,7 +421,7 @@ fn exercise(
         let boundary = mode.leaf_size(level).unwrap().get();
         let address = PhysicalAddress::new(boundary);
         assert_eq!(
-            unsafe { encoder.leaf(address, level, Permissions::ReadOnly) },
+            unsafe { encoder.leaf(address, level, LeafAccess::ReadOnly) },
             Some((boundary >> 2) | 0x43)
         );
     }

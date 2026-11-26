@@ -5,10 +5,10 @@ use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use kernel::metal::{
-    execution::riscv::description::RiscvExtension, execution::riscv::description::RiscvIsa,
-    firmware::devicetree::memory::Source, hart::riscv::description::RiscvCpus,
-    mmu::internal::riscv::description::RiscvMmu, mmu::internal::riscv::description::RiscvMmuMode,
-    time::RiscvTimebase,
+    processor::execution::description::riscv::RiscvExtension, processor::execution::description::riscv::RiscvIsa,
+    platform::firmware::devicetree::memory::Source, processor::hart::riscv::description::RiscvCpus,
+    memory::mmu::internal::riscv::description::{MaximumMode, RiscvMmu},
+    time::riscv::RiscvTimebase,
 };
 use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 use limen_treaty::model::{ByteLength, PhysicalAddress};
@@ -72,7 +72,7 @@ fn check_discovery(boot: &Boot<'_>) {
         .expect("declared MMU mode");
     assert!(matches!(
         mmu.maximum(),
-        RiscvMmuMode::Sv39 | RiscvMmuMode::Sv48 | RiscvMmuMode::Sv57
+        MaximumMode::Paged(_)
     ));
     assert_eq!(mmu.source(), cpu.node().id());
     let isa = RiscvIsa::describe(&cpu).unwrap().expect("declared ISA");
@@ -93,7 +93,7 @@ fn check_discovery(boot: &Boot<'_>) {
     assert_eq!(timebase.source(), cpus.node().id());
     assert_eq!(timebase.hertz(), 10_000_000);
     assert!(boot.acpi().is_none(), "SBI supplied a DTB, not ACPI");
-    let sbi = kernel::metal::firmware::sbi::platform_services();
+    let sbi = kernel::metal::platform::firmware::sbi::platform_services();
     assert!(sbi.hart_state_management() && sbi.timer() && sbi.inter_processor_interrupt());
     write("PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1\n");
 }

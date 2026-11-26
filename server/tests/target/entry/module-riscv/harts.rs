@@ -12,9 +12,9 @@ use core::{
 use kernel::{
     entry::boot::{Boot, Minor, Startup},
     metal::{
-        execution::riscv::description::{RiscvExtension, RiscvIsa},
-        hart::riscv::description::RiscvCpus,
-        mmu::internal::riscv::{Mode, context::Context, description::RiscvMmu, root::Root},
+        processor::execution::description::riscv::{RiscvExtension, RiscvIsa},
+        processor::hart::riscv::description::RiscvCpus,
+        memory::mmu::internal::riscv::{Mode, context::Context, description::RiscvMmu, encoder::Encoder},
         module::ModuleUse,
     },
 };
@@ -67,7 +67,7 @@ pub fn check(boot: &Boot<'_>, modes: &[Mode]) -> usize {
         let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
         assert!(isa.has(RiscvExtension::InstructionFence));
     }
-    assert!(kernel::metal::firmware::sbi::platform_services().hart_state_management());
+    assert!(kernel::metal::platform::firmware::sbi::platform_services().hart_state_management());
     assert_eq!(status(major), STARTED);
     assert_eq!(status(minor), STOPPED);
     minor
@@ -98,7 +98,7 @@ pub unsafe fn exercise(
     peer: usize,
     roots: [Context; 2],
     held: &ModuleUse<'_>,
-    encoder: &Root<'_>,
+    encoder: &Encoder<'_>,
     first_returned: impl FnOnce(),
 ) -> [u64; 2] {
     assert_eq!(PHASE.load(Relaxed), Phase::Idle as u8);
@@ -147,7 +147,7 @@ fn run(hart: usize, expected: usize) -> ! {
     unsafe { mapping::switch_context(Context::BARE, initial) };
     let query = unsafe { core::mem::transmute::<u64, unsafe extern "C" fn() -> u64>(entry) };
     RETURNS[0].store(unsafe { query() }, Relaxed);
-    let pointer = ENCODER.load(Relaxed).cast::<Root<'_>>();
+    let pointer = ENCODER.load(Relaxed).cast::<Encoder<'_>>();
     assert!(!pointer.is_null());
     // The launcher owns the shared borrow until HSM confirms our departure.
     let encoder = unsafe { &*pointer };

@@ -12,7 +12,7 @@ the supplied ID. The selected firmware adapter validates its input. The entry
 calls the image-defined `limen_platform_ready(Boot)` once. The image receives the
 major ID and the admitted device-tree extent or firmware map when available.
 A rejected handoff uses early diagnostics and requests failure shutdown.
-[Entry](../server/src/entry/boot/mod.rs) · [Admission](../server/src/metal/boot/major.rs)
+[Entry](../server/src/entry/boot/mod.rs) · [Admission](../server/src/metal/platform/boot/major.rs)
 
 Boot owns the major stack as an aligned Rust static. The image keeps
 the object resident and writable for the early boot path. On RV64, OpenSBI
@@ -36,7 +36,7 @@ entry. Only then does it publish `Ready` and invoke the supplied entry.
 
 A definitive rejection releases the record for retry. An unconfirmed xAPIC
 delivery keeps the record, trampoline, GDT and mappings reserved because the
-minor can still enter. [Launch state and safety contract](../server/src/metal/boot/minor.rs)
+minor can still enter. [Launch state and safety contract](../server/src/metal/platform/boot/minor.rs)
 
 ## Adding a backend
 

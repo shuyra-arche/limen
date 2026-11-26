@@ -1,7 +1,7 @@
 use kernel::{
     entry::boot::Boot,
     metal::{
-        allocator::{
+        memory::allocator::{
             Allocation, Allocator, Allowance, Config, Initial, MappedStorage,
             pool::{GroupId, GroupSlot, Pool},
         },

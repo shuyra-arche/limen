@@ -78,6 +78,7 @@ grep -Fxq 'PASS bootstrap-foundation pend=1 pool=1 retained=1 refund=1 generatio
 grep -Fxq 'PASS foundation-pressure preflight=1 fragments=1 allocation=1 pool=1 history=1 rediscover=1 shut=1' "$out/guest.log"
 grep -Fxq 'PASS boot-mapped-storage identity=1 range=1 rw=1 reuse=1' "$out/guest.log"
 grep -Fxq 'PASS synchronization' "$out/guest.log"
+grep -Fxq 'PASS cooperative-execution harts=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1' "$out/guest.log"
 jq -es 'all(.[]; has("error") | not)
     and any(.[]; .id == "capabilities" and has("return"))
     and any(.[]; .id == "start" and has("return"))' "$out/qmp.jsonl" >/dev/null

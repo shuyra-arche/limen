@@ -2,11 +2,11 @@
 
 use super::{Boot, Exclusions, Retirement, bump::Bump};
 use crate::metal::{
-    allocator::{
+    memory::allocator::{
         Allocator, Allowance, Config, Error, Initial, RegionDescription, RegionOrigin,
         RootInitialization, RootStorage,
     },
-    mmu::internal::access::MappedRange,
+    memory::mmu::internal::access::MappedRange,
 };
 use core::alloc::Layout;
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};

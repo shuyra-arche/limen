@@ -4,7 +4,6 @@
 //! protection for the current Hart. Synchronous exception entry cannot use it.
 
 mod leaf;
-mod queue;
 mod snap;
 mod turn;
 
@@ -15,4 +14,4 @@ pub use turn::{
 };
 
 /// Maximum number of unique Turn locks in a complete plan on one Hart.
-pub const TURN_CAPACITY: usize = crate::metal::hart::local::TURN_CAPACITY;
+pub const TURN_CAPACITY: usize = crate::metal::processor::hart::local::TURN_CAPACITY;

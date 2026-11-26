@@ -1,0 +1,404 @@
+//! Preflight and initialize the source’s permanent root and initial material.
+pub(crate) mod bump;
+
+use core::{
+    alloc::Layout,
+    mem::MaybeUninit,
+    ptr, slice,
+    sync::atomic::{AtomicUsize, Ordering::Release},
+};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
+
+use crate::metal::{
+    identity::{Entry, Generation, Slot},
+    memory::mmu::internal::access::MappedRange,
+    sync::{TURN_CAPACITY, TurnLock},
+};
+
+use super::{
+    Allocator, AllowanceId, Error, REGION_LIMIT, Region, RegionDescription, RegionId, RegionOrigin,
+    SourceId,
+    allocation::{Allocation, AllocationId, AllocationRecord, Phase},
+    allowance::{ASSIGNMENT_LOCKS, Allowance, AllowanceSlot, Balance, Free},
+    region::{
+        Backing,
+        buddy::{Geometry, Root},
+    },
+    returns::ReturnRecord,
+};
+
+use bump::Bump;
+
+/// Per-position maximum capacities include unpublished Region positions.
+#[derive(Clone, Copy, Debug)]
+pub struct Config {
+    pub granule: ByteLength,
+    pub maximum: ByteLength,
+    pub regions: usize,
+    pub grains: usize,
+    pub roots: usize,
+    pub allocations: usize,
+    pub returns: usize,
+    pub allowances: usize,
+    pub edits: usize,
+}
+
+impl Config {
+    fn check(self) -> Result<(), Error> {
+        let alignment = Alignment::new(self.granule.get()).ok_or(Error::Layout)?;
+        if !alignment.is_aligned(self.maximum) {
+            return Err(Error::Layout);
+        }
+        // No authorization ancestors are traversed here. Opening an
+        // Allowance takes at most Q Region locks, the slot and the free
+        // index. Source inspection takes Q Region locks and the directory.
+        if !(1..=REGION_LIMIT).contains(&self.regions)
+            || self.regions + ASSIGNMENT_LOCKS > TURN_CAPACITY
+            || self.roots == 0
+            || self.grains == 0
+            || self.allocations == 0
+            || self.returns < self.allocations
+            || self.allowances == 0
+            || Slot::new(self.allocations - 1).is_none()
+            || Slot::new(self.returns - 1).is_none()
+            || Slot::new(self.allowances - 1).is_none()
+        {
+            return Err(Error::Capacity);
+        }
+        Ok(())
+    }
+
+    pub(super) fn granule_alignment(self) -> Alignment {
+        Alignment::new(self.granule.get()).expect("validated Allocator configuration")
+    }
+
+    fn nodes(self) -> Result<usize, Error> {
+        self.grains.checked_mul(2).ok_or(Error::Capacity)
+    }
+
+    /// Full fixed root, including backing for delayed admission and history.
+    pub fn layout(self) -> Result<Layout, Error> {
+        self.check()?;
+        let mut root = Layout::new::<Allocator>();
+        for element in [
+            array::<Region>(self.regions)?,
+            array::<TurnLock<AllowanceSlot>>(self.allowances)?,
+        ] {
+            root = root.extend(element).map_err(|_| Error::Layout)?.0;
+        }
+        let region = [
+            array::<Root>(self.roots)?,
+            array::<u8>(self.nodes()?)?,
+            array::<Entry<AllocationRecord>>(self.allocations)?,
+            array::<Entry<ReturnRecord>>(self.returns)?,
+        ];
+        for _ in 0..self.regions {
+            for element in region {
+                root = root.extend(element).map_err(|_| Error::Layout)?.0;
+            }
+        }
+        Ok(root.pad_to_align())
+    }
+
+    pub(super) fn geometry(self, description: RegionDescription) -> Result<Geometry, Error> {
+        let geometry =
+            Geometry::new(description.physical, self.granule).map_err(|_| Error::Range)?;
+        if description.physical.length().get() / self.granule.get() > self.grains as u64
+            || geometry.root_count() > self.roots
+            || geometry.edit_bound() > self.edits
+        {
+            return Err(Error::Capacity);
+        }
+        Ok(geometry)
+    }
+}
+
+fn array<T>(count: usize) -> Result<Layout, Error> {
+    Layout::array::<T>(count).map_err(|_| Error::Layout)
+}
+
+/// Storage reserved for a root layout. Its entire backing granules have
+/// already been removed from the geometry.
+pub struct RootStorage<'a> {
+    mapping: MappedRange<'a>,
+    reserved: PhysicalRange,
+    origin: RegionOrigin,
+}
+
+impl<'a> RootStorage<'a> {
+    pub(crate) fn new(
+        mapping: MappedRange<'a>,
+        reserved: PhysicalRange,
+        origin: RegionOrigin,
+    ) -> Self {
+        Self {
+            mapping,
+            reserved,
+            origin,
+        }
+    }
+
+    pub fn physical(&self) -> PhysicalRange {
+        self.mapping.physical()
+    }
+
+    pub fn reserved(&self) -> PhysicalRange {
+        self.reserved
+    }
+
+    pub fn origin(&self) -> RegionOrigin {
+        self.origin
+    }
+
+    fn into_bytes(self) -> &'a mut [MaybeUninit<u8>] {
+        self.mapping.into_bytes()
+    }
+
+    pub fn bytes(&mut self) -> &mut [MaybeUninit<u8>] {
+        self.mapping.bytes()
+    }
+}
+
+/// One actual initial allocation and its original receiver slot.
+pub struct Initial<'a> {
+    physical: PhysicalRange,
+    receiver: &'a mut Option<Allocation>,
+    staged: Option<AllocationId>,
+}
+
+impl<'a> Initial<'a> {
+    pub fn new(physical: PhysicalRange, receiver: &'a mut Option<Allocation>) -> Self {
+        Self {
+            physical,
+            receiver,
+            staged: None,
+        }
+    }
+}
+
+/// Exact root input and initial receiving positions checked before Entry
+/// consumes the permanent mapped storage.
+pub(crate) struct RootInitialization<'r, 'a> {
+    config: Config,
+    descriptions: [Option<RegionDescription>; REGION_LIMIT],
+    capacity: u64,
+    committed: u64,
+    allowance_receiver: &'r mut Option<Allowance>,
+    initial: &'r mut [Initial<'a>],
+}
+
+impl<'r, 'a> RootInitialization<'r, 'a> {
+    pub(crate) fn prepare(
+        config: Config,
+        descriptions: impl Iterator<Item = RegionDescription>,
+        capacity: u64,
+        allowance_receiver: &'r mut Option<Allowance>,
+        initial: &'r mut [Initial<'a>],
+    ) -> Result<Self, Error> {
+        config.check()?;
+        if allowance_receiver.is_some() {
+            return Err(Error::Receiver);
+        }
+        let alignment = config.granule_alignment();
+        if initial.len() > config.regions.saturating_mul(config.allocations)
+            || !alignment.is_aligned(ByteLength::new(capacity))
+        {
+            return Err(Error::Capacity);
+        }
+        let mut prepared = [None; REGION_LIMIT];
+        let mut committed = 0u64;
+        let mut total = ByteLength::new(0);
+        for (index, description) in descriptions.enumerate() {
+            if index >= config.regions {
+                return Err(Error::Capacity);
+            }
+            prepared[index] = Some(description);
+            config.geometry(description)?;
+            total = total
+                .checked_add(description.physical.length())
+                .ok_or(Error::Capacity)?;
+            let mut count = 0;
+            for (index, item) in initial.iter().enumerate() {
+                if !description.physical.covers(item.physical) {
+                    continue;
+                }
+                if item.receiver.is_some()
+                    || !item.physical.start().is_aligned(alignment)
+                    || !item.physical.end().is_aligned(alignment)
+                {
+                    return Err(Error::Receiver);
+                }
+                if initial[..index]
+                    .iter()
+                    .any(|prior| prior.physical.overlaps(item.physical))
+                {
+                    return Err(Error::Overlap);
+                }
+                committed = committed
+                    .checked_add(item.physical.length().get())
+                    .ok_or(Error::Capacity)?;
+                count += 1;
+            }
+            if count > config.allocations {
+                return Err(Error::AllocationCapacity);
+            }
+        }
+        if total > config.maximum || ByteLength::new(capacity) > total || committed > capacity {
+            return Err(Error::Balance);
+        }
+        if initial.iter().any(|item| {
+            !prepared
+                .iter()
+                .flatten()
+                .any(|region| region.physical.covers(item.physical))
+        }) {
+            return Err(Error::Range);
+        }
+
+        Ok(Self {
+            config,
+            descriptions: prepared,
+            capacity,
+            committed,
+            allowance_receiver,
+            initial,
+        })
+    }
+
+    /// # Safety
+    ///
+    /// Entry must supply the exact root from its preflight, with this
+    /// configuration's layout and exclusive permanent storage. It must
+    /// have removed the entire reservation from the prepared regions.
+    pub(crate) unsafe fn install(self, storage: RootStorage<'static>) -> &'static Allocator {
+        initialize(
+            storage,
+            self.config,
+            self.descriptions.into_iter().flatten(),
+            self.capacity,
+            self.committed,
+            self.allowance_receiver,
+            self.initial,
+        )
+    }
+}
+
+/// All accesses use disjoint prefixes of the one permanent mapped grant.
+struct Carve {
+    base: *mut MaybeUninit<u8>,
+    cursor: Bump,
+}
+
+impl Carve {
+    fn take<T>(&mut self, count: usize) -> &'static mut [MaybeUninit<T>] {
+        let layout = array::<T>(count).expect("preflighted array");
+        let offsets = self
+            .cursor
+            .reserve(layout)
+            .expect("preflighted root layout");
+        // Root base is aligned for all components. Bump proves disjoint
+        // initialized or uninitialized storage and preserves pointer provenance.
+        unsafe { slice::from_raw_parts_mut(self.base.add(offsets.start).cast(), count) }
+    }
+}
+
+fn filled<T>(slice: &mut [MaybeUninit<T>]) -> &mut [T] {
+    // All callers initialize every element in place before this conversion.
+    unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr().cast(), slice.len()) }
+}
+
+fn initialize(
+    storage: RootStorage<'static>,
+    config: Config,
+    descriptions: impl Iterator<Item = RegionDescription>,
+    capacity: u64,
+    committed: u64,
+    allowance_receiver: &mut Option<Allowance>,
+    initial: &mut [Initial<'_>],
+) -> &'static Allocator {
+    let reserved = storage.reserved();
+    let bytes = storage.into_bytes();
+    let mut carve = Carve {
+        base: bytes.as_mut_ptr(),
+        cursor: Bump::new(0..bytes.len()).expect("nonempty root"),
+    };
+    let place = &mut carve.take::<Allocator>(1)[0];
+    let source_id = SourceId(ptr::from_mut(place).addr());
+    let regions = carve.take::<Region>(config.regions);
+    let allowances = carve.take::<TurnLock<AllowanceSlot>>(config.allowances);
+    for (index, slot) in allowances.iter_mut().enumerate() {
+        let entry = if index == 0 {
+            AllowanceSlot::initial(Balance::new(capacity, committed))
+        } else {
+            let next = (index + 1 < config.allowances)
+                .then(|| Slot::new(index + 1).expect("checked Allowance capacity"));
+            AllowanceSlot::free(next)
+        };
+        slot.write(TurnLock::new(entry));
+    }
+
+    for (index, region) in regions.iter_mut().enumerate() {
+        let roots = carve.take::<Root>(config.roots);
+        let nodes = carve.take::<u8>(config.nodes().expect("preflighted node count"));
+        nodes.fill(MaybeUninit::new(0));
+        let allocations = carve.take::<Entry<AllocationRecord>>(config.allocations);
+        allocations.fill_with(|| MaybeUninit::new(Entry::EMPTY));
+        let returns = carve.take::<Entry<ReturnRecord>>(config.returns);
+        returns.fill_with(|| MaybeUninit::new(Entry::EMPTY));
+        region.write(Region::new(
+            Backing {
+                roots,
+                nodes: filled(nodes),
+            },
+            filled(allocations),
+            filled(returns),
+            RegionId::new(source_id, index),
+        ));
+    }
+
+    let regions = filled(regions);
+    let initial_slot = Slot::new(0).expect("initial Allowance slot");
+    let allowance = AllowanceId::new(source_id, initial_slot, Generation::FIRST);
+    let mut charged = capacity;
+    let mut published = 0;
+    for (index, description) in descriptions.enumerate() {
+        let region = &mut regions[index];
+        let geometry = config.geometry(description).expect("preflighted Region");
+        region.initialize(description, geometry, config.edits);
+        let state = region.state.get_mut();
+        let amount = charged.min(state.unassigned);
+        state.unassigned -= amount;
+        charged -= amount;
+        for item in initial
+            .iter_mut()
+            .filter(|x| description.physical.covers(x.physical))
+        {
+            state
+                .buddy()
+                .occupy(item.physical)
+                .expect("initial ranges preflighted");
+            item.staged = Some(state.record(item.physical, allowance, Phase::Issued));
+        }
+        published += 1;
+    }
+
+    let source = place.write(Allocator {
+        config,
+        root: reserved,
+        directory: TurnLock::new(()),
+        published: AtomicUsize::new(0),
+        regions,
+        allowances: filled(allowances),
+        free: TurnLock::new(Free {
+            head: (config.allowances > 1).then(|| Slot::new(1).expect("second Allowance slot")),
+            retired: 0,
+        }),
+    });
+    for item in initial {
+        let id = item.staged.take().expect("preflighted initial position");
+        *item.receiver = Some(Allocation::issued(source, id, item.physical));
+    }
+    *allowance_receiver = Some(Allowance::initial(source, allowance));
+    source.published.store(published, Release);
+    source
+}

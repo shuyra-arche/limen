@@ -139,7 +139,7 @@ pub(super) fn check_discovery(boot: &boot::Boot<'_>, target: usize) {
     assert!(boot.conventional_ram().is_none());
 }
 
-pub(super) fn inspect(boot: boot::Boot, _: &impl MemoryMap) -> ! {
+pub(super) fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) {
     assert!(boot.device_tree().is_none());
     assert!(boot.dtb_memory().is_none());
     let idtr = Idtr::read();
@@ -159,6 +159,9 @@ pub(super) fn inspect(boot: boot::Boot, _: &impl MemoryMap) -> ! {
         assert!(unsafe { gate.add(2).cast::<u16>().read_unaligned() } == cs);
     }
     boot::write("PASS firmware-discovery q35 acpi=1 madt=1 routes=1 retained=1\n");
+}
+
+pub(super) fn report() -> ! {
     use core::fmt::Write;
     boot::console()
         .expect("board console")

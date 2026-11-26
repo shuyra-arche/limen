@@ -1,7 +1,7 @@
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
-        allocator::{
+        memory::allocator::{
             Allocation,
             Allowance,
             Config,

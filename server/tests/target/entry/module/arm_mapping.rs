@@ -1,7 +1,7 @@
 //! Inspect the firmware-owned EL1 stage-1 root of the singleton Arm virt guest.
 
 use core::arch::asm;
-use kernel::{metal::firmware::map::FirmwareMap, metal::module::Permissions};
+use kernel::{metal::platform::firmware::map::FirmwareMap, metal::module::SegmentPermissions};
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 pub const PAGE: u64 = 4096;
@@ -130,7 +130,7 @@ impl Root {
         self,
         map: FirmwareMap<'_>,
         physical: PhysicalRange,
-        expected: impl Fn(u64) -> Permissions,
+        expected: impl Fn(u64) -> SegmentPermissions,
     ) -> Result<(), Error> {
         if Self::current()? != self
             || !physical.start().get().is_multiple_of(PAGE)
@@ -196,7 +196,7 @@ struct Walk<'a, Expected> {
     observed: u64,
 }
 
-impl<Expected: Fn(u64) -> Permissions> Walk<'_, Expected> {
+impl<Expected: Fn(u64) -> SegmentPermissions> Walk<'_, Expected> {
     unsafe fn table(
         &mut self,
         address: u64,
@@ -289,9 +289,9 @@ impl<Expected: Fn(u64) -> Permissions> Walk<'_, Expected> {
         let last = overlap.end().get();
         for page in (first..last).step_by(PAGE as usize) {
             let expected = match (self.expected)(page) {
-                Permissions::ReadOnly => (false, false),
-                Permissions::ReadWrite => (true, false),
-                Permissions::ReadExecute => (false, true),
+                SegmentPermissions::ReadOnly => (false, false),
+                SegmentPermissions::ReadWrite => (true, false),
+                SegmentPermissions::ReadExecute => (false, true),
             };
             let access = translate(page, true);
             let permitted = if writable {

@@ -1,10 +1,11 @@
 use core::{arch::asm, fmt::Write};
 use kernel::entry::boot;
 use kernel::metal::{
-    firmware::arm::{GenericTimer, GicV3, Trigger},
-    firmware::devicetree::{DeviceTree, Error as TreeError},
-    firmware::psci::{Conduit, PsciDescription},
-    hart::aarch64::description::Aarch64Cpus,
+    interrupt::gic::{GicV3, Trigger},
+    platform::firmware::devicetree::{DeviceTree, Error as TreeError},
+    platform::firmware::psci::{Conduit, PsciDescription},
+    processor::hart::aarch64::description::Aarch64Cpus,
+    time::aarch64::GenericTimer,
 };
 use uefi::{
     Status,
@@ -110,7 +111,7 @@ pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
     devicetree::copy(discover).map(Some)
 }
 
-pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
+pub(super) fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) {
     let (el, daif, sp, vectors, spsel): (usize, usize, usize, usize, usize);
     unsafe {
         asm!("mrs {}, CurrentEL", "mrs {}, DAIF", "mov {}, sp", "mrs {}, VBAR_EL1",
@@ -168,6 +169,10 @@ pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
     console
         .write_str("PASS firmware-discovery virt dtb=1 psci=1 affinity=1 gic=1 timer=1\n")
         .expect("firmware discovery output");
+}
+
+pub(super) fn report() -> ! {
+    let mut console = boot::console().expect("board console");
     console
         .write_str("PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1 ram=1 reconciled=1\n")
         .expect("diagnostic output");
@@ -193,8 +198,8 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
     assert_eq!(psci.conduit(), conduit());
     unsafe {
         psci.verify().expect("live PSCI version and calls");
-        psci.verify_affinity(target, true)
-            .expect("live minor affinity");
+        psci.verify_affinity(target, false)
+            .expect("minor affinity before startup");
     }
 
     let timer = GenericTimer::read(tree)
@@ -217,4 +222,15 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
     );
     assert!(unsafe { GicV3::cpu_interface_available() });
     let _frequency = unsafe { timer.counter_frequency() }.expect("live generic timer frequency");
+}
+
+/// Recheck the original PSCI target only after the minor has entered.
+pub(super) fn inspect_started(tree: &DeviceTree<'_>, target: usize) {
+    let psci = PsciDescription::read(tree)
+        .unwrap()
+        .expect("PSCI declaration");
+    unsafe {
+        psci.verify_affinity(target, true)
+            .expect("live minor affinity");
+    }
 }

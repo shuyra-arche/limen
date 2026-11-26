@@ -40,7 +40,7 @@ CPU node can supply source-scoped MMU mode and ISA extension facts. The
 `/cpus` node can supply a timebase frequency. Boot exposes the independently
 probed SBI HSM, TIME and IPI extensions. A minor starts through SBI HSM
 with its resident record in `a1`.
-[RV64 entry](../server/src/metal/boot/riscv/) · [SBI](../server/src/metal/firmware/sbi/)
+[RV64 entry](../server/src/metal/platform/boot/riscv/) · [SBI](../server/src/metal/platform/firmware/sbi/)
 
 ## UEFI loader
 
@@ -77,7 +77,7 @@ and attributes. The original DTB and UEFI descriptions remain available
 through `Boot`. Initial RAM admission still requires the remaining platform
 reservations, active image/stack/translation storage, verified access and old
 device isolation.
-[UEFI adapter](../server/src/metal/firmware/uefi/) ·
+[UEFI adapter](../server/src/metal/platform/firmware/uefi/) ·
 [Formal boot contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/entry/boot/platforms.md)
 
 ### x86_64 q35
@@ -103,7 +103,7 @@ referenced tables. It preserves raw entries for unsupported bindings and
 decodes MADT processor and interrupt-controller descriptions. Boot compares
 the major's enabled MADT entry and local controller address with CPUID and
 the active xAPIC base. The test also compares the selected minor with MADT
-and checks the ACPI exclusions. [x86_64 entry](../server/src/metal/boot/x86_64/)
+and checks the ACPI exclusions. [x86_64 entry](../server/src/metal/platform/boot/x86_64/)
 
 ### AArch64 virt
 
@@ -118,7 +118,7 @@ and fits in retained loader data in the final map. The platform supplies it
 as `DeviceTree::Memory` to enable cross-checking. The minor starts through
 PSCI `CPU_ON` with a launch record as context, restores the major's EL1
 translation controls and installs its stack and vectors. QEMU verifies the
-HVC conduit. [AArch64 entry](../server/src/metal/boot/aarch64/) · [PSCI](../server/src/metal/firmware/psci.rs)
+HVC conduit. [AArch64 entry](../server/src/metal/platform/boot/aarch64/) · [PSCI](../server/src/metal/platform/firmware/psci.rs)
 
 The verified scope on x86 and Arm covers major and minor boot, and on Arm
 also the DTB and UEFI memory cross-check. CPU hotplug,

@@ -9,7 +9,7 @@ fn main() {
     // independent build facts. Neither proves a running hardware capability.
     let (firmware, cooperative) = match (arch.as_str(), os.as_str()) {
         ("riscv64", "none") => ("sbi", true),
-        ("x86_64" | "aarch64", "none" | "uefi") => ("uefi", false),
+        ("x86_64" | "aarch64", "none" | "uefi") => ("uefi", true),
         _ => return,
     };
     println!("cargo::rustc-cfg=limen_target");

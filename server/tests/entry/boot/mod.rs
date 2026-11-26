@@ -1,5 +1,5 @@
 use super::{Boot, Retirement, physical, regions};
-use crate::metal::firmware::{
+use crate::metal::platform::firmware::{
     devicetree::{self, memory::DtbMemory},
     facts::Descriptions,
     map::{FirmwareMap, FirmwareRegion, MapError},

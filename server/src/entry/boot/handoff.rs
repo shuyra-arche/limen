@@ -1,6 +1,6 @@
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, FirmwareRegion, devicetree, physical::Exclusions};
-use crate::metal::firmware::facts::Descriptions;
+use crate::metal::platform::firmware::facts::Descriptions;
 use core::ops::Range;
 use limen_treaty::model::PhysicalRange;
 

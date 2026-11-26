@@ -4,21 +4,21 @@ mod handoff;
 mod physical;
 mod regions;
 #[cfg(limen_target)]
-use crate::metal::allocator::RegionDescription;
-use crate::metal::allocator::bump;
+use crate::metal::memory::allocator::RegionDescription;
+use crate::metal::memory::allocator::bootstrap::bump;
 #[cfg(limen_target)]
-use crate::metal::boot::major;
+use crate::metal::platform::boot::major;
 #[cfg(limen_target)]
 use core::fmt::Write;
 #[cfg(limen_target)]
 use limen_treaty::model::ByteLength;
 
 #[cfg(limen_target)]
-pub use crate::metal::boot::{Startup, console::Console, services::Services};
-use crate::metal::firmware::acpi;
+pub use crate::metal::platform::boot::{Startup, console::Console, services::Services};
+use crate::metal::platform::firmware::acpi;
 #[cfg(limen_target)]
-use crate::metal::firmware::facts::Descriptions;
-use crate::metal::firmware::{
+use crate::metal::platform::firmware::facts::Descriptions;
+use crate::metal::platform::firmware::{
     devicetree::{
         self,
         memory::{DtbMemory, Source},
@@ -63,14 +63,16 @@ impl Boot<'_> {
     pub fn exclusions(&self) -> Exclusions<'_> {
         self.exclusions_for(
             physical::extent(stack_range()),
-            physical::extent(crate::metal::boot::trap_stack_range()),
+            physical::extent(crate::metal::platform::boot::trap_stack_range()),
         )
     }
 
     fn stacks_in_image(&self) -> bool {
         let image = self.image();
         image.covers(physical::extent(stack_range()))
-            && image.covers(physical::extent(crate::metal::boot::trap_stack_range()))
+            && image.covers(physical::extent(
+                crate::metal::platform::boot::trap_stack_range(),
+            ))
     }
 }
 
@@ -100,7 +102,7 @@ unsafe extern "Rust" {
 }
 
 #[cfg(limen_target)]
-pub use crate::metal::boot::minor::{Minor, StartError};
+pub use crate::metal::platform::boot::minor::{Minor, StartError};
 
 #[cfg(test)]
 #[path = "../../../tests/entry/boot/mod.rs"]
@@ -114,9 +116,9 @@ pub(crate) mod tests;
 #[cfg(limen_firmware = "uefi")]
 pub unsafe fn major(
     hart: usize,
-    loader: &crate::metal::firmware::uefi::Loader<'_>,
+    loader: &crate::metal::platform::firmware::uefi::Loader<'_>,
     services: &'static Services,
 ) -> ! {
     services.install();
-    unsafe { crate::metal::boot::enter_major(hart, loader) }
+    unsafe { crate::metal::platform::boot::enter_major(hart, loader) }
 }

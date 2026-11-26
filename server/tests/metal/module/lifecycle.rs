@@ -1,9 +1,9 @@
 use super::{IMAGES, PAGE, ROOT, SV39_ROOT};
 use kernel::metal::{
-    mmu::internal::access::MappedRange,
-    mmu::internal::{
+    memory::mmu::internal::access::MappedRange,
+    memory::mmu::internal::{
         GEOMETRY,
-        riscv::{Mode, root},
+        riscv::{Mode, encoder},
     },
     module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, UseError},
 };
@@ -210,12 +210,12 @@ fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
     // These buffers only model custody. Their numerical entries are never
     // called on the Host.
     assert_eq!(
-        root::check(Mode::Sv39, &root_layout, &[]),
+        encoder::check(Mode::Sv39, &root_layout, &[]),
         Err(UseError::Interface)
     );
     let wrong_machine = other.acquire(GEOMETRY).unwrap();
     assert_eq!(
-        root::check(
+        encoder::check(
             Mode::Sv39,
             &root_layout,
             std::slice::from_ref(&wrong_machine)
@@ -232,7 +232,7 @@ fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
             geometry.acquire(GEOMETRY).unwrap(),
         ];
         assert_eq!(
-            root::check(Mode::Sv39, &root_layout, &ambiguous),
+            encoder::check(Mode::Sv39, &root_layout, &ambiguous),
             Err(UseError::Interface)
         );
         let [first, second] = ambiguous;
@@ -247,10 +247,10 @@ fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
     assert_eq!(root_material.as_ptr(), root_storage);
 
     let dependency = [first];
-    root::check(Mode::Sv39, &root_layout, &dependency).unwrap();
+    encoder::check(Mode::Sv39, &root_layout, &dependency).unwrap();
     for mode in [Mode::Sv48, Mode::Sv57] {
         assert_eq!(
-            root::check(mode, &root_layout, &dependency),
+            encoder::check(mode, &root_layout, &dependency),
             Err(UseError::Interface)
         );
     }
@@ -259,7 +259,7 @@ fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
         .unwrap();
     let wrong_contract = root.acquire(ROOT).unwrap();
     assert_eq!(
-        root::check(
+        encoder::check(
             Mode::Sv39,
             &second_layout,
             std::slice::from_ref(&wrong_contract)

@@ -4,7 +4,7 @@ use kernel::{
     basis::pend::{Error, Handle, Initial as InitialPend, PendSpace, Revoker},
     entry::boot::{self, Boot, Retirement as PhysicalRetirement},
     metal::{
-        allocator::{
+        memory::allocator::{
             Allocation, AllocationConstruction, AllocationId, Allocator, Allowance, Candidate,
             Config, Error as SourceError, Initial, MappedStorage, Pending,
             RamPurpose::Metadata,
@@ -14,7 +14,7 @@ use kernel::{
                 Stable, StableOwner,
             },
         },
-        mmu::internal::access::MappedRange,
+        memory::mmu::internal::access::MappedRange,
         sync::TurnMode::Fast,
     },
 };

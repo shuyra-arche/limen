@@ -7,6 +7,7 @@
 
 #[cfg(any(limen_target, test))]
 pub mod basis;
+mod devicetree;
 #[cfg(any(limen_target, test))]
 pub mod entry;
 pub mod metal;

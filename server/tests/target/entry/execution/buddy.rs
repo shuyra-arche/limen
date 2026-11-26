@@ -1,5 +1,5 @@
 use core::mem::MaybeUninit;
-use kernel::metal::allocator::buddy::{Buddy, Error, Geometry, Root};
+use kernel::metal::memory::allocator::region::buddy::{Buddy, Error, Geometry, Root};
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 const ORDER: u32 = 14;

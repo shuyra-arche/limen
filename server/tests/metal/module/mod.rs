@@ -1,11 +1,11 @@
 mod lifecycle;
 
-use kernel::metal::mmu::internal::access::MappedRange;
-use kernel::metal::mmu::internal::{
+use kernel::metal::memory::mmu::internal::access::MappedRange;
+use kernel::metal::memory::mmu::internal::{
     GEOMETRY,
-    riscv::{Mode, root},
+    riscv::{Mode, encoder},
 };
-use kernel::metal::module::{Contract, Error, Machine, ModuleImage, Permissions};
+use kernel::metal::module::{Contract, Error, Machine, ModuleImage, SegmentPermissions};
 use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
 use std::mem::MaybeUninit;
 
@@ -41,7 +41,7 @@ const ROOTS: [(Mode, &[u8]); 3] = [
     ),
 ];
 const SV39_ROOT: &[u8] = ROOTS[0].1;
-const ROOT: Contract<'static> = root::contract(Mode::Sv39);
+const ROOT: Contract<'static> = encoder::contract(Mode::Sv39);
 
 #[derive(Clone, Copy)]
 struct Program {
@@ -87,7 +87,7 @@ fn note_property(bytes: &[u8], path: &[u8], name: &[u8]) -> usize {
     let fdt_length =
         u32::from_le_bytes(bytes[note.offset + 4..note.offset + 8].try_into().unwrap()) as usize;
     let fdt_start = note.offset + 12 + name_length.next_multiple_of(4);
-    let description = kernel::metal::firmware::devicetree::DeviceTree::new(
+    let description = kernel::metal::platform::firmware::devicetree::DeviceTree::new(
         &bytes[fdt_start..fdt_start + fdt_length],
     )
     .unwrap();
@@ -168,9 +168,9 @@ fn prepares_independently_linked_programs_using_only_program_headers() {
         );
 
         let permissions = [
-            Permissions::ReadOnly,
-            Permissions::ReadExecute,
-            Permissions::ReadWrite,
+            SegmentPermissions::ReadOnly,
+            SegmentPermissions::ReadExecute,
+            SegmentPermissions::ReadWrite,
         ];
         let segments = plan.segments().collect::<Vec<_>>();
         assert_eq!(segments.len(), permissions.len());
@@ -300,8 +300,8 @@ fn selects_distinct_rv64_geometry_and_root_images() {
     let contracts = [
         GEOMETRY,
         ROOT,
-        root::contract(Mode::Sv48),
-        root::contract(Mode::Sv57),
+        encoder::contract(Mode::Sv48),
+        encoder::contract(Mode::Sv57),
     ];
     for (bytes, own) in sources.into_iter().zip(contracts) {
         let selected = ModuleImage::select(&sources, machine, PAGE, own)

@@ -11,9 +11,9 @@ for path in "${changed[@]}"; do
     case "$path" in
         rust-toolchain.toml|Cargo.toml|Cargo.lock|treaty/*|.cargo/*|server/Cargo.toml|server/build.rs|tools/tests/checks.sh|tools/tests/changes.sh|.github/workflows/check.yml)
             full=true ;;
-        server/src/metal/boot/x86_64/*|server/src/metal/boot/aarch64/*|server/src/metal/hart/x86_64.rs|server/src/metal/hart/aarch64/native.rs|server/src/metal/firmware/psci/native.rs|server/src/metal/firmware/uefi/mod.rs|server/src/metal/firmware/arm/native.rs)
+        server/src/metal/processor/execution/cooperative/x86_64/*|server/src/metal/processor/execution/cooperative/aarch64/*|server/src/metal/platform/boot/x86_64/*|server/src/metal/platform/boot/aarch64/*|server/src/metal/processor/hart/x86_64.rs|server/src/metal/processor/hart/aarch64/native.rs|server/src/metal/platform/firmware/psci/native.rs|server/src/metal/platform/firmware/uefi/mod.rs|server/src/metal/interrupt/gic/native.rs|server/src/metal/time/aarch64/native.rs)
             ;;
-        server/src/metal/firmware/uefi/loader.rs|server/src/metal/hart/aarch64/description.rs|server/src/metal/firmware/psci/mod.rs|server/src/metal/firmware/arm/mod.rs)
+        server/src/metal/platform/firmware/uefi/loader.rs|server/src/metal/processor/hart/aarch64/description.rs|server/src/metal/platform/firmware/psci/mod.rs|server/src/metal/interrupt/mod.rs|server/src/metal/interrupt/gic/mod.rs|server/src/metal/time/aarch64/mod.rs)
             host=true ;;
         server/src/*|server/link.x)
             host=true; rv64=true ;;
