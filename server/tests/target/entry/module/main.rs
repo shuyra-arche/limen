@@ -19,7 +19,8 @@ use kernel::{
     access::MappedRange,
     address::{PhysicalAddress, PhysicalRange},
     entry::boot::{self, FirmwareMap},
-    module::{Contract, Layout, ModuleImage, ModuleSlots, Permissions, UseError},
+    mmu::internal::GEOMETRY,
+    module::{Layout, ModuleImage, ModuleSlots, Permissions, UseError},
 };
 use limen_treaty::model::{ByteLength, PageSize};
 use uefi::{
@@ -89,7 +90,7 @@ fn prepare() -> Placement {
         &[IMAGE],
         board::MACHINE,
         PageSize::new(PAGE).unwrap(),
-        Contract::MmuGeometry,
+        GEOMETRY,
     )
     .unwrap()
     .unwrap();
@@ -138,7 +139,7 @@ fn prepare() -> Placement {
         pages[((first - start) / PAGE) as usize..((last - start) / PAGE) as usize]
             .fill(segment.permissions);
     }
-    let entry = layout.entry(Contract::MmuGeometry).unwrap();
+    let entry = layout.entry(GEOMETRY).unwrap();
     assert!(entry >= start && entry < physical.end().get());
     assert_eq!(
         pages[((entry - start) / PAGE) as usize],
@@ -259,15 +260,12 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         // The initial root keeps the exact executable pages visible on the
         // only Hart. The image declares the target's scalar geometry ABI.
         let module = unsafe { slots.publish(layout, storage, []) }.ok().unwrap();
-        let caller = module.acquire(Contract::MmuGeometry, 1).unwrap();
-        let sibling = module.acquire(Contract::MmuGeometry, 1).unwrap();
+        let caller = module.acquire(GEOMETRY).unwrap();
+        let sibling = module.acquire(GEOMETRY).unwrap();
         assert_eq!(caller.entry(), sibling.entry());
         let geometry = unsafe { board::query(caller.entry() as usize) };
         module.shut();
-        assert!(matches!(
-            module.acquire(Contract::MmuGeometry, 1),
-            Err(UseError::Closed)
-        ));
+        assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Closed)));
         assert!(matches!(module.retire(), Err(UseError::Busy)));
         drop(caller);
         assert!(matches!(module.retire(), Err(UseError::Busy)));

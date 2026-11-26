@@ -18,6 +18,7 @@
     "server/src/metal/allocator/**",
     "server/src/metal/mmu/internal/access.rs",
     "server/src/metal/mmu/internal/mod.rs",
+    "server/src/metal/mmu/internal/riscv/mod.rs",
     "server/src/metal/mmu/internal/riscv/description.rs",
     "server/src/metal/execution/**",
     "server/src/metal/hart/description.rs",

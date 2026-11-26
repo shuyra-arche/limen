@@ -1,6 +1,6 @@
 //! Versioned module declarations carried in a bounded ELF note.
 
-use super::elf::{Elf, Machine};
+use super::elf::Elf;
 use crate::metal::firmware::devicetree::{DeviceTree, Error as TreeError, Node, NodeId};
 
 const NOTE_OWNER: &[u8] = b"SHUYRA\0";
@@ -30,42 +30,52 @@ impl From<TreeError> for DescriptionError {
     }
 }
 
-/// Supported native ELF calling contracts.
+/// Exact interface declaration to match. The consumer defines what the
+/// interface and calling ABI mean.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Abi {
-    /// Integer-only calls, using SysV on x86_64 and the native ELF integer
-    /// calling conventions on RV64 and AArch64.
-    Scalar,
-    /// RV64 C ABI with a caller-borrowed, versioned geometry import table.
-    Sv39Root,
+pub struct Contract<'a> {
+    compatible: &'a [u8],
+    abi: u32,
+    version: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Contract {
-    /// Version 1 takes no arguments and returns the base translation page
-    /// size in bytes as a u64. Zero means the active configuration is unsupported.
-    MmuGeometry,
-    /// Version 1 takes a geometry import table, a physical byte address and
-    /// the kind of Sv39 root entry to encode. Zero means unsupported.
-    Sv39Root,
+impl<'a> Contract<'a> {
+    pub const fn new(compatible: &'a [u8], abi: u32, version: u32) -> Self {
+        Self {
+            compatible,
+            abi,
+            version,
+        }
+    }
+
+    pub const fn compatible(self) -> &'a [u8] {
+        self.compatible
+    }
+
+    pub const fn abi(self) -> u32 {
+        self.abi
+    }
+
+    pub const fn version(self) -> u32 {
+        self.version
+    }
 }
 
 /// An entry declaration tied to the original immutable note.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Interface<'a> {
-    contract: Contract,
-    version: u32,
+    contract: Contract<'a>,
     entry: u64,
     source: NodeId<'a>,
 }
 
 impl<'a> Interface<'a> {
-    pub const fn contract(self) -> Contract {
+    pub const fn contract(self) -> Contract<'a> {
         self.contract
     }
 
     pub const fn version(self) -> u32 {
-        self.version
+        self.contract.version()
     }
 
     /// Link-time virtual address in the file-backed executable segment.
@@ -82,23 +92,21 @@ impl<'a> Interface<'a> {
 /// requirements are established separately when publishing an instance.
 #[derive(Clone, Copy, Debug)]
 pub struct Description<'a> {
-    abi: Abi,
     interface: Interface<'a>,
 }
 
 impl<'a> Description<'a> {
-    pub(super) fn read(elf: &Elf<'a>, machine: Machine) -> Result<Self, DescriptionError> {
+    pub(super) fn read(elf: &Elf<'a>) -> Result<Self, DescriptionError> {
         let tree = DeviceTree::new(note(elf)?)?;
         let mut nodes = tree.nodes();
         let root = nodes.next().ok_or(DescriptionError::Missing)?;
         if word(&root, b"version")? != VERSION {
             return Err(DescriptionError::Unsupported);
         }
-        let abi = match word(&root, b"abi")? {
-            1 => Abi::Scalar,
-            2 if machine == Machine::Riscv64 => Abi::Sv39Root,
-            _ => return Err(DescriptionError::Unsupported),
-        };
+        let abi = word(&root, b"abi")?;
+        if abi == 0 {
+            return Err(DescriptionError::Format);
+        }
 
         let interfaces = nodes.next().ok_or(DescriptionError::Missing)?;
         if interfaces.parent_id() != Some(root.id()) || interfaces.name() != b"interfaces" {
@@ -117,14 +125,14 @@ impl<'a> Description<'a> {
             }
             return Err(DescriptionError::Unsupported);
         }
-        Ok(Self { abi, interface })
+        Ok(Self { interface })
     }
 
-    pub const fn abi(&self) -> Abi {
-        self.abi
+    pub const fn abi(&self) -> u32 {
+        self.interface.contract.abi()
     }
 
-    pub fn interface(&self, contract: Contract) -> Option<Interface<'a>> {
+    pub fn interface(&self, contract: Contract<'_>) -> Option<Interface<'a>> {
         (self.interface.contract == contract).then_some(self.interface)
     }
 
@@ -171,27 +179,21 @@ fn note_field(bytes: &[u8], length: u32) -> Result<(&[u8], &[u8]), DescriptionEr
 fn read_interface<'a>(
     elf: &Elf<'a>,
     node: &Node<'_, 'a>,
-    abi: Abi,
+    abi: u32,
 ) -> Result<Interface<'a>, DescriptionError> {
     let compatible = node
         .string(b"compatible")?
         .ok_or(DescriptionError::Missing)?;
-    let contract = match (abi, compatible) {
-        (Abi::Scalar, b"shuyra,mmu-geometry") => Contract::MmuGeometry,
-        (Abi::Sv39Root, b"shuyra,sv39-root") => Contract::Sv39Root,
-        _ => return Err(DescriptionError::Unsupported),
-    };
     let version = word(node, b"version")?;
-    if version != 1 {
-        return Err(DescriptionError::Unsupported);
+    if compatible.is_empty() || version == 0 {
+        return Err(DescriptionError::Format);
     }
     let entry = u64::from_be_bytes(field(node, b"entry")?);
     if !elf.is_file_executable(entry) {
         return Err(DescriptionError::Entry);
     }
     Ok(Interface {
-        contract,
-        version,
+        contract: Contract::new(compatible, abi, version),
         entry,
         source: node.id(),
     })

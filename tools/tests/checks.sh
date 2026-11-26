@@ -31,6 +31,8 @@ while IFS= read -r -d '' manifest; do
                   $path == server/src/metal/time/* ) ) ||
               ( $owner == server/tests/metal/module &&
                 ( $path == server/src/metal/mmu/internal/access.rs ||
+                  $path == server/src/metal/mmu/internal/mod.rs ||
+                  $path == server/src/metal/mmu/internal/riscv/sv39.rs ||
                   $path == server/src/metal/firmware/devicetree/* ) ) ||
               ( $owner == server/tests/metal/sync && $path == server/src/metal/hart/node.rs ) ]]; then
             manifests+=("$manifest")

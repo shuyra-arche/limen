@@ -2,11 +2,11 @@ use super::{IMAGES, PAGE, SV39_ROOT};
 use crate::{
     access::MappedRange,
     address::PhysicalAddress,
+    mmu::internal::GEOMETRY,
     module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, UseError},
+    sv39::{self, ROOT},
 };
 use std::{mem::MaybeUninit, sync::Barrier, thread};
-
-const GEOMETRY: Contract = Contract::MmuGeometry;
 
 fn image() -> ModuleImage<'static> {
     let (machine, bytes) = IMAGES[1];
@@ -41,18 +41,22 @@ fn shutting_denies_admission_and_retirement_requires_an_effect_witness() {
     // with its owner. No actual target instruction or mapping is installed.
     let module = unsafe { slots.publish(layout, backing, []) }.ok().unwrap();
     assert!(matches!(module.retire(), Err(UseError::Open)));
-    let first = module.acquire(GEOMETRY, 1).unwrap();
-    let second = module.acquire(GEOMETRY, 1).unwrap();
+    let first = module.acquire(GEOMETRY).unwrap();
+    let second = module.acquire(GEOMETRY).unwrap();
     assert_eq!(first.id(), module.id());
     assert_eq!(first.entry(), entry);
     assert!(matches!(
-        module.acquire(GEOMETRY, 2),
+        module.acquire(Contract::new(b"shuyra,mmu-geometry", 1, 2)),
+        Err(UseError::Interface)
+    ));
+    assert!(matches!(
+        module.acquire(Contract::new(b"shuyra,mmu-geometry", 2, 1)),
         Err(UseError::Interface)
     ));
 
     module.shut();
     module.shut();
-    assert!(matches!(module.acquire(GEOMETRY, 1), Err(UseError::Closed)));
+    assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Closed)));
     assert!(matches!(module.retire(), Err(UseError::Busy)));
     assert_eq!(first.entry(), entry);
     drop(first);
@@ -64,7 +68,7 @@ fn shutting_denies_admission_and_retirement_requires_an_effect_witness() {
     // An abandoned attempt must leave the original obligations in place.
     drop(attempt);
     let module = module.reclaim().err().unwrap();
-    assert!(matches!(module.acquire(GEOMETRY, 1), Err(UseError::Closed)));
+    assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Closed)));
     let attempt = module.retire().unwrap();
     // The Host installed no target mapping and never executed the module.
     unsafe { attempt.complete() };
@@ -84,13 +88,13 @@ fn a_racing_admission_is_closed_or_counted_before_retirement() {
         let raced = thread::scope(|scope| {
             let entrant = scope.spawn(|| {
                 start.wait();
-                module.acquire(GEOMETRY, 1)
+                module.acquire(GEOMETRY)
             });
             start.wait();
             module.shut();
             entrant.join().unwrap()
         });
-        assert!(matches!(module.acquire(GEOMETRY, 1), Err(UseError::Closed)));
+        assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Closed)));
         match raced {
             Ok(held) => {
                 assert_eq!(held.id(), module.id());
@@ -122,7 +126,7 @@ fn a_consumer_holds_the_exact_provider_until_its_custody_is_reclaimed() {
         .ok()
         .unwrap();
     assert_ne!(first.id(), second.id());
-    let held = first.acquire(GEOMETRY, 1).unwrap();
+    let held = first.acquire(GEOMETRY).unwrap();
     let consumer = unsafe { slots.publish(consumer_layout, consumer_backing, [held]) }
         .ok()
         .unwrap();
@@ -157,7 +161,7 @@ fn capacity_failure_keeps_the_layout_material_and_dependency() {
     let next_storage = next_backing.as_ptr();
     let slots = ModuleSlots::<1>::new();
     let module = unsafe { slots.publish(layout, backing, []) }.ok().unwrap();
-    let held = module.acquire(GEOMETRY, 1).unwrap();
+    let held = module.acquire(GEOMETRY).unwrap();
     let (next_layout, next_backing, [held]) =
         unsafe { slots.publish(next_layout, next_backing, [held]) }
             .err()
@@ -189,7 +193,7 @@ fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
     let (root_layout, root_material) = prepare(&root, 0x22_0000, 0x4002_0000);
     let (second_layout, second_material) = prepare(&root, 0x23_0000, 0x4003_0000);
     let root_physical = root_layout.physical();
-    let root_entry = root_layout.entry(Contract::Sv39Root).unwrap();
+    let root_entry = root_layout.entry(ROOT).unwrap();
     let root_storage = root_material.as_ptr();
     let slots = ModuleSlots::<3>::new();
     let geometry = unsafe { slots.publish(geometry_layout, geometry_material, []) }
@@ -201,47 +205,51 @@ fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
 
     // These buffers only model custody. Their numerical entries are never
     // called on the Host.
-    let (layout, material, []) = unsafe { slots.publish(root_layout, root_material, []) }
-        .err()
-        .unwrap();
-    let wrong_machine = other.acquire(GEOMETRY, 1).unwrap();
-    let (layout, material, [wrong_machine]) =
-        unsafe { slots.publish(layout, material, [wrong_machine]) }
-            .err()
-            .unwrap();
+    assert_eq!(sv39::check(&root_layout, &[]), Err(UseError::Interface));
+    let wrong_machine = other.acquire(GEOMETRY).unwrap();
+    assert_eq!(
+        sv39::check(&root_layout, std::slice::from_ref(&wrong_machine)),
+        Err(UseError::Interface)
+    );
     assert_eq!(wrong_machine.id(), other.id());
     assert_eq!(wrong_machine.machine(), Machine::X86_64);
     drop(wrong_machine);
 
-    let first = geometry.acquire(GEOMETRY, 1).unwrap();
-    let second = geometry.acquire(GEOMETRY, 1).unwrap();
-    let (layout, material, [first, second]) =
-        unsafe { slots.publish(layout, material, [first, second]) }
-            .err()
-            .unwrap();
-    assert_eq!(first.id(), geometry.id());
-    assert_eq!(second.id(), geometry.id());
-    assert_eq!(first.contract(), GEOMETRY);
-    assert_eq!(first.version(), 1);
-    drop(second);
-    assert_eq!(layout.physical(), root_physical);
-    assert_eq!(layout.entry(Contract::Sv39Root), Some(root_entry));
-    assert_eq!(material.as_ptr(), root_storage);
+    let first = {
+        let ambiguous = [
+            geometry.acquire(GEOMETRY).unwrap(),
+            geometry.acquire(GEOMETRY).unwrap(),
+        ];
+        assert_eq!(
+            sv39::check(&root_layout, &ambiguous),
+            Err(UseError::Interface)
+        );
+        let [first, second] = ambiguous;
+        assert_eq!(first.id(), geometry.id());
+        assert_eq!(second.id(), geometry.id());
+        assert_eq!(first.contract(), GEOMETRY);
+        drop(second);
+        first
+    };
+    assert_eq!(root_layout.physical(), root_physical);
+    assert_eq!(root_layout.entry(ROOT), Some(root_entry));
+    assert_eq!(root_material.as_ptr(), root_storage);
 
-    // Three earlier rejections leave the one available publication slot free.
-    let root = unsafe { slots.publish(layout, material, [first]) }
+    let dependency = [first];
+    sv39::check(&root_layout, &dependency).unwrap();
+    let root = unsafe { slots.publish(root_layout, root_material, dependency) }
         .ok()
         .unwrap();
-    let wrong_contract = root.acquire(Contract::Sv39Root, 1).unwrap();
-    let available = ModuleSlots::<1>::new();
-    let (_, _, [wrong_contract]) =
-        unsafe { available.publish(second_layout, second_material, [wrong_contract]) }
-            .err()
-            .unwrap();
+    let wrong_contract = root.acquire(ROOT).unwrap();
+    assert_eq!(
+        sv39::check(&second_layout, std::slice::from_ref(&wrong_contract)),
+        Err(UseError::Interface)
+    );
     assert_eq!(wrong_contract.id(), root.id());
-    assert_eq!(wrong_contract.contract(), Contract::Sv39Root);
+    assert_eq!(wrong_contract.contract(), ROOT);
     assert_eq!(wrong_contract.entry(), root_entry);
     drop(wrong_contract);
+    drop(second_material);
 
     geometry.shut();
     assert!(matches!(geometry.retire(), Err(UseError::Busy)));
