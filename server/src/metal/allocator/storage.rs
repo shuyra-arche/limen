@@ -124,7 +124,10 @@ impl<'a> MappedStorage<'a> {
         if allocation.physical() != mapping.physical() {
             return Err((allocation, mapping, Error::Range));
         }
-        Ok(Self { allocation, mapping })
+        Ok(Self {
+            allocation,
+            mapping,
+        })
     }
 
     pub fn id(&self) -> AllocationId {

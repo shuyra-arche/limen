@@ -123,7 +123,10 @@ impl<'storage, T> Pool<'storage, T> {
         let mapping = supplied.mapping();
         let geometry = Geometry::of::<T>(mapping.length())?;
         if !mapping.address().is_multiple_of(geometry.alignment)
-            || !supplied.physical().start.is_multiple_of(geometry.alignment as u64)
+            || !supplied
+                .physical()
+                .start
+                .is_multiple_of(geometry.alignment as u64)
         {
             return Err(Error::Layout);
         }

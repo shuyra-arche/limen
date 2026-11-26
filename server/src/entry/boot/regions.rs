@@ -3,7 +3,7 @@
 use super::{
     Boot, Exclusions, Physical, Retirement,
     bump::Bump,
-    physical::{check, contains},
+    physical::contains,
 };
 use crate::access::MappedRange;
 use core::{alloc::Layout, mem::MaybeUninit};

@@ -53,7 +53,11 @@ fn mapped<'a>(
 ) -> Option<MappedStorage<'a>> {
     let allocation = material.take().unwrap();
     let mapping = unsafe { MappedRange::new(allocation.physical(), bytes) }.unwrap();
-    Some(unsafe { MappedStorage::prepare(allocation, mapping) }.ok().unwrap())
+    Some(
+        unsafe { MappedStorage::prepare(allocation, mapping) }
+            .ok()
+            .unwrap(),
+    )
 }
 
 fn supplies() -> [Option<Allocation>; 2] {
@@ -117,10 +121,9 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
     // Even an equally long, correctly aligned mapping of the other actual
     // Allocation cannot be paired with the first. Both inputs survive.
     let mapping = unsafe { MappedRange::new(second_physical, &mut bytes.0) }.unwrap();
-    let (allocation, mut returned, reason) =
-        unsafe { MappedStorage::prepare(allocation, mapping) }
-            .err()
-            .unwrap();
+    let (allocation, mut returned, reason) = unsafe { MappedStorage::prepare(allocation, mapping) }
+        .err()
+        .unwrap();
     assert_eq!(reason, crate::allocator::Error::Range);
     assert_eq!(allocation.id(), first_id);
     assert_eq!(returned.physical(), second_physical);
