@@ -126,15 +126,24 @@ for source in server/src/metal/platform/firmware/psci/native.rs server/src/metal
 done
 for source in server/src/metal/processor/hart/aarch64/description.rs \
               server/src/metal/platform/firmware/psci/mod.rs \
-              server/src/metal/interrupt/mod.rs \
               server/src/metal/interrupt/internal/gic/mod.rs \
-              server/src/metal/interrupt/internal/mod.rs \
-              server/src/metal/interrupt/internal/timer/mod.rs \
-              server/src/metal/interrupt/internal/timer/architected.rs \
+              server/src/metal/interrupt/internal/architected.rs \
               server/src/metal/chrono/aarch64/mod.rs; do
     change "$source"
     [[ $(boards) == virt ]]
     bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
+done
+for source in server/src/metal/interrupt/mod.rs \
+              server/src/metal/interrupt/internal/mod.rs; do
+    change "$source"
+    [[ $(boards) == 'rv64 virt' ]]
+done
+for source in server/src/metal/interrupt/external/aplic/mod.rs \
+              server/src/metal/interrupt/external/aplic/direct.rs \
+              server/src/metal/interrupt/internal/aclint/timer/mod.rs \
+              server/src/metal/interrupt/internal/aclint/timer/supervisor.rs; do
+    change "$source"
+    bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["rv64-interrupt"]' >/dev/null
 done
 change server/tests/metal/memory/mmu/internal/riscv/activity/mod.rs
 [[ $(bash "$discover" . "$base") == '[]' ]]

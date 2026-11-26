@@ -9,4 +9,4 @@ pub use probe::SbiServices;
 #[cfg(limen_firmware = "sbi")]
 pub use transport::platform_services;
 #[cfg(limen_firmware = "sbi")]
-pub(crate) use transport::{extensions, hart_started, reset, start_hart, write_byte};
+pub(crate) use transport::{extensions, hart_started, reset, set_timer, start_hart, write_byte};

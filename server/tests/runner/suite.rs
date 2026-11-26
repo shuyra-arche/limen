@@ -22,6 +22,8 @@ pub enum Run {
     Qemu {
         kernel: String,
         #[serde(default)]
+        machine: RiscvMachine,
+        #[serde(default)]
         harts: Option<NonZeroU8>,
         #[serde(default)]
         imports: Vec<String>,
@@ -43,6 +45,24 @@ pub enum Run {
         test: String,
         ignored: bool,
     },
+}
+
+/// Named, reproducible RV64 hardware configurations. No arbitrary QEMU flags.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RiscvMachine {
+    #[default]
+    Virt,
+    AplicAclint,
+}
+
+impl RiscvMachine {
+    pub fn arguments(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Virt => ("virt", "rv64"),
+            Self::AplicAclint => ("virt,aia=aplic,aclint=on", "rv64,sstc=false"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, clap::ValueEnum)]

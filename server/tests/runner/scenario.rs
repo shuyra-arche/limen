@@ -1,6 +1,6 @@
 use crate::{
     composition, qmp,
-    suite::{self, Board, Run, Suite},
+    suite::{self, Board, RiscvMachine, Run, Suite},
     verify,
 };
 use clap::Args;
@@ -34,11 +34,13 @@ struct Variant {
     root: PathBuf,
     elf: PathBuf,
     harts: u8,
+    machine: RiscvMachine,
 }
 
 fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result<Variant> {
     let Run::Qemu {
         kernel,
+        machine,
         harts,
         imports,
         features,
@@ -107,6 +109,8 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         "suite": suite.id,
         "profile": args.profile,
         "harts": harts,
+        "machine": machine,
+        "machine_arguments": machine.arguments(),
         "tools": tools(&provider, &qemu, &firmware)?,
         "suite_sha256": composition::hashes(&owner.join(relative))?,
         "builds": [format!("{command:?}")],
@@ -133,6 +137,7 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         root: root.to_owned(),
         elf,
         harts,
+        machine: *machine,
     })
 }
 
@@ -140,19 +145,21 @@ fn run_image(
     elf: &Path,
     evidence: &Path,
     harts: u8,
+    machine: RiscvMachine,
 ) -> Result<(process::Outcome, std::io::Result<qmp::Shutdown>)> {
     fresh(evidence)?;
     let firmware = Path::new(&std::env::var("QEMU_OPENSBI")?).canonicalize()?;
     let qemu = std::env::var("QEMU_RISCV64").unwrap_or("qemu-system-riscv64".into());
     let mut command = Command::new(qemu);
+    let (machine, cpu) = machine.arguments();
     command
         .args([
             "-accel",
             "tcg,thread=multi",
             "-machine",
-            "virt",
+            machine,
             "-cpu",
-            "rv64",
+            cpu,
             "-smp",
         ])
         .arg(harts.to_string())
@@ -167,7 +174,7 @@ fn run_image(
 /// The scenario owner, not the launcher, decides whether the evidence passes.
 pub fn observe(elf: PathBuf, evidence: PathBuf) -> Result<()> {
     let elf = elf.canonicalize()?;
-    let (result, shutdown) = run_image(&elf, &evidence, GUEST_CPUS)?;
+    let (result, shutdown) = run_image(&elf, &evidence, GUEST_CPUS, RiscvMachine::Virt)?;
     let mut value = serde_json::to_value(&result)?;
     value["qmp_shutdown"] = match shutdown {
         Ok(receipt) => serde_json::to_value(receipt)?,
@@ -186,7 +193,7 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<bo
     };
     let harts = variant.harts;
     let evidence = variant.root.join(format!("harts-{harts}-round-{round}"));
-    let (mut result, shutdown) = run_image(&variant.elf, &evidence, harts)?;
+    let (mut result, shutdown) = run_image(&variant.elf, &evidence, harts, variant.machine)?;
     let log = fs::read(evidence.join("serial.log"))?;
     let details = match std::str::from_utf8(&log) {
         Ok(log) => verify::check(log, expects, distinct.as_ref())?,

@@ -165,4 +165,23 @@ fn symbolizer_preserves_literal_return_addresses() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn rv64_machine_profiles_are_explicit_and_reproducible() {
+    let manifest = |machine| {
+        serde_json::json!({
+            "kind": "qemu", "kernel": "interrupt", "expects": ["PASS"],
+            "machine": machine
+        })
+    };
+    let run = serde_json::from_value::<suite::Run>(manifest("aplic-aclint")).unwrap();
+    let suite::Run::Qemu { machine, .. } = run else {
+        panic!("not a QEMU suite");
+    };
+    assert_eq!(
+        machine.arguments(),
+        ("virt,aia=aplic,aclint=on", "rv64,sstc=false")
+    );
+    assert!(serde_json::from_value::<suite::Run>(manifest("arbitrary")).is_err());
+}
+
 mod execution;

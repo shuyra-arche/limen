@@ -2,7 +2,9 @@
 
 use core::arch::asm;
 
-use super::probe::{DEBUG_CONSOLE, Extensions, HART_STATE_MANAGEMENT, SYSTEM_RESET, SbiServices};
+use super::probe::{
+    DEBUG_CONSOLE, Extensions, HART_STATE_MANAGEMENT, SYSTEM_RESET, SbiServices, TIMER,
+};
 
 const BASE: usize = 0x10;
 const HART_STATUS: usize = 2;
@@ -60,4 +62,12 @@ fn call(
 /// Check the live HSM state of the exact Hart described by the caller.
 pub(crate) fn hart_started(hart: usize) -> bool {
     call(HART_STATE_MANAGEMENT, HART_STATUS, hart, 0, 0) == (0, STARTED)
+}
+
+/// The actual supervisor timer service takes an absolute hardware count.
+pub(crate) fn set_timer(count: u64) -> Result<(), isize> {
+    match call(TIMER, 0, count as usize, 0, 0).0 {
+        0 => Ok(()),
+        error => Err(error),
+    }
 }
