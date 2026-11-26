@@ -43,7 +43,6 @@ impl<'a> GicV3<'a> {
             redistributor,
         })
     }
-
 }
 
 /// The trigger declared for a PPI in the GICv3 interrupt domain.
@@ -146,7 +145,6 @@ impl<'a> GenericTimer<'a> {
     pub fn described_frequency(self) -> Option<NonZeroU32> {
         self.frequency
     }
-
 }
 
 fn cell(value: Option<&[u8]>) -> Result<Option<u32>, Error> {

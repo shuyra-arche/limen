@@ -37,7 +37,9 @@ pub(crate) unsafe fn admit<'a>(
     };
     unsafe { LOCAL.install(hart) };
     if !local::can_switch() {
-        services.reject(format_args!("FAIL Limen boot: local protection is not idle\n"));
+        services.reject(format_args!(
+            "FAIL Limen boot: local protection is not idle\n"
+        ));
     }
     facts
 }

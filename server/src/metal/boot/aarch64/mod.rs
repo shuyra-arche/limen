@@ -1,6 +1,9 @@
 use crate::metal::{
     boot::trap as diagnostic,
-    firmware::{facts::{Descriptions, Facts}, uefi},
+    firmware::{
+        facts::{Descriptions, Facts},
+        uefi,
+    },
     hart::aarch64::native,
 };
 mod major;
