@@ -1,4 +1,5 @@
 mod fixture;
+mod riscv_fixture;
 
 use std::{env, path::PathBuf};
 
@@ -7,7 +8,7 @@ fn main() {
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     println!("cargo:rerun-if-changed=../probe.rs");
     println!("cargo:rerun-if-changed=../fixture.rs");
-    println!("cargo:rerun-if-changed=../sv39_root.rs");
+    println!("cargo:rerun-if-changed=../riscv_root.rs");
 
     for (target, file) in [
         ("riscv64gc-unknown-none-elf", "riscv64.elf"),
@@ -16,12 +17,9 @@ fn main() {
     ] {
         fixture::build(&source, target, &output.join(file));
     }
-    fixture::build_module(
-        &source.with_file_name("sv39_root.rs"),
+    riscv_fixture::build_roots(
+        &source.with_file_name("riscv_root.rs"),
         "riscv64gc-unknown-none-elf",
-        &output.join("sv39-root.elf"),
-        "sv39-root",
-        "module_sv39_root",
-        2,
+        &output,
     );
 }

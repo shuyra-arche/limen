@@ -27,8 +27,10 @@ global_asm!(
 module_geometry:
     csrr a0, satp
     srli a0, a0, 60
-    li t0, 8
-    bne a0, t0, 1f
+    # Sv39, Sv48 and Sv57 share the same base granule.
+    addi a0, a0, -8
+    li t0, 2
+    bgtu a0, t0, 1f
     lla a0, geometry_pointer
     ld a0, 0(a0)
     ld a0, 0(a0)

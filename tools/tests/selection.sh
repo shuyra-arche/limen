@@ -154,15 +154,19 @@ done
 change server/tests/target/entry/module/arm_mapping.rs
 bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
     [["module-execution", "virt", "debug"], ["module-execution", "virt", "release"]]' >/dev/null
-for source in server/src/metal/mmu/internal/riscv/sv39/mod.rs \
-              server/src/metal/mmu/internal/riscv/sv39/native.rs \
-              server/tests/metal/module/sv39_root.rs; do
+for source in server/src/metal/mmu/internal/riscv/root/mod.rs \
+              server/src/metal/mmu/internal/riscv/root/binding.rs \
+              server/src/metal/mmu/internal/riscv/mode.rs \
+              server/src/metal/mmu/internal/riscv/context/mod.rs \
+              server/src/metal/mmu/internal/riscv/context/satp.rs \
+              server/tests/metal/module/riscv_root.rs \
+              server/tests/metal/module/riscv_fixture.rs; do
     change "$source"
     bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
         [["riscv-module-execution", "rv64", "debug"], ["riscv-module-execution", "rv64", "release"]]' >/dev/null
 done
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
-change server/src/metal/mmu/internal/riscv/sv39/mod.rs
+change server/src/metal/mmu/internal/riscv/root/binding.rs
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/allocator/storage.rs
 [[ $(boards) == 'q35 rv64 virt' ]]

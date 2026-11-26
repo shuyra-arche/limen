@@ -9,11 +9,18 @@ use std::{
 const ENTRY: u64 = 0x1000;
 
 pub fn build(probe: &Path, target: &str, output: &Path) {
-    build_module(probe, target, output, "mmu-geometry", "module_geometry", 1);
+    build_module(
+        fs::read_to_string(probe).unwrap(),
+        target,
+        output,
+        "mmu-geometry",
+        "module_geometry",
+        1,
+    );
 }
 
 pub fn build_module(
-    program: &Path,
+    mut code: String,
     target: &str,
     output: &Path,
     interface: &str,
@@ -36,7 +43,6 @@ pub fn build_module(
 
     let source = output.with_extension("rs");
     let object = output.with_extension("o");
-    let mut code = fs::read_to_string(program).unwrap();
     let description = description(interface, abi);
     write!(
         code,

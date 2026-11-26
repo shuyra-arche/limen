@@ -14,18 +14,18 @@ macro_rules! global_asm {
     ($($tokens:tt)*) => {};
 }
 
-// Internal Sv39Root v1 (RV64 ELF C ABI). The input table is GeometryV1:
+// Internal RV64 root encoder v1 (RV64 ELF C ABI). The input table is GeometryV1:
 // version at 0, byte length at 4, and the previously bound query at 8.
 // The second and third arguments are the physical byte address and encoding
 // kind. Firmware and the host loader retain custody of the target tables.
 global_asm!(
     r#"
-.section .text.module_sv39_root, "ax", %progbits
+.section .text.module_riscv_root, "ax", %progbits
 .p2align 2
-.global module_sv39_root
-.hidden module_sv39_root
-.type module_sv39_root, %function
-module_sv39_root:
+.global module_riscv_root
+.hidden module_riscv_root
+.type module_riscv_root, %function
+module_riscv_root:
     beqz a0, .Lreject
     andi t0, a0, 7
     bnez t0, .Lreject
@@ -72,16 +72,16 @@ module_sv39_root:
     or a0, a0, t0
     ret
 .Lcontext:
-    li a0, 8
+    li a0, ROOT_MODE
     slli a0, a0, 60
     or a0, a0, a1
     ret
 .Lreject:
     li a0, 0
     ret
-.size module_sv39_root, . - module_sv39_root
+.size module_riscv_root, . - module_riscv_root
 
-.section .rodata.sv39_root, "a", %progbits
+.section .rodata.riscv_root, "a", %progbits
 .Lflags:
     # Nonleaf, R, RW, RX. Eagerly set A and D only on the applicable leaves.
     .byte 0x01, 0x43, 0xc7, 0x4b

@@ -1,5 +1,6 @@
 //! Firmware's description of a Hart's maximum translation mode.
 
+use super::Mode;
 use crate::metal::{
     firmware::devicetree::{Error, NodeId},
     hart::description::RiscvCpu,
@@ -11,6 +12,20 @@ pub enum RiscvMmuMode {
     Sv39,
     Sv48,
     Sv57,
+}
+
+impl RiscvMmuMode {
+    /// Whether the firmware's maximum includes this paging mode. The
+    /// calling Hart still has to establish the actual SATP configuration.
+    pub fn supports(self, mode: Mode) -> bool {
+        let maximum = match self {
+            Self::Bare => return false,
+            Self::Sv39 => Mode::Sv39,
+            Self::Sv48 => Mode::Sv48,
+            Self::Sv57 => Mode::Sv57,
+        };
+        mode <= maximum
+    }
 }
 
 #[derive(Clone, Copy)]

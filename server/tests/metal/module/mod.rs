@@ -2,7 +2,10 @@ mod lifecycle;
 
 use kernel::metal::address::{PhysicalAddress, PhysicalRange};
 use kernel::metal::mmu::internal::access::MappedRange;
-use kernel::metal::mmu::internal::{GEOMETRY, riscv::sv39::ROOT};
+use kernel::metal::mmu::internal::{
+    GEOMETRY,
+    riscv::{Mode, root},
+};
 use kernel::metal::module::{Contract, Error, Machine, ModuleImage, Permissions};
 use limen_treaty::model::{ByteLength, PageSize};
 use std::mem::MaybeUninit;
@@ -24,7 +27,22 @@ const IMAGES: [(Machine, &[u8]); 3] = [
         include_bytes!(concat!(env!("OUT_DIR"), "/aarch64.elf")),
     ),
 ];
-const SV39_ROOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sv39-root.elf"));
+const ROOTS: [(Mode, &[u8]); 3] = [
+    (
+        Mode::Sv39,
+        include_bytes!(concat!(env!("OUT_DIR"), "/sv39-root.elf")),
+    ),
+    (
+        Mode::Sv48,
+        include_bytes!(concat!(env!("OUT_DIR"), "/sv48-root.elf")),
+    ),
+    (
+        Mode::Sv57,
+        include_bytes!(concat!(env!("OUT_DIR"), "/sv57-root.elf")),
+    ),
+];
+const SV39_ROOT: &[u8] = ROOTS[0].1;
+const ROOT: Contract<'static> = root::contract(Mode::Sv39);
 
 #[derive(Clone, Copy)]
 struct Program {
@@ -265,23 +283,31 @@ fn selects_a_unique_provider_from_the_original_images() {
 #[test]
 fn selects_distinct_rv64_geometry_and_root_images() {
     let (machine, geometry) = IMAGES[0];
-    let sources = [geometry, SV39_ROOT];
-    for (bytes, abi, own, other) in [
-        (geometry, 1, GEOMETRY, ROOT),
-        (SV39_ROOT, 2, ROOT, GEOMETRY),
-    ] {
+    let sources = [geometry, ROOTS[0].1, ROOTS[1].1, ROOTS[2].1];
+    let contracts = [
+        GEOMETRY,
+        ROOT,
+        root::contract(Mode::Sv48),
+        root::contract(Mode::Sv57),
+    ];
+    for (bytes, own) in sources.into_iter().zip(contracts) {
         let selected = ModuleImage::select(&sources, machine, PAGE, own)
             .unwrap()
             .unwrap();
         let description = selected.description();
-        assert_eq!(description.abi(), abi);
-        assert!(description.interface(other).is_none());
+        assert_eq!(description.abi(), if own == GEOMETRY { 1 } else { 2 });
+        assert_eq!(description.interfaces().len(), 1);
+        for other in contracts.into_iter().filter(|&contract| contract != own) {
+            assert!(description.interface(other).is_none());
+        }
         let offered = description.interface(own).unwrap();
         assert_eq!(offered.contract(), own);
         assert_eq!(offered.entry(), word(bytes, 24));
         assert_eq!(offered.version(), 1);
+        let mut duplicate = sources.to_vec();
+        duplicate.push(bytes);
         assert!(matches!(
-            ModuleImage::select(&[geometry, SV39_ROOT, bytes], machine, PAGE, own),
+            ModuleImage::select(&duplicate, machine, PAGE, own),
             Err(Error::Conflict)
         ));
     }
