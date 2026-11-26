@@ -1,4 +1,3 @@
-#[cfg(not(target_arch = "riscv64"))]
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, FirmwareRegion, devicetree, physical::Exclusions};
 use crate::metal::{address::PhysicalRange, firmware::facts::Descriptions};
@@ -26,17 +25,15 @@ impl<'a> Boot<'a> {
         major: PhysicalRange,
         trap: PhysicalRange,
     ) -> Exclusions<'_> {
-        let exclusions = Exclusions::new(
+        Exclusions::new(
             self.image(),
             major,
             trap,
             self.device_tree(),
             self.firmware_map(),
             self.descriptions.memory.as_ref(),
-        );
-        #[cfg(not(target_arch = "riscv64"))]
-        let exclusions = exclusions.with_acpi(self.acpi());
-        exclusions
+        )
+        .with_acpi(self.acpi())
     }
 
     pub fn device_tree(&self) -> Option<Range<usize>> {
@@ -49,7 +46,6 @@ impl<'a> Boot<'a> {
         self.descriptions.device_tree
     }
 
-    #[cfg(not(target_arch = "riscv64"))]
     pub fn acpi(&self) -> Option<&Acpi<'a>> {
         self.descriptions.acpi.as_ref()
     }

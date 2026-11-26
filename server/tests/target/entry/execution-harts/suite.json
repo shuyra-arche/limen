@@ -15,6 +15,7 @@
     "server/src/metal/boot/trap.rs",
     "server/src/metal/firmware/mod.rs",
     "server/src/metal/firmware/map.rs",
+    "server/src/metal/firmware/acpi/**",
     "server/src/entry/boot/**",
     "server/src/metal/boot/riscv/**",
     "server/src/metal/firmware/sbi/**",
@@ -35,7 +36,8 @@
     "server/src/metal/hart/protection.rs",
     "server/src/metal/hart/riscv.rs",
     "server/src/metal/hart/stack.rs",
-    "server/src/metal/execution/mod.rs"
+    "server/src/metal/execution/mod.rs",
+    "server/src/metal/execution/cooperative.rs"
   ],
   "run": {
     "kind": "qemu",

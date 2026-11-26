@@ -1,9 +1,9 @@
 use super::{DeviceTree, Error, Node, registers::Cells};
 use crate::metal::address::{PhysicalAddress, PhysicalRange};
 use crate::metal::fdt::RESERVATION_LIMIT;
-#[cfg(any(target_arch = "riscv64", test))]
+#[cfg(any(limen_firmware = "sbi", test))]
 use crate::metal::fdt::{HEADER_SIZE, MAX_BLOCK_BYTES, extent};
-#[cfg(any(target_arch = "riscv64", test))]
+#[cfg(any(limen_firmware = "sbi", test))]
 use core::{ops::Range, slice};
 use limen_treaty::model::ByteLength;
 
@@ -75,7 +75,7 @@ impl DtbMemory {
 /// guarantees that the firmware's initialized DTB storage remains readable
 /// and immutable for the returned view's lifetime. The DTB cannot supply any
 /// part of that window bound.
-#[cfg(any(target_arch = "riscv64", test))]
+#[cfg(any(limen_firmware = "sbi", test))]
 pub(crate) unsafe fn read<'a>(
     input: *const (),
     window: Range<usize>,
@@ -110,7 +110,6 @@ pub fn describe(tree: DeviceTree<'_>, output: &mut Option<DtbMemory>) -> Result<
 }
 
 /// Retain the original reservations without using the tree as a RAM source.
-#[cfg(any(not(target_arch = "riscv64"), test))]
 pub fn describe_reservations(
     tree: DeviceTree<'_>,
     output: &mut Option<DtbMemory>,

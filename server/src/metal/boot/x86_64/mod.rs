@@ -1,4 +1,11 @@
-use crate::metal::boot::trap as diagnostic;
+use crate::metal::{
+    boot::trap as diagnostic,
+    firmware::{
+        facts::{Descriptions, Facts},
+        uefi,
+    },
+    hart,
+};
 mod major;
 pub(crate) use major::major as enter_major;
 
@@ -36,6 +43,21 @@ fn load_idt() {
 }
 
 static mut IDT: core::mem::MaybeUninit<[Gate; 256]> = core::mem::MaybeUninit::uninit();
+
+/// Admit the loader facts and check the actual local APIC against MADT.
+pub(crate) unsafe fn admit<'a>(
+    hart: usize,
+    input: *const (),
+    descriptions: &mut Descriptions<'a>,
+) -> Option<Facts<'a>> {
+    let facts = unsafe { uefi::admit(hart, input, descriptions) }?;
+    if let Some(acpi) = descriptions.acpi.as_ref()
+        && !hart::matches_madt(hart, acpi.madt()?)
+    {
+        return None;
+    }
+    Some(facts)
+}
 
 pub(crate) fn established() -> bool {
     let (flags, cr0): (usize, usize);

@@ -60,7 +60,8 @@ unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
 }
 
 impl Minor {
-    pub(in crate::metal) fn established(&self) -> bool {
+    pub(in crate::metal) fn established(&self, _hart: usize) -> bool {
+        // The entry ABI and trampoline already checked the incoming Hart.
         super::established()
     }
 }

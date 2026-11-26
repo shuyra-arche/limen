@@ -18,7 +18,9 @@ fn extensions() -> Extensions {
     Extensions::probe(|function, extension| call(BASE, function, extension, 0, 0))
 }
 
-pub(crate) fn platform_services() -> SbiServices {
+/// Probe the running SBI implementation for its HSM, timer and IPI services.
+/// The current CPU must be executing in the supported SBI supervisor environment.
+pub fn platform_services() -> SbiServices {
     SbiServices::probe(|function, extension| call(BASE, function, extension, 0, 0))
 }
 

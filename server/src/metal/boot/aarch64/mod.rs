@@ -1,4 +1,5 @@
 use crate::metal::boot::trap as diagnostic;
+pub(crate) use crate::metal::firmware::uefi::admit;
 mod major;
 pub(crate) use major::major as enter_major;
 

@@ -26,3 +26,20 @@ pub(super) unsafe fn restore_interrupts(saved: usize) {
         assert!(masked.replace(saved != 0));
     });
 }
+
+#[test]
+fn cooperative_switch_requires_no_local_participation() {
+    use crate::metal::{
+        hart::can_switch,
+        sync::{LeafLock, TurnLock},
+    };
+
+    assert!(can_switch());
+    let turn = TurnLock::new(());
+    turn.acquire(|_| assert!(!can_switch())).unwrap();
+    assert!(can_switch());
+
+    let leaf = LeafLock::new(());
+    leaf.attempt(|_| assert!(!can_switch())).unwrap();
+    assert!(can_switch());
+}

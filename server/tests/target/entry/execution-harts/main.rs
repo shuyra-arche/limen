@@ -18,7 +18,7 @@ use kernel::{
         room::Occupancy,
         unit::{End, Lifecycle, Stacks, UnitId},
     },
-    entry::boot::{Boot, Minor, shutdown, write},
+    entry::boot::{Boot, Minor, Startup, shutdown, write},
 };
 
 mod snapshot;
@@ -210,7 +210,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let pinned = unsafe { execution.create(pinned) }.expect("create on major");
     execution.submit(pinned).expect("admit pinned Unit");
     assert!(matches!(
-        unsafe { execution.start_minor(8, run_minor) },
+        unsafe { execution.start_minor(8, run_minor, Startup::Sbi) },
         Err(Error::Firmware(_))
     ));
     unsafe {
@@ -220,7 +220,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
             minor: minor_hart,
         });
         execution
-            .start_minor(minor_hart, run_minor)
+            .start_minor(minor_hart, run_minor, Startup::Sbi)
             .expect("start actual minor Hart");
     }
     turn::major();

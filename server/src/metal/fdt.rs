@@ -34,7 +34,7 @@ pub enum Error {
 ///
 /// The trusted firmware must supply immutable readable storage for the header
 /// at a nonzero aligned address. This check reads only the fixed-size header.
-#[cfg(any(target_arch = "riscv64", test))]
+#[cfg(any(limen_firmware = "sbi", test))]
 pub(crate) unsafe fn extent(header: *const [u32; 10], image: Range<usize>) -> Option<Range<usize>> {
     let address = header.addr();
     let header_end = address.checked_add(HEADER_SIZE)?;
