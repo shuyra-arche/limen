@@ -49,12 +49,11 @@ use handoff::Boot;
 #[path = "../../../src/metal/firmware/map.rs"]
 mod map;
 use address::{PhysicalAddress, PhysicalRange};
+use allocator::bump;
 use devicetree::memory::{DtbMemory, Source};
 use loader::{DeviceTree, Loader};
 use map::{FirmwareMap, FirmwareRegion, MapError};
 use physical::{Exclusions, Retirement};
-#[path = "../../../src/metal/allocator/bump.rs"]
-mod bump;
 mod exclusions;
 #[path = "../../../src/entry/boot/handoff.rs"]
 mod handoff;

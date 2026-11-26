@@ -71,7 +71,7 @@ through `Boot`. Initial RAM admission still requires the remaining platform
 reservations, active image/stack/translation storage, verified access and old
 device isolation.
 [UEFI adapter](../server/src/metal/firmware/uefi/) ·
-[Formal boot contract](https://github.com/shuyra-arche/document-limen/blob/246170c626ee2b5e316753e95f50f1669e8f47dd/server/entry/boot/platforms.md)
+[Formal boot contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/entry/boot/platforms.md)
 
 ### x86_64 q35
 
@@ -143,15 +143,18 @@ granularity and actual access before handing a range to Allocator.
 It uses DTB RAM on OpenSBI, conventional UEFI memory when only that memory
 description is supplied, and their checked intersection when both are
 available. The table clips each input to the completed retirement scope,
-excludes granules touched by fixed claims and keeps each surviving interval's
-source and attributes. Invalid geometry or insufficient table space clears
-the output. The table describes physical ranges for later handoff.
+excludes granules touched by fixed claims and preserves the source and
+attributes in each `allocator::RegionDescription`. Invalid geometry or
+insufficient table space clears the output.
 
 To reserve a local root, its owner supplies an exclusive `MappedRange` whose
 writable byte slice corresponds to the indicated physical range. An existing
 Bump cursor reserves the requested Rust `Layout` within that mapping. The
 handoff verifies both address alignments, subtracts all granules touched by
 the reservation and returns the exact uninitialized root bytes and their
-physical provenance. A failed request retains the mapping and geometry.
-Missing evidence leaves ranges held. The current QEMU boot paths produce
-an empty table and deliver no root.
+physical provenance as `allocator::RootStorage`. A failed request leaves the
+mapping and region table with their owner. `Regions::allocator` checks the
+complete initial layout and receivers before consuming that storage. In the
+target fixtures, a boot without retirement and mapping evidence delivers no
+usable RAM or root. Foundation scenarios also exercise admission with a
+bounded RAM grant and its validated mapping.
