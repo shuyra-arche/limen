@@ -45,7 +45,11 @@ pub struct Interface<'a> {
 }
 
 impl<'a> Interface<'a> {
-    pub(super) const fn new(contract: Contract<'a>, entry: ImageAddress, source: NodeId<'a>) -> Self {
+    pub(super) const fn new(
+        contract: Contract<'a>,
+        entry: ImageAddress,
+        source: NodeId<'a>,
+    ) -> Self {
         Self {
             contract,
             entry,
@@ -121,4 +125,3 @@ impl Drop for ModuleUse<'_> {
         self.state.fetch_sub(USE, Ordering::Release);
     }
 }
-
