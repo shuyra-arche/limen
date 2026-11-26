@@ -1,9 +1,11 @@
 #[path = "../../../src/metal/mmu/internal/access.rs"]
 pub mod access;
+#[path = "../../../src/metal/firmware/acpi/mod.rs"]
+pub mod acpi;
 #[path = "../../../src/metal/address.rs"]
 pub mod address;
 #[path = "../../../src/metal/firmware/devicetree/mod.rs"]
-mod devicetree;
+pub mod devicetree;
 mod memory;
 
 #[repr(align(8))]
@@ -45,7 +47,7 @@ fn rejects_impossible_structure_lengths_and_overlapping_blocks() {
 
 #[path = "../../../src/metal/firmware/uefi/loader.rs"]
 mod loader;
-use handoff::Boot;
+use handoff::{Boot, Descriptions};
 #[path = "../../../src/metal/firmware/map.rs"]
 mod map;
 use address::{PhysicalAddress, PhysicalRange};
@@ -80,6 +82,9 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
     for (dst, word) in dtb.0.as_chunks_mut::<4>().0.iter_mut().zip(words) {
         dst.copy_from_slice(&word.to_be_bytes());
     }
+    for (offset, token) in [(56, 1u32), (64, 2), (68, 9)] {
+        dtb.0[offset..offset + 4].copy_from_slice(&token.to_be_bytes());
+    }
     let mut descriptors = Bytes([0u8; 96]);
     // A real reserved descriptor, not a zero-length placeholder.
     descriptors.0[24..32].copy_from_slice(&1u64.to_le_bytes());
@@ -95,11 +100,14 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
             version,
             descriptor_limit: 2,
             device_tree: tree.map(DeviceTree::Description),
+            acpi: None,
         };
-        loader.admit(7).map(|b| {
+        let mut descriptions = Descriptions::new();
+        loader.admit(7, &mut descriptions).map(|b| {
             assert_eq!(b.hart(), 7);
             assert_eq!(b.firmware_map().unwrap().stride(), stride);
             assert!(b.dtb_memory().is_none());
+            assert_eq!(b.device_tree_description().map(|view| view.bytes()), tree);
             assert!(b.conventional_ram().is_none());
             b.device_tree()
         })
@@ -116,8 +124,9 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
         version: 1,
         descriptor_limit: 2,
         device_tree: Some(DeviceTree::Memory(&dtb.0)),
+        acpi: None,
     };
-    assert!(loader.admit(7).is_none());
+    assert!(loader.admit(7, &mut Descriptions::new()).is_none());
     assert!(admit(&descriptors.0, 48, 1, Some(&dtb.0[..40])).is_none());
     assert!(admit(&descriptors.0, 0, 1, None).is_none());
     assert!(admit(&descriptors.0, 48, 2, None).is_none());
@@ -194,8 +203,43 @@ fn firmware_map_rejects_bad_geometry_overlaps_and_capacity_before_handoff() {
             version: 1,
             descriptor_limit: 2,
             device_tree: None,
+            acpi: None,
         };
-        assert!(loader.admit(7).is_none());
+        assert!(loader.admit(7, &mut Descriptions::new()).is_none());
+    }
+}
+
+#[test]
+fn checks_the_firmware_map_before_requesting_acpi_bytes() {
+    use core::cell::Cell;
+
+    let root = PhysicalAddress::new(0x4ff0);
+    for (kind, pages, expected) in [
+        (7, 2, None),
+        (9, 1, None),
+        (9, 2, Some(range(0x4ff0, 0x5004))),
+    ] {
+        let requested = Cell::new(None);
+        let deny = |physical| {
+            requested.set(Some(physical));
+            None
+        };
+        let mut descriptors = DescriptorBytes([0; 96]);
+        describe(&mut descriptors.0[..48], kind, 0x4000, pages, 0);
+        let loader = Loader {
+            image: image(),
+            descriptors: &descriptors.0[..48],
+            stride: 48,
+            version: 1,
+            descriptor_limit: 1,
+            device_tree: None,
+            acpi: Some(loader::AcpiInput {
+                rsdp: root,
+                read: &deny,
+            }),
+        };
+        assert!(loader.admit(7, &mut Descriptions::new()).is_none());
+        assert_eq!(requested.take(), expected);
     }
 }
 

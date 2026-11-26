@@ -1,6 +1,8 @@
 //! Trusted local CPU facts and fixed storage.
 use core::{cell::Cell, ptr};
 
+#[cfg(target_arch = "riscv64")]
+pub(crate) mod description;
 mod node;
 mod protection;
 pub(in crate::metal) mod stack;
@@ -17,7 +19,11 @@ mod backend;
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 pub(in crate::metal) use backend::boot_identity;
+#[cfg(target_arch = "x86_64")]
+pub(in crate::metal) use backend::matches_madt;
 pub(in crate::metal) use backend::stack_pointer;
+#[cfg(target_arch = "aarch64")]
+pub use backend::{Aarch64Cpus, CpuCandidate};
 pub(crate) use node::QueueNode;
 #[cfg(target_arch = "riscv64")]
 pub(crate) use protection::can_switch;

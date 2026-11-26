@@ -21,11 +21,12 @@
     "server/src/metal/boot/trap.rs",
     "server/src/metal/firmware/mod.rs",
     "server/src/metal/firmware/map.rs",
+    "server/src/metal/firmware/acpi/**",
     "server/src/metal/firmware/uefi/**",
     "server/src/metal/hart/stack.rs",
     "server/src/metal/boot/console.rs",
     "server/src/metal/boot/services.rs",
-    "server/src/metal/firmware/devicetree/mod.rs",
+    "server/src/metal/firmware/devicetree/**",
     "server/src/metal/hart/mod.rs",
     "server/src/metal/hart/node.rs",
     "server/src/metal/hart/protection.rs",
@@ -53,7 +54,7 @@
         "server/tests/target/entry/platforms/virt.rs",
         "server/tests/target/entry/platforms/pl011.rs",
         "server/src/metal/firmware/psci.rs",
-        "server/src/metal/firmware/devicetree/memory.rs",
+        "server/src/metal/firmware/arm.rs",
         "server/src/metal/hart/aarch64.rs"
       ]
     }

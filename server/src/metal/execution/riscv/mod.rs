@@ -9,6 +9,8 @@ use core::{
 
 use crate::metal::hart;
 
+pub(crate) mod description;
+
 pub(crate) fn extensions_off() -> bool {
     let status: usize;
     unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nomem, nostack)) };

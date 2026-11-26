@@ -52,7 +52,7 @@ change server/src/metal/sync/turn.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/sync/host/Cargo.toml"]' >/dev/null
 change server/src/metal/execution/mod.rs
-bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts"]' >/dev/null
+bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["boot-handoff","kernel-execution","kernel-execution-harts"]' >/dev/null
 change server/src/metal/identity/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.rv64 and (.full or .runner) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml", "server/tests/metal/identity/host/Cargo.toml"]' >/dev/null
@@ -85,6 +85,9 @@ bash "$checks" . "$base" | jq -e '.rv64 == false and .manifests == []' >/dev/nul
 change server/src/metal/firmware/uefi/loader.rs
 [[ $(boards) == 'q35 virt' ]]
 bash "$checks" . "$base" | jq -e '.rv64 == false and .manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+change server/src/metal/firmware/acpi/madt.rs
+[[ $(boards) == 'q35 virt' ]]
+bash "$checks" . "$base" | jq -e '(.full or .runner or .rv64) == false and (.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/firmware/acpi/host/Cargo.toml"]' >/dev/null
 change server/src/metal/firmware/map.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
@@ -113,7 +116,20 @@ change server/src/metal/boot/services.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/firmware/devicetree/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '.manifests == ["server/tests/entry/boot/host/Cargo.toml"]' >/dev/null
+bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/firmware/devicetree/host/Cargo.toml"]' >/dev/null
+for source in server/src/metal/hart/description.rs \
+              server/src/metal/execution/riscv/description.rs \
+              server/src/metal/time/mod.rs; do
+    change "$source"
+    [[ $(boards) == rv64 ]]
+    bash "$checks" . "$base" | jq -e '.rv64 and .manifests == ["server/tests/metal/firmware/devicetree/host/Cargo.toml"]' >/dev/null
+done
+change server/src/metal/mmu/internal/riscv/description.rs
+[[ $(boards) == rv64 ]]
+bash "$checks" . "$base" | jq -e '.rv64 and (.manifests | sort) == ["server/tests/metal/firmware/devicetree/host/Cargo.toml","server/tests/metal/mmu/internal/riscv/host/Cargo.toml"]' >/dev/null
+change server/src/metal/address.rs
+[[ $(bash "$discover" . "$base") == "$full" ]]
+bash "$checks" . "$base" | jq -e '(.manifests | sort) == ["server/tests/entry/boot/host/Cargo.toml","server/tests/metal/allocator/host/Cargo.toml","server/tests/metal/firmware/acpi/host/Cargo.toml","server/tests/metal/firmware/devicetree/host/Cargo.toml"]' >/dev/null
 change server/src/metal/hart/stack.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/qemu.version

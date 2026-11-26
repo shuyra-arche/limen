@@ -1,17 +1,33 @@
 //! Firmware calls required by the trusted boot prefix.
 
-use crate::metal::boot::services::Services;
+use crate::{
+    address::{PhysicalAddress, PhysicalRange},
+    entry::boot::{Boot, Descriptions},
+    metal::{boot::services::Services, hart::description::RiscvCpus},
+};
 use core::arch::asm;
 
 mod probe;
-use probe::Extensions;
-use probe::{DEBUG_CONSOLE, SYSTEM_RESET};
+pub use probe::SbiServices;
+use probe::{DEBUG_CONSOLE, Extensions, HART_STATE_MANAGEMENT, SYSTEM_RESET};
 
 const BASE: usize = 0x10;
-const HART_STATE_MANAGEMENT: usize = 0x48534d;
+const HART_STATUS: usize = 2;
+const STARTED: usize = 0;
 
 fn extensions() -> Extensions {
     Extensions::probe(|function, extension| call(BASE, function, extension, 0, 0))
+}
+
+fn platform_services() -> SbiServices {
+    SbiServices::probe(|function, extension| call(BASE, function, extension, 0, 0))
+}
+
+impl Boot<'_> {
+    /// Probe the running firmware for its HSM, timer and IPI services.
+    pub fn sbi_services(&self) -> SbiServices {
+        platform_services()
+    }
 }
 
 fn write_byte(byte: u8) -> bool {
@@ -83,10 +99,11 @@ pub(crate) fn services_on_entry() -> &'static Services {
     &SERVICES
 }
 
-pub(crate) unsafe fn admit(
+pub(crate) unsafe fn admit<'a>(
     hart: usize,
     input: *const (),
-) -> Option<crate::entry::boot::Boot<'static>> {
+    descriptions: &'a mut Descriptions<'a>,
+) -> Option<Boot<'a>> {
     // The image provides the readable physical window independently of the
     // a1 pointer or the bytes of the DTB. These symbols are addresses, not objects.
     unsafe extern "C" {
@@ -95,16 +112,39 @@ pub(crate) unsafe fn admit(
     }
     let window = (&raw const DTB_WINDOW_START).addr()..(&raw const DTB_WINDOW_END).addr();
     let image = crate::metal::boot::image();
-    let mut memory = None;
-    let parsed =
-        unsafe { super::devicetree::memory::read(input, window, image.clone(), &mut memory) };
-    match parsed {
-        Ok(tree) => Some(crate::entry::boot::Boot::from_opensbi(
-            hart,
-            image,
-            tree,
-            memory.expect("described DTB memory"),
-        )),
+    let parsed = unsafe {
+        super::devicetree::memory::read(input, window, image.clone(), &mut descriptions.memory)
+    };
+    let tree = match parsed {
+        Ok(tree) => tree,
         Err(error) => Services::active().reject(format_args!("FAIL Limen boot: DTB {error:?}\n")),
+    };
+    let cpus = RiscvCpus::new(tree).and_then(|cpus| {
+        cpus.as_ref().map_or(Ok(false), |cpus| {
+            cpus.cpu(hart as u64)
+                .map(|cpu| cpu.is_some_and(|cpu| cpu.enabled()))
+        })
+    });
+    match cpus {
+        Ok(true) => {}
+        Ok(false) => Services::active().reject(format_args!(
+            "FAIL Limen boot: firmware Hart missing or disabled in DTB\n"
+        )),
+        Err(error) => {
+            Services::active().reject(format_args!("FAIL Limen boot: DTB CPU {error:?}\n"))
+        }
     }
+    // The firmware gives this Hart's actual identity in a0. When HSM is
+    // advertised, independently check the live ID with its status function.
+    if platform_services().hart_state_management()
+        && call(HART_STATE_MANAGEMENT, HART_STATUS, hart, 0, 0) != (0, STARTED)
+    {
+        Services::active().reject(format_args!("FAIL Limen boot: SBI Hart status mismatch\n"));
+    }
+    descriptions.device_tree = Some(tree);
+    let image = PhysicalRange::new(
+        PhysicalAddress::new(image.start as u64),
+        PhysicalAddress::new(image.end as u64),
+    )?;
+    Some(Boot::new(hart, image, None, descriptions))
 }

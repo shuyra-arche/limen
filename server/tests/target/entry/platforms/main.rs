@@ -81,7 +81,39 @@ fn main() -> Status {
         uefi::println!("Foundation RAM grant: {status:?}");
         return status;
     }
+    #[cfg(target_arch = "x86_64")]
+    let rsdp = match board::acpi_root() {
+        Some(address) => address,
+        None => return Status::NOT_FOUND,
+    };
     let map = unsafe { uefi::boot::exit_boot_services(None) };
+    #[cfg(target_arch = "x86_64")]
+    let read_acpi = |physical: kernel::address::PhysicalRange| {
+        use uefi::mem::memory_map::MemoryType;
+        // This loader keeps ACPI Reclaim and NVS pages identity-mapped and
+        // unmodified. Nothing in that window is freed or handed to Limen RAM.
+        let start = physical.start().get();
+        let end = physical.end().get();
+        let source = map.entries().find(|descriptor| {
+            matches!(
+                descriptor.ty,
+                MemoryType::ACPI_RECLAIM | MemoryType::ACPI_NON_VOLATILE
+            ) && descriptor.phys_start <= start
+                && descriptor
+                    .page_count
+                    .checked_mul(uefi::boot::PAGE_SIZE as u64)
+                    .and_then(|length| descriptor.phys_start.checked_add(length))
+                    .is_some_and(|limit| end <= limit)
+        })?;
+        let length = usize::try_from(end - start).ok()?;
+        let address = usize::try_from(start).ok()?;
+        if address == 0 || length > isize::MAX as usize || source.virt_start != 0 {
+            return None;
+        }
+        Some(unsafe {
+            core::slice::from_raw_parts(core::ptr::with_exposed_provenance(address), length)
+        })
+    };
     let meta = map.meta();
     let input = boot::Loader {
         image,
@@ -91,6 +123,13 @@ fn main() -> Status {
         // The selected test configurations admit at most 512 descriptors.
         descriptor_limit: 512,
         device_tree: board.map(boot::DeviceTree::Memory),
+        #[cfg(target_arch = "x86_64")]
+        acpi: Some(boot::AcpiInput {
+            rsdp,
+            read: &read_acpi,
+        }),
+        #[cfg(target_arch = "aarch64")]
+        acpi: None,
     };
     unsafe { boot::major(board::hart(), &input, &board::SERVICES) }
 }
@@ -199,6 +238,8 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     ram::check(&boot);
     let target = TARGET.load(Ordering::Acquire);
     assert_ne!(target, boot.hart());
+    #[cfg(target_arch = "x86_64")]
+    board::check_discovery(&boot, target);
     let startup = board::startup();
     assert!(unsafe { MINOR.start(boot.hart(), minor_ready, target, startup) }.is_err());
     unsafe { MINOR.start(target, minor_ready, target, startup) }.expect("minor startup request");

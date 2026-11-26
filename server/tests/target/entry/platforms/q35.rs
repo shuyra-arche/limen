@@ -61,6 +61,17 @@ pub(super) fn startup() -> boot::Startup {
     }
 }
 
+pub(super) fn acpi_root() -> Option<kernel::address::PhysicalAddress> {
+    uefi::system::with_config_table(|entries| {
+        let mut roots = entries
+            .iter()
+            .filter(|entry| entry.guid == uefi::table::cfg::ConfigTableEntry::ACPI2_GUID);
+        let root = roots.next()?.address;
+        (!root.is_null() && roots.next().is_none())
+            .then(|| kernel::address::PhysicalAddress::new(root.addr() as u64))
+    })
+}
+
 pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
     let handle = uefi::boot::get_handle_for_protocol::<MpServices>().map_err(|e| e.status())?;
     let mp = uefi::boot::open_protocol_exclusive::<MpServices>(handle).map_err(|e| e.status())?;
@@ -108,10 +119,34 @@ impl Idtr {
     }
 }
 
+pub(super) fn check_discovery(boot: &boot::Boot<'_>, target: usize) {
+    let acpi = boot.acpi().expect("real firmware ACPI");
+    let madt = acpi.madt().expect("MADT describes q35 topology");
+    let enabled = |candidate| {
+        madt.processors().any(|processor| {
+            matches!(processor, boot::acpi::Processor::Apic { id, .. } if usize::from(id) == candidate)
+                && processor.enabled()
+        })
+    };
+    assert!(enabled(boot.hart()));
+    assert!(enabled(target));
+    assert!(madt.io_apics().next().is_some());
+    assert!(madt.source_overrides().next().is_some());
+    let early = boot.exclusions();
+    for physical in core::iter::once(acpi.rsdp_range())
+        .chain(core::iter::once(acpi.xsdt().physical()))
+        .chain(acpi.tables().map(|table| table.physical()))
+    {
+        assert!(early.entries().any(|entry| {
+            entry.occupant == boot::Occupant::Acpi && entry.physical == physical && entry.fixed()
+        }));
+    }
+    assert!(boot.conventional_ram().is_none());
+}
+
 pub(super) fn inspect(boot: boot::Boot, _: &impl MemoryMap) -> ! {
     assert!(boot.device_tree().is_none());
     assert!(boot.dtb_memory().is_none());
-    assert!(boot.conventional_ram().is_none());
     let idtr = Idtr::read();
     let (sp, flags, cr0): (usize, usize, usize);
     let cs: u16;
@@ -128,6 +163,7 @@ pub(super) fn inspect(boot: boot::Boot, _: &impl MemoryMap) -> ! {
         assert!(unsafe { gate.add(5).read_volatile() } == 0x8e);
         assert!(unsafe { gate.add(2).cast::<u16>().read_unaligned() } == cs);
     }
+    boot::write("PASS firmware-discovery q35 acpi=1 madt=1 routes=1 retained=1\n");
     use core::fmt::Write;
     boot::console()
         .expect("board console")

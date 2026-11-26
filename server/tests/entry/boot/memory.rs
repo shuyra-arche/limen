@@ -2,7 +2,10 @@ use super::organization::retired;
 use super::regions::Regions;
 use super::{
     DeviceTree, DtbMemory, FirmwareRegion, Loader,
-    devicetree::memory::{Error, Source, describe as describe_into, read},
+    devicetree::{
+        Error,
+        memory::{Source, describe as describe_into, read},
+    },
     image, range,
 };
 use crate::allocator::RegionOrigin;
@@ -10,7 +13,8 @@ use limen_treaty::model::ByteLength;
 
 fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
     let mut memory = None;
-    let result = describe_into(blob, &mut memory);
+    let tree = super::devicetree::DeviceTree::new(blob)?;
+    let result = describe_into(tree, &mut memory);
     assert_eq!(memory.is_some(), result.is_ok());
     result.map(|()| memory.unwrap())
 }
@@ -151,8 +155,10 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
         version: 1,
         descriptor_limit: 5,
         device_tree: Some(DeviceTree::Memory(bytes)),
+        acpi: None,
     };
-    let boot = loader.admit(7).unwrap();
+    let mut descriptions = super::Descriptions::new();
+    let boot = loader.admit(7, &mut descriptions).unwrap();
     assert_eq!(boot.firmware_map().unwrap().regions().len(), 5);
     assert_eq!(boot.dtb_memory().unwrap().reservations().len(), 2);
     let early = boot.exclusions_for(image(), image());
@@ -199,6 +205,64 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
                 (0xc000, RegionOrigin::DeviceTreeAndUefi { attributes: 0x0f }),
             ])
     );
+}
+
+#[test]
+fn hardware_only_dtb_still_reserves_both_kinds_of_range() {
+    let mut fixture = root();
+    fixture.reservations.push((0x3800, 0x10));
+    fixture.reserved();
+    fixture.node("firmware@5800");
+    fixture.property("reg", &pair(0x5800, 0x10));
+    fixture.token(2);
+    fixture.token(2);
+    let tree = fixture.finish(true);
+
+    #[repr(align(8))]
+    struct Bytes<const N: usize>([u8; N]);
+    let mut storage = Bytes([0; 512]);
+    let bytes = &mut storage.0[..tree.len()];
+    bytes.copy_from_slice(&tree);
+    let mut descriptors = Bytes([0; 2 * 48]);
+    super::describe(&mut descriptors.0[..48], 7, 0x2000, 5, 8);
+    super::describe(
+        &mut descriptors.0[48..],
+        2,
+        bytes.as_ptr().addr() as u64 & !4095,
+        2,
+        0,
+    );
+
+    let loader = Loader {
+        image: image(),
+        descriptors: &descriptors.0,
+        stride: 48,
+        version: 1,
+        descriptor_limit: 2,
+        device_tree: Some(DeviceTree::Description(bytes)),
+        acpi: None,
+    };
+    let mut descriptions = super::Descriptions::new();
+    let boot = loader.admit(7, &mut descriptions).unwrap();
+    assert!(boot.dtb_memory().is_none());
+    assert!(boot.conventional_ram().is_none());
+
+    let early = boot.exclusions_for(image(), image());
+    let evidence = retired(range(0x1000, 0x8000));
+    let mut space = [None; 3];
+    let ready = Regions::organize(
+        &boot,
+        &early,
+        ByteLength::new(4096),
+        Some(&evidence),
+        &mut space,
+    )
+    .unwrap();
+    assert!(ready.entries().map(|entry| entry.physical).eq([
+        range(0x2000, 0x3000),
+        range(0x4000, 0x5000),
+        range(0x6000, 0x7000),
+    ]));
 }
 
 #[test]
@@ -264,7 +328,13 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
         }))
     );
     assert!(early.entries().all(|entry| entry.fixed()));
-    let boot = super::Boot::from_opensbi(0, 0x1000..0x2000, 0x3000..0x4000, map);
+    let tree = super::devicetree::DeviceTree::new(&blob).unwrap();
+    let descriptions = super::Descriptions {
+        device_tree: Some(tree),
+        memory: Some(map),
+        acpi: None,
+    };
+    let boot = super::Boot::new(0, image(), None, &descriptions);
     let early = boot.exclusions_for(image(), image());
     let evidence = retired(range(0x8000_0000, 0x1_0040_0000));
     let mut space = [None; 3];
@@ -477,6 +547,7 @@ fn checks_the_trusted_readable_window_before_reading_the_blob() {
     let mut memory = None;
     let extent = unsafe { read(input, start..end, 0..0, &mut memory) }.unwrap();
     let memory = memory.unwrap();
-    assert_eq!(extent, start..end);
+    assert_eq!(extent.bytes(), &storage.0[..blob.len()]);
+    assert_eq!(extent.bytes().as_ptr().addr(), start);
     assert_eq!(memory.ram().len(), 1);
 }

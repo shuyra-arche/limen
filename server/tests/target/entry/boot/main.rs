@@ -6,7 +6,10 @@ use core::fmt::Write;
 use core::panic::PanicInfo;
 use kernel::{
     address::PhysicalAddress,
-    entry::boot::{Boot, Source, shutdown, stack_range, write},
+    entry::boot::{
+        Boot, RiscvCpus, RiscvExtension, RiscvIsa, RiscvMmu, RiscvMmuMode, RiscvTimebase, Source,
+        shutdown, stack_range, write,
+    },
 };
 use limen_treaty::model::ByteLength;
 
@@ -54,6 +57,45 @@ global_asm!(
     hart = sym FIRMWARE_HART,
     sentinel = sym ZEROED,
 );
+
+fn check_discovery(boot: &Boot<'_>) {
+    let tree = boot.device_tree_description().expect("OpenSBI source tree");
+    let cpus = RiscvCpus::new(tree).unwrap().expect("QEMU CPU scope");
+    let hart = boot.hart() as u64;
+    let cpu = cpus.cpu(hart).unwrap().expect("actual Hart description");
+    assert_eq!(cpu.id(), hart);
+    assert!(cpu.enabled());
+    assert!(cpus.cpu(u64::MAX).unwrap().is_none());
+
+    let mmu = RiscvMmu::describe(&cpu)
+        .unwrap()
+        .expect("declared MMU mode");
+    assert!(matches!(
+        mmu.maximum(),
+        RiscvMmuMode::Sv39 | RiscvMmuMode::Sv48 | RiscvMmuMode::Sv57
+    ));
+    assert_eq!(mmu.source(), cpu.node().id());
+    let isa = RiscvIsa::describe(&cpu).unwrap().expect("declared ISA");
+    assert_eq!(isa.source(), cpu.node().id());
+    for extension in [
+        RiscvExtension::Integer,
+        RiscvExtension::Atomic,
+        RiscvExtension::Float,
+        RiscvExtension::Double,
+        RiscvExtension::Compressed,
+    ] {
+        assert!(isa.has(extension));
+    }
+
+    let timebase = RiscvTimebase::describe(&cpus)
+        .unwrap()
+        .expect("QEMU timebase");
+    assert_eq!(timebase.source(), cpus.node().id());
+    assert_eq!(timebase.hertz(), 10_000_000);
+    let sbi = boot.sbi_services();
+    assert!(sbi.hart_state_management() && sbi.timer() && sbi.inter_processor_interrupt());
+    write("PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1\n");
+}
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
@@ -153,6 +195,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let length = u32::from_be(unsafe { header.add(1).read_volatile() }) as usize;
     assert!(magic == 0xd00d_feed, "invalid firmware tree magic");
     assert!(length == device_tree.len(), "firmware tree length mismatch");
+    check_discovery(&boot);
 
     let memory = boot.dtb_memory().expect("OpenSBI DTB memory");
     assert!(boot.conventional_ram().is_none());

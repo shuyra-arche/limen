@@ -1,5 +1,9 @@
 use core::{arch::asm, fmt::Write};
-use kernel::entry::boot;
+use kernel::entry::boot::{
+    self, Aarch64Cpus, PsciDescription,
+    arm::{GenericTimer, GicV3, Trigger},
+    devicetree::{DeviceTree, Error as TreeError},
+};
 use uefi::{
     Status,
     boot::{self as firmware, AllocateType, PAGE_SIZE},
@@ -10,6 +14,8 @@ use uefi::{
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::memory;
+
+const MAX_DTB_BYTES: usize = 2 * 1024 * 1024;
 
 #[path = "pl011.rs"]
 mod pl011;
@@ -32,50 +38,61 @@ pub(super) static SERVICES: boot::Services = boot::Services {
     reset: Some(|_| unsafe { conduit().system_off() }),
 };
 
+fn checked<T>(result: Result<T, TreeError>) -> Result<T, Status> {
+    result.map_err(|error| match error {
+        TreeError::Unsupported => Status::UNSUPPORTED,
+        TreeError::Missing => Status::NOT_FOUND,
+        _ => Status::COMPROMISED_DATA,
+    })
+}
+
 fn discover(bytes: &[u8]) -> Result<(), Status> {
-    let tree = fdt::Fdt::new(bytes).map_err(|_| Status::COMPROMISED_DATA)?;
-    let psci = tree
-        .find_compatible(&["arm,psci-1.0", "arm,psci-0.2"])
+    let tree = checked(DeviceTree::new(bytes))?;
+    let psci = checked(PsciDescription::read(&tree))?.ok_or(Status::NOT_FOUND)?;
+    let cpus = checked(Aarch64Cpus::read(&tree))?.ok_or(Status::NOT_FOUND)?;
+    let major = checked(unsafe { cpus.current() })?;
+    let target = cpus
+        .candidates()
+        .find(|cpu| cpu.enabled && cpu.starts_with_psci && cpu.affinity != major.affinity)
         .ok_or(Status::NOT_FOUND)?;
-    let hvc = match psci.property("method").and_then(|p| p.as_str()) {
-        Some("hvc") => true,
-        Some("smc") => false,
-        _ => return Err(Status::UNSUPPORTED),
+    // AAVMF's retained native tree describes the conduit of this running VM.
+    // Probe the calls before installing PSCI as a startup and shutdown service.
+    unsafe {
+        psci.verify().map_err(|_| Status::UNSUPPORTED)?;
+        psci.verify_affinity(major.affinity, true)
+            .map_err(|_| Status::COMPROMISED_DATA)?;
+        psci.verify_affinity(target.affinity, false)
+            .map_err(|_| Status::COMPROMISED_DATA)?;
+    }
+
+    let stdout = checked(tree.find_path(b"/chosen"))?.ok_or(Status::NOT_FOUND)?;
+    let stdout = checked(stdout.property(b"stdout-path"))?
+        .and_then(|bytes| bytes.strip_suffix(&[0]))
+        .and_then(|value| value.split(|byte| *byte == b':').next())
+        .ok_or(Status::NOT_FOUND)?;
+    let path = if stdout.starts_with(b"/") {
+        stdout
+    } else {
+        let aliases = checked(tree.find_path(b"/aliases"))?.ok_or(Status::NOT_FOUND)?;
+        checked(aliases.property(stdout))?
+            .and_then(|bytes| bytes.strip_suffix(&[0]))
+            .ok_or(Status::NOT_FOUND)?
     };
-    tree.find_node("/chosen").ok_or(Status::NOT_FOUND)?;
-    tree.find_node("/cpus").ok_or(Status::NOT_FOUND)?;
-    let serial = tree
-        .chosen()
-        .stdout()
-        .filter(|node| {
-            node.compatible()
-                .is_some_and(|c| c.all().any(|s| s == "arm,pl011"))
-        })
-        .ok_or(Status::NOT_FOUND)?;
-    let range = serial
-        .reg()
-        .and_then(|mut r| r.next())
-        .filter(|r| {
-            !r.starting_address.is_null()
-                && r.starting_address.addr().is_multiple_of(4)
-                && r.size.is_some_and(|s| s >= 0x1c)
-        })
-        .ok_or(Status::COMPROMISED_DATA)?;
-    let target = tree
-        .cpus()
-        .filter(|cpu| {
-            cpu.property("reg").is_some()
-                && cpu.property("enable-method").and_then(|p| p.as_str()) == Some("psci")
-                && cpu
-                    .property("status")
-                    .is_none_or(|p| matches!(p.as_str(), Some("okay" | "ok")))
-        })
-        .flat_map(|cpu| cpu.ids().all())
-        .find(|id| *id != hart())
-        .ok_or(Status::NOT_FOUND)?;
-    USE_HVC.store(hvc, Ordering::Release);
-    UART.store(range.starting_address.addr(), Ordering::Release);
-    crate::TARGET.store(target, Ordering::Release);
+    let serial = checked(tree.find_path(path))?.ok_or(Status::NOT_FOUND)?;
+    if !checked(serial.enabled())? || !checked(serial.compatible(b"arm,pl011"))? {
+        return Err(Status::UNSUPPORTED);
+    }
+    let range = checked(serial.register(0))?;
+    let start = range.start().get();
+    if start == 0 || !start.is_multiple_of(4) || range.end().get() - start < 0x1c {
+        return Err(Status::COMPROMISED_DATA);
+    }
+    USE_HVC.store(psci.conduit() == boot::Conduit::Hvc, Ordering::Release);
+    UART.store(
+        usize::try_from(start).map_err(|_| Status::COMPROMISED_DATA)?,
+        Ordering::Release,
+    );
+    crate::TARGET.store(target.affinity, Ordering::Release);
     Ok(())
 }
 
@@ -106,17 +123,16 @@ pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
             &[MemoryType::BOOT_SERVICES_DATA, MemoryType::ACPI_RECLAIM],
         )
     }?;
-    discover(unsafe { core::slice::from_raw_parts(source, size) })?;
-    let dtb = firmware::allocate_pages(
-        AllocateType::AnyPages,
-        MemoryType::LOADER_DATA,
-        size.div_ceil(PAGE_SIZE),
-    )
-    .map_err(|e| e.status())?;
+    let pages = size.div_ceil(PAGE_SIZE);
+    let dtb = firmware::allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, pages)
+        .map_err(|e| e.status())?;
     unsafe { source.copy_to_nonoverlapping(dtb.as_ptr(), size) };
-    Ok(Some(unsafe {
-        core::slice::from_raw_parts(dtb.as_ptr(), size)
-    }))
+    let bytes = unsafe { core::slice::from_raw_parts(dtb.as_ptr(), size) };
+    if let Err(status) = discover(bytes) {
+        unsafe { firmware::free_pages(dtb, pages) }.map_err(|error| error.status())?;
+        return Err(status);
+    }
+    Ok(Some(bytes))
 }
 
 // The caller supplies a firmware table pointer or its reserved, identity-mapped copy.
@@ -147,7 +163,7 @@ unsafe fn dtb_size(
     let words = dtb.cast::<u32>();
     let magic = u32::from_be(unsafe { words.read() });
     let size = u32::from_be(unsafe { words.add(1).read() }) as usize;
-    if magic != 0xd00dfeed || !(40..=available).contains(&size) {
+    if magic != 0xd00dfeed || !(40..=available.min(MAX_DTB_BYTES)).contains(&size) {
         return Err(Status::COMPROMISED_DATA);
     }
     Ok(size)
@@ -175,8 +191,12 @@ pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
                 .is_some_and(|limit| end <= limit)
     }));
     let tree = boot.device_tree().expect("UEFI virt DTB");
-    let size = unsafe { dtb_size(tree.start as *const u8, map, &[MemoryType::LOADER_DATA]) };
-    assert_eq!(size, Ok(tree.len()));
+    let firmware = boot
+        .device_tree_description()
+        .expect("validated UEFI virt DTB");
+    assert_eq!(firmware.bytes().as_ptr().addr(), tree.start);
+    assert_eq!(firmware.bytes().len(), tree.len());
+    inspect_firmware(&firmware, boot.hart());
 
     let description = boot.dtb_memory().expect("decoded DTB memory");
     let bank = memory::extent(0x4000_0000, 0x5000_0000);
@@ -203,9 +223,57 @@ pub(super) fn inspect(boot: boot::Boot, map: &impl MemoryMap) -> ! {
                 && range.end().get() <= d.phys_start + d.page_count * PAGE_SIZE as u64
         }));
     }
-    boot::console()
-        .expect("board console")
+    let mut console = boot::console().expect("board console");
+    console
+        .write_str("PASS firmware-discovery virt dtb=1 psci=1 affinity=1 gic=1 timer=1\n")
+        .expect("firmware discovery output");
+    console
         .write_str("PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1 ram=1 reconciled=1\n")
         .expect("diagnostic output");
     boot::shutdown(true)
+}
+
+fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) {
+    let cpus = Aarch64Cpus::read(tree).unwrap().expect("CPU declarations");
+    let current = unsafe { cpus.current() }.expect("MPIDR matches an enabled CPU node");
+    assert_eq!(current.affinity, major);
+    let target = crate::TARGET.load(Ordering::Acquire);
+    let minor = cpus
+        .candidates()
+        .find(|cpu| cpu.affinity == target && cpu.enabled && cpu.starts_with_psci)
+        .expect("minor's original PSCI CPU declaration");
+    assert_ne!(current.source, minor.source);
+    assert!(tree.node(minor.source).is_some());
+
+    let psci = PsciDescription::read(tree)
+        .unwrap()
+        .expect("PSCI declaration");
+    assert!(tree.node(psci.source()).is_some());
+    assert_eq!(psci.conduit(), conduit());
+    unsafe {
+        psci.verify().expect("live PSCI version and calls");
+        psci.verify_affinity(target, true)
+            .expect("live minor affinity");
+    }
+
+    let timer = GenericTimer::read(tree)
+        .unwrap()
+        .expect("generic timer declaration");
+    assert_eq!(tree.node(timer.source).unwrap().name(), b"timer");
+    assert_eq!(timer.virtual_intid, 27);
+    assert_eq!(timer.virtual_trigger, Trigger::LevelHigh);
+    assert!(timer.always_on);
+    assert!(tree.node(timer.controller.source).is_some());
+    assert_eq!(
+        timer.controller.distributor,
+        memory::extent(0x0800_0000, 0x0801_0000)
+    );
+    assert!(
+        timer
+            .controller
+            .redistributor
+            .covers(memory::extent(0x080a_0000, 0x080c_0000))
+    );
+    assert!(unsafe { GicV3::cpu_interface_available() });
+    let _frequency = unsafe { timer.counter_frequency() }.expect("live generic timer frequency");
 }

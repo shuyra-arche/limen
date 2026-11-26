@@ -57,7 +57,8 @@ fn bootstrap_at(
     let scope = range(base, base + 13 * PAGE);
     describe(&mut descriptors.0, 7, scope.start().get(), 13, 8);
     let map = FirmwareMap::new(&descriptors.0, 40, 1, 1).unwrap();
-    let boot = Boot::from_uefi(0, image(), None, map, None);
+    let descriptions = super::Descriptions::new();
+    let boot = Boot::new(0, image(), Some(map), &descriptions);
     let exclusions = boot.exclusions_for(image(), image());
     let evidence = retired(scope);
     let mut scratch = [None; 3];
