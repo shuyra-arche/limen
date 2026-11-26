@@ -4,10 +4,10 @@
 use core::{mem, num::NonZeroU64};
 
 #[cfg(target_arch = "riscv64")]
-use crate::address::PhysicalAddress;
+use crate::metal::address::PhysicalAddress;
 #[cfg(target_arch = "riscv64")]
-use crate::module::Module;
-use crate::{
+use crate::metal::module::Module;
+use crate::metal::{
     mmu::internal::GEOMETRY,
     module::{Contract, Layout, Machine, ModuleUse, UseError},
 };

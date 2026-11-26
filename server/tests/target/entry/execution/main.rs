@@ -16,11 +16,13 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering::Relaxed},
 };
 
-use kernel::entry::{
-    boot::{Boot, shutdown, write},
-    execution::{
-        Current, End, Error, EstablishError, Execution, Lifecycle, Occupancy, Stacks, UnitId,
+use kernel::{
+    basis::{
+        execution::{Current, Error, EstablishError, Execution},
+        room::Occupancy,
+        unit::{End, Lifecycle, Stacks, UnitId},
     },
+    entry::boot::{Boot, shutdown, write},
 };
 
 static mut STACKS: Stacks = Stacks::new();
@@ -91,7 +93,7 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
     let execution = execution();
     assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Ending));
     assert_eq!(execution.finish_end(unit), Err(Error::Busy));
-    assert_eq!(execution.reap(unit), Err(Error::State));
+    assert_eq!(execution.reap(unit), Err(Error::UnitNotEnded));
     assert_eq!(execution.enter(), Err(Error::Busy));
     execution.vacate(occupancy).expect("matching actual leave");
     assert_eq!(execution.pending_leave(), Ok(None));
@@ -137,8 +139,8 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         .expect("stop before admission");
     assert_eq!(execution.lifecycle(dormant), Ok(Lifecycle::Ending));
     assert_eq!(execution.stop_dormant(dormant), Ok(()));
-    assert_eq!(execution.submit(dormant), Err(Error::State));
-    assert_eq!(execution.reap(dormant), Err(Error::State));
+    assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
+    assert_eq!(execution.reap(dormant), Err(Error::UnitNotEnded));
     assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
     assert_eq!(execution.enter(), Ok(None));
     execution

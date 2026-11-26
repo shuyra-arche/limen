@@ -8,9 +8,9 @@ pub use description::{Contract, Description, DescriptionError, Interface};
 pub use elf::{Machine, Permissions};
 pub use lifetime::{Module, ModuleId, ModuleSlots, ModuleUse, Retirement, UseError};
 
-use crate::{
-    access::MappedRange,
+use crate::metal::{
     address::{PhysicalAddress, PhysicalRange},
+    mmu::internal::access::MappedRange,
 };
 use core::{mem::MaybeUninit, ops::Range};
 use limen_treaty::model::{ByteLength, PageSize};

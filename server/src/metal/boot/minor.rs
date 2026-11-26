@@ -99,7 +99,7 @@ impl Minor {
         argument: usize,
         method: boot::Startup,
     ) -> Result<(), StartError> {
-        if hart == hart::current_hart() {
+        if hart == hart::current_hart().get() {
             return Err(StartError::Busy);
         }
         self.state

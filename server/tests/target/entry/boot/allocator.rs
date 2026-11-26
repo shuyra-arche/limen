@@ -1,11 +1,13 @@
 use kernel::{
-    address::PhysicalRange,
-    allocator::{
-        Allocation, Allowance, Config, Error, Initial, Pending, RamPurpose::Metadata, Request,
-        ReturnId, Search,
-    },
     entry::boot::{self, Boot},
-    sync::TurnMode::{Fast, Slow},
+    metal::{
+        address::PhysicalRange,
+        allocator::{
+            Allocation, Allowance, Config, Error, Initial, Pending, RamPurpose::Metadata, Request,
+            ReturnId, Search,
+        },
+        sync::TurnMode::{Fast, Slow},
+    },
 };
 
 use super::memory::{extent, mapped, retirement};
@@ -74,7 +76,12 @@ pub(super) fn check(boot: &Boot<'_>) {
     let root_pages = CONFIG.layout().unwrap().size().div_ceil(PAGE as usize) as u64;
     assert_eq!(source.root(), pages(4, 4 + root_pages));
     let capacity = (13 - root_pages) * PAGE;
-    assert_eq!(source.budget(Slow), Ok((capacity, capacity - 10 * PAGE)));
+    assert_eq!(
+        source
+            .budget(Slow)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok((capacity, capacity - 10 * PAGE))
+    );
 
     let mut lookup = source
         .lookup(
@@ -157,7 +164,12 @@ pub(super) fn check(boot: &Boot<'_>) {
     assert_eq!(receipt, pending);
     assert_eq!(done.physical, pages(0, 3));
     let capacity = capacity + 4 * PAGE;
-    assert_eq!(source.budget(Fast), Ok((capacity, capacity)));
+    assert_eq!(
+        source
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok((capacity, capacity))
+    );
     allowance.reclaim(Slow).ok().unwrap();
     assert_eq!(source.finish_return(receipt, Fast), Ok(done));
     source.acknowledge(receipt).unwrap();

@@ -1,13 +1,15 @@
 use core::{mem::MaybeUninit, ptr};
 
 use kernel::{
-    address::PhysicalAddress,
-    allocator::{
-        Allocation, Allowance, Error as SourceError,
-        pool::{Error, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement, Stable},
-    },
     entry::boot::{self, Boot},
-    sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
+    metal::{
+        address::PhysicalAddress,
+        allocator::{
+            Allocation, Allowance, Error as SourceError,
+            pool::{Error, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement, Stable},
+        },
+        sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
+    },
 };
 
 use super::{
@@ -99,9 +101,14 @@ pub(super) fn check(boot: &Boot<'_>) {
         }
     }
     assert_eq!(pool.capacity().unwrap().free, geometry.slots);
-    assert_eq!(source.budget(Fast), Ok((PAGE as u64, 0)));
+    assert_eq!(
+        source
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok((PAGE as u64, 0))
+    );
     let owner = allowance.as_ref().unwrap();
-    assert_eq!(owner.balance().unwrap().occupied, PAGE as u64);
+    assert_eq!(owner.balance().unwrap().occupied().get(), PAGE as u64);
     assert_eq!(pool.shut(group), Ok(physical));
     assert_eq!(pool.capacity().unwrap().bytes, PAGE);
     let Retirement::Shutting(group, scope) = pool.retirement(&mut 0, 1).unwrap() else {
@@ -127,7 +134,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         source.acknowledge(supply.retirement),
         Err(SourceError::Stale)
     );
-    assert_eq!(owner.balance().unwrap().occupied, 0);
+    assert_eq!(owner.balance().unwrap().occupied().get(), 0);
     assert_eq!(pool.capacity().unwrap().bytes, 0);
     boot::write("PASS typed-pool mapped=1 slots=1 reuse=1 joint=1 stable=1 refund=1\n");
 }

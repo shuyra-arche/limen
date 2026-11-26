@@ -2,12 +2,12 @@
 
 use limen_treaty::model::{Alignment, ByteLength};
 
-use crate::{
+use crate::metal::{
     allocator::{
         self, AllocationConstruction, AllocationId, AllocationPermit, AllocationPermitSlot,
         Allowance, Candidate, LayoutLimit,
     },
-    metal::sync::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
+    sync::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

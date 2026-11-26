@@ -59,3 +59,7 @@ fn supports(base: &mut impl FnMut(usize, usize) -> (isize, usize), extension: us
     let (error, value) = base(3, extension);
     error == 0 && value != 0
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/metal/firmware/sbi/mod.rs"]
+mod tests;

@@ -15,12 +15,15 @@ mod mapping;
 mod mapping;
 
 use core::fmt::{self, Write};
+use kernel::metal::{firmware::map::FirmwareMap, firmware::uefi::Loader};
 use kernel::{
-    access::MappedRange,
-    address::{PhysicalAddress, PhysicalRange},
-    entry::boot::{self, FirmwareMap},
-    mmu::internal::GEOMETRY,
-    module::{Layout, ModuleImage, ModuleSlots, Permissions, UseError},
+    entry::boot::{self},
+    metal::{
+        address::{PhysicalAddress, PhysicalRange},
+        mmu::internal::GEOMETRY,
+        mmu::internal::access::MappedRange,
+        module::{Layout, ModuleImage, ModuleSlots, Permissions, UseError},
+    },
 };
 use limen_treaty::model::{ByteLength, PageSize};
 use uefi::{
@@ -224,7 +227,7 @@ fn main() -> Status {
 
     let map = unsafe { uefi::boot::exit_boot_services(None) };
     let meta = map.meta();
-    let input = boot::Loader {
+    let input = Loader {
         image,
         descriptors: map.buffer(),
         stride: meta.desc_size,
@@ -265,7 +268,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         assert_eq!(caller.entry(), sibling.entry());
         let geometry = unsafe { board::query(caller.entry() as usize) };
         module.shut();
-        assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Closed)));
+        assert!(matches!(module.acquire(GEOMETRY), Err(UseError::Shut)));
         assert!(matches!(module.retire(), Err(UseError::Busy)));
         drop(caller);
         assert!(matches!(module.retire(), Err(UseError::Busy)));

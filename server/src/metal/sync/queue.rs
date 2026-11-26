@@ -1,5 +1,4 @@
 use core::{
-    hint::spin_loop,
     ptr::{self, null_mut},
     sync::atomic::{
         AtomicPtr,
@@ -8,6 +7,15 @@ use core::{
 };
 
 use crate::metal::hart::QueueNode;
+
+#[cfg(not(test))]
+use core::hint::spin_loop;
+#[cfg(test)]
+use tests::observe_spin as spin_loop;
+
+#[cfg(test)]
+#[path = "../../../tests/metal/sync/mod.rs"]
+mod tests;
 
 pub(super) struct Queue {
     tail: AtomicPtr<QueueNode>,

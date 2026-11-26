@@ -1,5 +1,5 @@
 use core::arch::asm;
-use kernel::sync::{
+use kernel::metal::sync::{
     LeafError, LeafLock, PublishError, SnapLock, Snapshot, TurnAcquireError, TurnLock, TurnMode,
     TurnWorkspace,
 };

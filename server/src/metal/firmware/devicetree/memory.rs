@@ -1,7 +1,8 @@
-use super::{DeviceTree, Error, Node, RESERVATION_LIMIT, registers::Cells};
+use super::{DeviceTree, Error, Node, registers::Cells};
+use crate::metal::address::{PhysicalAddress, PhysicalRange};
+use crate::metal::fdt::RESERVATION_LIMIT;
 #[cfg(any(target_arch = "riscv64", test))]
-use super::{HEADER_SIZE, MAX_BLOCK_BYTES, extent};
-use crate::address::{PhysicalAddress, PhysicalRange};
+use crate::metal::fdt::{HEADER_SIZE, MAX_BLOCK_BYTES, extent};
 #[cfg(any(target_arch = "riscv64", test))]
 use core::{ops::Range, slice};
 use limen_treaty::model::ByteLength;
@@ -104,13 +105,13 @@ pub(crate) unsafe fn read<'a>(
 
 /// Populate the caller's fixed storage before it leaves the firmware adapter.
 /// A failed decode removes the partial description.
-pub(crate) fn describe(tree: DeviceTree<'_>, output: &mut Option<DtbMemory>) -> Result<(), Error> {
+pub fn describe(tree: DeviceTree<'_>, output: &mut Option<DtbMemory>) -> Result<(), Error> {
     describe_into(tree, output, true)
 }
 
 /// Retain the original reservations without using the tree as a RAM source.
 #[cfg(any(not(target_arch = "riscv64"), test))]
-pub(crate) fn describe_reservations(
+pub fn describe_reservations(
     tree: DeviceTree<'_>,
     output: &mut Option<DtbMemory>,
 ) -> Result<(), Error> {
@@ -230,3 +231,7 @@ fn describe_reservation(node: &Node<'_, '_>, memory: &mut DtbMemory) -> Result<(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/metal/firmware/devicetree/retained.rs"]
+mod tests;

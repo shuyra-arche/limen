@@ -3,7 +3,10 @@
 
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use kernel::{address::PhysicalAddress, entry::boot};
+#[cfg(target_arch = "x86_64")]
+use kernel::metal::firmware::uefi::AcpiInput;
+use kernel::metal::firmware::uefi::{DeviceTree as LoaderTree, Loader};
+use kernel::{entry::boot, metal::address::PhysicalAddress};
 use limen_treaty::model::ByteLength;
 
 #[path = "../foundation.rs"]
@@ -55,8 +58,8 @@ mod board;
 #[entry]
 fn main() -> Status {
     assert_eq!(
-        kernel::sync::LeafLock::new(()).attempt(|()| ()),
-        Err(kernel::sync::LeafError::Context)
+        kernel::metal::sync::LeafLock::new(()).attempt(|()| ()),
+        Err(kernel::metal::sync::LeafError::Context)
     );
     let loaded = match uefi::boot::open_protocol_exclusive::<uefi::proto::loaded_image::LoadedImage>(
         uefi::boot::image_handle(),
@@ -88,7 +91,7 @@ fn main() -> Status {
     };
     let map = unsafe { uefi::boot::exit_boot_services(None) };
     #[cfg(target_arch = "x86_64")]
-    let read_acpi = |physical: kernel::address::PhysicalRange| {
+    let read_acpi = |physical: kernel::metal::address::PhysicalRange| {
         use uefi::mem::memory_map::MemoryType;
         // This loader keeps ACPI Reclaim and NVS pages identity-mapped and
         // unmodified. Nothing in that window is freed or handed to Limen RAM.
@@ -115,16 +118,16 @@ fn main() -> Status {
         })
     };
     let meta = map.meta();
-    let input = boot::Loader {
+    let input = Loader {
         image,
         descriptors: map.buffer(),
         stride: meta.desc_size,
         version: meta.desc_version,
         // The selected test configurations admit at most 512 descriptors.
         descriptor_limit: 512,
-        device_tree: board.map(boot::DeviceTree::Memory),
+        device_tree: board.map(LoaderTree::Memory),
         #[cfg(target_arch = "x86_64")]
-        acpi: Some(boot::AcpiInput {
+        acpi: Some(AcpiInput {
             rsdp,
             read: &read_acpi,
         }),
@@ -189,7 +192,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
             .unwrap()
             .is_none()
     );
-    let configuration = kernel::allocator::Config {
+    let configuration = kernel::metal::allocator::Config {
         granule,
         maximum: ByteLength::new(0),
         regions: 1,

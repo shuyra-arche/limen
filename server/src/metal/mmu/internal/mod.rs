@@ -1,8 +1,7 @@
 pub mod access;
-#[cfg(target_arch = "riscv64")]
 pub mod riscv;
 
-use crate::module::Contract;
+use crate::metal::module::Contract;
 
 /// Query the active base translation granule using the native integer ABI.
 /// The entry takes no arguments and returns the base size in bytes, or zero

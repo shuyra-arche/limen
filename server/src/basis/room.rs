@@ -3,7 +3,7 @@
 use core::num::NonZeroU64;
 
 use super::unit::UnitId;
-use crate::metal::execution::LeaveReceipt;
+use crate::metal::{execution::LeaveReceipt, hart::HartId};
 
 const HART_CAPACITY: usize = 2;
 
@@ -33,7 +33,7 @@ pub struct Occupancy {
     id: OccupancyId,
     unit: UnitId,
     admission: AdmissionId,
-    hart: usize,
+    hart: HartId,
     participation: ParticipationId,
 }
 
@@ -47,7 +47,7 @@ impl Occupancy {
     }
 
     pub fn hart(self) -> usize {
-        self.hart
+        self.hart.get()
     }
 }
 
@@ -75,17 +75,17 @@ enum Placement {
 struct UnitEntry {
     unit: UnitId,
     admission: AdmissionId,
-    affinity: Option<usize>,
+    affinity: Option<HartId>,
     placement: Placement,
 }
 
 struct HartEntry {
-    hart: usize,
+    hart: HartId,
     occupied: Option<usize>,
 }
 
 impl HartEntry {
-    const fn new(hart: usize) -> Self {
+    const fn new(hart: HartId) -> Self {
         Self {
             hart,
             occupied: None,
@@ -103,7 +103,7 @@ pub(crate) struct Room<const CAPACITY: usize> {
 }
 
 impl<const CAPACITY: usize> Room<CAPACITY> {
-    pub(crate) const fn new(hart: usize) -> Self {
+    pub(crate) const fn new(hart: HartId) -> Self {
         Self {
             units: [const { None }; CAPACITY],
             harts: [Some(HartEntry::new(hart)), None],
@@ -114,7 +114,7 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
     }
 
     /// Called after the trusted entry has established the Hart's local state.
-    pub(crate) fn attach(&mut self, hart: usize) -> Result<(), Error> {
+    pub(crate) fn attach(&mut self, hart: HartId) -> Result<(), Error> {
         if self.participation(hart).is_some() {
             return Err(Error::Busy);
         }
@@ -130,7 +130,7 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
     pub(crate) fn submit(
         &mut self,
         unit: UnitId,
-        affinity: Option<usize>,
+        affinity: Option<HartId>,
     ) -> Result<AdmissionId, Error> {
         if self.admitted(unit) {
             return Err(Error::Busy);
@@ -165,14 +165,14 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         self.units.iter().flatten().any(|entry| entry.unit == unit)
     }
 
-    fn participation(&self, hart: usize) -> Option<ParticipationId> {
+    fn participation(&self, hart: HartId) -> Option<ParticipationId> {
         self.harts
             .iter()
             .position(|slot| slot.as_ref().is_some_and(|attached| attached.hart == hart))
             .map(ParticipationId)
     }
 
-    fn available(&self, hart: usize) -> Result<ParticipationId, Error> {
+    fn available(&self, hart: HartId) -> Result<ParticipationId, Error> {
         let participation = self.participation(hart).ok_or(Error::Unsupported)?;
         let participant = self.harts[participation.0].as_ref().expect("attached Hart");
         if participant.occupied.is_some() {
@@ -181,7 +181,7 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         Ok(participation)
     }
 
-    fn first_ready(&self, hart: usize) -> Option<(usize, usize)> {
+    fn first_ready(&self, hart: HartId) -> Option<(usize, usize)> {
         self.ready[..self.ready_len]
             .iter()
             .copied()
@@ -192,14 +192,14 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
             })
     }
 
-    pub(crate) fn candidate(&self, hart: usize) -> Result<Option<UnitId>, Error> {
+    pub(crate) fn candidate(&self, hart: HartId) -> Result<Option<UnitId>, Error> {
         self.available(hart)?;
         Ok(self
             .first_ready(hart)
             .map(|(_, slot)| self.units[slot].as_ref().expect("ready Unit").unit))
     }
 
-    pub(crate) fn occupy(&mut self, hart: usize, unit: UnitId) -> Result<Occupancy, Error> {
+    pub(crate) fn occupy(&mut self, hart: HartId, unit: UnitId) -> Result<Occupancy, Error> {
         let participation = self.available(hart)?;
         let (index, slot) = self.first_ready(hart).ok_or(Error::State)?;
         let entry = self.units[slot].as_mut().expect("ready Unit");

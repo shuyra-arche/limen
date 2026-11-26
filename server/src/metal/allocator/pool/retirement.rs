@@ -1,6 +1,6 @@
 use crate::metal::sync::{TurnMode, TurnWorkspace};
 
-use crate::address::{PhysicalRange, length};
+use crate::metal::address::{PhysicalRange, length};
 
 use super::super::{
     Allocation, AllocationId, Allocator, ReturnId, Returned, returns::ReceiptOwner,

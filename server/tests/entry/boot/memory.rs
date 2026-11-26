@@ -8,8 +8,9 @@ use super::{
     },
     image, range,
 };
-use crate::allocator::RegionOrigin;
+use crate::metal::allocator::RegionOrigin;
 use limen_treaty::model::ByteLength;
+use std::vec::Vec;
 
 fn describe(blob: &[u8]) -> Result<DtbMemory, Error> {
     let mut memory = None;
@@ -158,7 +159,7 @@ fn uefi_handoff_exposes_only_whole_unreserved_pages_corroborated_by_both_sources
         acpi: None,
     };
     let mut descriptions = super::Descriptions::new();
-    let boot = loader.admit(7, &mut descriptions).unwrap();
+    let boot = super::admit_loader(&loader, &mut descriptions).unwrap();
     assert_eq!(boot.firmware_map().unwrap().regions().len(), 5);
     assert_eq!(boot.dtb_memory().unwrap().reservations().len(), 2);
     let early = boot.exclusions_for(image(), image());
@@ -243,7 +244,7 @@ fn hardware_only_dtb_still_reserves_both_kinds_of_range() {
         acpi: None,
     };
     let mut descriptions = super::Descriptions::new();
-    let boot = loader.admit(7, &mut descriptions).unwrap();
+    let boot = super::admit_loader(&loader, &mut descriptions).unwrap();
     assert!(boot.dtb_memory().is_none());
     assert!(boot.conventional_ram().is_none());
 

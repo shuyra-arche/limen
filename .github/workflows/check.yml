@@ -91,12 +91,8 @@ jobs:
           RUSTFLAGS: "-Dwarnings"
           PLAN: ${{ steps.scope.outputs.plan }}
         run: |
-          if jq -e .full <<<"$PLAN" >/dev/null; then
+          if jq -e .host <<<"$PLAN" >/dev/null; then
             cargo test --locked --workspace --target x86_64-unknown-linux-gnu
-          else
-            while IFS= read -r manifest; do
-              cargo test --locked --manifest-path "$manifest" --target x86_64-unknown-linux-gnu
-            done < <(jq -r '.manifests[]' <<<"$PLAN")
           fi
           if jq -e .runner <<<"$PLAN" >/dev/null; then
             cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu

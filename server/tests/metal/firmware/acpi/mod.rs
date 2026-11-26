@@ -1,10 +1,7 @@
-#[path = "../../../../src/metal/firmware/acpi/mod.rs"]
-pub mod acpi;
-#[path = "../../../../src/metal/address.rs"]
-pub mod address;
-
-use acpi::{Acpi, Error, IoApic, Polarity, Processor, SourceOverride, Trigger};
-use address::{PhysicalAddress, PhysicalRange};
+use kernel::metal::address::{PhysicalAddress, PhysicalRange};
+use kernel::metal::firmware::acpi::{
+    Acpi, Error, IoApic, Polarity, Processor, SourceOverride, Trigger,
+};
 
 const ROOT: u64 = 0x1000;
 const XSDT: u64 = 0x3000;

@@ -7,20 +7,18 @@ use core::{
 };
 use limen_treaty::model::{Alignment, ByteLength};
 
-use crate::{
-    access::MappedRange,
+use crate::metal::{
     address::{PhysicalRange, length},
-    metal::{
-        identity::{Entry, Generation, Slot},
-        sync::{TURN_CAPACITY, TurnLock},
-    },
+    identity::{Entry, Generation, Slot},
+    mmu::internal::access::MappedRange,
+    sync::{TURN_CAPACITY, TurnLock},
 };
 
 use super::{
     Allocator, AllowanceId, Error, REGION_LIMIT, Region, RegionDescription, RegionId, RegionOrigin,
     SourceId,
     allocation::{Allocation, AllocationId, AllocationRecord, Phase},
-    allowance::{Allowance, AllowanceSlot, Balance, Free},
+    allowance::{ASSIGNMENT_LOCKS, Allowance, AllowanceSlot, Balance, Free},
     buddy::{Geometry, Root},
     bump::Bump,
     region::Backing,
@@ -51,7 +49,7 @@ impl Config {
         // Allowance takes at most Q Region locks, the slot and the free
         // index. Source inspection takes Q Region locks and the directory.
         if !(1..=REGION_LIMIT).contains(&self.regions)
-            || self.regions + 2 > TURN_CAPACITY
+            || self.regions + ASSIGNMENT_LOCKS > TURN_CAPACITY
             || self.roots == 0
             || self.grains == 0
             || self.allocations == 0
@@ -326,11 +324,7 @@ fn initialize(
     let allowances = carve.take::<TurnLock<AllowanceSlot>>(config.allowances);
     for (index, slot) in allowances.iter_mut().enumerate() {
         let entry = if index == 0 {
-            AllowanceSlot::initial(Balance {
-                capacity,
-                reserved: 0,
-                occupied: committed,
-            })
+            AllowanceSlot::initial(Balance::new(capacity, committed))
         } else {
             let next = (index + 1 < config.allowances)
                 .then(|| Slot::new(index + 1).expect("checked Allowance capacity"));

@@ -1,27 +1,8 @@
 #[cfg(not(target_arch = "riscv64"))]
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, FirmwareRegion, devicetree, physical::Exclusions};
-use crate::address::PhysicalRange;
+use crate::metal::{address::PhysicalRange, firmware::facts::Descriptions};
 use core::ops::Range;
-
-/// Retained firmware descriptions prepared in the startup caller's frame.
-pub(crate) struct Descriptions<'a> {
-    pub(crate) device_tree: Option<devicetree::DeviceTree<'a>>,
-    pub(crate) memory: Option<DtbMemory>,
-    #[cfg(not(target_arch = "riscv64"))]
-    pub(crate) acpi: Option<Acpi<'a>>,
-}
-
-impl Descriptions<'_> {
-    pub(crate) const fn new() -> Self {
-        Self {
-            device_tree: None,
-            memory: None,
-            #[cfg(not(target_arch = "riscv64"))]
-            acpi: None,
-        }
-    }
-}
 
 /// Facts admitted on the major CPU. These carry no allocation authority.
 pub struct Boot<'a> {
@@ -40,7 +21,7 @@ impl<'a> Boot<'a> {
         self.image
     }
 
-    pub(super) fn exclusions_for(
+    pub(crate) fn exclusions_for(
         &self,
         major: PhysicalRange,
         trap: PhysicalRange,

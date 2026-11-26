@@ -1,13 +1,8 @@
-#![no_std]
-
 use core::cell::Cell;
 
-mod identity {
-    include!("../../../src/metal/identity/mod.rs");
-    include!("retirement.rs");
-}
-
-use identity::{Entry, GenerationTable, InitializeError, KeyError, Reservation, ReserveError};
+use super::{Entry, GenerationTable, InitializeError, KeyError, Reservation, ReserveError};
+use retirement::issued_generation;
+mod retirement;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Region {
@@ -146,7 +141,7 @@ fn batches_leave_all_slots_and_outputs_intact_when_preflight_fails() {
 
     let first = table.reserve().unwrap();
     let key = first.key();
-    assert_eq!(identity::issued_generation(key), 1);
+    assert_eq!(issued_generation(key), 1);
     let mut short = [Some(first)];
     assert_eq!(
         table.reserve_many(&mut short),
@@ -166,8 +161,8 @@ fn batches_leave_all_slots_and_outputs_intact_when_preflight_fails() {
     table.reserve_many(&mut oversized).unwrap();
     let [left, right] = oversized.map(Option::unwrap);
     let mut generations = [
-        identity::issued_generation(left.key()),
-        identity::issued_generation(right.key()),
+        issued_generation(left.key()),
+        issued_generation(right.key()),
     ];
     generations.sort_unstable();
     assert_eq!(generations, [1, 2]);
@@ -212,7 +207,7 @@ fn region_preflights_both_typed_tables_before_reserving_any_slot() {
     assert!(
         allocation_output
             .iter()
-            .all(|token| { identity::issued_generation(token.as_ref().unwrap().key()) == 1 })
+            .all(|token| { issued_generation(token.as_ref().unwrap().key()) == 1 })
     );
     assert_eq!(
         allocation_table.reserve().unwrap_err(),

@@ -9,13 +9,18 @@ use core::{
         Ordering::{Acquire, Relaxed, Release},
     },
 };
+use kernel::metal::{
+    execution::riscv::description::RiscvExtension, execution::riscv::description::RiscvIsa,
+    hart::description::RiscvCpus, mmu::internal::riscv::description::RiscvMmu,
+    mmu::internal::riscv::description::RiscvMmuMode,
+};
 use kernel::{
-    address::PhysicalAddress,
-    entry::boot::{
-        Boot, Minor, RiscvCpus, RiscvExtension, RiscvIsa, RiscvMmu, RiscvMmuMode, Startup,
+    entry::boot::{Boot, Minor, Startup},
+    metal::{
+        address::PhysicalAddress,
+        mmu::internal::riscv::sv39::{Sv39Encoding, Sv39Root},
+        module::ModuleUse,
     },
-    mmu::internal::riscv::sv39::{Sv39Encoding, Sv39Root},
-    module::ModuleUse,
 };
 
 use super::mapping;

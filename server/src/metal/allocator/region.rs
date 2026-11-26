@@ -4,10 +4,10 @@ use core::{
     sync::atomic::Ordering::{Acquire, Release},
 };
 
-use crate::{
+use crate::metal::{
     address::{PhysicalRange, length},
-    metal::identity::{Entry, GenerationTable},
-    metal::sync::{TurnLock, TurnMode, TurnWorkspace},
+    identity::{Entry, GenerationTable},
+    sync::{TurnLock, TurnMode, TurnWorkspace},
 };
 
 use super::{

@@ -1,6 +1,6 @@
 use super::vectors;
-use crate::entry::boot::Loader;
 use crate::metal::boot::{STACK_BYTES, major::STACK};
+use crate::metal::firmware::uefi::Loader;
 use core::arch::naked_asm;
 
 /// Establish the major CPU stack and exception vectors before delivering Boot.

@@ -1,18 +1,11 @@
 use super::{DeviceTree, Error, Fixture};
 
-#[path = "../../../../src/metal/hart/description.rs"]
-pub(crate) mod hart_description;
-#[path = "../../../../src/metal/execution/riscv/description.rs"]
-mod isa_description;
-#[path = "../../../../src/metal/mmu/internal/riscv/description.rs"]
-mod mmu_description;
-#[path = "../../../../src/metal/time/mod.rs"]
-mod time_description;
-
-use hart_description::RiscvCpus;
-use isa_description::{RiscvExtension, RiscvIsa};
-use mmu_description::{RiscvMmu, RiscvMmuMode};
-use time_description::RiscvTimebase;
+use kernel::metal::{
+    execution::riscv::description::{RiscvExtension, RiscvIsa},
+    hart::description::RiscvCpus,
+    mmu::internal::riscv::description::{RiscvMmu, RiscvMmuMode},
+    time::RiscvTimebase,
+};
 
 fn cpu_scope() -> Fixture {
     let mut fixture = Fixture::root();

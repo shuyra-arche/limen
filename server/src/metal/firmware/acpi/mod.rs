@@ -1,6 +1,6 @@
 //! Static ACPI descriptions under an independently retained physical read scope.
 
-use crate::address::{PhysicalAddress, PhysicalRange};
+use crate::metal::address::{PhysicalAddress, PhysicalRange};
 use limen_treaty::model::ByteLength;
 
 mod madt;

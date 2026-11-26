@@ -2,7 +2,7 @@
 
 use core::{mem::MaybeUninit, ptr::NonNull, slice};
 
-use crate::address::{PhysicalRange, length};
+use crate::metal::address::{PhysicalRange, length};
 use limen_treaty::model::ByteLength;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,10 +76,12 @@ impl<'a> MappedRange<'a> {
         self.bytes
     }
 
+    #[cfg(any(test, target_os = "none", target_os = "uefi"))]
     pub(crate) fn address(&self) -> usize {
         self.bytes.as_ptr().addr()
     }
 
+    #[cfg(any(test, target_os = "none", target_os = "uefi"))]
     pub(crate) fn into_bytes(self) -> &'a mut [MaybeUninit<u8>] {
         self.bytes
     }

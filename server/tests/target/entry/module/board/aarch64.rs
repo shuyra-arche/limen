@@ -1,7 +1,8 @@
 use core::arch::asm;
-use kernel::{
-    entry::boot::{self, Aarch64Cpus, Conduit, PsciDescription, devicetree::DeviceTree},
-    module::Machine,
+use kernel::metal::module::Machine;
+use kernel::metal::{
+    firmware::devicetree::DeviceTree, firmware::psci::Conduit, firmware::psci::PsciDescription,
+    firmware::uefi::DeviceTree as LoaderTree, hart::Aarch64Cpus,
 };
 use uefi::Status;
 
@@ -14,7 +15,7 @@ mod pl011;
 pub const MACHINE: Machine = Machine::Aarch64;
 pub const NAME: &str = "virt";
 
-pub fn capture() -> Option<boot::DeviceTree<'static>> {
+pub fn capture() -> Option<LoaderTree<'static>> {
     let bytes = devicetree::copy(|bytes| {
         let tree = DeviceTree::new(bytes).map_err(|_| Status::COMPROMISED_DATA)?;
         let cpus = Aarch64Cpus::read(&tree)
@@ -39,7 +40,7 @@ pub fn capture() -> Option<boot::DeviceTree<'static>> {
         Ok(())
     })
     .unwrap();
-    Some(boot::DeviceTree::Memory(bytes))
+    Some(LoaderTree::Memory(bytes))
 }
 
 pub fn hart() -> usize {

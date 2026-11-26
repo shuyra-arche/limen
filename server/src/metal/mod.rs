@@ -1,13 +1,16 @@
 pub mod address;
+#[cfg(any(limen_target, test))]
 pub mod allocator;
+#[cfg(any(limen_target, test))]
 pub(crate) mod boot;
-#[cfg(target_arch = "riscv64")]
-pub(crate) mod execution;
-pub(crate) mod firmware;
-pub(crate) mod hart;
+pub mod execution;
+pub(crate) mod fdt;
+pub mod firmware;
+pub mod hart;
+#[cfg(any(limen_target, test))]
 pub(crate) mod identity;
 pub mod mmu;
 pub mod module;
+#[cfg(any(limen_target, test))]
 pub mod sync;
-#[cfg(target_arch = "riscv64")]
-pub(crate) mod time;
+pub mod time;

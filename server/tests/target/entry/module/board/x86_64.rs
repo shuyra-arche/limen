@@ -1,5 +1,5 @@
 use core::arch::{asm, x86_64::__cpuid};
-use kernel::{entry::boot::DeviceTree, module::Machine};
+use kernel::{metal::firmware::uefi::DeviceTree, metal::module::Machine};
 use uefi::proto::pi::mp::MpServices;
 
 pub const MACHINE: Machine = Machine::X86_64;

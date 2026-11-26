@@ -2,10 +2,11 @@
 
 ## Provisioning
 
-On RV64, the trusted image consumes the Boot handoff to establish cooperative execution
-on the Boot Hart. It supplies two resident 16 KiB stacks in the shared Bare
-Kernel Nest. Each Unit reserves a generational identity and independently
-borrows an exclusive stack and saved continuation from the Nest's supply.
+On RV64, the trusted image consumes the Boot handoff through
+`basis::execution::Execution` to establish cooperative execution on the Boot
+Hart. It supplies two resident 16 KiB stacks with saved continuations.
+Unit owns each exclusive stack lease until its continuation has retired.
+The current machine runs in Bare mode.
 If `Execution::new` or `Execution::with_minor` rejects the environment before
 establishment, `EstablishFailure` returns the original `Boot`, the exclusive
 stack supply and the reason. The trusted image can correct the environment and
@@ -36,16 +37,17 @@ resumes the Unit. Metal issues the leave receipt after the dispatcher resumes
 on its own stack. `pending_leave` reports the stopped occupancy to its owning
 dispatcher. Room matches the private Metal receipt to the exact current
 occupancy before making the Unit ready again or releasing the admission.
-One MCS Turn orders changes to Room placement, Unit state and Nest bindings
+One MCS Turn orders the shared changes to Room placement and Unit state
 at publication and settlement. Metal rejects a switch while the Hart has
 active synchronization participation. The Turn ends its
 borrows, settles all queue nodes and restores the original interrupt state
 before a continuation can be entered or handed off.
 A yielded continuation becomes available to the
 other Hart only after settlement. An Ending Unit keeps its binding until the
-admission is released. `finish_end` clears the retired continuation and returns
-the backing to the Nest before the Ended result becomes visible. The result
-and its generational identity persist until `reap`.
+admission is released. `finish_end` clears and returns the stack before the
+Ended result becomes visible. Its Unit identity and result persist until
+`reap` releases the identity slot. A replacement can reuse an available
+stack while a prior result remains observable.
 
 ## Cancellation
 

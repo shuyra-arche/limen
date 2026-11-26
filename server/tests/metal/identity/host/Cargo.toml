@@ -8,7 +8,3 @@ autotests = false
 [lib]
 path = "../contracts.rs"
 test = false
-
-[[test]]
-name = "identity"
-path = "../mod.rs"

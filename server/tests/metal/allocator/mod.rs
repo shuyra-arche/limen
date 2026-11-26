@@ -1,14 +1,6 @@
-#![no_std]
-
 use core::alloc::Layout;
 
-#[allow(dead_code)]
-#[path = "../../../src/metal/address.rs"]
-mod address;
-#[path = "../../../src/metal/allocator/bump.rs"]
-mod bump;
-
-use bump::Bump;
+use super::bump::Bump;
 
 #[test]
 fn reserves_aligned_disjoint_ranges_inside_the_owned_interval() {
@@ -51,3 +43,6 @@ fn rejects_address_overflow_and_empty_input() {
 }
 
 mod buddy;
+
+mod pool;
+mod source;

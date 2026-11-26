@@ -1,6 +1,6 @@
 //! Exclusive mapped storage for one ordinary issued Allocation.
 
-use crate::{access::MappedRange, address::PhysicalRange};
+use crate::metal::{address::PhysicalRange, mmu::internal::access::MappedRange};
 
 use super::{Allocation, AllocationId, Error};
 

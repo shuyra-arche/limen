@@ -2,7 +2,7 @@
 //! A descriptor is a firmware fact, not permission to allocate or access RAM.
 
 use super::devicetree::memory::DtbMemory;
-use crate::address::{PhysicalAddress, PhysicalRange};
+use crate::metal::address::{PhysicalAddress, PhysicalRange};
 use core::iter;
 use limen_treaty::model::{Alignment, PageCount, PageSize};
 
@@ -99,12 +99,12 @@ impl<'a> FirmwareMap<'a> {
             .map(|entry| decode(entry).expect("validated firmware descriptor"))
     }
 
-    pub(crate) fn conventional(&self) -> impl Iterator<Item = FirmwareRegion> + '_ {
+    pub fn conventional(&self) -> impl Iterator<Item = FirmwareRegion> + '_ {
         self.regions()
             .filter(|region| region.kind == CONVENTIONAL_MEMORY && region.attributes & RUNTIME == 0)
     }
 
-    pub(crate) fn conventional_ram<'b>(
+    pub fn conventional_ram<'b>(
         &'b self,
         memory: &'b DtbMemory,
     ) -> impl Iterator<Item = FirmwareRegion> + 'b {

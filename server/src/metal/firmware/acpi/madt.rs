@@ -1,5 +1,5 @@
 use super::{Error, Table, field};
-use crate::address::PhysicalAddress;
+use crate::metal::address::PhysicalAddress;
 
 const HEADER: usize = 44;
 const RECORD_LIMIT: usize = 256;

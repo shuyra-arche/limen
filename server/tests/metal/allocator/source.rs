@@ -1,22 +1,31 @@
 use crate::{
-    Boot, FirmwareMap, PhysicalRange, Retirement,
-    access::MappedRange,
-    allocator::{
-        Allocation, Allocator, Allowance, Config, Error, Initial, Pending, RamPurpose::Metadata,
-        RegionDescription, RegionOrigin, Request, Retired, ReturnId, Search,
+    basis::pend::{Error as PendError, Handle, Initial as InitialPend, PendSpace, Revoker},
+    metal::{
+        allocator::{
+            Allocation, Allocator, Allowance, Config, Error, Initial, Pending,
+            RamPurpose::Metadata, RegionDescription, RegionOrigin, Request, Retired, ReturnId,
+            Search,
+        },
+        mmu::internal::access::MappedRange,
+        sync::{
+            TurnAcquireError,
+            TurnMode::{Fast, Slow},
+        },
     },
-    describe, image,
-    metal::sync::{
-        TurnAcquireError,
-        TurnMode::{Fast, Slow},
+};
+use crate::{
+    entry::boot::{
+        Boot, Regions, Retirement,
+        tests::{describe, image, organization::retired, range},
     },
-    organization::retired,
-    pend::{Error as PendError, Handle, Initial as InitialPend, PendSpace, Revoker},
-    range,
-    regions::Regions,
+    metal::{
+        address::PhysicalRange,
+        firmware::{facts::Descriptions, map::FirmwareMap},
+    },
 };
 use core::mem::MaybeUninit;
 use limen_treaty::model::{Alignment, ByteLength};
+use std::{boxed::Box, vec::Vec};
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x100_000;
@@ -57,7 +66,7 @@ fn bootstrap_at(
     let scope = range(base, base + 13 * PAGE);
     describe(&mut descriptors.0, 7, scope.start().get(), 13, 8);
     let map = FirmwareMap::new(&descriptors.0, 40, 1, 1).unwrap();
-    let descriptions = super::Descriptions::new();
+    let descriptions = Descriptions::new();
     let boot = Boot::new(0, image(), Some(map), &descriptions);
     let exclusions = boot.exclusions_for(image(), image());
     let evidence = retired(scope);
@@ -146,8 +155,14 @@ fn only_the_original_source_can_resolve_region_and_allowance_slots() {
     assert_ne!(allowance.id(), other_allowance.id());
     assert_ne!(candidate, other_candidate);
 
-    let budget = source.budget(Fast).unwrap();
-    let other_budget = other.budget(Fast).unwrap();
+    let budget = source
+        .budget(Fast)
+        .map(|(total, unassigned)| (total.get(), unassigned.get()))
+        .unwrap();
+    let other_budget = other
+        .budget(Fast)
+        .map(|(total, unassigned)| (total.get(), unassigned.get()))
+        .unwrap();
     let mut work = TurnWorkspace::<4>::new();
     let request = Request::new(
         ByteLength::new(PAGE),
@@ -162,11 +177,19 @@ fn only_the_original_source_can_resolve_region_and_allowance_slots() {
         Err(Error::Stale)
     ));
     assert_eq!(
-        other.plan_allowance(&mut work.plan(), candidate, &[(other_region, PAGE)]),
+        other.plan_allowance(
+            &mut work.plan(),
+            candidate,
+            &[(other_region, ByteLength::new(PAGE))]
+        ),
         Err(Error::Stale)
     );
     assert_eq!(
-        other.plan_allowance(&mut work.plan(), other_candidate, &[(region, PAGE)]),
+        other.plan_allowance(
+            &mut work.plan(),
+            other_candidate,
+            &[(region, ByteLength::new(PAGE))]
+        ),
         Err(Error::Stale)
     );
     assert_eq!(
@@ -174,8 +197,18 @@ fn only_the_original_source_can_resolve_region_and_allowance_slots() {
         Err(Error::Stale)
     );
     assert_eq!(allowance.shut(Some(other_region), Fast), Err(Error::Stale));
-    assert_eq!(source.budget(Fast), Ok(budget));
-    assert_eq!(other.budget(Fast), Ok(other_budget));
+    assert_eq!(
+        source
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok(budget)
+    );
+    assert_eq!(
+        other
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok(other_budget)
+    );
 
     allowance.shut(Some(region), Fast).unwrap();
     let (allowance, failure) = allowance.reclaim(Fast).err().unwrap();
@@ -192,7 +225,12 @@ fn only_the_original_source_can_resolve_region_and_allowance_slots() {
     source.finish_return(receipt, Fast).unwrap();
     allowance.reclaim(Fast).ok().unwrap();
     source.acknowledge(receipt).unwrap();
-    assert_eq!(other.budget(Fast), Ok(other_budget));
+    assert_eq!(
+        other
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok(other_budget)
+    );
 
     other_allowance.shut(Some(other_region), Fast).unwrap();
     other_allowance.reclaim(Fast).ok().unwrap();
@@ -218,7 +256,7 @@ fn metadata_spending(allowance: &Allowance) -> (Handle, Revoker) {
     (spending.unwrap(), closing.unwrap())
 }
 
-fn metadata_candidate(source: &'static Allocator) -> crate::allocator::Candidate {
+fn metadata_candidate(source: &'static Allocator) -> crate::metal::allocator::Candidate {
     let request = Request::new(
         ByteLength::new(PAGE),
         Alignment::new(PAGE).unwrap(),
@@ -235,9 +273,9 @@ fn metadata_candidate(source: &'static Allocator) -> crate::allocator::Candidate
 
 #[test]
 fn initial_pend_limits_and_revalidates_the_original_spender() {
-    use crate::{
+    use crate::metal::{
         allocator::{AllocationConstruction, RamPurpose},
-        metal::sync::TurnWorkspace,
+        sync::TurnWorkspace,
     };
     use std::{sync::mpsc::sync_channel, thread};
 
@@ -370,7 +408,7 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
         assert_eq!(revoker.revoked(), Ok(false));
         revoker.revoke().unwrap();
         assert_eq!(handle.issue(cancelled, Fast), Err(PendError::Revoked));
-        assert_eq!(allowance.balance().unwrap().reserved, PAGE);
+        assert_eq!(allowance.balance().unwrap().reserved().get(), PAGE);
         assert_eq!(
             handle.reserve(valid, cancelled, Fast),
             Err(PendError::Revoked)
@@ -411,7 +449,7 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
     cancelled.shut().unwrap();
     assert_eq!(cancelled.cancel(Fast), Ok(()));
     assert_eq!(cancelled.cancel(Fast), Ok(()));
-    assert_eq!(allowance.balance().unwrap().reserved, 0);
+    assert_eq!(allowance.balance().unwrap().reserved().get(), 0);
     let mut material = None;
     unsafe { issued.take(&mut material) }.unwrap();
     let mut receipt = None;
@@ -427,7 +465,7 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
 
 #[test]
 fn reserve_and_revocation_order_the_original_holding() {
-    use crate::allocator::AllocationConstruction;
+    use crate::metal::allocator::AllocationConstruction;
     use std::{sync::Barrier, thread};
 
     let mut initial = None;
@@ -451,8 +489,8 @@ fn reserve_and_revocation_order_the_original_holding() {
     match reserved {
         Ok(_) => {
             let balance = allowance.balance().unwrap();
-            assert_eq!(balance.reserved, before.reserved + PAGE);
-            assert_eq!(balance.occupied, before.occupied);
+            assert_eq!(balance.reserved().get(), before.reserved().get() + PAGE);
+            assert_eq!(balance.occupied().get(), before.occupied().get());
             assert_eq!(spending.issue(construction, Slow), Err(PendError::Revoked));
         }
         Err(PendError::Revoked) => assert_eq!(allowance.balance(), Ok(before)),
@@ -467,7 +505,7 @@ fn reserve_and_revocation_order_the_original_holding() {
 
 #[test]
 fn issue_and_allowance_shut_order_the_same_charge() {
-    use crate::allocator::AllocationConstruction;
+    use crate::metal::allocator::AllocationConstruction;
     use std::{sync::Barrier, thread};
 
     let mut initial = None;
@@ -504,19 +542,21 @@ fn issue_and_allowance_shut_order_the_same_charge() {
         unexpected => panic!("unsettled issue/shut race: {unexpected:?}"),
     }
     let balance = allowance.balance().unwrap();
-    assert_eq!(balance.reserved, 0);
-    assert_eq!(balance.occupied, before.occupied);
-    assert_eq!(balance.available(), 0);
+    assert_eq!(balance.reserved().get(), 0);
+    assert_eq!(balance.occupied().get(), before.occupied().get());
+    assert_eq!(balance.available().get(), 0);
     let capacity = initial_capacity(source);
     assert_eq!(
-        source.budget(Fast),
-        Ok((capacity, capacity - before.occupied))
+        source
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok((capacity, capacity - before.occupied().get()))
     );
 }
 
 #[test]
 fn issue_and_cancellation_have_one_winner() {
-    use crate::allocator::AllocationConstruction;
+    use crate::metal::allocator::AllocationConstruction;
     use std::{sync::Barrier, thread};
 
     let mut initial = None;
@@ -589,7 +629,12 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
     let mut initial = None;
     let (source, allowance) = source(&mut initial, 10 * PAGE);
     let capacity = initial_capacity(source);
-    assert_eq!(source.budget(Slow), Ok((capacity, capacity - 10 * PAGE)));
+    assert_eq!(
+        source
+            .budget(Slow)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok((capacity, capacity - 10 * PAGE))
+    );
     let mut halves = [None, None];
     let original = initial.take().unwrap();
     let original_id = original.id();
@@ -616,7 +661,7 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
         .unwrap();
     let merged = merged.unwrap();
     assert_eq!(merged.physical(), pages(0, 3));
-    assert_eq!(allowance.balance().unwrap().occupied, 3 * PAGE);
+    assert_eq!(allowance.balance().unwrap().occupied().get(), 3 * PAGE);
 
     let receipt = begin_return(source, unsafe { merged.retire() });
     let mut cursor = 0;
@@ -633,7 +678,12 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
     allowance.shut(Some(credit), Fast).unwrap();
     let done = source.finish_return(receipt, Slow).unwrap();
     assert_eq!(done.physical, pages(0, 3));
-    assert_eq!(source.budget(Fast), Ok((capacity, capacity)));
+    assert_eq!(
+        source
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok((capacity, capacity))
+    );
     allowance.reclaim(Slow).ok().unwrap();
     assert_eq!(source.finish_return(receipt, Fast), Ok(done));
     source.acknowledge(receipt).unwrap();
@@ -665,7 +715,7 @@ fn a_split_without_two_return_slots_keeps_the_original_material() {
     let receipt = begin_return(source, unsafe { returned.retire() });
     let result = source.finish_return(receipt, Fast).unwrap();
     let before = allowance.balance().unwrap();
-    assert_eq!(before.occupied, 2 * PAGE);
+    assert_eq!(before.occupied().get(), 2 * PAGE);
 
     let original = unsafe { material.retire() };
     let mut receivers = [None, None];
@@ -757,7 +807,10 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
         physical: later,
         origin: ATTRIBUTES,
     };
-    let budget_before_grant = source.budget(Fast).unwrap();
+    let budget_before_grant = source
+        .budget(Fast)
+        .map(|(total, unassigned)| (total.get(), unassigned.get()))
+        .unwrap();
     assert_eq!(
         unsafe { Retirement::new(later).grant(source, description) }.err(),
         Some(Error::Range)
@@ -766,7 +819,12 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
         unsafe { retired(pages(16, 19)).grant(source, description) }.err(),
         Some(Error::Range)
     );
-    assert_eq!(source.budget(Fast), Ok(budget_before_grant));
+    assert_eq!(
+        source
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok(budget_before_grant)
+    );
     let mut grant = unsafe { retired(later).grant(source, description) }.unwrap();
     let region = grant.admit(Fast).unwrap();
     assert_eq!(grant.admit(Slow), Ok(region));
@@ -778,13 +836,18 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
         }
     }
     let capacity = initial_capacity(source) + 4 * PAGE;
-    assert_eq!(source.budget(Fast), Ok((capacity, capacity - 3 * PAGE)));
-    assert_eq!(allowance.balance().unwrap().occupied, 0);
+    assert_eq!(
+        source
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok((capacity, capacity - 3 * PAGE))
+    );
+    assert_eq!(allowance.balance().unwrap().occupied().get(), 0);
 }
 
 #[test]
 fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
-    use crate::{allocator::AllocationConstruction, metal::sync::TurnWorkspace};
+    use crate::metal::{allocator::AllocationConstruction, sync::TurnWorkspace};
     use std::{sync::mpsc::sync_channel, thread};
 
     // The Host owner explicitly funds its single actual construction, with a
@@ -825,12 +888,12 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
         let result = spending.reserve(candidate, construction, Fast);
         release.send(()).unwrap();
         assert_eq!(result, Err(PendError::Acquire(TurnAcquireError::Busy)));
-        assert_eq!(allowance.balance().unwrap().reserved, 0);
+        assert_eq!(allowance.balance().unwrap().reserved().get(), 0);
     });
 
     assert_eq!(candidate.physical(), pages(3, 4));
     spending.reserve(candidate, construction, Slow).unwrap();
-    assert_eq!(allowance.balance().unwrap().reserved, PAGE);
+    assert_eq!(allowance.balance().unwrap().reserved().get(), PAGE);
 
     let mut work = TurnWorkspace::<3>::new();
     let mut plan = work.plan();
@@ -843,14 +906,19 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     revoker.revoke().unwrap();
     allowance.shut(Some(candidate.region()), Fast).unwrap();
     construction.cancel(Slow).unwrap();
-    assert_eq!(allowance.balance().unwrap().reserved, 0);
+    assert_eq!(allowance.balance().unwrap().reserved().get(), 0);
     let capacity = initial_capacity(source);
-    assert_eq!(source.budget(Fast), Ok((capacity, capacity - 3 * PAGE)));
+    assert_eq!(
+        source
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok((capacity, capacity - 3 * PAGE))
+    );
 }
 
 #[test]
 fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
-    use crate::{allocator::AllocationConstruction, metal::sync::TurnWorkspace};
+    use crate::metal::{allocator::AllocationConstruction, sync::TurnWorkspace};
     let mut initial = None;
     let (source, allowance) = source(&mut initial, 3 * PAGE);
     let capacity = initial_capacity(source);
@@ -861,7 +929,10 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
     assert_eq!(credit.physical.start(), source.root().end());
     assert_eq!(credit.physical.end(), pages(0, 13).end());
     let other = source.regions().nth(1).unwrap().0;
-    let debits = [(region, PAGE), (other, 2 * PAGE)];
+    let debits = [
+        (region, ByteLength::new(PAGE)),
+        (other, ByteLength::new(2 * PAGE)),
+    ];
 
     let mut receiver = None;
     let index = source.allowance_candidate().unwrap();
@@ -876,9 +947,14 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
     .unwrap()
     .unwrap();
     let second = receiver.take().unwrap();
-    assert_eq!(second.balance().unwrap().capacity, 3 * PAGE);
+    assert_eq!(second.balance().unwrap().capacity().get(), 3 * PAGE);
     assert_eq!(source.allowance_candidate(), Err(Error::AllowanceCapacity));
-    assert_eq!(source.budget(Fast), Ok((capacity, capacity - 6 * PAGE)));
+    assert_eq!(
+        source
+            .budget(Fast)
+            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        Ok((capacity, capacity - 6 * PAGE))
+    );
 
     allowance.shut(None, Slow).unwrap();
     let material = initial.take().unwrap();
@@ -914,12 +990,12 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
     assert_eq!(
         plan.acquire(Fast, |held| {
             // A stale role must fail the live Allowance check before either debit.
-            unsafe { source.transfer_allowance(held, original, second.id(), PAGE) }
+            unsafe { source.transfer_allowance(held, original, second.id(), ByteLength::new(PAGE)) }
         }),
         Ok(Err(Error::Stale))
     );
-    assert_eq!(second.balance().unwrap().capacity, 3 * PAGE);
-    assert_eq!(next.balance().unwrap().capacity, 3 * PAGE);
+    assert_eq!(second.balance().unwrap().capacity().get(), 3 * PAGE);
+    assert_eq!(next.balance().unwrap().capacity().get(), 3 * PAGE);
     assert_eq!(
         source.finish_return(receipt, Fast).unwrap().physical,
         pages(0, 3)
@@ -928,7 +1004,7 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
 
 #[test]
 fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation() {
-    use crate::allocator::AllocationConstruction;
+    use crate::metal::allocator::AllocationConstruction;
 
     let mut initial = None;
     let mut receiver = None;
@@ -988,7 +1064,7 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
                 .allocation,
             original_id
         );
-        assert_eq!(allowance.balance().unwrap().occupied, PAGE);
+        assert_eq!(allowance.balance().unwrap().occupied().get(), PAGE);
         source
             .begin_return(unsafe { issued.retire() }, receipt)
             .ok()
@@ -1004,7 +1080,7 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
         spending.reserve(candidate, construction, Fast),
         Err(PendError::Source(Error::ReturnCapacity))
     );
-    assert_eq!(allowance.balance().unwrap().available(), 8 * PAGE);
+    assert_eq!(allowance.balance().unwrap().available().get(), 8 * PAGE);
 
     source.acknowledge(owner_receipt).unwrap();
     let reserved = spending.reserve(candidate, construction, Slow).unwrap();
@@ -1026,7 +1102,7 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
     );
     let new_receipt = begin_return(source, retired);
     source.finish_return(new_receipt, Fast).unwrap();
-    assert_eq!(allowance.balance().unwrap().available(), 8 * PAGE);
+    assert_eq!(allowance.balance().unwrap().available().get(), 8 * PAGE);
 }
 
 #[test]

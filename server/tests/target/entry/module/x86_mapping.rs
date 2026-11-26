@@ -2,9 +2,11 @@
 
 use core::arch::{asm, x86_64::__cpuid};
 use kernel::{
-    address::{PhysicalAddress, PhysicalRange, length},
-    entry::boot::FirmwareMap,
-    module::Permissions,
+    metal::firmware::map::FirmwareMap,
+    metal::{
+        address::{PhysicalAddress, PhysicalRange, length},
+        module::Permissions,
+    },
 };
 use limen_treaty::model::ByteLength;
 

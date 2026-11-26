@@ -2,12 +2,10 @@
 
 use core::ptr;
 
-use crate::{
+use crate::metal::{
     address::{PhysicalRange, length},
-    metal::{
-        identity::Key,
-        sync::{TurnLock, TurnMode, TurnWorkspace},
-    },
+    identity::Key,
+    sync::{TurnLock, TurnMode, TurnWorkspace},
 };
 
 use super::{

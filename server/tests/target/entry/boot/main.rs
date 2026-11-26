@@ -4,12 +4,15 @@
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
+use kernel::metal::{
+    execution::riscv::description::RiscvExtension, execution::riscv::description::RiscvIsa,
+    firmware::devicetree::memory::Source, hart::description::RiscvCpus,
+    mmu::internal::riscv::description::RiscvMmu, mmu::internal::riscv::description::RiscvMmuMode,
+    time::RiscvTimebase,
+};
 use kernel::{
-    address::PhysicalAddress,
-    entry::boot::{
-        Boot, RiscvCpus, RiscvExtension, RiscvIsa, RiscvMmu, RiscvMmuMode, RiscvTimebase, Source,
-        shutdown, stack_range, write,
-    },
+    entry::boot::{Boot, shutdown, stack_range, write},
+    metal::address::PhysicalAddress,
 };
 use limen_treaty::model::ByteLength;
 
