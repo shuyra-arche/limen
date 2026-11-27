@@ -30,7 +30,7 @@ unsafe extern "C" fn major(hart: usize, dtb: usize) -> ! {
         "j 2b",
         "3: tail {loaded}",
         interrupt_enable = const super::status::SIE,
-        extensions = const super::status::EXTENSIONS,
+        extensions = const super::status::WRITABLE_EXTENSIONS,
         stack = sym STACK,
         size = const STACK_BYTES,
         top = sym diagnostic::TOP,

@@ -3,8 +3,13 @@
 pub(in crate::metal) const SIE: usize = 1 << 1;
 const FS_SHIFT: u32 = 13;
 const VS_SHIFT: u32 = 9;
+const XS_SHIFT: u32 = 15;
 const FIELD: usize = 3;
-pub(in crate::metal) const EXTENSIONS: usize = (FIELD << FS_SHIFT) | (FIELD << VS_SHIFT);
+const XS_MASK: usize = FIELD << XS_SHIFT;
+
+/// FS and VS may be cleared; XS is a read-only summary of other extensions.
+pub(in crate::metal) const WRITABLE_EXTENSIONS: usize =
+    (FIELD << FS_SHIFT) | (FIELD << VS_SHIFT);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Extension {
@@ -46,8 +51,14 @@ impl Status {
         Extension::from_bits(self.0 >> VS_SHIFT)
     }
 
+    fn additional_off(self) -> bool {
+        self.0 & XS_MASK == 0
+    }
+
     pub(in crate::metal) fn extensions_off(self) -> bool {
-        self.floating() == Extension::Off && self.vector() == Extension::Off
+        self.floating() == Extension::Off
+            && self.vector() == Extension::Off
+            && self.additional_off()
     }
 }
 
