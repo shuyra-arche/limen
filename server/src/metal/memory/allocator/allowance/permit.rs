@@ -78,6 +78,18 @@ impl AllocationPermit {
         self.allowance
     }
 
+    pub(crate) fn plan_allowance(self, plan: &mut TurnPlan<'_, '_>) -> Result<(), Error> {
+        plan.insert(self.source.slot(self.allowance)?)
+            .map_err(|_| Error::Capacity)
+    }
+
+    pub(crate) fn check_allowance(self, held: &mut TurnAccess<'_>) -> Result<(), Error> {
+        held.access(self.source.slot(self.allowance)?)
+            .ok_or(Error::Protection)?
+            .open(self.allowance)?;
+        Ok(())
+    }
+
     pub(in crate::metal::memory::allocator) fn slot(self) -> &'static AllocationPermitSlot {
         self.slot
     }

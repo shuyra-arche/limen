@@ -1,5 +1,7 @@
 //! Shared CPU translation and I/O binding contracts.
 
+pub use super::table::{TableError, TableFormat, TableId, TableStore};
+
 mod installation;
 pub use installation::Installation;
 #[cfg(all(

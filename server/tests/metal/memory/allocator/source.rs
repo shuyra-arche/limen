@@ -612,6 +612,85 @@ fn table_page_spending_retains_its_origin_and_bounds() {
 }
 
 #[test]
+fn closing_the_allowance_rejects_first_cell_publication_and_retains_the_allocation() {
+    use crate::{
+        basis::cell::CellSlot,
+        metal::memory::{
+            allocator::treaty::{AllocationConstruction, MappedStorage, RamPurpose::PageTable},
+            mmu::{
+                riscv64::internal::format::Format,
+                treaty::{TableError, TableFormat, TableStore},
+            },
+        },
+    };
+
+    let mut original = None;
+    let (source, allowance) = source(&mut original, 8 * PAGE);
+    let space = Box::leak(Box::new(PendSpace::for_page_tables()));
+    let mut spending = None;
+    let mut closing = None;
+    unsafe {
+        space.publish_initial(
+            &allowance,
+            ByteLength::new(PAGE),
+            Alignment::new(PAGE).unwrap(),
+            InitialPend {
+                spending: &mut spending,
+                closing: &mut closing,
+            },
+            Fast,
+        )
+    }
+    .unwrap();
+    let spending = spending.unwrap();
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(PAGE).unwrap(),
+        pages(6, 13),
+        Some(ATTRIBUTES),
+        PageTable,
+    )
+    .unwrap();
+    let mut observations = [LookupObservation::EMPTY; 3];
+    let mut lookup = source.lookup(request, None, &mut observations).unwrap();
+    let candidate = loop {
+        match lookup.step().unwrap() {
+            Search::Pending => {}
+            Search::Candidate(candidate) => break candidate,
+            Search::NoRange => panic!("page available"),
+        }
+    };
+    let position = Box::leak(Box::new(AllocationConstruction::new()));
+    let id = spending.reserve(candidate, position, Fast).unwrap();
+    assert_eq!(spending.issue(position, Fast), Ok(id));
+    let mut material = None;
+    unsafe { position.take(&mut material) }.unwrap();
+    let material = material.unwrap();
+    allowance.shut(Some(material.region()), Fast).unwrap();
+
+    let bytes = Box::leak(Box::new(Mapped([MaybeUninit::uninit(); 2 * PAGE as usize])));
+    let physical = material.physical();
+    let map = unsafe { MappedRange::new(physical, &mut bytes.0[..PAGE as usize]) }.unwrap();
+    let storage = unsafe { MappedStorage::prepare(material, map) }
+        .ok()
+        .unwrap();
+    let cell = Box::leak(Box::new(CellSlot::new()));
+    let tables = Box::leak(Box::new(TableStore::new(TableFormat::Riscv64(
+        Format::Sv39,
+    ))));
+    let (storage, error) = tables
+        .publish_cell(cell, spending, storage, Fast)
+        .err()
+        .unwrap();
+    assert_eq!(error, TableError::Pend(PendError::Source(Error::Shut)));
+    assert_eq!(storage.id(), id);
+    let (material, _) = storage.into_parts();
+    let receipt = begin_return(unsafe { material.retire() });
+    assert_eq!(receipt.finish(Fast).unwrap().allocation, id);
+    receipt.acknowledge().unwrap();
+}
+
+#[test]
 fn reserve_and_revocation_order_the_original_holding() {
     use crate::metal::memory::allocator::treaty::AllocationConstruction;
     use std::{sync::Barrier, thread};

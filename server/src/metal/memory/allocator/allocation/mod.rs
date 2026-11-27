@@ -16,7 +16,7 @@ use limen_treaty::model::PhysicalRange;
 
 use super::{
     Allocator, AllowanceId, Error, RegionId, Retired, ReturnId,
-    allowance::permit::{AllocationPermitSlot, InitialAccess},
+    allowance::permit::{AllocationPermit, AllocationPermitSlot, InitialAccess},
     region::State,
     returns::{ReturnRecord, ReturnScope},
 };
@@ -75,6 +75,17 @@ impl Allocation {
     pub fn initial_access(&self) -> Option<InitialAccess> {
         self.initial_issuer
             .and_then(AllocationPermitSlot::initial_access)
+    }
+
+    pub(in crate::metal::memory::allocator) fn access_from(
+        &self,
+        permit: AllocationPermit,
+    ) -> Result<InitialAccess, Error> {
+        let issuer = self.initial_issuer.ok_or(Error::PermitLimit)?;
+        if !ptr::eq(self.source, permit.source()) || !issuer.matches(permit.slot()) {
+            return Err(Error::PermitOrigin);
+        }
+        issuer.initial_access().ok_or(Error::PermitLimit)
     }
 
     pub(super) fn source(&self) -> &'static Allocator {

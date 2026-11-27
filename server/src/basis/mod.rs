@@ -1,3 +1,4 @@
+pub mod cell;
 #[cfg(limen_cooperative)]
 pub mod execution;
 pub mod pend;
