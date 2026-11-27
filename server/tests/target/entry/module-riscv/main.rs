@@ -282,7 +282,11 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     let [major, peer] = harts::check(&boot, &MODES);
     assert!(unsafe { Translation::admit(peer) }.is_err());
     let mut translation = unsafe { Translation::admit(major) }.unwrap();
-    let service = boot.sbi_services().hart_state_management().expect("SBI HSM");
+    let service = boot
+        .sbi_services()
+        .hart_state_management()
+        .unwrap()
+        .expect("SBI HSM");
     let storage = NonNull::new((&raw mut STORAGE).cast::<Storage>()).unwrap();
     let start = storage.addr().get() as u64;
     let resident = Resident::from_boot(&boot, start..start + size_of::<[Storage; 2]>() as u64);

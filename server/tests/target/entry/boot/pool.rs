@@ -8,7 +8,7 @@ use kernel::{
             Allocation,
             Allowance,
             Error as SourceError,
-            pool::{Error, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement, Stable},
+            pool::{Error, GroupReceipt, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement, Stable},
         },
         sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
     },
@@ -25,12 +25,14 @@ static mut GROUPS: [GroupSlot<'static, Entry>; 1] = [GroupSlot::EMPTY];
 static mut TYPED: MaybeUninit<Pool<'static, Entry>> = MaybeUninit::uninit();
 static mut ALLOCATION: Option<Allocation> = None;
 static mut ALLOWANCE: Option<Allowance> = None;
+static mut GROUP_RECEIPT: Option<GroupReceipt> = None;
 
 pub(super) fn check(boot: &Boot<'_>) {
     let allocation = unsafe { &mut *(&raw mut ALLOCATION) };
     let allowance = unsafe { &mut *(&raw mut ALLOWANCE) };
     let directory = unsafe { &mut *(&raw mut GROUPS) };
-    let (pool, group, source) = unsafe { install(boot, directory, allocation, allowance) };
+    let receipt = unsafe { &mut *(&raw mut GROUP_RECEIPT) };
+    let (pool, group, source) = unsafe { install(boot, directory, allocation, allowance, receipt) };
     let pool = unsafe { (&mut *(&raw mut TYPED)).write(pool) };
     let physical = group_extent();
 
@@ -124,19 +126,17 @@ pub(super) fn check(boot: &Boot<'_>) {
         panic!("returning group missing from the Pool directory");
     };
     let result = source.finish_return(supply.retirement, Fast).unwrap();
-    assert_eq!(
-        source.acknowledge(supply.retirement),
-        Err(SourceError::Protection)
-    );
     assert_eq!(pool.finish_return(group, Fast), Ok(result));
     assert_eq!(result.allocation, supply.allocation);
     assert_eq!(result.physical, physical);
     assert_eq!(pool.finish_return(group, Fast), Ok(result));
     assert_eq!(
-        source.acknowledge(supply.retirement),
+        source.finish_return(supply.retirement, Fast),
         Err(SourceError::Stale)
     );
     assert_eq!(owner.balance().unwrap().occupied().get(), 0);
     assert_eq!(pool.capacity().unwrap().bytes, 0);
+    receipt.as_ref().unwrap().acknowledge(pool).unwrap();
+    assert_eq!(pool.finish_return(group, Fast), Err(Error::Stale));
     boot::write("PASS typed-pool mapped=1 slots=1 reuse=1 joint=1 stable=1 refund=1\n");
 }

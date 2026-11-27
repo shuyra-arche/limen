@@ -102,6 +102,7 @@ pub(crate) unsafe fn wake_minor(
     if !idle(icr) || !delay(1) {
         return Err(StartError::Rejected(-1));
     }
+    slot.publish();
     let send = |cmd| unsafe {
         destination.write_volatile((hart as u32) << 24);
         icr.write_volatile(cmd);

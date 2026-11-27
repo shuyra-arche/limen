@@ -66,11 +66,13 @@ impl<T> Pool<'_, T> {
     /// to revisit retained work. No mapped group bytes are accessed.
     pub fn retirement(&self, cursor: &mut usize, budget: usize) -> Result<Retirement, Error> {
         Ok(self.state.acquire(|state| {
-            let stop = (*cursor).saturating_add(budget.min(64)).min(state.count);
+            let stop = (*cursor).saturating_add(budget.min(64)).min(state.extent);
             while *cursor < stop {
                 let index = *cursor;
                 *cursor += 1;
-                let entry = state.groups[index].0.as_ref().expect("installed group");
+                let Some(entry) = state.groups[index].record.as_ref() else {
+                    continue;
+                };
                 let id = GroupId(index, entry.allocation());
                 match entry {
                     GroupRecord::Shutting(material) => {
@@ -80,7 +82,7 @@ impl<T> Pool<'_, T> {
                     GroupRecord::Open(_) | GroupRecord::Retired(_) => {}
                 }
             }
-            if *cursor >= state.count {
+            if *cursor >= state.extent {
                 *cursor = 0;
                 Retirement::End
             } else {
@@ -104,7 +106,7 @@ impl<T> Pool<'_, T> {
                 GroupRecord::Retired(result) => return Ok(result.physical),
             };
             state.unlink(id, Chain::Empty);
-            let entry = &mut state.groups[id.0].0;
+            let entry = &mut state.groups[id.0].record;
             let Some(GroupRecord::Open(group)) = entry.take() else {
                 unreachable!("checked open group");
             };

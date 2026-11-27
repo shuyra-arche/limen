@@ -18,14 +18,15 @@ use core::{
 
 use kernel::{
     basis::{
-        execution::{Current, Error, EstablishError, Execution},
+        execution::{Current, Error, EstablishError, Execution, KernelBinding},
         room::Occupancy,
-        unit::{End, Lifecycle, Stacks, UnitId},
+        unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::{Boot, shutdown, write},
 };
 
 static mut STACKS: Stacks = Stacks::new();
+static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 static FIRST_STACK: AtomicUsize = AtomicUsize::new(0);
@@ -115,7 +116,9 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     // Individual interrupt sources remain masked. SIE makes the execution
     // environment unsupported before the constructor binds the stack supply.
     unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-    let rejected = Execution::new(boot, unsafe { &mut *stacks });
+    let rejected = Execution::new(boot, unsafe { &mut *stacks }, unsafe {
+        &mut *(&raw mut RECORDS)
+    });
     unsafe { asm!("csrci sstatus, 2", options(nostack)) };
     let Err(failure) = rejected else {
         panic!("execution admitted with interrupts enabled");
@@ -124,7 +127,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert_eq!(failure.boot.hart(), major);
     assert_eq!(failure.boot.device_tree(), device_tree);
     assert!(core::ptr::eq(failure.stacks, stacks));
-    let runtime = Execution::new(failure.boot, failure.stacks)
+    let runtime = Execution::new(failure.boot, failure.stacks, failure.records)
         .map_err(|failure| failure.reason)
         .expect("original handoff and stack supply can be retried");
     unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
@@ -150,9 +153,13 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         execution.lifecycle(dormant),
         Ok(Lifecycle::Ended(End::Cancelled))
     );
+    // The original result remains live, but its stack is already reusable.
+    let b = unsafe { execution.create(second) }.expect("reuse stack before Reap");
+    assert_eq!(
+        execution.lifecycle(dormant),
+        Ok(Lifecycle::Ended(End::Cancelled))
+    );
     assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
-
-    let b = unsafe { execution.create(second) }.expect("reuse dormant slot");
     assert_ne!(dormant, b);
     assert_eq!(execution.stop_dormant(dormant), Err(Error::Gone));
     assert_eq!(execution.submit(dormant), Err(Error::Gone));

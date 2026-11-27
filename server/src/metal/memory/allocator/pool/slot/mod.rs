@@ -338,11 +338,11 @@ impl<T> Pool<'_, T> {
     ) -> Result<ReleaseProgress, Error> {
         Ok(self.state.acquire(|state| {
             for _ in 0..budget.min(64) {
-                if cursor.group >= state.count {
+                if cursor.group >= state.extent {
                     *cursor = ReleaseCursor::default();
                     return ReleaseProgress::End;
                 }
-                if let Some(GroupRecord::Open(group)) = &state.groups[cursor.group].0
+                if let Some(GroupRecord::Open(group)) = &state.groups[cursor.group].record
                     && cursor.slot < group.geometry.slots
                 {
                     let index = cursor.slot;
