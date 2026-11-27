@@ -4,7 +4,7 @@ use super::{GicV3, Trigger};
 
 mod route;
 use crate::metal::{
-    interrupt::PublishRoute, memory::mmu::access::device::DeviceWindow,
+    interrupt::RouteControl, memory::mmu::access::device::DeviceWindow,
     processor::hart::aarch64::description::AFFINITY_MASK,
 };
 pub use route::Route;
@@ -97,14 +97,14 @@ pub struct Distributor<'map, 'tree> {
     count: usize,
 }
 
-struct Publication<'route, 'map, 'tree> {
+struct Control<'route, 'map, 'tree> {
     owner: &'route mut Distributor<'map, 'tree>,
     binding: &'route mut BoundRoute<'tree>,
 }
 
-impl crate::metal::interrupt::publication::Sealed for Publication<'_, '_, '_> {}
+impl crate::metal::interrupt::route::Sealed for Control<'_, '_, '_> {}
 
-impl PublishRoute for Publication<'_, '_, '_> {
+impl RouteControl for Control<'_, '_, '_> {
     type Failure = Failure;
 
     unsafe fn publish(&mut self) -> Result<(), Failure> {
@@ -213,9 +213,9 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     pub fn control<'route>(
         &'route mut self,
         binding: &'route mut BoundRoute<'tree>,
-    ) -> Result<impl PublishRoute<Failure = Failure> + 'route, Failure> {
+    ) -> Result<impl RouteControl<Failure = Failure> + 'route, Failure> {
         self.bound_slot(binding)?;
-        Ok(Publication {
+        Ok(Control {
             owner: self,
             binding,
         })
@@ -270,7 +270,7 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
         binding: &'route mut BoundRoute<'tree>,
         affinity: u64,
         priority: u8,
-    ) -> Result<impl PublishRoute<Failure = Failure> + 'route, Failure> {
+    ) -> Result<impl RouteControl<Failure = Failure> + 'route, Failure> {
         let slot = self.bound_slot(binding)?;
         let (route, state) = self.slots[slot].route.unwrap();
         let id = route.intid;
@@ -331,12 +331,15 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     unsafe fn enable(&mut self, slot: usize) -> Result<(), Failure> {
         let (route, state) = self.slots[slot].route.unwrap();
         let id = route.intid;
-        if !matches!(state, State::Configured | State::Quiesced) {
-            return Err(Failure::State);
+        match state {
+            State::Configured | State::Quiesced => {
+                self.slots[slot].route = Some((route, State::Enabling));
+                self.write(Self::bank(ENABLE, id), Self::mask(id));
+                self.barrier.synchronize();
+            }
+            State::Enabling => {}
+            _ => return Err(Failure::State),
         }
-        self.slots[slot].route = Some((route, State::Enabling));
-        self.write(Self::bank(ENABLE, id), Self::mask(id));
-        self.barrier.synchronize();
         if !self.bit(ENABLE, id) {
             return Err(Failure::Unconfirmed);
         }

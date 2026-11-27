@@ -5,7 +5,7 @@ use super::{
     registers::{enable, priority},
     source::Priority,
 };
-use crate::metal::{interrupt::PublishRoute, platform::description::devicetree::Error};
+use crate::metal::{interrupt::RouteControl, platform::description::devicetree::Error};
 
 const PENDING: usize = 0x1000;
 
@@ -66,14 +66,14 @@ pub struct BoundRoute<'tree> {
     slot: usize,
 }
 
-struct Publication<'route, 'access, 'storage, 'tree> {
+struct Control<'route, 'access, 'storage, 'tree> {
     owner: &'route mut Access<'access, 'storage, 'tree>,
     binding: &'route mut BoundRoute<'tree>,
 }
 
-impl crate::metal::interrupt::publication::Sealed for Publication<'_, '_, '_, '_> {}
+impl crate::metal::interrupt::route::Sealed for Control<'_, '_, '_, '_> {}
 
-impl PublishRoute for Publication<'_, '_, '_, '_> {
+impl RouteControl for Control<'_, '_, '_, '_> {
     type Failure = Failure;
 
     unsafe fn publish(&mut self) -> Result<(), Failure> {
@@ -180,9 +180,9 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
     pub fn control<'route>(
         &'route mut self,
         binding: &'route mut BoundRoute<'tree>,
-    ) -> Result<impl PublishRoute<Failure = Failure> + 'route, Failure> {
+    ) -> Result<impl RouteControl<Failure = Failure> + 'route, Failure> {
         self.bound_slot(binding)?;
-        Ok(Publication {
+        Ok(Control {
             owner: self,
             binding,
         })

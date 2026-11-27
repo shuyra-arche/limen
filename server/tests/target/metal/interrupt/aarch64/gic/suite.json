@@ -6,7 +6,7 @@
   ],
   "sources": [
     "server/src/metal/interrupt/absolute.rs",
-    "server/src/metal/interrupt/publication.rs",
+    "server/src/metal/interrupt/route.rs",
     "server/tests/target/support/route.rs",
     "server/tests/target/support/timer.rs",
     "server/src/entry/boot/**",

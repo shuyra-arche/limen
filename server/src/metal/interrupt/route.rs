@@ -5,7 +5,7 @@ pub trait Sealed {}
 /// An exclusive borrow of the prepared source and its original destination.
 /// The native owner keeps the route and any uncertain write when this borrow
 /// ends. An interrupt already taken retains its original completion path.
-pub trait PublishRoute: Sealed {
+pub trait RouteControl: Sealed {
     type Failure;
 
     /// Enable delivery from the original prepared route.

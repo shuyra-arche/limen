@@ -11,5 +11,5 @@ pub use claim::{Completion, HardwareClaim, Receive};
 mod absolute;
 pub use absolute::AbsoluteTimer;
 
-mod publication;
-pub use publication::PublishRoute;
+mod route;
+pub use route::RouteControl;
