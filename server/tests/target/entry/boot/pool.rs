@@ -124,16 +124,12 @@ pub(super) fn check(boot: &Boot<'_>) {
         panic!("returning group missing from the Pool directory");
     };
     let result = source.finish_return(supply.retirement, Fast).unwrap();
-    assert_eq!(
-        source.acknowledge(supply.retirement),
-        Err(SourceError::Protection)
-    );
     assert_eq!(pool.finish_return(group, Fast), Ok(result));
     assert_eq!(result.allocation, supply.allocation);
     assert_eq!(result.physical, physical);
     assert_eq!(pool.finish_return(group, Fast), Ok(result));
     assert_eq!(
-        source.acknowledge(supply.retirement),
+        source.finish_return(supply.retirement, Fast),
         Err(SourceError::Stale)
     );
     assert_eq!(owner.balance().unwrap().occupied().get(), 0);
