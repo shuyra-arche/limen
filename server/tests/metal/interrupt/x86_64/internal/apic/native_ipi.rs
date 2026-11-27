@@ -85,9 +85,20 @@ fn minor(processor: usize, argument: usize) -> ! {
     let vector = local.reserve_vector(VECTOR).unwrap();
     let gate = unsafe { Window::install(vector.vector()) };
     ICR_PROBE.store(1, Release);
-    await_vector(gate);
+    await_phase(&ICR_PROBE, 2);
+    assert_eq!(gate.count(), 0);
+    drop(gate);
+    // Sender confirmation with IF masked leaves the real request in IRR.
+    // It must retain the original vector before the processor enters the gate.
+    let (vector, reason) = local.release_vector(vector).unwrap_err();
+    assert_eq!(reason, Failure::Busy);
+    await_vector(unsafe { Window::install(vector.vector()) });
+    assert_eq!(local.reception(), Reception::Idle);
+    // The accepted ISR bit must retain the same lease before software receives it.
+    let (vector, reason) = local.release_vector(vector).unwrap_err();
+    assert_eq!(reason, Failure::Busy);
     finish_claim(&mut local);
-    ICR_PROBE.store(2, Release);
+    ICR_PROBE.store(3, Release);
 
     for round in 1..=2 {
         let gate = unsafe { Window::install(vector.vector()) };
@@ -155,7 +166,8 @@ pub fn check(boot: boot::Boot<'_>) {
         assert_eq!(route.pending(), Ok(Some(issue)));
         assert_eq!(route.confirm(issue), Ok(Issuance::Confirmed(issue)));
     }
-    await_phase(&ICR_PROBE, 2);
+    ICR_PROBE.store(2, Release);
+    await_phase(&ICR_PROBE, 3);
 
     assert!(matches!(
         unsafe { controller.bind_ipi(original) },
@@ -171,6 +183,6 @@ pub fn check(boot: boot::Boot<'_>) {
     assert_eq!(controller.reception(), Reception::Idle);
     assert_eq!(READY.load(Relaxed), 2);
     boot_diagnostic::write(
-        "PASS local-apic-ipi issued=3 rechecked=2 eoi=2 stale=0 scope-rejected=1 icr-blocked=1\n",
+        "PASS local-apic-ipi issued=3 rechecked=2 eoi=2 stale=0 scope-rejected=1 icr-blocked=1 irr-retained=1 isr-retained=1\n",
     );
 }

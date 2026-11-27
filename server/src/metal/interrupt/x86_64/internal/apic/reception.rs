@@ -4,6 +4,7 @@ use super::{Failure, LocalApic};
 use crate::metal::interrupt::treaty::{ClaimConfirmation, ClaimId, Completion, HardwareClaim};
 
 const ISR: usize = 0x100;
+const IRR: usize = 0x200;
 const EOI: usize = 0xb0;
 const SPURIOUS: usize = 0xf0;
 const SOFTWARE_ENABLE: u32 = 1 << 8;
@@ -86,29 +87,35 @@ impl<'map> LocalApic<'map> {
         (usize::from(vector) / 64, 1 << (vector % 64))
     }
 
-    /// Reserve the destination vector before publishing a physical source route.
+    /// Reserve a native-quiet destination vector before publishing a physical
+    /// source route. The owner must also keep unrelated sources from targeting it.
     pub fn reserve_vector(&mut self, vector: u8) -> Result<VectorLease, Failure> {
         self.reception_context()?;
         let processor = u8::try_from(self.processor).map_err(|_| Failure::Scope)?;
         let svr = unsafe { self.window.read_u32(SPURIOUS) }.expect("xAPIC SVR");
-        if vector < 32 || vector == svr as u8 {
+        if !Self::fixed_vector(vector, svr) {
             return Err(Failure::Scope);
         }
         let (bank, bit) = Self::vector_bit(vector);
-        if self.vectors[bank] & bit != 0 || self.reception_round == u64::MAX {
+        if self.vectors[bank] & bit != 0
+            || self.reception_round == u64::MAX
+            || self.vector_busy(vector)
+        {
             return Err(Failure::Busy);
         }
         self.vectors[bank] |= bit;
         Ok(VectorLease { processor, vector })
     }
 
-    /// Return a lease after the original source route has retired.
+    /// Return a lease after the original source route has retired and its
+    /// queued, accepted and recorded reception has drained. The source owner
+    /// must separately stop further arrivals before returning the lease.
     pub fn release_vector(&mut self, lease: VectorLease) -> Result<(), (VectorLease, Failure)> {
         if usize::from(lease.processor) != self.processor || self.reception_context().is_err() {
             return Err((lease, Failure::Scope));
         }
         let (bank, bit) = Self::vector_bit(lease.vector);
-        if self.vectors[bank] & bit == 0 || self.reception_involves(lease.vector) {
+        if self.vectors[bank] & bit == 0 || self.vector_busy(lease.vector) {
             return Err((lease, Failure::Busy));
         }
         self.vectors[bank] &= !bit;
@@ -160,11 +167,8 @@ impl<'map> LocalApic<'map> {
         }
         let svr = unsafe { self.window.read_u32(SPURIOUS) }.expect("xAPIC SVR");
         let (bank, bit) = Self::vector_bit(vector);
-        if vector < 32
+        if !Self::fixed_vector(vector, svr)
             || self.vectors[bank] & bit == 0
-            || vector == svr as u8
-            || svr & SOFTWARE_ENABLE == 0
-            || svr & SUPPRESS_BROADCAST != 0
             || self.top() != Some(vector)
         {
             return Err(Failure::Scope);
@@ -204,15 +208,27 @@ impl<'map> LocalApic<'map> {
         Ok(())
     }
 
-    pub(super) fn in_service(&mut self, vector: u8) -> bool {
+    fn fixed_vector(vector: u8, svr: u32) -> bool {
+        vector >= 32
+            && vector != svr as u8
+            && svr & SOFTWARE_ENABLE != 0
+            && svr & SUPPRESS_BROADCAST == 0
+    }
+
+    fn in_service(&mut self, vector: u8) -> bool {
+        self.vector_set(ISR, vector)
+    }
+
+    fn vector_set(&mut self, register: usize, vector: u8) -> bool {
         let bank = usize::from(vector) / 32;
         let bit = 1 << (vector % 32);
-        let word = unsafe { self.window.read_u32(ISR + 16 * bank) }.expect("xAPIC ISR bank");
+        let word =
+            unsafe { self.window.read_u32(register + 16 * bank) }.expect("xAPIC vector bank");
         word & bit != 0
     }
 
-    pub(super) fn reception_involves(&self, vector: u8) -> bool {
-        self.reception.involves(vector)
+    pub(super) fn vector_busy(&mut self, vector: u8) -> bool {
+        self.reception.involves(vector) || self.vector_set(IRR, vector) || self.in_service(vector)
     }
 }
 

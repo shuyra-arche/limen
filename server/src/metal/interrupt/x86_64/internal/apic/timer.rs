@@ -14,7 +14,6 @@ const TIMER_MODE: u32 = 3 << 17;
 const PERIODIC: u32 = 1 << 17;
 const LVT_FIELDS: u32 = MASKED | TIMER_MODE | 0xff;
 const DIVIDE_FIELDS: u32 = (1 << 3) | 3;
-const REQUESTS: usize = 0x200;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Divider {
@@ -159,7 +158,7 @@ impl LocalApic<'_> {
             return Err(Failure::Unconfirmed);
         }
         let vector = original.vector();
-        if vector >= 32 && (self.vector_pending(vector) || self.reception_involves(vector)) {
+        if vector >= 32 && self.vector_busy(vector) {
             return Err(Failure::Busy);
         }
         self.timer = Slot::Vacant;
@@ -176,7 +175,7 @@ impl LocalApic<'_> {
         }
         if !matches!(self.timer, Slot::Vacant)
             || !self.timer_quiet()
-            || self.vector_pending(vector.vector())
+            || self.vector_busy(vector.vector())
         {
             return Err((vector, Failure::Busy));
         }
@@ -243,8 +242,7 @@ impl LocalApic<'_> {
         let vector = timer.vector.vector();
         if !matches!(state, TimerState::Reserved | TimerState::Stopped)
             || !self.timer_quiet()
-            || self.vector_pending(vector)
-            || self.reception_involves(vector)
+            || self.vector_busy(vector)
         {
             return Err(Failure::Busy);
         }
@@ -258,12 +256,6 @@ impl LocalApic<'_> {
         self.timer_matches(LVT, MASKED | DELIVERY_PENDING, MASKED)
             && self.timer_read(INITIAL) == 0
             && self.timer_read(CURRENT) == 0
-    }
-
-    fn vector_pending(&mut self, vector: u8) -> bool {
-        let bank = usize::from(vector / 32) * 16;
-        let bit = 1 << (vector % 32);
-        self.timer_read(REQUESTS + bank) & bit != 0 || self.in_service(vector)
     }
 
     fn timer_matches(&mut self, register: usize, mask: u32, expected: u32) -> bool {
