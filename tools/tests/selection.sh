@@ -262,8 +262,6 @@ change server/src/metal/interrupt/claim.rs
 expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc x86-64-ioapic
 change server/src/metal/memory/mmu/retirement.rs
 expect_suites aarch64-smmu rv64-iommu
-change server/src/metal/memory/mmu/installation.rs
-expect_suites aarch64-paging x86-64-paging
 change server/tests/target/support/pci/edu.rs
 expect_suites aarch64-smmu rv64-iommu x86-64-amdvi x86-64-vtd
 change server/tests/target/support/pci/q35.rs
