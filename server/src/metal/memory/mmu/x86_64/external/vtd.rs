@@ -134,6 +134,29 @@ pub struct Sequence(u64);
 
 impl Sequence {
     pub const FRESH: Self = Self(0);
+
+    fn reserve(&mut self, count: u64) -> Result<u64, Error> {
+        self.0 = self.0.checked_add(count).ok_or(Error::Exhausted)?;
+        Ok(self.0)
+    }
+
+    fn reserve_binding(
+        &mut self,
+        unit: PhysicalAddress,
+        context: Context,
+    ) -> Result<Binding, Error> {
+        // An admitted binding can retire even if ordinary work consumes the
+        // rest of this controller's sequence.
+        let retirement_number = self.reserve(2)?;
+        Ok(Binding {
+            publication: CommandId {
+                unit,
+                number: retirement_number - 1,
+            },
+            retirement_number,
+            context,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,14 +168,21 @@ pub struct Context {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Binding {
-    unit: PhysicalAddress,
-    generation: u64,
+    publication: CommandId,
+    retirement_number: u64,
     context: Context,
 }
 
 impl Binding {
     pub fn context(self) -> Context {
         self.context
+    }
+
+    fn retirement(self) -> CommandId {
+        CommandId {
+            unit: self.publication.unit,
+            number: self.retirement_number,
+        }
     }
 }
 
@@ -214,7 +244,7 @@ pub struct Storage<'a> {
 
 #[must_use]
 pub struct Controller<'a> {
-    window: &'a mut DeviceWindow,
+    window: DeviceWindow<'a>,
     unit: RemappingUnit<'a>,
     storage: Storage<'a>,
     visibility: Visibility,
@@ -243,7 +273,7 @@ impl<'a> Controller<'a> {
     /// fresh. Old effects must already be settled before re-admission.
     pub unsafe fn admit(
         unit: RemappingUnit<'a>,
-        window: &'a mut DeviceWindow,
+        window: &'a mut DeviceWindow<'_>,
         storage: Storage<'a>,
         visibility: Visibility,
     ) -> Result<Self, Error> {
@@ -296,7 +326,7 @@ impl<'a> Controller<'a> {
             return Err(Error::Window);
         }
         let mut unit = Self {
-            window,
+            window: window.reborrow(),
             unit,
             storage,
             visibility,
@@ -390,20 +420,6 @@ impl<'a> Controller<'a> {
         (self.read(offset) & FAULT_VALID == 0)
             .then_some(())
             .ok_or(Error::Unconfirmed)
-    }
-
-    fn next_command(&mut self) -> Result<CommandId, Error> {
-        let number = self
-            .storage
-            .sequence
-            .0
-            .checked_add(1)
-            .ok_or(Error::Exhausted)?;
-        self.storage.sequence.0 = number;
-        Ok(CommandId {
-            unit: self.unit.registers().start(),
-            number,
-        })
     }
 
     fn binding_slot(&self, requester: u16) -> Option<usize> {
@@ -500,12 +516,12 @@ impl<'a> Controller<'a> {
         if self.storage.contexts.0.0[index] != [0; 2] {
             return Err(Error::Occupied);
         }
-        let command = self.next_command()?;
-        self.storage.bindings[slot] = Some(Binding {
-            unit: command.unit,
-            generation: command.number,
-            context,
-        });
+        let binding = self
+            .storage
+            .sequence
+            .reserve_binding(self.unit.registers().start(), context)?;
+        let command = binding.publication;
+        self.storage.bindings[slot] = Some(binding);
         self.pending = Some((command, Operation::Bind(slot)));
         let directory = &mut self.storage.contexts.0.0[index];
         directory[1] = entry[1];
@@ -525,7 +541,10 @@ impl<'a> Controller<'a> {
     /// transactions require separate settlement.
     pub unsafe fn begin_invalidate(&mut self, expected: Binding) -> Result<CommandId, Error> {
         let slot = self.active_slot(expected)?;
-        let command = self.next_command()?;
+        let command = CommandId {
+            unit: self.unit.registers().start(),
+            number: self.storage.sequence.reserve(1)?,
+        };
         self.pending = Some((command, Operation::Invalidate(slot)));
         self.state = State::RefreshingTranslations;
         self.write(self.iotlb, IN_PROGRESS | GLOBAL_IOTLB | self.drain);
@@ -540,7 +559,7 @@ impl<'a> Controller<'a> {
     /// matching Unbound receipt. Separate endpoint obligations must settle.
     pub unsafe fn begin_unbind(&mut self, expected: Binding) -> Result<CommandId, Error> {
         let slot = self.active_slot(expected)?;
-        let command = self.next_command()?;
+        let command = expected.retirement();
         let directory =
             &mut self.storage.contexts.0.0[usize::from(expected.context.requester as u8)];
         let original = self
@@ -673,3 +692,7 @@ impl<'a> Controller<'a> {
         Err(Error::Pending)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../tests/metal/memory/mmu/x86_64/external/vtd.rs"]
+mod tests;

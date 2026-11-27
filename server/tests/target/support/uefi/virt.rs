@@ -1,18 +1,11 @@
 use core::arch::asm;
-#[cfg(any(feature = "platform-boot", feature = "platform-execution"))]
 use core::fmt::Write;
 use kernel::entry::boot;
-#[cfg(any(
-    feature = "gic",
-    feature = "platform-boot",
-    feature = "platform-execution"
-))]
 use kernel::metal::interrupt::aarch64::gic::GicV3;
-#[cfg(any(feature = "platform-boot", feature = "platform-execution"))]
 use kernel::metal::{
     chrono::aarch64::GenericCounter,
     interrupt::aarch64::{
-        gic::{Trigger, internal::PrivateInterrupts},
+        gic::{Trigger, cpu_interface, redistributor::PrivateInterrupts},
         internal::timer::GenericTimer,
     },
     platform::firmware::psci::Psci,
@@ -23,7 +16,6 @@ use kernel::metal::{
     processor::hart::aarch64::description::Aarch64Cpus,
 };
 use uefi::Status;
-#[cfg(any(feature = "platform-boot", feature = "platform-execution"))]
 use uefi::{
     boot::PAGE_SIZE,
     mem::memory_map::{MemoryMap, MemoryType},
@@ -31,19 +23,12 @@ use uefi::{
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-#[cfg(any(feature = "platform-boot", feature = "platform-execution"))]
 use super::extent;
 
 #[path = "devicetree.rs"]
 mod devicetree;
-#[cfg(feature = "gic")]
-#[path = "../../metal/interrupt/aarch64/gic/scenario.rs"]
-mod gic;
 #[path = "pl011.rs"]
 mod pl011;
-#[cfg(feature = "smmu")]
-#[path = "../../metal/memory/mmu/aarch64/smmu/scenario.rs"]
-mod smmu;
 static FIRMWARE_VECTORS: AtomicUsize = AtomicUsize::new(0);
 static UART: AtomicUsize = AtomicUsize::new(0);
 static USE_HVC: AtomicBool = AtomicBool::new(false);
@@ -118,7 +103,7 @@ fn discover(bytes: &[u8]) -> Result<(), Status> {
     Ok(())
 }
 
-pub(super) fn hart() -> usize {
+pub fn hart() -> usize {
     let mpidr: usize;
     unsafe { asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nomem, nostack)) };
     mpidr & 0xff00ffffff
@@ -131,8 +116,7 @@ pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
     devicetree::copy(discover).map(Some)
 }
 
-#[cfg(any(feature = "platform-boot", feature = "platform-execution"))]
-pub(super) fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) -> boot::Startup {
+pub fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) -> boot::Startup {
     let (el, daif, sp, vectors, spsel): (usize, usize, usize, usize, usize);
     unsafe {
         asm!("mrs {}, CurrentEL", "mrs {}, DAIF", "mov {}, sp", "mrs {}, VBAR_EL1",
@@ -193,28 +177,6 @@ pub(super) fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) -> boot::Star
     boot::Startup::Psci(psci)
 }
 
-#[cfg(feature = "platform-boot")]
-pub(super) fn report() -> ! {
-    let mut console = boot::console().expect("board console");
-    console
-        .write_str("PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1 ram=1 reconciled=1\n")
-        .expect("diagnostic output");
-    boot::shutdown(true)
-}
-
-#[cfg(feature = "smmu")]
-pub(super) fn check_smmu(boot: &boot::Boot<'_>) {
-    smmu::check(&boot.device_tree_description().unwrap());
-}
-
-#[cfg(feature = "gic")]
-pub(super) fn check_irq(boot: &boot::Boot<'_>) {
-    let tree = boot.device_tree_description().unwrap();
-    let controller = GicV3::read(&tree).unwrap().expect("GIC description");
-    gic::check(&tree, controller, boot.hart());
-}
-
-#[cfg(any(feature = "platform-boot", feature = "platform-execution"))]
 fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) -> Psci {
     let cpus = Aarch64Cpus::read(tree).unwrap().expect("CPU declarations");
     let current = unsafe { cpus.current() }.expect("MPIDR matches an enabled CPU node");
@@ -257,13 +219,12 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) -> Psci {
             .redistributor()
             .covers(extent(0x080a_0000, 0x080c_0000))
     );
-    assert!(unsafe { GicV3::cpu_interface_available() });
+    assert!(unsafe { cpu_interface::available() });
     let _frequency = unsafe { counter.counter_frequency() }.expect("live generic timer frequency");
     psci
 }
 
 /// Recheck the original PSCI target only after the minor has entered.
-#[cfg(any(feature = "platform-boot", feature = "platform-execution"))]
-pub(super) fn inspect_started(boot::Startup::Psci(psci): &boot::Startup, target: usize) {
+pub fn inspect_started(boot::Startup::Psci(psci): &boot::Startup, target: usize) {
     unsafe { psci.verify_affinity(target, true) }.expect("live minor affinity");
 }

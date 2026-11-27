@@ -84,8 +84,34 @@ change server/tests/target/support/uefi/virt.rs
 [[ $(boards) == virt ]]
 change server/tests/target/support/uefi/q35.rs server/src/metal/platform/boot/aarch64/mod.rs
 [[ $(boards) == 'q35 virt' ]]
-change server/tests/target/support/uefi/main.rs
+for source in server/tests/target/support/uefi/lib.rs \
+              server/tests/target/Cargo.toml server/tests/target/Cargo.lock; do
+    change "$source"
+    [[ $(boards) == 'q35 virt' ]]
+    expect_suites aarch64-gic aarch64-paging aarch64-smmu platform-boot platform-execution \
+        x86-64-amdvi x86-64-ioapic x86-64-local-apic-failure x86-64-local-apic-ipi x86-64-local-apic-timer x86-64-paging x86-64-vtd
+done
+change server/tests/target/entry/platforms/main.rs
+expect_suites platform-boot
 [[ $(boards) == 'q35 virt' ]]
+change server/tests/target/metal/interrupt/aarch64/gic/main.rs
+expect_suites aarch64-gic
+[[ $(boards) == virt ]]
+change server/tests/target/metal/memory/mmu/x86_64/amdvi/Cargo.toml
+expect_suites x86-64-amdvi
+[[ $(boards) == q35 ]]
+for source in server/tests/target/support/paging/mod.rs \
+              server/tests/target/support/paging/installation.rs; do
+    change "$source"
+    expect_suites aarch64-paging x86-64-paging
+    [[ $(boards) == 'q35 virt' ]]
+done
+change server/tests/target/support/uefi/interrupt.rs
+expect_suites x86-64-ioapic x86-64-local-apic-ipi x86-64-local-apic-timer
+[[ $(boards) == q35 ]]
+change server/tests/target/metal/interrupt/x86_64/apic-timer/main.rs
+expect_suites x86-64-local-apic-timer
+[[ $(boards) == q35 ]]
 change server/src/basis/execution.rs
 expect_suites kernel-execution kernel-execution-harts platform-execution
 change server/tests/target/basis/execution/platforms/scenario.rs
@@ -117,7 +143,7 @@ change server/src/metal/platform/firmware/uefi/loader.rs
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/platform/description/acpi/madt.rs
 [[ $(boards) == q35 ]]
-expect_suites platform-boot platform-execution x86-64-amdvi x86-64-ioapic x86-64-local-apic-failure x86-64-paging x86-64-vtd
+expect_suites platform-boot platform-execution x86-64-amdvi x86-64-ioapic x86-64-local-apic-failure x86-64-local-apic-ipi x86-64-local-apic-timer x86-64-paging x86-64-vtd
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 change server/src/metal/platform/description/acpi/dmar.rs
 expect_suites x86-64-vtd
@@ -143,10 +169,10 @@ change server/src/metal/platform/boot/handoff/uefi.rs
 [[ $(boards) == 'q35 virt' ]]
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/platform/boot/minor.rs
-expect_suites kernel-execution-harts platform-boot platform-execution riscv-module-execution x86-64-local-apic-failure
+expect_suites aarch64-gic kernel-execution-harts platform-boot platform-execution riscv-module-execution rv64-ipi x86-64-local-apic-failure x86-64-local-apic-ipi
 change server/src/metal/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-for source in server/src/metal/platform/firmware/psci/native.rs server/src/metal/interrupt/aarch64/gic/native.rs server/src/metal/chrono/aarch64/native.rs; do
+for source in server/src/metal/platform/firmware/psci/native.rs server/src/metal/interrupt/aarch64/gic/cpu_interface/native.rs server/src/metal/chrono/aarch64/native.rs; do
     change "$source"
     [[ $(boards) == virt ]]
     bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
@@ -154,7 +180,7 @@ done
 for source in server/src/metal/processor/hart/aarch64/description.rs \
               server/src/metal/platform/firmware/psci/mod.rs \
               server/src/metal/interrupt/aarch64/gic/mod.rs \
-              server/src/metal/interrupt/aarch64/internal/timer.rs \
+              server/src/metal/interrupt/aarch64/internal/timer/mod.rs \
               server/src/metal/chrono/aarch64/mod.rs; do
     change "$source"
     [[ $(boards) == virt ]]
@@ -164,7 +190,7 @@ change server/src/metal/interrupt/mod.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 change server/src/metal/interrupt/x86_64/internal/apic/mod.rs
 [[ $(boards) == q35 ]]
-expect_suites module-execution platform-boot platform-execution x86-64-ioapic x86-64-local-apic-failure
+expect_suites module-execution platform-boot platform-execution x86-64-ioapic x86-64-local-apic-failure x86-64-local-apic-ipi x86-64-local-apic-timer
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/interrupt/x86_64/internal/apic/native.rs
 [[ $(boards) == q35 ]]
@@ -189,6 +215,9 @@ expect_suites aarch64-smmu
 change server/src/metal/memory/mmu/x86_64/internal/native.rs
 expect_suites x86-64-paging
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
+change server/src/metal/memory/mmu/installation.rs
+expect_suites aarch64-paging x86-64-paging
+[[ $(boards) == 'q35 virt' ]]
 change server/src/metal/memory/mmu/aarch64/internal/native.rs
 expect_suites aarch64-paging
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
@@ -201,14 +230,34 @@ expect_suites x86-64-local-apic-failure
 change server/tests/target/metal/interrupt/riscv64/plic-sstc/plic.rs
 expect_suites rv64-plic-sstc
 change server/tests/target/support/riscv64/reception.rs
-expect_suites rv64-interrupt rv64-plic-sstc
+expect_suites rv64-interrupt rv64-ipi rv64-plic-sstc
+change server/src/metal/interrupt/x86_64/internal/apic/ipi.rs
+expect_suites module-execution platform-boot platform-execution x86-64-ioapic x86-64-local-apic-failure x86-64-local-apic-ipi x86-64-local-apic-timer
+change server/src/metal/interrupt/riscv64/internal/ipi.rs
+expect_suites rv64-ipi
+change server/tests/target/support/clock.rs
+expect_suites aarch64-gic rv64-plic-sstc
+change server/src/metal/chrono/clock.rs
+expect_suites aarch64-gic rv64-interrupt rv64-ipi rv64-plic-sstc
+change server/tests/target/support/timer.rs
+expect_suites aarch64-gic rv64-plic-sstc
+change server/src/metal/interrupt/absolute.rs
+expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc
+change server/tests/target/support/interrupt.rs
+expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc x86-64-ioapic
+change server/src/metal/interrupt/claim.rs
+expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc x86-64-ioapic
+change server/src/metal/memory/mmu/retirement.rs
+expect_suites aarch64-smmu rv64-iommu
+change server/src/metal/memory/mmu/installation.rs
+expect_suites aarch64-paging x86-64-paging
 change server/tests/target/support/pci/edu.rs
 expect_suites aarch64-smmu rv64-iommu x86-64-amdvi x86-64-vtd
 change server/tests/target/support/pci/q35.rs
 expect_suites x86-64-amdvi x86-64-vtd
 change server/tests/target/support/uefi/run.sh
 expect_suites aarch64-gic aarch64-paging aarch64-smmu platform-boot platform-execution x86-64-amdvi \
-    x86-64-ioapic x86-64-local-apic-failure x86-64-paging x86-64-vtd
+    x86-64-ioapic x86-64-local-apic-failure x86-64-local-apic-ipi x86-64-local-apic-timer x86-64-paging x86-64-vtd
 change server/tests/target/entry/boot/main.rs
 expect_suites boot-handoff
 change server/tests/metal/memory/mmu/riscv64/internal/activity/mod.rs
@@ -283,7 +332,7 @@ for source in server/src/metal/processor/hart/riscv64/status.rs \
               server/src/metal/memory/mmu/riscv64/internal/context/satp.rs; do
     change "$source"
     expect_suites boot-handoff kernel-execution kernel-execution-harts riscv-module-execution \
-        rv64-interrupt rv64-iommu rv64-plic-sstc
+        rv64-interrupt rv64-iommu rv64-ipi rv64-plic-sstc
     bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 done
 for source in server/src/metal/processor/hart/aarch64/status.rs \

@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = [
+    "basis/execution/platforms",
+    "entry/platforms",
+    "metal/interrupt/aarch64/gic",
+    "metal/interrupt/x86_64/apic-failure",
+    "metal/interrupt/x86_64/apic-ipi",
+    "metal/interrupt/x86_64/apic-timer",
+    "metal/interrupt/x86_64/ioapic",
+    "metal/memory/mmu/aarch64/paging",
+    "metal/memory/mmu/aarch64/smmu",
+    "metal/memory/mmu/x86_64/amdvi",
+    "metal/memory/mmu/x86_64/paging",
+    "metal/memory/mmu/x86_64/vtd",
+    "support/uefi",
+]
+
+[workspace.dependencies]
+kernel = { path = "../.." }
+limen-treaty = { path = "../../../treaty" }
+uefi = "=0.41.0"
+uefi-fixture = { path = "support/uefi" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

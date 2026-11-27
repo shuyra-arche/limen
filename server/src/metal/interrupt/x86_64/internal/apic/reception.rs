@@ -25,6 +25,10 @@ pub struct VectorLease {
 }
 
 impl VectorLease {
+    pub fn vector(&self) -> u8 {
+        self.vector
+    }
+
     pub(crate) fn matches(&self, hart: u8, vector: u8) -> bool {
         self.hart == hart && self.vector == vector
     }
@@ -33,12 +37,12 @@ impl VectorLease {
 /// Exclusive borrow of the non-nested reception slot. No later vector can
 /// be admitted while this claim can still complete an EOI.
 #[must_use]
-pub struct Claim<'a> {
-    owner: &'a mut LocalApic,
+pub struct Claim<'a, 'map> {
+    owner: &'a mut LocalApic<'map>,
     vector: u8,
 }
 
-impl Claim<'_> {
+impl Claim<'_, '_> {
     pub fn vector(&self) -> u8 {
         self.vector
     }
@@ -52,7 +56,7 @@ impl Claim<'_> {
     }
 }
 
-impl LocalApic {
+impl<'map> LocalApic<'map> {
     fn vector_bit(vector: u8) -> (usize, u64) {
         (usize::from(vector) / 64, 1 << (vector % 64))
     }
@@ -90,7 +94,7 @@ impl LocalApic {
     }
 
     /// Reborrow the original reception without a new vector entry.
-    pub fn current(&mut self) -> Option<Claim<'_>> {
+    pub fn current(&mut self) -> Option<Claim<'_, 'map>> {
         let Reception::Received(vector) = self.reception else {
             return None;
         };
@@ -104,7 +108,7 @@ impl LocalApic {
         self.reception
     }
 
-    fn reception_context(&self) -> Result<(), Failure> {
+    pub(super) fn reception_context(&self) -> Result<(), Failure> {
         if self.probe.base_for(self.hart) != Some(self.base) {
             return Err(Failure::Scope);
         }
@@ -127,7 +131,7 @@ impl LocalApic {
     /// vector entry. Retain the original binding and reserved reception
     /// slot until its software and hardware obligations have been settled.
     /// No other context manipulates the ISR, EOI or spurious-vector register.
-    pub unsafe fn receive(&mut self, vector: u8) -> Result<Claim<'_>, Failure> {
+    pub unsafe fn receive(&mut self, vector: u8) -> Result<Claim<'_, 'map>, Failure> {
         self.reception_context()?;
         if self.reception != Reception::Idle {
             return Err(Failure::Busy);
@@ -171,13 +175,36 @@ impl LocalApic {
         if self.reception != Reception::Unconfirmed(vector) {
             return Err(Failure::Busy);
         }
-        let bank = usize::from(vector) / 32;
-        let bit = 1 << (vector % 32);
-        let word = unsafe { self.window.read_u32(ISR + 16 * bank) }.expect("xAPIC ISR bank");
-        if word & bit != 0 {
+        if self.in_service(vector) {
             return Err(Failure::Unconfirmed);
         }
         self.reception = Reception::Idle;
         Ok(())
+    }
+
+    pub(super) fn in_service(&mut self, vector: u8) -> bool {
+        let bank = usize::from(vector) / 32;
+        let bit = 1 << (vector % 32);
+        let word = unsafe { self.window.read_u32(ISR + 16 * bank) }.expect("xAPIC ISR bank");
+        word & bit != 0
+    }
+
+    pub(super) fn reception_involves(&self, vector: u8) -> bool {
+        matches!(self.reception, Reception::Received(old) | Reception::Unconfirmed(old) if old == vector)
+    }
+}
+
+impl crate::metal::interrupt::claim::Sealed for Claim<'_, '_> {}
+
+impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_> {
+    type Error = Failure;
+
+    fn source_number(&self) -> u32 {
+        u32::from(self.vector())
+    }
+
+    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::Completion, Failure> {
+        use crate::metal::interrupt::Completion;
+        unsafe { self.complete() }.map(|()| Completion::Settled)
     }
 }

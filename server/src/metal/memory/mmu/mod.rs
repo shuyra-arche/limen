@@ -1,5 +1,12 @@
 pub mod aarch64;
 pub mod access;
+#[cfg(any(
+    test,
+    all(limen_target, any(target_arch = "aarch64", target_arch = "x86_64"))
+))]
+mod installation;
+#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "x86_64")))]
+pub use installation::{LocalInstall, LocalRoot};
 pub mod riscv64;
 pub mod x86_64;
 
@@ -38,3 +45,6 @@ use crate::metal::module::Contract;
 /// The entry takes no arguments and returns the base size in bytes, or zero
 /// when the active translation configuration is unsupported.
 pub const GEOMETRY: Contract<'static> = Contract::new(b"shuyra,mmu-geometry", 1, 1);
+
+mod retirement;
+pub use retirement::{Retirement, Unbind};

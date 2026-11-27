@@ -5,6 +5,7 @@
     "release"
   ],
   "sources": [
+    "server/src/metal/interrupt/absolute.rs",
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
     "server/src/metal/mod.rs",
@@ -53,7 +54,10 @@
     "server/src/metal/memory/mmu/riscv64/internal/pte.rs",
     "server/tests/target/support/riscv64/reception.rs",
     "server/src/metal/interrupt/riscv64/external/aplic/**",
-    "server/src/metal/interrupt/riscv64/external/mod.rs"
+    "server/src/metal/interrupt/riscv64/external/mod.rs",
+    "server/src/metal/chrono/clock.rs",
+    "server/src/metal/interrupt/claim.rs",
+    "server/tests/target/support/interrupt.rs"
   ],
   "run": {
     "kind": "qemu",

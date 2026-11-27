@@ -1,6 +1,11 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::interrupt::{AbsoluteTimer, Completion};
+
+#[path = "../../../../support/interrupt.rs"]
+mod consumer;
+
 use core::fmt::Write;
 use kernel::{
     entry::boot::{self, Boot},
@@ -60,18 +65,35 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     ));
     let mut timer = unsafe { Timer::admit_sbi(&counter, service, local) }.unwrap();
     assert_eq!(timer.state(), State::Inherited(None));
-    assert_eq!(timer.arm(1), Err(timer::Failure::Busy));
-    assert_eq!(timer.rearm(1), Err(timer::Failure::Busy));
+    assert_eq!(timer.arm_at(counter.deadline(1)), Err(timer::Failure::Busy));
+    assert_eq!(
+        unsafe { timer.rearm(counter.deadline(1)) },
+        Err(timer::Failure::Busy)
+    );
     assert_eq!(timer.due(), Err(timer::Failure::Busy));
     assert_eq!(timer.state(), State::Inherited(None));
-    timer.shut().unwrap();
+    unsafe { timer.shut() }.unwrap();
     assert_eq!(timer.state(), State::Idle);
     assert!(!timer.pending().unwrap());
     let hertz = u64::from(timebase.hertz());
     let now = timer.counter().unwrap();
-    assert_eq!(timer.arm(now), Err(timer::Failure::Range));
-    assert_eq!(timer.arm(u64::MAX), Err(timer::Failure::Range));
-    assert_eq!(timer.rearm(now + hertz), Err(timer::Failure::Busy));
+    let separate = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
+    assert_eq!(
+        timer.arm_at(separate.deadline(now + hertz)),
+        Err(timer::Failure::Scope)
+    );
+    assert_eq!(
+        timer.arm_at(counter.deadline(now)),
+        Err(timer::Failure::Range)
+    );
+    assert_eq!(
+        timer.arm_at(counter.deadline(u64::MAX)),
+        Err(timer::Failure::Range)
+    );
+    assert_eq!(
+        unsafe { timer.rearm(counter.deadline(now + hertz)) },
+        Err(timer::Failure::Busy)
+    );
     assert_eq!(timer.state(), State::Idle);
     for round in 0..2 {
         let now = timer.counter().unwrap();
@@ -79,37 +101,43 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
         let limit = now.checked_add(hertz).unwrap();
         if round == 0 {
             let later = limit.checked_add(hertz).unwrap();
-            timer.arm(later).unwrap();
+            timer.arm_at(counter.deadline(later)).unwrap();
             assert_eq!(timer.state(), State::Armed(later));
             assert!(!timer.due().unwrap());
-            assert!(matches!(timer.arm(target), Err(timer::Failure::Busy)));
-            assert_eq!(timer.rearm(now), Err(timer::Failure::Range));
+            assert!(matches!(
+                timer.arm_at(counter.deadline(target)),
+                Err(timer::Failure::Busy)
+            ));
+            assert_eq!(
+                unsafe { timer.rearm(counter.deadline(now)) },
+                Err(timer::Failure::Range)
+            );
             assert_eq!(timer.state(), State::Armed(later));
         }
         // Replace the old comparison directly. In round two this also clears
         // the pending interrupt from round one without an intervening shut.
-        timer.rearm(target).unwrap();
+        unsafe { timer.rearm(counter.deadline(target)) }.unwrap();
         assert_eq!(timer.state(), State::Armed(target));
         assert!(!timer.pending().unwrap());
         assert_eq!(unsafe { receive(limit) }, TIMER, "supervisor timer trap");
         assert!(timer.pending().unwrap());
         assert!(timer.due().unwrap());
     }
-    timer.shut().unwrap();
+    unsafe { timer.shut() }.unwrap();
     assert_eq!(timer.state(), State::Idle);
     assert!(!timer.pending().unwrap());
     assert_eq!(timer.due(), Err(timer::Failure::Busy));
-    timer.shut().unwrap();
+    unsafe { timer.shut() }.unwrap();
     assert_eq!(timer.state(), State::Idle);
     boot::write("PASS sbi-timer received=2 cleared=2 states=1 rejected=1\n");
 }
 
-fn uart_read(window: &mut DeviceWindow, register: usize) -> u8 {
+fn uart_read(window: &mut DeviceWindow<'_>, register: usize) -> u8 {
     // The test owns the QEMU ns16550a byte register window during this step.
     unsafe { window.read_u8(register) }.unwrap()
 }
 
-fn uart_write(window: &mut DeviceWindow, register: usize, value: u8) {
+fn uart_write(window: &mut DeviceWindow<'_>, register: usize, value: u8) {
     unsafe {
         window.write_u8(register, value).unwrap();
         core::arch::asm!("fence iorw, iorw", options(nostack));
@@ -240,8 +268,7 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
         uart_write(&mut serial, 1, 0);
         // The test has consumed this notification and disabled the actual
         // source. There is no separate software binding in this scenario.
-        unsafe { claim.settle() }.unwrap();
-        assert_eq!(unsafe { claim.settle() }, Err(aplic::Failure::Busy));
+        unsafe { consumer::finish(&mut claim, route.id(), Completion::Settled) };
     }
     assert!(direct.current().is_none());
     assert!(direct.claim().unwrap().is_none());

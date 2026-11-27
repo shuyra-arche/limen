@@ -4,6 +4,7 @@ use core::marker::PhantomData;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Cause {
+    Software,
     Timer,
     External,
 }
@@ -11,6 +12,7 @@ pub enum Cause {
 impl Cause {
     fn mask(self) -> usize {
         match self {
+            Self::Software => 1 << 1,
             Self::Timer => 1 << 5,
             Self::External => 1 << 9,
         }
@@ -111,6 +113,20 @@ mod native {
                 operations: &OPERATIONS,
                 local: PhantomData,
             }
+        }
+
+        #[cfg(limen_firmware = "sbi")]
+        pub(crate) unsafe fn admit_software(hart: u64) -> Result<Self, Error> {
+            let software = Self::new(hart, Cause::Software);
+            if !software.valid() || software.enabled() || software.pending() {
+                return Err(Error::Context);
+            }
+            Ok(software)
+        }
+
+        #[cfg(limen_firmware = "sbi")]
+        pub(crate) fn clear_software(&mut self) {
+            unsafe { asm!("csrci sip, 2", options(nostack)) };
         }
 
         pub(crate) fn pending(&self) -> bool {

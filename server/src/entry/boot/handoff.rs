@@ -1,6 +1,8 @@
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, FirmwareRegion, devicetree, physical::Exclusions};
 use crate::metal::platform::boot::handoff::Descriptions;
+#[cfg(limen_target)]
+use crate::metal::platform::boot::major::Admission;
 use core::ops::Range;
 use limen_treaty::model::PhysicalRange;
 
@@ -10,7 +12,7 @@ pub struct Boot<'a> {
     image: PhysicalRange,
     descriptions: &'a Descriptions<'a>,
     firmware_map: Option<FirmwareMap<'a>>,
-    #[cfg(limen_firmware = "sbi")]
+    #[cfg(all(limen_target, target_arch = "riscv64"))]
     reception: Option<crate::metal::interrupt::riscv64::internal::supervisor::Supervisor>,
 }
 
@@ -66,7 +68,7 @@ impl<'a> Boot<'a> {
     }
 
     /// Move the major Hart's exclusive reception lines out of the handoff.
-    #[cfg(limen_firmware = "sbi")]
+    #[cfg(all(limen_target, target_arch = "riscv64"))]
     pub fn take_reception(
         &mut self,
     ) -> Option<crate::metal::interrupt::riscv64::internal::supervisor::Supervisor> {
@@ -100,12 +102,24 @@ impl<'a> Boot<'a> {
         ))
     }
 
+    #[cfg(limen_target)]
+    pub(super) fn from_major(admission: Admission<'a>, descriptions: &'a Descriptions<'a>) -> Self {
+        Self::new(
+            admission.hart,
+            admission.facts.image,
+            admission.facts.firmware_map,
+            descriptions,
+            #[cfg(target_arch = "riscv64")]
+            admission.reception,
+        )
+    }
+
     pub(crate) fn new(
         hart: usize,
         image: PhysicalRange,
         firmware_map: Option<FirmwareMap<'a>>,
         descriptions: &'a Descriptions<'a>,
-        #[cfg(limen_firmware = "sbi")]
+        #[cfg(all(limen_target, target_arch = "riscv64"))]
         reception: crate::metal::interrupt::riscv64::internal::supervisor::Supervisor,
     ) -> Self {
         Self {
@@ -113,7 +127,7 @@ impl<'a> Boot<'a> {
             image,
             descriptions,
             firmware_map,
-            #[cfg(limen_firmware = "sbi")]
+            #[cfg(all(limen_target, target_arch = "riscv64"))]
             reception: Some(reception),
         }
     }

@@ -121,7 +121,7 @@ enum Reception {
 #[must_use]
 pub struct Direct<'a> {
     description: Description<'a>,
-    mapping: &'a mut DeviceWindow,
+    mapping: DeviceWindow<'a>,
     local: &'a mut LocalReception,
     barrier: Barrier,
     sources: [Source; SOURCE_LIMIT as usize + 1],
@@ -145,7 +145,7 @@ impl<'a> Direct<'a> {
     /// accesses the machine-level parent domain.
     pub unsafe fn admit(
         description: Description<'a>,
-        mapping: &'a mut DeviceWindow,
+        mapping: &'a mut DeviceWindow<'_>,
         local: &'a mut LocalReception,
         barrier: Barrier,
     ) -> Result<Self, Failure> {
@@ -159,7 +159,7 @@ impl<'a> Direct<'a> {
         }
         let mut instance = Self {
             description,
-            mapping,
+            mapping: mapping.reborrow(),
             local,
             barrier,
             sources: [Source::Vacant; SOURCE_LIMIT as usize + 1],
@@ -500,5 +500,20 @@ impl<'a> Direct<'a> {
         }
         self.state = State::Shut;
         Ok(())
+    }
+}
+
+impl crate::metal::interrupt::claim::Sealed for Claim<'_, '_> {}
+
+impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_> {
+    type Error = Failure;
+
+    fn source_number(&self) -> u32 {
+        self.source()
+    }
+
+    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::Completion, Failure> {
+        use crate::metal::interrupt::Completion;
+        unsafe { self.settle() }.map(|()| Completion::Settled)
     }
 }

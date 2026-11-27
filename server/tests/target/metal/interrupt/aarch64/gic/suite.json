@@ -5,6 +5,8 @@
     "release"
   ],
   "sources": [
+    "server/src/metal/interrupt/absolute.rs",
+    "server/tests/target/support/timer.rs",
     "server/src/entry/boot/**",
     "server/src/entry/mod.rs",
     "server/src/lib.rs",
@@ -28,12 +30,19 @@
     "server/src/metal/processor/hart/local/**",
     "server/src/metal/processor/hart/mod.rs",
     "server/src/metal/processor/mod.rs",
-    "server/tests/target/support/uefi/Cargo.lock",
     "server/tests/target/support/uefi/Cargo.toml",
     "server/tests/target/support/uefi/build.rs",
-    "server/tests/target/support/uefi/main.rs",
-    "server/tests/target/support/uefi/run.sh",
-    "server/src/metal/sync/**"
+    "server/src/metal/sync/**",
+    "server/tests/target/Cargo.toml",
+    "server/tests/target/Cargo.lock",
+    "server/tests/target/support/uefi/lib.rs",
+    "server/src/metal/platform/boot/minor.rs",
+    "server/src/metal/chrono/clock.rs",
+    "server/src/metal/chrono/mod.rs",
+    "server/tests/target/support/clock.rs",
+    "server/src/metal/chrono/aarch64/**",
+    "server/src/metal/interrupt/claim.rs",
+    "server/tests/target/support/interrupt.rs"
   ],
   "run": {
     "kind": "board-boot",
@@ -55,19 +64,18 @@
         "server/src/metal/memory/mmu/access/**",
         "server/src/metal/memory/mmu/mod.rs",
         "server/src/metal/interrupt/aarch64/gic/**",
-        "server/src/metal/interrupt/aarch64/gic/external/**",
         "server/src/metal/interrupt/aarch64/gic/mod.rs",
-        "server/src/metal/interrupt/aarch64/gic/external/mod.rs"
+        "server/src/metal/interrupt/aarch64/internal/timer/**"
       ]
     },
     "launch": {
       "virt": {
         "secondary_serial": true,
-        "features": [
-          "gic"
-        ],
         "expects": [
-          "PASS virt interrupt uart-primary=2 uart-secondary=2 shared-words=1 iar=4 eoi=4 dir=2 masked=1"
+          "PASS virt interrupt uart-primary=2 uart-secondary=2 shared-words=1 iar=4 eoi=4 dir=2 masked=1",
+          "PASS gicr frames=2 independent=1",
+          "PASS arm-virtual-timer programmed=1 ppi=1 eoi=1 retired=1 common=1",
+          "PASS arm-sgi target=1 claim=1 eoi=1 retired=1"
         ]
       }
     }

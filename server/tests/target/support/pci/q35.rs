@@ -1,8 +1,8 @@
 //! QEMU EDU endpoints at the PCI functions wired by the q35 launcher.
 use core::arch::{asm, x86_64::_mm_mfence};
-use core::sync::atomic::Ordering;
 use kernel::metal::memory::mmu::access::device::DeviceWindow;
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress};
+use uefi_fixture::q35;
 
 pub(super) const REQUESTER: u16 = 6 << 3;
 #[path = "edu.rs"]
@@ -12,7 +12,7 @@ const DMA_MASK: u32 = 0x0fff_ffff;
 
 fn select(device: u16, offset: u16) {
     unsafe {
-        super::io::write32(
+        q35::io::write32(
             0xcf8,
             0x8000_0000 | (u32::from(device) << 8) | u32::from(offset),
         )
@@ -50,14 +50,11 @@ impl Endpoint {
         // The retained q35 identity map covers the BAR assigned by OVMF. The only
         // owner of the endpoint after ExitBootServices is this single major CPU.
         let registers = unsafe { DeviceWindow::admit(range, InternalAddress::new(bar)) }.unwrap();
-        let hertz = super::TICKS_PER_US
-            .load(Ordering::Acquire)
-            .checked_mul(1_000_000)
-            .unwrap();
+        let hertz = q35::tsc_frequency();
         fn order() {
             unsafe { _mm_mfence() };
         }
-        Self(Edu::admit(registers, order, super::tsc, hertz, DMA_MASK))
+        Self(Edu::admit(registers, order, q35::tsc, hertz, DMA_MASK))
     }
 
     /// The caller retains initialized source storage with exclusive DMA ownership

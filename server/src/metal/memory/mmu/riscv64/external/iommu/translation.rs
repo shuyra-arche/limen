@@ -10,11 +10,15 @@ pub enum Access {
 }
 
 impl Profile {
+    pub(super) fn directory_capacity(&self) -> usize {
+        if self.extended_context { 64 } else { 128 }
+    }
+
     /// Locate a device context within a single-level 4 KiB directory.
-    pub fn context_words(&self, device: u32) -> Result<core::ops::Range<usize>, Error> {
+    pub(super) fn context_words(&self, device: u32) -> Result<core::ops::Range<usize>, Error> {
         let words = if self.extended_context { 8 } else { 4 };
         let index = device as usize;
-        if index >= 512 / words {
+        if index >= self.directory_capacity() {
             return Err(Error::Address);
         }
         Ok(index * words..(index + 1) * words)
@@ -34,7 +38,7 @@ impl Profile {
     /// The four common words of a device context. Use the hardware-selected
     /// DDT stride, zero all optional MSI fields, and publish the valid word
     /// last (or prepare the entire directory before installing its root).
-    pub fn context(&self, root: PhysicalAddress, pscid: u32) -> Result<[u64; 4], Error> {
+    pub(super) fn context(&self, root: PhysicalAddress, pscid: u32) -> Result<[u64; 4], Error> {
         if pscid >= 1 << 20 {
             return Err(Error::Address);
         }

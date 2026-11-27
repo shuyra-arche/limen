@@ -68,7 +68,7 @@ RUSTFLAGS=-Dwarnings cargo test --locked -p kernel --lib --target x86_64-unknown
 
 | Target | Source and receiver | Observed behavior |
 | --- | --- | --- |
-| RV64 virt | 16550 UART and Goldfish RTC → PLIC supervisor context; Sstc → supervisor timer line | Three external receptions preserve the shared enable word and original claim completion. Two timer deadlines use the real STIMECMP after taking over the inherited comparator. |
+| RV64 virt | 16550 UART and Goldfish RTC → PLIC supervisor contexts; Sstc → supervisor timer line | Two physical PLIC contexts admit independent routes. The boot Hart receives three interrupts and completes each original claim. Its two timer deadlines use the real STIMECMP after taking over the inherited comparator. |
 | RV64 virt with AIA | 16550 UART → APLIC direct IDC; SBI TIME programs the supervisor comparator | The interrupt guest exercises direct delivery, deadline replacement and hardware shutdown. |
 | x86_64 q35 | COM1 → I/O APIC → local xAPIC | The BSP receives a fixed vector through a guest IDT gate, checks the in-service vector, clears the device and sends the original EOI. |
 | AArch64 virt | Two PL011 UARTs → GICv3 Distributor → Group 1 CPU interface | The guest verifies independent source bits, exact IAR/EOI pairing and the active bit before and after split deactivation. |
@@ -222,7 +222,22 @@ test-only linker wrapper sets distinct `s0`–`s11` values for each saved
 frame and checks their restoration at the production switch boundary,
 including the call that resumes on the other Hart.
 
+## q35 Local APIC timer
+
+The [one-shot timer guest](target/metal/interrupt/x86_64/apic-timer/) settles the
+inherited legacy countdown on q35, then arms the original local timer, observes its leased vector through a temporary
+test IDT, and stops the source. The vector stays occupied until the original
+Local APIC in-service entry has been completed. It checks that the vector can
+be returned after EOI and that the stopped countdown emits no second entry.
+
 ## UEFI Kernel Unit execution
+
+Each UEFI scenario builds the guest next to its own `suite.json`. Its Cargo
+package owns both firmware entry and the kernel handoff. The guest calls the
+shared `uefi-fixture` library to prepare the board and retain the firmware
+inputs, then runs its own assertions. The target workspace shares a lockfile
+across these guests, and the launcher uses the suite's board configuration
+and evidence expectations to build and observe the selected guest.
 
 The [platform execution suite](target/basis/execution/platforms/) boots q35
 or Arm virt, attaches both entered Harts to the actual Room and runs a

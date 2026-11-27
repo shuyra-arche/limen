@@ -21,7 +21,7 @@ impl Ring {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Invalidate {
+pub(super) enum Invalidate {
     Stream(u32),
     StageTwo(u8),
 }
@@ -36,9 +36,21 @@ enum State {
     Failed(Option<Invalidate>),
 }
 
+impl State {
+    fn admits_command(self) -> Result<(), Error> {
+        match self {
+            Self::Starting | Self::Ready => Ok(()),
+            Self::Issued(_) | Self::Shutting => Err(Error::Busy),
+            Self::Failed(_) => Err(Error::Unconfirmed),
+            Self::Shut => Err(Error::Active),
+        }
+    }
+}
+
 pub(super) struct Queue {
     ring: &'static mut Ring,
     physical: PhysicalAddress,
+    generation: u64,
     retained_control: u32,
     sid_bits: u32,
     producer: u32,
@@ -57,9 +69,10 @@ impl Queue {
     /// attributes.
     /// Retain the ring and hardware obligations even if the observer is lost.
     pub(super) unsafe fn prepare(
-        window: &mut DeviceWindow,
+        window: &mut DeviceWindow<'_>,
         ring: &'static mut Ring,
         physical: PhysicalAddress,
+        generation: u64,
     ) -> Result<Self, Error> {
         let idr1 = unsafe { read(window, 4)? };
         let address = physical.get();
@@ -87,11 +100,21 @@ impl Queue {
         Ok(Self {
             ring,
             physical,
+            generation,
             retained_control,
             sid_bits: idr1 & 63,
             producer: 0,
             state: State::Starting,
         })
+    }
+
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(super) fn open_generation(&self) -> Result<u64, Error> {
+        self.state.admits_command()?;
+        Ok(self.generation)
     }
 
     pub(super) fn physical(&self) -> PhysicalAddress {
@@ -102,7 +125,7 @@ impl Queue {
     /// readback blocks further admission while that storage remains held.
     pub(super) fn start(
         &mut self,
-        window: &mut DeviceWindow,
+        window: &mut DeviceWindow<'_>,
         order: &DeviceOrder,
     ) -> Result<(), Error> {
         let base = self.physical.get() | u64::from(LOG_ENTRIES);
@@ -119,6 +142,11 @@ impl Queue {
             .map_err(|_| Error::Window)
     }
 
+    pub(super) fn into_storage(self) -> (&'static mut Ring, PhysicalAddress) {
+        assert_eq!(self.state, State::Shut);
+        (self.ring, self.physical)
+    }
+
     pub(super) fn unsettled(&self) -> Option<Invalidate> {
         match self.state {
             State::Issued(operation) | State::Failed(Some(operation)) => Some(operation),
@@ -131,7 +159,11 @@ impl Queue {
         Error::Rejected
     }
 
-    fn healthy(&mut self, window: &mut DeviceWindow, order: &DeviceOrder) -> Result<u32, Error> {
+    fn healthy(
+        &mut self,
+        window: &mut DeviceWindow<'_>,
+        order: &DeviceOrder,
+    ) -> Result<u32, Error> {
         order.fence();
         let errors = unsafe { read(window, GLOBAL_ERROR)? ^ read(window, GLOBAL_ERROR_ACK)? };
         let consumer = unsafe { read(window, CONSUMER)? };
@@ -150,7 +182,7 @@ impl Queue {
     /// CMD_SYNC without an MSI, then ring the producer doorbell only once.
     pub(super) fn submit(
         &mut self,
-        window: &mut DeviceWindow,
+        window: &mut DeviceWindow<'_>,
         order: &DeviceOrder,
         operation: Invalidate,
     ) -> Result<(), Error> {
@@ -181,7 +213,7 @@ impl Queue {
     /// Only consumption through this batch's CMD_SYNC completes the operation.
     pub(super) fn observe(
         &mut self,
-        window: &mut DeviceWindow,
+        window: &mut DeviceWindow<'_>,
         order: &DeviceOrder,
     ) -> Result<Invalidate, Error> {
         let State::Issued(operation) = self.state else {
@@ -197,7 +229,7 @@ impl Queue {
 
     pub(super) fn shut(
         &mut self,
-        window: &mut DeviceWindow,
+        window: &mut DeviceWindow<'_>,
         order: &DeviceOrder,
     ) -> Result<(), Error> {
         if matches!(self.state, State::Starting | State::Ready) {
@@ -217,3 +249,7 @@ impl Queue {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../tests/metal/memory/mmu/aarch64/external/smmu/queue.rs"]
+mod tests;

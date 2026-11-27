@@ -137,7 +137,7 @@ fn prove_fault(controller: &mut Controller<'_>, requester: u16, reason: u8) {
     assert_eq!(controller.primary_fault().unwrap(), None);
 }
 
-pub(super) fn check(unit: RemappingUnit<'_>, registers: &mut DeviceWindow) {
+pub(super) fn check(unit: RemappingUnit<'_>, registers: &mut DeviceWindow<'_>) {
     let mut primary = Endpoint::open();
     let mut secondary = Endpoint::open_at(SECOND);
     let first_word = (&raw mut PRIMARY_PAYLOAD).cast::<u32>();

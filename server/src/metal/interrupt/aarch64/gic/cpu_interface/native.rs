@@ -1,0 +1,240 @@
+//! Native Group 1 acknowledge and completion on the original PE.
+
+use core::arch::asm;
+
+use super::super::{
+    reception::{Failure, Mode, State},
+    redistributor::{Frame, Ppi},
+    sgi::{Phase, Sgi},
+};
+use crate::metal::processor::hart::aarch64::{native::boot_identity, status};
+
+pub(in crate::metal::interrupt::aarch64::gic) fn local(affinity: usize) -> bool {
+    let el: usize;
+    let mask: usize;
+    unsafe {
+        asm!("mrs {}, CurrentEL", "mrs {}, DAIF", out(reg) el, out(reg) mask, options(nostack, nomem))
+    };
+    status::el1(el) && mask & 0xc0 == 0xc0 && boot_identity() == affinity
+}
+
+/// Inspect the executing PE's architectural GIC CPU Interface feature.
+///
+/// # Safety
+/// Run at an exception level allowed to read ID_AA64PFR0_EL1.
+pub unsafe fn available() -> bool {
+    let features: u64;
+    unsafe { asm!("mrs {}, ID_AA64PFR0_EL1", out(reg) features, options(nomem, nostack)) };
+    super::system_register_interface(features)
+}
+
+fn mode() -> Option<Mode> {
+    let sre: u64;
+    unsafe { asm!("mrs {}, ICC_SRE_EL1", out(reg) sre, options(nostack, nomem)) };
+    if sre & 1 == 0 {
+        return None;
+    }
+    let control: u64;
+    let group: u64;
+    unsafe {
+        asm!("mrs {}, ICC_CTLR_EL1", "mrs {}, ICC_IGRPEN1_EL1", out(reg) control, out(reg) group, options(nostack, nomem))
+    };
+    (group & 1 != 0).then_some(if control & (1 << 1) == 0 {
+        Mode::Combined
+    } else {
+        Mode::Split
+    })
+}
+
+/// One preallocated reception slot for this CPU Interface and its live frame.
+#[must_use]
+pub struct CpuInterface<'map> {
+    frame: Frame<'map>,
+    mode: Mode,
+    state: State,
+}
+
+impl<'map> CpuInterface<'map> {
+    /// # Safety
+    /// The executing Non-secure PE owns the physical Group 1 interface and
+    /// a non-nested, masked reception interval. Higher ELs grant system
+    /// register access. Keep delivery mode, priority stack, isolation and
+    /// Redistributor power stable until all claims settle. Source owners
+    /// retain binding across IAR. Route only SGIs with active state here.
+    pub unsafe fn admit(mut frame: Frame<'map>) -> Result<Self, (Frame<'map>, Failure)> {
+        if !local(frame.affinity()) || !unsafe { available() } {
+            return Err((frame, Failure::Scope));
+        }
+        if !frame.awake() {
+            return Err((frame, Failure::Busy));
+        }
+        let Some(mode) = mode() else {
+            return Err((frame, Failure::Scope));
+        };
+        Ok(Self {
+            frame,
+            mode,
+            state: State::Empty,
+        })
+    }
+
+    pub fn state(&self) -> State {
+        self.state
+    }
+
+    /// Return the original frame after all local receptions settle.
+    pub fn release(self) -> Result<Frame<'map>, Self> {
+        if self.state == State::Empty {
+            Ok(self.frame)
+        } else {
+            Err(self)
+        }
+    }
+
+    /// Open the original SGI for this live Group 1 interface.
+    ///
+    /// # Safety
+    /// This source is reserved on the actual originating/receiving PEs.
+    /// Exclude old or competing use and retain the destination and group
+    /// configuration until the exact Sgi has completed.
+    pub unsafe fn reserve_sgi(&mut self, intid: u8, priority: u8) -> Result<Sgi<'map>, Failure> {
+        self.context()?;
+        if self.state != State::Empty {
+            return Err(Failure::Busy);
+        }
+        self.frame
+            .prepare_signal(intid, priority)
+            .map_err(|error| match error {
+                super::super::redistributor::Failure::Busy => Failure::Busy,
+                _ => Failure::Scope,
+            })
+    }
+
+    /// Deliver once to the ready, independently owned destination PE.
+    pub fn send_sgi(&mut self, signal: &mut Sgi<'_>) -> Result<(), Failure> {
+        self.context()?;
+        if self.frame.domain() != signal.domain || self.frame.physical() == signal.physical {
+            return Err(Failure::Scope);
+        }
+        if signal.phase != Phase::Prepared {
+            return Err(Failure::Busy);
+        }
+        signal.phase = Phase::Sending;
+        unsafe {
+            asm!("dsb ishst", "msr ICC_SGI1R_EL1, {}", "isb", in(reg) signal.address, options(nostack))
+        };
+        signal.phase = Phase::Sent;
+        Ok(())
+    }
+
+    pub(in crate::metal::interrupt::aarch64) fn admits_ppi(&mut self, ppi: &Ppi<'_>) -> bool {
+        self.state == State::Empty && self.context().is_ok() && self.frame.ready_ppi(ppi)
+    }
+
+    fn context(&self) -> Result<(), Failure> {
+        if !local(self.frame.affinity()) || mode() != Some(self.mode) {
+            return Err(Failure::Scope);
+        }
+        Ok(())
+    }
+
+    /// Reborrow the exact outstanding claim after a temporary borrow ends.
+    pub fn claim(&mut self) -> Option<Claim<'_, 'map>> {
+        let id = self.state.claim()?;
+        Some(Claim { owner: self, id })
+    }
+
+    pub fn receive(&mut self) -> Result<Option<Claim<'_, 'map>>, Failure> {
+        self.context()?;
+        self.state.begin_read()?;
+        let raw: u64;
+        unsafe { asm!("mrs {}, ICC_IAR1_EL1", "dsb sy", out(reg) raw, options(nostack)) };
+        self.state.finish_read(raw)?;
+        Ok(self.claim())
+    }
+}
+
+/// Excludes another acknowledgement while this borrow can complete an EOI.
+#[must_use]
+pub struct Claim<'slot, 'map> {
+    owner: &'slot mut CpuInterface<'map>,
+    id: u32,
+}
+
+impl Claim<'_, '_> {
+    pub fn intid(&self) -> u32 {
+        self.id
+    }
+
+    /// Complete precisely the SGI sent to this destination and retain a
+    /// retirement witness in that original Sgi.
+    pub fn complete_sgi(&mut self, signal: &mut Sgi<'_>) -> Result<(), Failure> {
+        if signal.phase != Phase::Sent
+            || self.owner.frame.physical() != signal.physical
+            || self.owner.frame.domain() != signal.domain
+            || self.id != u32::from(signal.id)
+        {
+            return Err(Failure::Scope);
+        }
+        if self.owner.state == State::Claimed(self.id) {
+            // A sent SGI is an internally controlled edge with no separate
+            // source-level mask or level deassertion obligation.
+            unsafe { self.drop_priority()? };
+        }
+        if self.owner.state == State::DroppedPriority(self.id) {
+            unsafe { self.deactivate()? };
+        }
+        if self.owner.state != State::Empty {
+            return Err(Failure::Busy);
+        }
+        signal.phase = Phase::Settled;
+        Ok(())
+    }
+
+    /// # Safety
+    /// The original claim is durably associated or quarantined. The owner
+    /// permits priority drop and, in combined mode, deactivation now.
+    pub unsafe fn drop_priority(&mut self) -> Result<(), Failure> {
+        self.owner.context()?;
+        let id = self.id;
+        self.owner.state.begin_priority_drop(id)?;
+        unsafe {
+            asm!("dsb sy", "msr ICC_EOIR1_EL1, {}", "isb", in(reg) u64::from(id), options(nostack))
+        };
+        self.owner.state.finish_priority_drop(id, self.owner.mode)
+    }
+
+    /// # Safety
+    /// The original source is ready for deactivation. For level interrupts
+    /// its assertion is cleared or its original route is durably masked.
+    pub unsafe fn deactivate(&mut self) -> Result<(), Failure> {
+        self.owner.context()?;
+        let id = self.id;
+        self.owner.state.begin_deactivation(id)?;
+        unsafe {
+            asm!("dsb sy", "msr ICC_DIR_EL1, {}", "isb", in(reg) u64::from(id), options(nostack))
+        };
+        self.owner.state.finish_deactivation(id)
+    }
+}
+
+impl crate::metal::interrupt::claim::Sealed for Claim<'_, '_> {}
+
+impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_> {
+    type Error = Failure;
+
+    fn source_number(&self) -> u32 {
+        self.intid()
+    }
+
+    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::Completion, Failure> {
+        use crate::metal::interrupt::Completion;
+        if self.owner.state == State::Claimed(self.id) {
+            unsafe { self.drop_priority() }?;
+            if self.owner.state == State::Empty {
+                return Ok(Completion::Settled);
+            }
+        }
+        unsafe { self.deactivate() }.map(|()| Completion::Settled)
+    }
+}

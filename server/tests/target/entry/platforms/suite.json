@@ -37,14 +37,13 @@
     "server/tests/target/entry/foundation.rs",
     "server/tests/target/entry/memory.rs",
     "server/tests/target/entry/synchronization.rs",
-    "server/tests/target/support/uefi/Cargo.lock",
     "server/tests/target/support/uefi/Cargo.toml",
     "server/tests/target/support/uefi/build.rs",
-    "server/tests/target/support/uefi/main.rs",
-    "server/tests/target/support/uefi/ram.rs",
-    "server/tests/target/support/uefi/run.sh",
     "server/src/basis/mod.rs",
-    "server/src/basis/pend.rs"
+    "server/src/basis/pend.rs",
+    "server/tests/target/Cargo.toml",
+    "server/tests/target/Cargo.lock",
+    "server/tests/target/support/uefi/lib.rs"
   ],
   "run": {
     "kind": "board-boot",
@@ -73,7 +72,7 @@
         "server/tests/target/support/uefi/devicetree.rs",
         "server/tests/target/support/uefi/pl011.rs",
         "server/src/metal/interrupt/aarch64/gic/**",
-        "server/src/metal/interrupt/aarch64/internal/timer.rs",
+        "server/src/metal/interrupt/aarch64/internal/timer/**",
         "server/src/metal/interrupt/aarch64/mod.rs",
         "server/src/metal/interrupt/aarch64/internal/mod.rs",
         "server/src/metal/interrupt/mod.rs",
@@ -83,9 +82,6 @@
     },
     "launch": {
       "q35": {
-        "features": [
-          "platform-boot"
-        ],
         "expects": [
           "PASS firmware-discovery q35 acpi=1 madt=1 routes=1 retained=1",
           "PASS q35 major=1 minor=1 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1",
@@ -99,9 +95,6 @@
         ]
       },
       "virt": {
-        "features": [
-          "platform-boot"
-        ],
         "expects": [
           "PASS firmware-discovery virt dtb=1 psci=1 affinity=1 gic=1 timer=1",
           "PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1 ram=1 reconciled=1",

@@ -1,7 +1,7 @@
 use super::{Controls, Format};
-use crate::metal::memory::mmu::SwitchError;
+use crate::metal::memory::mmu::{LocalRoot, SwitchError};
 use crate::metal::processor::hart::local::try_current_hart;
-use core::{arch::asm, marker::PhantomData};
+use core::arch::asm;
 use limen_treaty::model::PhysicalAddress;
 
 impl Controls {
@@ -35,59 +35,28 @@ impl Controls {
     }
 }
 
-/// Qualified exclusive access to the selected processor's four-level CR3.
-/// The control snapshots identify roots, while their actual storage stays
-/// with the mapping owner.
-#[must_use]
-pub struct Translation {
-    hart: usize,
-    format: Format,
-    original: Controls,
-    approved: Controls,
-    pending: Option<Controls>,
-    local: PhantomData<*mut ()>,
+/// Bind this Hart's four-level, untagged CR3 installation authority.
+///
+/// # Safety
+/// The caller owns the local root registers exclusively, with physical
+/// address modifiers excluded. Keep that ownership and all affected
+/// table storage live through actual retirement.
+pub unsafe fn admit_root(hart: usize) -> Result<(LocalRoot, Format), SwitchError> {
+    NativeRoot::check(hart)?;
+    let initial = unsafe { Controls::current() };
+    let format = initial.local_format().ok_or(SwitchError::Scope)?;
+    Ok((
+        LocalRoot::bind(hart, NativeRoot { format }, initial),
+        format,
+    ))
 }
 
-impl Translation {
-    /// Admit the actual translation profile on the intended Hart.
-    ///
-    /// # Safety
-    /// The caller controls the local translation registers exclusively and
-    /// keeps the active and any candidate roots live through their actual
-    /// retirement. Exclude physical address modifiers. Keep this authority
-    /// on the same processor and retain it while any effect is uncertain.
-    pub unsafe fn admit(hart: usize) -> Result<Self, SwitchError> {
-        Self::check(hart)?;
-        let original = unsafe { Controls::current() };
-        let format = original.local_format().ok_or(SwitchError::Scope)?;
-        Ok(Self {
-            hart,
-            format,
-            original,
-            approved: original,
-            pending: None,
-            local: PhantomData,
-        })
-    }
+pub(in crate::metal::memory::mmu) struct NativeRoot {
+    format: Format,
+}
 
-    pub fn format(&self) -> Format {
-        self.format
-    }
-
-    pub fn original(&self) -> Controls {
-        self.original
-    }
-
-    pub fn current(&self) -> Option<Controls> {
-        self.pending.is_none().then_some(self.approved)
-    }
-
-    /// The last verified controls and the proposed controls of an uncertain write.
-    pub fn pending(&self) -> Option<(Controls, Controls)> {
-        self.pending.map(|next| (self.approved, next))
-    }
-
-    fn check(hart: usize) -> Result<(), SwitchError> {
+impl NativeRoot {
+    pub(in crate::metal::memory::mmu) fn check(hart: usize) -> Result<(), SwitchError> {
         use crate::metal::processor::hart::x86_64::status;
         let flags: usize;
         unsafe { asm!("pushfq", "pop {}", out(reg) flags) };
@@ -99,59 +68,26 @@ impl Translation {
         Ok(())
     }
 
-    /// Install a plain WB root and invalidate this processor's non-global
-    /// translations. Success covers no other processor or outstanding access.
-    ///
-    /// # Safety
-    /// Supply a live and visible four-level root preserving every live
-    /// code, data, stack and exception path. Retain the old tables and
-    /// their remaining obligations.
-    pub unsafe fn switch(
-        &mut self,
-        current: Controls,
+    pub(in crate::metal::memory::mmu) fn root(&self, controls: Controls) -> PhysicalAddress {
+        PhysicalAddress::new(controls.cr3 as u64)
+    }
+
+    pub(in crate::metal::memory::mmu) fn with_root(
+        &self,
+        controls: Controls,
         root: PhysicalAddress,
-    ) -> Result<(), SwitchError> {
-        Self::check(self.hart)?;
-        let previous = self.current().ok_or(SwitchError::Unconfirmed)?;
-        if !root.get().is_multiple_of(4096) || root.get() >= (1 << self.format.physical_bits) {
-            return Err(SwitchError::Scope);
-        }
-        if previous != current || unsafe { Controls::current() } != previous {
-            return Err(SwitchError::Current);
-        }
-        let next = Controls {
-            cr3: root.get() as usize,
-            ..previous
-        };
-        self.pending = Some(next);
-        unsafe { self.install(next) }
+    ) -> Option<Controls> {
+        (root.get().is_multiple_of(4096) && root.get() < 1 << self.format.physical_bits).then_some(
+            Controls {
+                cr3: root.get() as usize,
+                ..controls
+            },
+        )
     }
 
-    /// Repeat the retained switch and its native maintenance on the same Hart.
-    ///
-    /// # Safety
-    /// Preserve the original switch's ownership, mappings and ordering
-    /// requirements for both recorded roots. No other effect may have used
-    /// this authority since the uncertain write.
-    pub unsafe fn retry(&mut self) -> Result<(), SwitchError> {
-        Self::check(self.hart)?;
-        let next = self.pending.ok_or(SwitchError::Current)?;
-        let observed = unsafe { Controls::current() };
-        if observed != self.approved && observed != next {
-            return Err(SwitchError::Unconfirmed);
-        }
-        unsafe { self.install(next) }
-    }
-
-    unsafe fn install(&mut self, next: Controls) -> Result<(), SwitchError> {
+    pub(in crate::metal::memory::mmu) unsafe fn install(&self, next: Controls) {
         unsafe {
             asm!("mov cr3, {next}", next = in(reg) next.cr3, options(nostack, preserves_flags));
         }
-        if unsafe { Controls::current() } != next {
-            return Err(SwitchError::Unconfirmed);
-        }
-        self.approved = next;
-        self.pending = None;
-        Ok(())
     }
 }

@@ -163,7 +163,7 @@ fn controller_discovery_rejects_foreign_cpu_scope() {
 
 #[test]
 fn plic_supervisor_route_preserves_holes_and_rejects_ambiguous_contexts() {
-    use kernel::metal::interrupt::riscv64::external::plic::Route;
+    use kernel::metal::interrupt::riscv64::external::plic::{Destination, Route, Source};
     for (targets, index) in [
         (vec![1, u32::MAX, 1, 9], Ok(1)),
         (vec![1, 11, 1, 9], Ok(1)),
@@ -204,7 +204,13 @@ fn plic_supervisor_route_preserves_holes_and_rejects_ambiguous_contexts() {
         let cpus = RiscvCpus::new(tree).unwrap().unwrap();
         let device = tree.find_path(b"/uart").unwrap().unwrap();
         assert_eq!(
-            Route::read(&tree, &cpus, device, 3).map(|r| r.context()),
+            Source::read(&tree, device).and_then(|source| {
+                assert_eq!(source.number(), 10);
+                assert_eq!(source.device(), device.id());
+                let target = Destination::read(&tree, &cpus, source.controller(), 3)?;
+                Route::connect(source, target)?;
+                Ok(target.number())
+            }),
             index
         );
     }

@@ -28,12 +28,14 @@
     "server/src/metal/processor/hart/local/**",
     "server/src/metal/processor/hart/mod.rs",
     "server/src/metal/processor/mod.rs",
-    "server/tests/target/support/uefi/Cargo.lock",
     "server/tests/target/support/uefi/Cargo.toml",
     "server/tests/target/support/uefi/build.rs",
-    "server/tests/target/support/uefi/main.rs",
-    "server/tests/target/support/uefi/run.sh",
-    "server/src/metal/sync/**"
+    "server/src/metal/sync/**",
+    "server/tests/target/Cargo.toml",
+    "server/tests/target/Cargo.lock",
+    "server/tests/target/support/uefi/lib.rs",
+    "server/src/metal/memory/mmu/installation.rs",
+    "server/tests/target/support/paging/installation.rs"
   ],
   "run": {
     "kind": "board-boot",
@@ -52,14 +54,12 @@
         "server/src/metal/memory/mmu/aarch64/internal/**",
         "server/src/metal/memory/mmu/aarch64/mod.rs",
         "server/src/metal/memory/mmu/mod.rs",
-        "server/tests/target/support/paging/**"
+        "server/tests/target/support/paging/mod.rs",
+        "server/tests/target/support/paging/installation.rs"
       ]
     },
     "launch": {
       "virt": {
-        "features": [
-          "paging"
-        ],
         "expects": [
           "PASS internal paging switched=1 alias=1 restored=1"
         ]

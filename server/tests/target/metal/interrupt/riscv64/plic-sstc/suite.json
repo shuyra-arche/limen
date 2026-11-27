@@ -5,6 +5,8 @@
     "release"
   ],
   "sources": [
+    "server/src/metal/interrupt/absolute.rs",
+    "server/tests/target/support/timer.rs",
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
     "server/src/metal/mod.rs",
@@ -51,15 +53,19 @@
     "server/src/metal/interrupt/riscv64/external/plic/**",
     "server/src/metal/interrupt/riscv64/external/mod.rs",
     "server/tests/target/support/riscv64/reception.rs",
-    "server/src/metal/interrupt/riscv64/internal/timer/**"
+    "server/src/metal/interrupt/riscv64/internal/timer/**",
+    "server/src/metal/chrono/clock.rs",
+    "server/tests/target/support/clock.rs",
+    "server/src/metal/interrupt/claim.rs",
+    "server/tests/target/support/interrupt.rs"
   ],
   "run": {
     "kind": "qemu",
     "kernel": "rv64-plic-sstc",
-    "harts": 1,
+    "harts": 2,
     "expects": [
-      "PASS plic uart=2 rtc=1 complete=3 shared-enable=1 duplicate=0 restored=1",
-      "PASS sstc expired=2 replaced=1 shut=1"
+      "PASS plic uart=2 rtc=1 complete=3 contexts=2 shared-enable=1 duplicate=0 restored=1",
+      "PASS sstc expired=2 replaced=1 shut=1 common=1"
     ],
     "imports": [
       "target/support/riscv64"

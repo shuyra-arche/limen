@@ -154,17 +154,19 @@ impl Probe {
 /// Exclusive local xAPIC register owner, including ICR and EOI.
 /// Drop neither retires a device mapping nor settles an uncertain send.
 #[must_use]
-pub struct LocalApic {
+pub struct LocalApic<'map> {
     base: Base,
     hart: usize,
-    window: DeviceWindow,
+    window: DeviceWindow<'map>,
     probe: Probe,
     state: State,
     reception: Reception,
     vectors: [u64; 4],
+    timer: timer::Slot,
+    ipi: Option<IpiTarget>,
 }
 
-impl LocalApic {
+impl<'map> LocalApic<'map> {
     /// # Safety
     /// The actual caller has exclusive control of this Hart's local APIC,
     /// including both ICR halves; the supplied page is the live UC mapping.
@@ -174,9 +176,9 @@ impl LocalApic {
     pub unsafe fn admit(
         hart: usize,
         madt: Madt<'_>,
-        mut window: DeviceWindow,
+        mut window: DeviceWindow<'map>,
         probe: Probe,
-    ) -> Result<Self, (DeviceWindow, Failure)> {
+    ) -> Result<Self, (DeviceWindow<'map>, Failure)> {
         let Some(base) = probe.base_for(hart) else {
             return Err((window, Failure::Scope));
         };
@@ -200,9 +202,12 @@ impl LocalApic {
             state: State::Idle,
             reception: Reception::Idle,
             vectors: [0; 4],
+            timer: timer::Slot::Unobserved,
+            ipi: None,
         })
     }
 
+    /// Retained state of the separate INIT/SIPI startup sequence.
     pub fn state(&self) -> State {
         self.state
     }
@@ -214,7 +219,11 @@ impl LocalApic {
 
     /// Borrow the exact controller for the requested target and page.
     /// Preparation neither writes ICR nor establishes target arrival.
-    pub fn prepare(&mut self, hart: usize, page: PhysicalAddress) -> Result<Prepared<'_>, Failure> {
+    pub fn prepare(
+        &mut self,
+        hart: usize,
+        page: PhysicalAddress,
+    ) -> Result<Prepared<'_, 'map>, Failure> {
         self.preflight(hart, page)?;
         Ok(Prepared {
             controller: self,
@@ -230,7 +239,7 @@ impl LocalApic {
         {
             return Err(Failure::Scope);
         }
-        if self.state != State::Idle {
+        if self.state != State::Idle || self.ipi.is_some() {
             return Err(Failure::Busy);
         }
         Ok(())
@@ -248,6 +257,10 @@ impl LocalApic {
 
     fn send(&mut self, effect: Effect, destination: Destination, command: Command) {
         self.state = State::Sending(effect);
+        self.write_icr(destination, command.bits());
+    }
+
+    fn write_icr(&mut self, destination: Destination, command: u32) {
         // The UC mapping and exclusive ICR ownership order the upper half
         // before the lower write that causes the actual send.
         unsafe {
@@ -255,7 +268,7 @@ impl LocalApic {
                 .write_u32(ICR_HIGH, destination.bits())
                 .expect("ICR destination geometry");
             self.window
-                .write_u32(ICR_LOW, command.bits())
+                .write_u32(ICR_LOW, command)
                 .expect("ICR command geometry");
         }
     }
@@ -303,17 +316,22 @@ impl LocalApic {
 
 mod reception;
 pub use reception::{Claim, Reception, VectorLease};
+mod timer;
+pub use timer::{Countdown, Divider, TimerState};
+
+mod ipi;
+pub use ipi::{IpiSend, IpiTarget};
 
 /// An exclusive, uncommitted startup preparation for one exact target and page.
 /// Dropping it before sending releases the borrow without a hardware effect.
 #[must_use]
-pub struct Prepared<'a> {
-    controller: &'a mut LocalApic,
+pub struct Prepared<'a, 'map> {
+    controller: &'a mut LocalApic<'map>,
     hart: usize,
     page: PhysicalAddress,
 }
 
-impl Prepared<'_> {
+impl Prepared<'_, '_> {
     /// # Safety
     /// The original target is inactive and exclusively owned, and its
     /// prepared trampoline and entry have been published. Preserve their

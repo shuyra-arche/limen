@@ -6,7 +6,7 @@ use kernel::metal::{
     memory::mmu::{
         access::device::DeviceWindow,
         x86_64::external::amdvi::{
-            Binding, Completion, Context, Controller, Error, Queue, Storage, Table,
+            Admissions, Binding, Completion, Context, Controller, Error, Queue, Storage, Table,
         },
     },
     platform::description::acpi::Ivhd,
@@ -71,9 +71,18 @@ pub(super) fn check(unit: Ivhd<'_>) {
             completion: (&mut *completion, pin(completion)),
         }
     };
-    let mut controller =
-        unsafe { Controller::admit(unit, &mut window, storage, &mut *(&raw mut BINDINGS)) }
-            .unwrap();
+    // The fixture owns just this physical unit through guest shutdown.
+    let mut admissions = Admissions::new(unit);
+    let mut controller = unsafe {
+        Controller::admit(
+            unit,
+            &mut window,
+            storage,
+            &mut *(&raw mut BINDINGS),
+            &mut admissions,
+        )
+    }
+    .unwrap();
     let result = controller.install_blocked();
     settle(&mut controller, result);
     unsafe {

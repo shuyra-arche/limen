@@ -1,106 +1,38 @@
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure",
-    feature = "ioapic"
-))]
 use core::arch::asm;
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure"
-))]
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use kernel::entry::boot;
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure",
-    feature = "ioapic"
-))]
 use kernel::metal::{
     interrupt::x86_64::internal::apic::{self, LocalApic, Probe},
     memory::mmu::access::device::DeviceWindow,
 };
 use limen_treaty::model::PhysicalAddress;
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure",
-    feature = "ioapic"
-))]
 use limen_treaty::model::{ByteLength, InternalAddress};
 use uefi::Status;
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure"
-))]
 use uefi::mem::memory_map::MemoryMap;
 
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure"
-))]
 static OLD_IDT: AtomicUsize = AtomicUsize::new(0);
 
-pub(super) fn hart() -> usize {
+pub fn hart() -> usize {
     (core::arch::x86_64::__cpuid(1).ebx >> 24) as usize
 }
 
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure"
-))]
 use core::{ptr::NonNull, sync::atomic::AtomicPtr};
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure",
-    feature = "vtd",
-    feature = "amdvi"
-))]
 use core::{sync::atomic::AtomicU64, time::Duration};
 use uefi::proto::pi::mp::MpServices;
 
-#[cfg(feature = "apic-failure")]
-#[path = "../../metal/interrupt/x86_64/apic-failure/scenario.rs"]
-mod failure;
 #[path = "io.rs"]
-mod io;
-#[cfg(feature = "ioapic")]
-#[path = "../../metal/interrupt/x86_64/ioapic/scenario.rs"]
-mod serial_irq;
-#[cfg(feature = "apic-failure")]
-pub(super) use failure::check_failure;
+pub mod io;
 
-#[cfg(feature = "amdvi")]
-#[path = "../../metal/memory/mmu/x86_64/amdvi/scenario.rs"]
-mod amdvi;
-#[cfg(any(feature = "amdvi", feature = "vtd"))]
-#[path = "../pci/q35.rs"]
-mod edu;
-#[cfg(feature = "vtd")]
-#[path = "../../metal/memory/mmu/x86_64/vtd/scenario.rs"]
-mod vtd;
-
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure"
-))]
 static TRAMPOLINE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure",
-    feature = "vtd",
-    feature = "amdvi"
-))]
 static TICKS_PER_US: AtomicU64 = AtomicU64::new(0);
+
+pub fn tsc_frequency() -> u64 {
+    TICKS_PER_US
+        .load(Ordering::Acquire)
+        .checked_mul(1_000_000)
+        .unwrap()
+}
 
 pub(super) static SERVICES: boot::Services = boot::Services {
     output: Some(|byte| {
@@ -110,14 +42,7 @@ pub(super) static SERVICES: boot::Services = boot::Services {
     reset: Some(|success| unsafe { io::write32(0xf4, if success { 0x10 } else { 0x11 }) }),
 };
 
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure",
-    feature = "vtd",
-    feature = "amdvi"
-))]
-fn tsc() -> u64 {
+pub fn tsc() -> u64 {
     use core::arch::x86_64::{_mm_lfence, _rdtsc};
     unsafe {
         _mm_lfence();
@@ -125,12 +50,7 @@ fn tsc() -> u64 {
     }
 }
 
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure"
-))]
-fn delay(microseconds: u32) -> bool {
+pub fn delay(microseconds: u32) -> bool {
     let Some(ticks) = TICKS_PER_US
         .load(Ordering::Acquire)
         .checked_mul(u64::from(microseconds))
@@ -144,26 +64,20 @@ fn delay(microseconds: u32) -> bool {
     ticks != 0
 }
 
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure",
-    feature = "ioapic"
-))]
-fn local_controller(boot: &boot::Boot<'_>) -> LocalApic {
+pub fn local_window(boot: &boot::Boot<'_>) -> DeviceWindow<'static> {
     let madt = boot.acpi().unwrap().madt().unwrap();
     let address = madt.local_controller_address().unwrap();
     let physical = address.range(ByteLength::new(4096)).unwrap();
     // The q35 loader's retained identity mappings include this local APIC
     // page with UC attributes. This fixture owns the actual original ICR.
-    let window =
-        unsafe { DeviceWindow::admit(physical, InternalAddress::new(address.get())) }.unwrap();
-    #[cfg(feature = "ioapic")]
-    let window = {
-        let mut window = window;
-        unsafe { serial_irq::prepare_local(&mut window) };
-        window
-    };
+    unsafe { DeviceWindow::admit(physical, InternalAddress::new(address.get())) }.unwrap()
+}
+
+pub fn local_controller(
+    boot: &boot::Boot<'_>,
+    window: DeviceWindow<'static>,
+) -> LocalApic<'static> {
+    let madt = boot.acpi().unwrap().madt().unwrap();
     let probe = Probe::native();
     let (window, reason) = unsafe { LocalApic::admit(usize::MAX, madt, window, probe) }
         .err()
@@ -178,24 +92,9 @@ fn local_controller(boot: &boot::Boot<'_>) -> LocalApic {
     controller
 }
 
-#[cfg(feature = "ioapic")]
-pub(super) fn check_irq(boot: &boot::Boot<'_>) {
-    let mut controller = local_controller(boot);
-    serial_irq::check(
-        boot.acpi().unwrap().madt().unwrap(),
-        boot.hart(),
-        &mut controller,
-    );
-}
-
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure"
-))]
-fn startup(boot: &boot::Boot<'_>) -> boot::Startup {
+pub(super) fn startup(boot: &boot::Boot<'_>) -> boot::Startup {
     boot::Startup::Xapic {
-        controller: local_controller(boot),
+        controller: local_controller(boot, local_window(boot)),
         trampoline: NonNull::new(TRAMPOLINE.load(Ordering::Acquire))
             .unwrap()
             .cast(),
@@ -227,62 +126,43 @@ pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
         }
     }
     crate::TARGET.store(target.ok_or(Status::NOT_FOUND)?, Ordering::Release);
-    // Stall is available until Boot Services exit. Save a TSC calibration
-    // for the subsequent INIT/SIPI delays on this same major CPU.
-    #[cfg(any(
-        feature = "platform-boot",
-        feature = "platform-execution",
-        feature = "apic-failure",
-        feature = "vtd",
-        feature = "amdvi"
-    ))]
-    {
-        let start = tsc();
-        uefi::boot::stall(Duration::from_millis(10));
-        let ticks = tsc()
-            .checked_sub(start)
-            .filter(|v| *v != 0)
-            .ok_or(Status::DEVICE_ERROR)?;
-        TICKS_PER_US.store(ticks.div_ceil(10_000), Ordering::Release);
-    }
-    #[cfg(any(
-        feature = "platform-boot",
-        feature = "platform-execution",
-        feature = "apic-failure"
-    ))]
-    {
-        let page = uefi::boot::allocate_pages(
-            uefi::boot::AllocateType::MaxAddress(0xfffff),
-            uefi::boot::MemoryType::LOADER_CODE,
-            1,
-        )
-        .map_err(|e| e.status())?;
-        TRAMPOLINE.store(page.as_ptr(), Ordering::Release);
-        OLD_IDT.store(Idtr::read().base, Ordering::Relaxed);
-    }
+    OLD_IDT.store(Idtr::read().base, Ordering::Relaxed);
     Ok(None)
 }
 
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure",
-    feature = "ioapic"
-))]
-#[repr(C, packed)]
-struct Idtr {
-    limit: u16,
-    base: usize,
+/// Save the TSC calibration while the firmware Stall service is available.
+pub fn calibrate() -> Result<(), Status> {
+    let start = tsc();
+    uefi::boot::stall(Duration::from_millis(10));
+    let ticks = tsc()
+        .checked_sub(start)
+        .filter(|v| *v != 0)
+        .ok_or(Status::DEVICE_ERROR)?;
+    TICKS_PER_US.store(ticks.div_ceil(10_000), Ordering::Release);
+    Ok(())
 }
 
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure",
-    feature = "ioapic"
-))]
+/// Reserve a low, executable startup page before firmware services exit.
+pub fn prepare_minor() -> Result<(), Status> {
+    calibrate()?;
+    let page = uefi::boot::allocate_pages(
+        uefi::boot::AllocateType::MaxAddress(0xfffff),
+        uefi::boot::MemoryType::LOADER_CODE,
+        1,
+    )
+    .map_err(|e| e.status())?;
+    TRAMPOLINE.store(page.as_ptr(), Ordering::Release);
+    Ok(())
+}
+
+#[repr(C, packed)]
+pub struct Idtr {
+    pub limit: u16,
+    pub base: usize,
+}
+
 impl Idtr {
-    fn read() -> Self {
+    pub fn read() -> Self {
         let mut value = Self { limit: 0, base: 0 };
         unsafe { asm!("sidt [{}]", in(reg) &mut value, options(nostack, preserves_flags)) };
         value
@@ -309,12 +189,7 @@ pub(super) fn check_discovery(boot: &boot::Boot<'_>, target: usize) {
     boot::write("PASS firmware-discovery q35 acpi=1 madt=1 routes=1 retained=1\n");
 }
 
-#[cfg(any(
-    feature = "platform-boot",
-    feature = "platform-execution",
-    feature = "apic-failure"
-))]
-pub(super) fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) -> boot::Startup {
+pub fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) -> boot::Startup {
     assert!(boot.device_tree().is_none());
     assert!(boot.dtb_memory().is_none());
     let idtr = Idtr::read();
@@ -336,36 +211,9 @@ pub(super) fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) -> boot::Startu
     startup(boot)
 }
 
-#[cfg(feature = "platform-boot")]
-pub(super) fn report() -> ! {
-    use core::fmt::Write;
-    boot::console()
-        .expect("board console")
-        .write_str("PASS q35 major=1 minor=1 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1\n")
-        .expect("diagnostic output");
-    boot::shutdown(true)
-}
-
-#[cfg(any(feature = "platform-boot", feature = "platform-execution"))]
-pub(super) fn inspect_started(boot::Startup::Xapic { controller, .. }: &boot::Startup, _: usize) {
+pub fn inspect_started(boot::Startup::Xapic { controller, .. }: &boot::Startup, _: usize) {
     // ICR completion alone would not prove the AP entered. The shared
     // fixture has already observed the actual minor Ready.
     assert_eq!(controller.state(), apic::State::Idle);
     boot::write("PASS local-apic startup=1 scope-rejected=1 target-rejected=1\n");
-}
-
-#[cfg(feature = "vtd")]
-pub(super) fn check_vtd(boot: &boot::Boot<'_>) {
-    vtd::check_firmware(boot);
-}
-
-#[cfg(feature = "amdvi")]
-pub(super) fn check_amdvi(boot: &boot::Boot<'_>) {
-    amdvi::check(
-        boot.acpi()
-            .unwrap()
-            .ivhd()
-            .expect("valid IVRS")
-            .expect("AMD remapping hardware"),
-    );
 }

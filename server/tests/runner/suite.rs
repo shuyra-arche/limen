@@ -120,8 +120,6 @@ impl QemuComponent {
 pub struct BoardLaunch {
     kernel: Option<String>,
     #[serde(default)]
-    features: Vec<String>,
-    #[serde(default)]
     machine_options: BTreeMap<String, String>,
     #[serde(default)]
     devices: Vec<QemuComponent>,
@@ -135,7 +133,6 @@ pub struct BoardLaunch {
 impl BoardLaunch {
     fn valid(&self) -> bool {
         self.kernel.as_ref().is_none_or(|value| name(value))
-            && self.features.iter().all(|feature| name(feature))
             && options(&self.machine_options)
             && self.devices.iter().all(QemuComponent::valid)
             && assertions(&self.expects)
@@ -291,6 +288,11 @@ pub fn read(path: &Path) -> Result<(Suite, PathBuf)> {
                     require(
                         script.starts_with(&target) && script.is_file(),
                         "launcher must be in the target test tree",
+                    )?;
+                    let manifest = directory.join("Cargo.toml").canonicalize()?;
+                    require(
+                        manifest.starts_with(&directory) && manifest.is_file(),
+                        "board guest manifest must be owned by the scenario",
                     )?;
                     require(
                         launch.keys().map(String::as_str).collect::<BTreeSet<_>>() == names

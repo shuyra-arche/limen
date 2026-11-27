@@ -63,7 +63,7 @@ fn migratable(current: &mut Current) -> u64 {
     assert_eq!(registers::control(), changed);
 
     registers::verify(current);
-    assert_eq!(current.hart(), super::TARGET.load(Relaxed));
+    assert_eq!(current.hart(), uefi_fixture::target());
     assert_eq!(STEP.fetch_add(1, Relaxed), 1);
     assert_eq!(stack_address(&value), address);
     assert_eq!(registers::control(), changed);
@@ -103,7 +103,7 @@ fn minor(_: usize, argument: usize) -> ! {
     assert_eq!(execution.enter(), Err(Error::Unsupported));
     execution.attach().expect("attach actual minor Hart");
     assert_eq!(execution.attach(), Err(Error::Busy));
-    super::observe_minor(super::board::hart());
+    super::observe_minor(uefi_fixture::hart());
     assert_eq!(execution.enter(), Err(Error::Protection));
     let mut schedule = || {
         let mark = core::hint::black_box(0u8);
@@ -116,7 +116,7 @@ fn minor(_: usize, argument: usize) -> ! {
         wait(3);
         let control = registers::control();
         let receipt = dispatch(execution);
-        assert_eq!(receipt.hart(), super::TARGET.load(Relaxed));
+        assert_eq!(receipt.hart(), uefi_fixture::target());
         assert_eq!(registers::control(), control);
         execution.vacate(receipt).expect("minor departure");
         PHASE.store(4, Relaxed);

@@ -23,7 +23,7 @@ pub(crate) const fn minor_context() -> MinorContext {
 /// The delay takes microseconds and reports whether the full interval elapsed.
 pub enum Startup {
     Xapic {
-        controller: LocalApic,
+        controller: LocalApic<'static>,
         trampoline: core::ptr::NonNull<[core::mem::MaybeUninit<u8>; 4096]>,
         delay: fn(u32) -> bool,
     },

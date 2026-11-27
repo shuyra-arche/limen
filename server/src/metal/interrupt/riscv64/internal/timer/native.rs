@@ -1,9 +1,13 @@
-use super::{ClearStep, Clearing, Effect, Failure, Prior, ProgramStep, Programming, State};
+use super::{ClearStep, Event, Failure, ProgramStep, State};
 #[cfg(limen_firmware = "sbi")]
 use crate::metal::platform::firmware::sbi::TimerService;
 use crate::metal::{
-    chrono::riscv64::Counter,
-    interrupt::riscv64::internal::supervisor::{Cause, Reception},
+    chrono::{Deadline, riscv64::Counter},
+    interrupt::{
+        AbsoluteTimer,
+        absolute::Sealed,
+        riscv64::internal::supervisor::{Cause, Reception},
+    },
     processor::{
         execution::description::riscv64::{RiscvExtension, RiscvIsa},
         hart::riscv64::description::RiscvCpu,
@@ -140,99 +144,58 @@ impl<'a> Timer<'a> {
         Ok(self.local.pending())
     }
 
-    /// Program an absolute future count. A previous comparison must have
-    /// been settled; the caller owns the higher-level stop/wake requirements.
-    pub fn arm(&mut self, count: u64) -> Result<(), Failure> {
+    /// Replace the current comparison without first masking it.
+    ///
+    /// # Safety
+    /// This replacement preserves every committed stop and wake obligation.
+    /// A later target requires independent evidence that earlier obligations
+    /// have settled or another source still covers them.
+    pub unsafe fn rearm(&mut self, deadline: Deadline<'_, '_>) -> Result<(), Failure> {
+        let target = deadline
+            .count_for(self.counter.clock())
+            .ok_or(Failure::Scope)?;
+        let now = self.counter()?;
+        self.state.advance(Event::Rearm { now, target })?;
+        self.drive()
+    }
+
+    /// Mask the interrupt and move the comparison to the far future.
+    /// Failure preserves the original comparator responsibility.
+    ///
+    /// # Safety
+    /// All higher-level stop and wake obligations have settled or are
+    /// continuously covered elsewhere throughout this operation.
+    pub unsafe fn shut(&mut self) -> Result<(), Failure> {
         self.context()?;
-        if self.state != State::Idle {
-            return Err(Failure::Busy);
-        }
-        self.program(None, count)
+        self.state.advance(Event::Shut)?;
+        self.drive()
     }
 
-    /// Replace the current comparison without first masking or cancelling it.
-    /// The caller must preserve every outstanding stop/wake requirement.
-    pub fn rearm(&mut self, count: u64) -> Result<(), Failure> {
-        self.context()?;
-        let State::Armed(previous) = self.state else {
-            return Err(Failure::Busy);
-        };
-        self.program(Some(previous), count)
+    fn drive(&mut self) -> Result<(), Failure> {
+        loop {
+            let event = match self.state {
+                State::Programming(program) => match program.step {
+                    ProgramStep::Compare => Event::Compared(self.comparator.set(program.requested)),
+                    ProgramStep::Enable => {
+                        self.local.set(true);
+                        Event::Enabled(self.local.enabled())
+                    }
+                },
+                State::Clearing(clear) => match clear.step {
+                    ClearStep::Mask => {
+                        self.local.set(false);
+                        Event::Masked(!self.local.enabled())
+                    }
+                    ClearStep::Compare => Event::Compared(self.comparator.set(u64::MAX)),
+                },
+                State::AwaitingClear(_) => Event::Drained(self.observe_clear()?),
+                _ => return Ok(()),
+            };
+            self.state.advance(event)?;
+        }
     }
 
-    fn program(&mut self, previous: Option<u64>, count: u64) -> Result<(), Failure> {
-        if count == u64::MAX || count <= self.counter()? {
-            return Err(Failure::Range);
-        }
-        let mut program = Programming {
-            previous,
-            requested: count,
-            step: ProgramStep::Compare,
-        };
-        self.state = State::Programming(program);
-        if let Err(error) = self.comparator.set(count) {
-            self.state = State::Uncertain(Effect::Programming(program));
-            return Err(error);
-        }
-        program.step = ProgramStep::Enable;
-        self.state = State::Programming(program);
-        self.local.set(true);
-        if !self.local.enabled() {
-            self.state = State::Uncertain(Effect::Programming(program));
-            return Err(Failure::Unconfirmed);
-        }
-        self.state = State::Armed(count);
-        Ok(())
-    }
-
-    /// A received IRQ is only an opportunity to inspect the original count.
-    /// A stale notification must not prove expiration.
-    pub fn due(&self) -> Result<bool, Failure> {
-        self.context()?;
-        let deadline = self.state.deadline().ok_or(Failure::Busy)?;
-        Ok(self.counter()? >= deadline)
-    }
-
-    /// Mask the local interrupt and move the comparison to the far future.
-    /// Failure preserves the original responsibility in this object.
-    /// The caller must already have settled or transferred higher-level
-    /// stop/wake obligations. This does not shut down the counter itself.
-    pub fn shut(&mut self) -> Result<(), Failure> {
-        self.context()?;
-        let prior = match self.state {
-            State::Inherited(count) => Prior::Inherited(count),
-            State::Idle => Prior::Idle,
-            State::Armed(count) => Prior::Armed(count),
-            State::Uncertain(Effect::Programming(program)) => Prior::Programming(program),
-            State::Uncertain(Effect::Clearing(clear)) => clear.prior,
-            State::AwaitingClear(_) => return self.observe_clear(),
-            // An actual operation must return to this exclusive owner first.
-            State::Programming(_) | State::Clearing(_) => return Err(Failure::Busy),
-        };
-        let mut clear = Clearing {
-            prior,
-            step: ClearStep::Mask,
-        };
-        self.state = State::Clearing(clear);
-        self.local.set(false);
-        if self.local.enabled() {
-            self.state = State::Uncertain(Effect::Clearing(clear));
-            return Err(Failure::Unconfirmed);
-        }
-        clear.step = ClearStep::Compare;
-        self.state = State::Clearing(clear);
-        // Once a replacement is confirmed, it covers either previous
-        // value, including an uncertain program or inherited deadline.
-        if let Err(error) = self.comparator.set(u64::MAX) {
-            self.state = State::Uncertain(Effect::Clearing(clear));
-            return Err(error);
-        }
-        self.state = State::AwaitingClear(prior);
-        self.observe_clear()
-    }
-
-    fn observe_clear(&mut self) -> Result<(), Failure> {
-        // A retry after a confirmed comparison only observes, never reissues the write.
+    fn observe_clear(&mut self) -> Result<bool, Failure> {
         if self.local.enabled() {
             self.local.set(false);
             if self.local.enabled() {
@@ -241,13 +204,32 @@ impl<'a> Timer<'a> {
         }
         for _ in 0..OBSERVATIONS {
             if !self.pending()? {
-                self.state = State::Idle;
-                return Ok(());
+                return Ok(true);
             }
             core::hint::spin_loop();
         }
-        // The write was confirmed. Preserve that fact even if the observation
-        // allowance is exhausted; the next shut continues at this boundary.
-        Err(Failure::Busy)
+        // The comparator write was confirmed. A retry only observes drain.
+        Ok(false)
+    }
+}
+
+impl Sealed for Timer<'_> {}
+
+impl AbsoluteTimer for Timer<'_> {
+    type Failure = Failure;
+
+    fn arm_at(&mut self, deadline: Deadline<'_, '_>) -> Result<(), Failure> {
+        let target = deadline
+            .count_for(self.counter.clock())
+            .ok_or(Failure::Scope)?;
+        let now = self.counter()?;
+        self.state.advance(Event::Arm { now, target })?;
+        self.drive()
+    }
+
+    fn due(&self) -> Result<bool, Failure> {
+        self.context()?;
+        let deadline = self.state.deadline().ok_or(Failure::Busy)?;
+        Ok(self.counter()? >= deadline)
     }
 }

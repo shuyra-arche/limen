@@ -2,8 +2,11 @@ use super::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 use core::arch::asm;
 use kernel::metal::memory::mmu::{
     LeafAccess, Memory, Privilege, SwitchError,
-    aarch64::internal::{Controls, Root, Translation},
+    aarch64::internal::{Controls, Root, admit_root},
 };
+
+#[path = "../../../../../support/paging/installation.rs"]
+mod installation;
 
 static EMPTY: Page = Page([0; 512]);
 
@@ -20,12 +23,11 @@ pub(crate) fn check(hart: usize) {
             disabled=in(reg) disabled, empty=in(reg) physical(&raw const EMPTY).get(),
             enabled=in(reg) enabled, options(nostack));
         assert!(matches!(
-            Translation::admit(hart.wrapping_add(1), Root::Upper),
+            admit_root(hart.wrapping_add(1), Root::Upper),
             Err(SwitchError::Context)
         ));
-        let mut translation = Translation::admit(hart, Root::Upper).unwrap();
-        let current = translation.original();
-        let format = translation.format();
+        let (mut control, format) = admit_root(hart, Root::Upper).unwrap();
+        let current = Controls::current();
         TOP.0[0] = format.branch(physical(&raw const NEXT)).unwrap();
         NEXT.0[0] = format.branch(physical(&raw const MIDDLE)).unwrap();
         MIDDLE.0[0] = format.branch(physical(&raw const LAST)).unwrap();
@@ -39,20 +41,18 @@ pub(crate) fn check(hart: usize) {
             )
             .unwrap();
         let root = physical(&raw const TOP);
-        translation.switch(current, root).unwrap();
         let alias = 0xffff_0000_0000_0000u64;
-        let data: u64;
-        asm!("ldr {}, [{}]", out(reg) data, in(reg) alias, options(nostack, readonly));
-        assert_eq!(data, DATA.0[0]);
-        let write: u64;
-        asm!("at s1e1w, {}", "isb", "mrs {}, par_el1", in(reg) alias, out(reg) write, options(nostack));
-        assert_ne!(write & 1, 0);
-        assert_eq!(translation.switch(current, root), Err(SwitchError::Current));
-        translation
-            .switch(translation.current().unwrap(), physical(&raw const EMPTY))
-            .unwrap();
-        assert!(translation.pending().is_none());
-        drop(translation);
+        installation::roundtrip(&mut control, hart, root, |_| {
+            assert_eq!(Controls::current().ttbr0, current.ttbr0);
+            let data: u64;
+            asm!("ldr {}, [{}]", out(reg) data, in(reg) alias, options(nostack, readonly));
+            assert_eq!(data, DATA.0[0]);
+            let write: u64;
+            asm!("at s1e1w, {}", "isb", "mrs {}, par_el1", in(reg) alias, out(reg) write, options(nostack));
+            assert_ne!(write & 1, 0);
+        });
+        assert_eq!(Controls::current(), current);
+        drop(control);
         let retired: u64;
         asm!("at s1e1r, {}", "isb", "mrs {}, par_el1", in(reg) alias, out(reg) retired, options(nostack));
         assert_ne!(retired & 1, 0);

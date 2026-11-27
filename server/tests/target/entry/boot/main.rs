@@ -94,7 +94,7 @@ fn check_discovery(boot: &Boot<'_>) {
     assert!(
         sbi.hart_state_management().unwrap().is_some()
             && sbi.timer().unwrap().is_some()
-            && sbi.inter_processor_interrupt().unwrap()
+            && sbi.ipi().unwrap().is_some()
     );
     write("PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1\n");
 }

@@ -34,17 +34,17 @@
     "server/src/metal/processor/mod.rs",
     "server/src/metal/sync/**",
     "server/tests/target/entry/synchronization.rs",
-    "server/tests/target/support/uefi/Cargo.lock",
     "server/tests/target/support/uefi/Cargo.toml",
     "server/tests/target/support/uefi/build.rs",
     "server/tests/target/basis/execution/platforms/scenario.rs",
-    "server/tests/target/support/uefi/main.rs",
-    "server/tests/target/support/uefi/run.sh",
     "server/src/basis/mod.rs",
     "server/src/basis/execution.rs",
     "server/src/basis/room.rs",
     "server/src/basis/unit/**",
-    "server/src/metal/identity/**"
+    "server/src/metal/identity/**",
+    "server/tests/target/Cargo.toml",
+    "server/tests/target/Cargo.lock",
+    "server/tests/target/support/uefi/lib.rs"
   ],
   "run": {
     "kind": "board-boot",
@@ -79,7 +79,7 @@
         "server/src/metal/processor/execution/description/aarch64.rs",
         "server/tests/target/basis/execution/platforms/aarch64.rs",
         "server/src/metal/interrupt/aarch64/gic/**",
-        "server/src/metal/interrupt/aarch64/internal/timer.rs",
+        "server/src/metal/interrupt/aarch64/internal/timer/**",
         "server/src/metal/interrupt/aarch64/mod.rs",
         "server/src/metal/interrupt/aarch64/internal/mod.rs",
         "server/src/metal/interrupt/mod.rs",
@@ -89,18 +89,12 @@
     },
     "launch": {
       "q35": {
-        "features": [
-          "platform-execution"
-        ],
         "expects": [
           "PASS cooperative-execution harts=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1",
           "PASS local-apic startup=1 scope-rejected=1 target-rejected=1"
         ]
       },
       "virt": {
-        "features": [
-          "platform-execution"
-        ],
         "expects": [
           "PASS cooperative-execution harts=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1"
         ]

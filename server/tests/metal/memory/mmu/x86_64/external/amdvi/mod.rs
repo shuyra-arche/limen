@@ -1,6 +1,8 @@
-use super::{Binding, Context, Error, admit_binding, binding_slot, reserve_epoch};
-use core::sync::atomic::AtomicU64;
-use limen_treaty::model::PhysicalAddress;
+use super::{
+    Admissions, Binding, Context, Error, Scope, admit_binding, binding_slot,
+    reserve_binding_numbers,
+};
+use limen_treaty::model::{ByteLength, PhysicalAddress};
 
 fn context(requester: u16, domain: u16) -> Context {
     Context {
@@ -11,13 +13,43 @@ fn context(requester: u16, domain: u16) -> Context {
     }
 }
 
+fn scope(segment: u16) -> Scope {
+    Scope {
+        registers: PhysicalAddress::new(0xfed9_0000)
+            .range(ByteLength::new(0x4000))
+            .unwrap(),
+        segment,
+        device: 0,
+    }
+}
+
 fn binding(number: u64, context: Context) -> Binding {
     Binding {
-        unit: PhysicalAddress::new(0xfed9_0000),
+        scope: scope(0),
         epoch: 1,
         number,
+        retirement: number + 1,
         context,
     }
+}
+
+#[test]
+fn final_binding_has_an_exact_retirement_stamp_after_sequence_exhaustion() {
+    let mut next = u64::MAX - 3;
+    assert_eq!(
+        reserve_binding_numbers(&mut next),
+        Ok((u64::MAX - 2, u64::MAX - 1))
+    );
+    assert_eq!(reserve_binding_numbers(&mut next), Err(Error::Exhausted));
+    assert_eq!(next, u64::MAX - 1);
+
+    let mut next = u64::MAX - 2;
+    let (number, retirement) = reserve_binding_numbers(&mut next).unwrap();
+    let original = binding(number, context(0x30, 1));
+    assert_eq!(reserve_binding_numbers(&mut next), Err(Error::Exhausted));
+    assert_eq!(original.retirement, retirement);
+    assert_eq!(retirement, u64::MAX);
+    assert_eq!(binding_slot(&[Some(original)], original), Ok(0));
 }
 
 #[test]
@@ -47,8 +79,15 @@ fn multiple_requesters_hold_independent_slots_and_domains() {
 fn a_rebound_requester_rejects_the_previous_generation_and_epoch() {
     let original = binding(2, context(0x30, 1));
     let rebound = binding(3, original.context());
+    let mut admissions = Admissions {
+        scope: original.scope,
+        epoch: 0,
+    };
+    admissions.advance(original.scope).unwrap();
+    assert_eq!(admissions.epoch, original.epoch);
+    admissions.advance(original.scope).unwrap();
     let readmitted = Binding {
-        epoch: 2,
+        epoch: admissions.epoch,
         ..original
     };
     assert_eq!(binding_slot(&[Some(rebound)], original), Err(Error::Stale));
@@ -61,8 +100,15 @@ fn a_rebound_requester_rejects_the_previous_generation_and_epoch() {
 
 #[test]
 fn admission_identity_exhaustion_cannot_wrap_into_an_old_epoch() {
-    let epochs = AtomicU64::new(u64::MAX - 1);
-    assert_eq!(reserve_epoch(&epochs), Ok(u64::MAX - 1));
-    assert_eq!(reserve_epoch(&epochs), Err(Error::Exhausted));
-    assert_eq!(reserve_epoch(&epochs), Err(Error::Exhausted));
+    let original = scope(0);
+    let mut admissions = Admissions {
+        scope: original,
+        epoch: u64::MAX - 1,
+    };
+    assert_eq!(admissions.advance(scope(1)), Err(Error::Window));
+    assert_eq!(admissions.epoch, u64::MAX - 1);
+    assert_eq!(admissions.advance(original), Ok(()));
+    assert_eq!(admissions.epoch, u64::MAX);
+    assert_eq!(admissions.advance(original), Err(Error::Exhausted));
+    assert_eq!(admissions.epoch, u64::MAX);
 }

@@ -83,9 +83,10 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo fmt --manifest-path server/tests/runner/Cargo.toml -- --check
+          cargo fmt --manifest-path server/tests/target/Cargo.toml --all -- --check
           while IFS= read -r -d '' manifest; do
             cargo fmt --manifest-path "$manifest" -- --check
-          done < <(git ls-files -z 'server/tests/target/metal/*/Cargo.toml' 'server/tests/target/support/uefi/Cargo.toml')
+          done < <(git ls-files -z 'server/tests/target/metal/*/riscv64/*/Cargo.toml')
       - name: Check runner
         if: fromJSON(steps.scope.outputs.plan).runner
         run: |

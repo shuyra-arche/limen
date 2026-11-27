@@ -3,7 +3,9 @@
 #[cfg(all(limen_target, target_arch = "x86_64"))]
 mod native;
 #[cfg(all(limen_target, target_arch = "x86_64"))]
-pub use native::Translation;
+pub(in crate::metal::memory::mmu) use native::NativeRoot;
+#[cfg(all(limen_target, target_arch = "x86_64"))]
+pub use native::admit_root;
 
 use crate::metal::memory::mmu::{LeafAccess, Memory, Privilege};
 use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};

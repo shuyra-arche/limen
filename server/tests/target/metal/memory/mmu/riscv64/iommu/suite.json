@@ -51,14 +51,16 @@
     "server/src/metal/memory/mmu/riscv64/mod.rs",
     "server/src/metal/memory/mmu/riscv64/external/mod.rs",
     "server/src/metal/chrono/riscv64/**",
-    "server/src/metal/chrono/mod.rs"
+    "server/src/metal/chrono/mod.rs",
+    "server/src/metal/memory/mmu/retirement.rs",
+    "server/tests/target/support/paging/retirement.rs"
   ],
   "run": {
     "kind": "qemu",
     "kernel": "rv64-iommu",
     "harts": 1,
     "expects": [
-      "PASS riscv-iommu sv39=1 directory=1 replacement-rejected=1 off=1 fences=130 walk=1 fault=1 dma=1 downgrade=1 bindings=2"
+      "PASS riscv-iommu sv39=1 directory=1 replacement-rejected=1 off=1 fences=130 walk=1 fault=1 dma=1 downgrade=1 bindings=2 unbound=1 stale=1 recovered=1 queue-return=2"
     ],
     "imports": [
       "target/support/pci/ecam.rs",

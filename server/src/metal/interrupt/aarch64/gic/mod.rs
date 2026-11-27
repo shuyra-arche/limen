@@ -3,16 +3,11 @@
 use crate::metal::platform::description::devicetree::{DeviceTree, Error, Node, NodeId, cell};
 use limen_treaty::model::PhysicalRange;
 
-#[cfg(all(limen_target, target_arch = "aarch64"))]
-mod native;
-
-/// Interpret ID_AA64PFR0_EL1.GIC for supported system register interfaces.
-pub const fn system_register_interface(features: u64) -> bool {
-    const SHIFT: u32 = 24;
-    const GIC_V3_V4: u64 = 1;
-    const GIC_V4_1: u64 = 3;
-    matches!((features >> SHIFT) & 0xf, GIC_V3_V4 | GIC_V4_1)
-}
+pub mod cpu_interface;
+pub mod distributor;
+pub mod reception;
+pub mod redistributor;
+pub mod sgi;
 
 /// Checked windows of one physical GICv3 domain, including its distributor.
 /// This description confers no register access or external routing authority.
@@ -21,6 +16,7 @@ pub struct GicV3<'a> {
     source: NodeId<'a>,
     distributor: PhysicalRange,
     redistributor: PhysicalRange,
+    redistributor_stride: Option<usize>,
 }
 
 impl<'a> GicV3<'a> {
@@ -50,6 +46,18 @@ impl<'a> GicV3<'a> {
         if cell(node.property(b"#redistributor-regions")?)?.is_some_and(|count| count != 1) {
             return Err(Error::Unsupported);
         }
+        let redistributor_stride = node
+            .property(b"redistributor-stride")?
+            .map(|bytes| {
+                let bytes: [u8; 8] = bytes.try_into().map_err(|_| Error::Format)?;
+                let stride =
+                    usize::try_from(u64::from_be_bytes(bytes)).map_err(|_| Error::Range)?;
+                if stride < 0x2_0000 || !stride.is_multiple_of(0x1_0000) {
+                    return Err(Error::Range);
+                }
+                Ok(stride)
+            })
+            .transpose()?;
         let distributor = node.register(0)?;
         let redistributor = node.register(1)?;
         if distributor.overlaps(redistributor)
@@ -64,6 +72,7 @@ impl<'a> GicV3<'a> {
             source: node.id(),
             distributor,
             redistributor,
+            redistributor_stride,
         })
     }
 
@@ -79,9 +88,6 @@ impl<'a> GicV3<'a> {
         self.redistributor
     }
 }
-
-pub mod external;
-pub mod internal;
 
 /// The trigger declared for a peripheral interrupt in the GICv3 interrupt domain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

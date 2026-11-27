@@ -7,6 +7,7 @@ out=${3:?expected fresh evidence directory}
 harts=${4:?expected runner CPU count}
 scenario=${5:?expected scenario identifier}
 manifest=${6:?expected suite manifest}
+project=$(dirname "$manifest")
 
 mkdir -p "$(dirname "$out")"
 mkdir "$out"
@@ -51,18 +52,16 @@ jq -e --arg board "$board" --arg id "$scenario" '
     def line: type == "string" and length > 0 and (test("[\r\n]") | not);
     def options: type == "object" and all(to_entries[]; (.key | word) and (.value | value));
     .id == $id and (.run.launch[$board] |
-        (.features | type == "array" and length > 0 and all(.[]; word))
-        and ((.machine_options // {}) | options)
+        ((.machine_options // {}) | options)
         and ((.devices // []) | type == "array" and all(.[]; (.name | word) and ((.options // {}) | options)))
         and (((.secondary_serial // false) | type) == "boolean")
         and ($board == "virt" or (.secondary_serial // false) == false)
-        and ((.kernel // "platform-boot") | word)
+        and ((.kernel // $id) | word)
         and (.expects | type == "array" and length > 0 and all(.[]; line))
         and ((.forbids // []) | type == "array" and all(.[]; line)))
 ' "$manifest" >/dev/null
 launch=$(jq -c --arg board "$board" '.run.launch[$board]' "$manifest")
-kernel=$(jq -r '.kernel // "platform-boot"' <<<"$launch")
-features=$(jq -r '.features | join(",")' <<<"$launch")
+kernel=$(jq -r --arg id "$scenario" '.kernel // $id' <<<"$launch")
 secondary_serial=$(jq -r '.secondary_serial // false' <<<"$launch")
 machine+=$(jq -r '(.machine_options // {}) | to_entries | map(",\(.key)=\(.value)") | join("")' <<<"$launch")
 mapfile -t devices < <(jq -r '
@@ -74,8 +73,8 @@ mapfile -t forbids < <(jq -r '.forbids[]?' <<<"$launch")
 "$qemu" --version | tee "$out/qemu.txt"
 expected=$(cat "$fixture/../../../qemu.version")
 [[ $(awk 'NR == 1 {print $4}' "$out/qemu.txt") == "$expected" ]]
-RUSTFLAGS=-Dwarnings cargo build --locked --manifest-path "$fixture/Cargo.toml" \
-    --target "$target" --bin "$kernel" --features "$features" "${flags[@]}"
+RUSTFLAGS=-Dwarnings cargo build --locked --manifest-path "$project/Cargo.toml" \
+    --target "$target" --bin "$kernel" "${flags[@]}"
 
 mkdir -p "$out/esp/EFI/BOOT"
 cp "$build/$target/$profile/$kernel.efi" "$out/esp/EFI/BOOT/$image"

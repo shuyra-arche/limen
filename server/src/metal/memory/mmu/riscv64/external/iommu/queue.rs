@@ -21,7 +21,7 @@ impl Page {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Invalidate {
+pub(super) enum Invalidate {
     Device(u32),
     FirstStage,
 }
@@ -36,11 +36,23 @@ enum State {
     Fault(Option<Invalidate>),
 }
 
+impl State {
+    fn admits_command(self) -> Result<(), Error> {
+        match self {
+            Self::Starting | Self::Idle => Ok(()),
+            Self::InFlight(_) | Self::Shutting => Err(Error::Busy),
+            Self::Fault(_) => Err(Error::Unconfirmed),
+            Self::Shut => Err(Error::Mode),
+        }
+    }
+}
+
 /// Once opened the page is permanent, including across queue faults. The
 /// sole producer can consume only the in-flight operation's own fence.
 pub(super) struct Queue {
     page: &'static mut Page,
     physical: PhysicalAddress,
+    generation: u64,
     tail: u32,
     state: State,
 }
@@ -55,9 +67,10 @@ impl Queue {
     /// Keep original controls, queue storage and unsettled translations retained
     /// if the observer is lost or the controller fails.
     pub(super) unsafe fn prepare(
-        window: &mut DeviceWindow,
+        window: &mut DeviceWindow<'_>,
         page: &'static mut Page,
         physical: PhysicalAddress,
+        generation: u64,
     ) -> Result<Self, Error> {
         let address = physical.get();
         if !address.is_multiple_of(4096) || address >> 56 != 0 {
@@ -78,9 +91,19 @@ impl Queue {
         Ok(Self {
             page,
             physical,
+            generation,
             tail: 0,
             state: State::Starting,
         })
+    }
+
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(super) fn open_generation(&self) -> Result<u64, Error> {
+        self.state.admits_command()?;
+        Ok(self.generation)
     }
 
     pub(super) fn physical(&self) -> PhysicalAddress {
@@ -91,7 +114,7 @@ impl Queue {
     /// readback blocks further admission while that storage remains held.
     pub(super) fn start(
         &mut self,
-        window: &mut DeviceWindow,
+        window: &mut DeviceWindow<'_>,
         order: &DeviceOrder,
     ) -> Result<(), Error> {
         let base = (self.physical.get() >> 2) | 7;
@@ -106,6 +129,11 @@ impl Queue {
         unsafe { window.write_u32(STATUS, ENABLE.to_le()) }.map_err(|_| Error::Window)
     }
 
+    pub(super) fn into_storage(self) -> (&'static mut Page, PhysicalAddress) {
+        assert_eq!(self.state, State::Shut);
+        (self.page, self.physical)
+    }
+
     pub(super) fn unsettled(&self) -> Option<Invalidate> {
         match self.state {
             State::InFlight(operation) | State::Fault(Some(operation)) => Some(operation),
@@ -118,13 +146,13 @@ impl Queue {
         Error::Rejected
     }
 
-    fn read(window: &mut DeviceWindow, offset: usize) -> Result<u32, Error> {
+    fn read(window: &mut DeviceWindow<'_>, offset: usize) -> Result<u32, Error> {
         unsafe { window.read_u32(offset) }
             .map(u32::from_le)
             .map_err(|_| Error::Window)
     }
 
-    fn active(&mut self, window: &mut DeviceWindow, order: &DeviceOrder) -> Result<(), Error> {
+    fn active(&mut self, window: &mut DeviceWindow<'_>, order: &DeviceOrder) -> Result<(), Error> {
         order.fence();
         let status = Self::read(window, STATUS)?;
         if status & ERRORS != 0 || status & ENABLE == 0 {
@@ -141,7 +169,7 @@ impl Queue {
     /// all affected resources. No new batch is admitted until observation.
     pub(super) fn submit(
         &mut self,
-        window: &mut DeviceWindow,
+        window: &mut DeviceWindow<'_>,
         order: &DeviceOrder,
         invalidate: Invalidate,
     ) -> Result<(), Error> {
@@ -173,7 +201,7 @@ impl Queue {
     /// the invalidation and PR/PW is retired by this observation.
     pub(super) fn observe(
         &mut self,
-        window: &mut DeviceWindow,
+        window: &mut DeviceWindow<'_>,
         order: &DeviceOrder,
     ) -> Result<Invalidate, Error> {
         let State::InFlight(operation) = self.state else {
@@ -193,7 +221,7 @@ impl Queue {
 
     pub(super) fn shut(
         &mut self,
-        window: &mut DeviceWindow,
+        window: &mut DeviceWindow<'_>,
         order: &DeviceOrder,
     ) -> Result<(), Error> {
         if matches!(self.state, State::Starting | State::Idle) {
@@ -216,3 +244,7 @@ impl Queue {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../../tests/metal/memory/mmu/riscv64/external/iommu/queue.rs"]
+mod tests;

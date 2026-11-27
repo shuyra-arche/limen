@@ -6,9 +6,9 @@ use crate::metal::{
 };
 use core::{
     cell::UnsafeCell,
-    sync::atomic::{AtomicU64, Ordering, fence},
+    sync::atomic::{Ordering, fence},
 };
-use limen_treaty::model::PhysicalAddress;
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 const TABLE: usize = 0;
 const COMMANDS: usize = 8;
@@ -25,16 +25,45 @@ const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
 // neither read nor write, so no ordinary device access may proceed.
 const DENY: [u64; 4] = [3 | (1 << 9), 0, 0, 0];
 
-// A physical reset can re-admit the same MMIO address and restart command
-// numbers. Its published requester identities must use a fresh epoch.
-static ADMISSIONS: AtomicU64 = AtomicU64::new(1);
+/// Resident admission history for one described physical unit. Its owner
+/// keeps this record through restarts and replacement of the controller.
+pub struct Admissions {
+    scope: Scope,
+    epoch: u64,
+}
 
-fn reserve_epoch(epochs: &AtomicU64) -> Result<u64, Error> {
-    let previous = epochs.load(Ordering::Relaxed);
-    let next = previous.checked_add(1).ok_or(Error::Exhausted)?;
-    epochs
-        .compare_exchange(previous, next, Ordering::Relaxed, Ordering::Relaxed)
-        .map_err(|_| Error::Occupied)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Scope {
+    registers: PhysicalRange,
+    segment: u16,
+    device: u16,
+}
+
+impl From<Ivhd<'_>> for Scope {
+    fn from(unit: Ivhd<'_>) -> Self {
+        Self {
+            registers: unit.registers(),
+            segment: unit.segment(),
+            device: unit.device(),
+        }
+    }
+}
+
+impl Admissions {
+    pub fn new(unit: Ivhd<'_>) -> Self {
+        Self {
+            scope: unit.into(),
+            epoch: 0,
+        }
+    }
+
+    fn advance(&mut self, scope: Scope) -> Result<(), Error> {
+        if self.scope != scope {
+            return Err(Error::Window);
+        }
+        self.epoch = self.epoch.checked_add(1).ok_or(Error::Exhausted)?;
+        Ok(())
+    }
 }
 
 /// Resident, naturally aligned device table covering every 16-bit DeviceID.
@@ -101,9 +130,10 @@ pub struct Context {
 /// The exact admitted generation of a requester on one physical unit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Binding {
-    unit: PhysicalAddress,
+    scope: Scope,
     epoch: u64,
     number: u64,
+    retirement: u64,
     context: Context,
 }
 
@@ -139,11 +169,11 @@ enum Progress {
 pub struct Controller<'a> {
     unit: Ivhd<'a>,
     selections: DeviceSelections<'a>,
-    window: &'a mut DeviceWindow,
+    window: DeviceWindow<'a>,
     storage: Storage<'a>,
     progress: Progress,
     bindings: &'a mut [Option<Binding>],
-    epoch: u64,
+    admissions: &'a mut Admissions,
     next: u64,
     tail: usize,
 }
@@ -157,12 +187,15 @@ impl<'a> Controller<'a> {
     /// names its object in coherent, contiguous, pinned RAM. The table is
     /// fresh Table::DENIED and all storage remains reserved while hardware can
     /// reference it, including if this owner is dropped. Re-admission after
-    /// external reset requires settling every old device effect.
+    /// external reset requires settling every old device effect. Supply
+    /// this exact unit's original resident admission history even if all
+    /// previous controllers and their storage have been replaced.
     pub unsafe fn admit(
         unit: Ivhd<'a>,
-        window: &'a mut DeviceWindow,
+        window: &'a mut DeviceWindow<'_>,
         storage: Storage<'a>,
         bindings: &'a mut [Option<Binding>],
+        admissions: &'a mut Admissions,
     ) -> Result<Self, Error> {
         if bindings.is_empty()
             || bindings.len() > usize::from(u16::MAX) + 1
@@ -195,11 +228,11 @@ impl<'a> Controller<'a> {
         let mut controller = Self {
             unit,
             selections: unit.selections(),
-            window,
+            window: window.reborrow(),
             storage,
             progress: Progress::Fresh,
             bindings,
-            epoch: 0,
+            admissions,
             next: 0,
             tail: 0,
         };
@@ -212,7 +245,7 @@ impl<'a> Controller<'a> {
         {
             return Err(Error::Occupied);
         }
-        controller.epoch = reserve_epoch(&ADMISSIONS)?;
+        controller.admissions.advance(unit.into())?;
         Ok(controller)
     }
 
@@ -298,18 +331,20 @@ impl<'a> Controller<'a> {
         self.poll()
     }
 
-    fn next_install_batch(&mut self) {
+    fn next_install_batch(&mut self) -> Result<(), Error> {
         let operation = self
             .selections
             .next()
             .map_or(Operation::InstallAll, Operation::InstallRequester);
-        self.invalidate(operation);
+        let number = self.next.checked_add(1).ok_or_else(|| self.uncertain())?;
+        self.next = number;
+        self.invalidate(number, operation);
+        Ok(())
     }
 
-    fn invalidate(&mut self, operation: Operation) {
+    fn invalidate(&mut self, number: u64, operation: Operation) {
         // At most three slots are used, and the previous completion store
         // has already settled. No independent producer advances this tail.
-        self.next += 1;
         let commands = &mut self.storage.queue.0.0;
         let requester = match operation {
             Operation::InstallRequester(requester) => Some(requester),
@@ -330,13 +365,10 @@ impl<'a> Controller<'a> {
             self.tail = (self.tail + 1) % commands.len();
         }
         // S=1, F=1: ordered completion store after invalidation.
-        commands[self.tail] = [(1 << 60) | self.storage.completion.1.get() | 5, self.next];
+        commands[self.tail] = [(1 << 60) | self.storage.completion.1.get() | 5, number];
         self.tail = (self.tail + 1) % commands.len();
         unsafe { self.storage.completion.0.0.get().write_volatile(0) };
-        self.progress = Progress::Waiting(Batch {
-            number: self.next,
-            operation,
-        });
+        self.progress = Progress::Waiting(Batch { number, operation });
         fence(Ordering::SeqCst);
         self.write(TAIL, (self.tail * 16) as u64);
     }
@@ -349,7 +381,7 @@ impl<'a> Controller<'a> {
                         return Err(self.uncertain());
                     }
                     if self.read(STATUS) & RUNNING != 0 {
-                        self.next_install_batch();
+                        self.next_install_batch()?;
                     }
                 }
                 Progress::Waiting(batch) => {
@@ -361,7 +393,7 @@ impl<'a> Controller<'a> {
                         fence(Ordering::Acquire);
                         match batch.operation {
                             Operation::InstallRequester(_) => {
-                                self.next_install_batch();
+                                self.next_install_batch()?;
                                 continue;
                             }
                             Operation::Unbind(index) => self.bindings[index] = None,
@@ -400,18 +432,19 @@ impl<'a> Controller<'a> {
         {
             return Err(Error::Address);
         }
-        let number = self.next.checked_add(1).ok_or(Error::Exhausted)?;
         let index = admit_binding(self.bindings, context)?;
+        let (number, retirement) = reserve_binding_numbers(&mut self.next)?;
         self.bindings[index] = Some(Binding {
-            unit: self.unit.registers().start(),
-            epoch: self.epoch,
+            scope: self.admissions.scope,
+            epoch: self.admissions.epoch,
             number,
+            retirement,
             context,
         });
         let dte = &mut self.storage.table.0.0[usize::from(context.requester)];
         dte[1] = u64::from(context.domain);
         dte[0] = context.root.get() | (u64::from(context.levels) << 9) | 3 | (3 << 61);
-        self.invalidate(Operation::Bind(index));
+        self.invalidate(number, Operation::Bind(index));
         self.poll()
     }
 
@@ -424,13 +457,18 @@ impl<'a> Controller<'a> {
             return Err(Error::Occupied);
         }
         let index = binding_slot(self.bindings, expected)?;
-        if self.next == u64::MAX {
-            return Err(Error::Exhausted);
-        }
         self.storage.table.0.0[usize::from(expected.context.requester)] = DENY;
-        self.invalidate(Operation::Unbind(index));
+        self.invalidate(expected.retirement, Operation::Unbind(index));
         self.poll()
     }
+}
+
+fn reserve_binding_numbers(next: &mut u64) -> Result<(u64, u64), Error> {
+    // Allocate the exact completion stamps for both transitions before any
+    // table write. A later admission cannot exhaust this binding's teardown.
+    let retirement = next.checked_add(2).ok_or(Error::Exhausted)?;
+    *next = retirement;
+    Ok((retirement - 1, retirement))
 }
 
 fn binding_slot(bindings: &[Option<Binding>], expected: Binding) -> Result<usize, Error> {

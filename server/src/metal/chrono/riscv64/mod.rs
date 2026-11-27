@@ -40,9 +40,7 @@ impl<'a> RiscvTimebase<'a> {
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 #[must_use]
 pub struct Counter<'a> {
-    timebase: RiscvTimebase<'a>,
-    hart: u64,
-    local: core::marker::PhantomData<*mut ()>,
+    clock: super::Clock<'a>,
 }
 
 #[cfg(all(limen_target, target_arch = "riscv64"))]
@@ -52,38 +50,40 @@ impl<'a> Counter<'a> {
     /// establishes its relationship to the described source. These conditions
     /// must remain valid throughout this use.
     pub unsafe fn admit(timebase: RiscvTimebase<'a>, hart: u64) -> Option<Self> {
-        if !crate::metal::processor::hart::local::try_current_hart()
-            .is_some_and(|current| current.get() as u64 == hart)
-        {
-            return None;
-        }
+        let hart = usize::try_from(hart).ok()?;
         Some(Self {
-            timebase,
-            hart,
-            local: core::marker::PhantomData,
+            clock: super::Clock::bind(timebase.source, hart, timebase.hertz, read_native)?,
         })
     }
 
+    pub fn clock(&self) -> &super::Clock<'a> {
+        &self.clock
+    }
+
     pub fn source(&self) -> NodeId<'a> {
-        self.timebase.source()
+        self.clock.source()
     }
 
     pub fn hart(&self) -> u64 {
-        self.hart
+        self.clock.hart() as u64
     }
 
     pub fn hertz(&self) -> u32 {
-        self.timebase.hertz()
+        self.clock.frequency().get()
+    }
+
+    pub fn deadline(&self, count: u64) -> super::Deadline<'_, 'a> {
+        self.clock.deadline(count)
     }
 
     pub fn read(&self) -> Option<u64> {
-        if !crate::metal::processor::hart::local::try_current_hart()
-            .is_some_and(|current| current.get() as u64 == self.hart)
-        {
-            return None;
-        }
-        let count;
-        unsafe { core::arch::asm!("rdtime {}", out(reg) count, options(nostack, nomem)) };
-        Some(count)
+        self.clock.read()
     }
+}
+
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+fn read_native() -> u64 {
+    let count;
+    unsafe { core::arch::asm!("rdtime {}", out(reg) count, options(nostack, nomem)) };
+    count
 }

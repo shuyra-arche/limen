@@ -65,7 +65,7 @@ pub enum State {
     Unconfirmed(Route, Effect),
 }
 
-struct Port<'a>(&'a mut DeviceWindow);
+struct Port<'a>(DeviceWindow<'a>);
 
 impl Port<'_> {
     fn select(&mut self, register: u8) {
@@ -127,7 +127,7 @@ impl<'a> Controller<'a> {
     /// CPUs and interrupt contexts, including failures. Direct compatibility
     /// format is active, interrupt remapping cannot reinterpret these entries,
     /// and this controller's probed GSI interval is exclusive in the system.
-    pub unsafe fn admit(madt: Madt<'a>, window: &'a mut DeviceWindow) -> Result<Self, Failure> {
+    pub unsafe fn admit(madt: Madt<'a>, window: &'a mut DeviceWindow<'_>) -> Result<Self, Failure> {
         let address = window.physical().start();
         let IoApic { id, gsi_base, .. } = madt
             .io_apics()
@@ -139,7 +139,7 @@ impl<'a> Controller<'a> {
         {
             return Err(Failure::Scope);
         }
-        let mut port = Port(window);
+        let mut port = Port(window.reborrow());
         if id > 15 || (port.read(0) >> 24) != u32::from(id) {
             return Err(Failure::Scope);
         }

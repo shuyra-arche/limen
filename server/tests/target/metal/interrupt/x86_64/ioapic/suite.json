@@ -28,12 +28,14 @@
     "server/src/metal/processor/hart/local/**",
     "server/src/metal/processor/hart/mod.rs",
     "server/src/metal/processor/mod.rs",
-    "server/tests/target/support/uefi/Cargo.lock",
     "server/tests/target/support/uefi/Cargo.toml",
     "server/tests/target/support/uefi/build.rs",
-    "server/tests/target/support/uefi/main.rs",
-    "server/tests/target/support/uefi/run.sh",
-    "server/src/metal/sync/**"
+    "server/src/metal/sync/**",
+    "server/tests/target/Cargo.toml",
+    "server/tests/target/Cargo.lock",
+    "server/tests/target/support/uefi/lib.rs",
+    "server/src/metal/interrupt/claim.rs",
+    "server/tests/target/support/interrupt.rs"
   ],
   "run": {
     "kind": "board-boot",
@@ -55,14 +57,12 @@
         "server/src/metal/interrupt/x86_64/internal/apic/**",
         "server/src/metal/interrupt/x86_64/external/mod.rs",
         "server/src/metal/interrupt/x86_64/external/ioapic/**",
-        "server/src/metal/platform/description/acpi/madt.rs"
+        "server/src/metal/platform/description/acpi/madt.rs",
+        "server/tests/target/support/uefi/interrupt.rs"
       ]
     },
     "launch": {
       "q35": {
-        "features": [
-          "ioapic"
-        ],
         "expects": [
           "PASS q35 interrupt uart=1 ioapic=1 vector=1 eoi=1 masked=1"
         ],

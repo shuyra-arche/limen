@@ -1,35 +1,15 @@
 [package]
-name = "platform-boot"
+name = "uefi-fixture"
 version = "0.0.0"
 edition = "2024"
 publish = false
 
-[workspace]
-
-[[bin]]
-name = "platform-boot"
-path = "main.rs"
+[lib]
+path = "lib.rs"
 test = false
-bench = false
-
-[features]
-platform-boot = []
-platform-execution = []
-apic-failure = []
-ioapic = []
-gic = []
-vtd = []
-amdvi = []
-smmu = []
-paging = []
+doctest = false
 
 [dependencies]
-kernel = { path = "../../../.." }
-limen-treaty = { path = "../../../../../treaty" }
-uefi = "=0.41.0"
-
-[profile.dev]
-panic = "abort"
-
-[profile.release]
-panic = "abort"
+kernel.workspace = true
+limen-treaty.workspace = true
+uefi.workspace = true

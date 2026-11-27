@@ -1,56 +1,162 @@
 //! A device mapping is not ordinary Rust byte storage.
 
 use core::{marker::PhantomData, ptr};
-use limen_treaty::model::{Alignment, InternalAddress, PhysicalRange};
+use limen_treaty::model::{Alignment, ByteLength, InternalAddress, PhysicalRange};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     Range,
 }
 
-/// A checked window in an existing device mapping. No RAM slice is formed.
-/// Its actual mapping and exclusive device access remain caller obligations.
+/// Actual mapping retention supplied by the owner of a removable mapping.
+/// Borrowing a window keeps that original retention in place.
 #[must_use]
-pub struct DeviceWindow {
-    physical: PhysicalRange,
-    base: usize,
-    length: usize,
+pub struct DeviceMapping<R> {
+    extent: Extent,
+    retention: R,
     local: PhantomData<*mut ()>,
 }
 
-impl DeviceWindow {
+impl<R> DeviceMapping<R> {
     /// # Safety
-    /// On successful geometry validation, the entire window must map the
-    /// indicated physical bytes in order, with valid device attributes,
-    /// privileged access and the required ownership. Keep that mapping and
-    /// control live until all users and original hardware effects settle.
-    /// A window does not itself pin a dynamically removable translation.
-    pub unsafe fn admit(physical: PhysicalRange, base: InternalAddress) -> Result<Self, Error> {
+    /// The retention must own the actual mapping of this region, including
+    /// its backing, device attributes and permissions. No outside action may
+    /// withdraw, replace or independently grant overlapping register access
+    /// while retention is held. The controller must settle device effects
+    /// before the caller relinquishes the retained mapping.
+    pub unsafe fn admit(
+        physical: PhysicalRange,
+        base: InternalAddress,
+        retention: R,
+    ) -> Result<Self, (R, Error)> {
+        match Extent::checked(physical, base) {
+            Ok(extent) => Ok(Self {
+                extent,
+                retention,
+                local: PhantomData,
+            }),
+            Err(error) => Err((retention, error)),
+        }
+    }
+
+    pub fn window(&mut self) -> DeviceWindow<'_> {
+        DeviceWindow::from_extent(self.extent)
+    }
+
+    /// Return the original retention after every window borrow has ended.
+    pub fn into_retention(self) -> R {
+        self.retention
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Extent {
+    physical: PhysicalRange,
+    base: usize,
+}
+
+impl Extent {
+    fn checked(physical: PhysicalRange, base: InternalAddress) -> Result<Self, Error> {
         let length = physical.length().as_usize().ok_or(Error::Range)?;
         let base = usize::try_from(base.get()).map_err(|_| Error::Range)?;
         if base == 0 || length == 0 || base.checked_add(length).is_none() {
             return Err(Error::Range);
         }
+        Ok(Self { physical, base })
+    }
+
+    fn restrict(self, part: PhysicalRange) -> Result<Self, Error> {
+        if !self.physical.covers(part) {
+            return Err(Error::Range);
+        }
+        let displacement = part
+            .start()
+            .distance(self.physical.start())
+            .and_then(|length| length.as_usize())
+            .ok_or(Error::Range)?;
         Ok(Self {
-            physical,
-            base,
-            length,
-            local: PhantomData,
+            physical: part,
+            base: self.base + displacement,
         })
+    }
+}
+
+/// A checked exclusive view of device registers. The view never forms a RAM
+/// slice. The register protocol, interconnect ordering and live device effects
+/// remain the responsibility of the register's controller.
+#[must_use]
+pub struct DeviceWindow<'mapping> {
+    extent: Extent,
+    local: PhantomData<(&'mapping mut (), *mut ())>,
+}
+
+impl DeviceWindow<'static> {
+    /// Admit an early, permanently resident platform device mapping.
+    ///
+    /// # Safety
+    /// The indicated physical bytes must already be mapped in order with
+    /// valid device attributes and privileged access. The trusted platform
+    /// guarantees the mapping remains fixed and grants exclusive register
+    /// access for every use derived from this window. A removable mapping
+    /// requires a retention represented by a DeviceMapping.
+    pub unsafe fn admit(physical: PhysicalRange, base: InternalAddress) -> Result<Self, Error> {
+        Extent::checked(physical, base).map(Self::from_extent)
+    }
+}
+
+impl<'mapping> DeviceWindow<'mapping> {
+    fn from_extent(extent: Extent) -> Self {
+        Self {
+            extent,
+            local: PhantomData,
+        }
+    }
+
+    pub fn reborrow(&mut self) -> DeviceWindow<'_> {
+        DeviceWindow::from_extent(self.extent)
+    }
+
+    /// Borrow a checked physical subrange without granting a second parent view.
+    pub fn subrange(&mut self, physical: PhysicalRange) -> Result<DeviceWindow<'_>, Error> {
+        self.extent
+            .restrict(physical)
+            .map(DeviceWindow::from_extent)
+    }
+
+    /// Consume the parent view and grant disjoint views with the same retention.
+    /// An invalid boundary returns the original view.
+    pub fn split(self, offset: ByteLength) -> Result<(Self, Self), (Self, Error)> {
+        let Some((prefix, suffix)) = self
+            .extent
+            .physical
+            .start()
+            .advance(offset)
+            .and_then(|at| self.extent.physical.split(at))
+        else {
+            return Err((self, Error::Range));
+        };
+        let left = self.extent.restrict(prefix).expect("left part covered");
+        let right = self.extent.restrict(suffix).expect("right part covered");
+        Ok((Self::from_extent(left), Self::from_extent(right)))
     }
 
     pub fn physical(&self) -> PhysicalRange {
-        self.physical
+        self.extent.physical
     }
 
     pub fn is_aligned(&self, alignment: Alignment) -> bool {
-        InternalAddress::new(self.base as u64).is_aligned(alignment)
+        InternalAddress::new(self.extent.base as u64).is_aligned(alignment)
     }
 
     fn address(&self, offset: usize, width: usize) -> Result<usize, Error> {
-        let address = self.base.checked_add(offset).ok_or(Error::Range)?;
-        if offset.checked_add(width).ok_or(Error::Range)? > self.length
-            || !address.is_multiple_of(width)
+        let address = self.extent.base.checked_add(offset).ok_or(Error::Range)?;
+        let length = self
+            .extent
+            .physical
+            .length()
+            .as_usize()
+            .expect("validated length");
+        if offset.checked_add(width).ok_or(Error::Range)? > length || !address.is_multiple_of(width)
         {
             return Err(Error::Range);
         }
@@ -121,3 +227,7 @@ impl DeviceWindow {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/metal/memory/mmu/access/partition.rs"]
+mod tests;

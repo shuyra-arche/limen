@@ -1,6 +1,6 @@
 //! Coordinates the existing cooperative Unit, Room and machine handoff.
 
-use core::{fmt::Write, marker::PhantomData};
+use core::marker::PhantomData;
 
 use crate::{
     basis::{
@@ -8,6 +8,7 @@ use crate::{
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, UnitRecord, Units},
     },
     metal::{
+        platform::boot::services::Services,
         processor::execution::cooperative::{
             self, Hart, LeaveReceipt, LocalHart, cooperative_ready,
         },
@@ -16,7 +17,7 @@ use crate::{
     },
 };
 
-use crate::entry::boot::{self, Boot};
+use crate::entry::boot::Boot;
 
 type Entry = fn(&mut Current) -> u64;
 
@@ -377,8 +378,9 @@ impl Execution {
 
     fn end(&self, unit: UnitId, value: u64) -> Result<!, Error> {
         self.leave(unit, Some(value))?;
-        boot::write("FAIL Limen execution: terminal continuation resumed\n");
-        boot::shutdown(false)
+        Services::active().reject(format_args!(
+            "FAIL Limen execution: terminal continuation resumed\n"
+        ))
     }
 }
 
@@ -422,8 +424,7 @@ extern "C" fn start(argument: *const ()) -> ! {
         local: PhantomData,
     });
     let Err(error) = execution.end(unit, value);
-    if let Some(mut console) = boot::console() {
-        let _ = writeln!(console, "FAIL Limen execution: terminal leave {error:?}");
-    }
-    boot::shutdown(false)
+    Services::active().reject(format_args!(
+        "FAIL Limen execution: terminal leave {error:?}\n"
+    ))
 }

@@ -2,7 +2,7 @@ pub(super) const DEBUG_CONSOLE: usize = 0x4442_434e;
 pub(super) const SYSTEM_RESET: usize = 0x5352_5354;
 pub(super) const HART_STATE_MANAGEMENT: usize = 0x0048_534d;
 pub(super) const TIMER: usize = 0x5449_4d45;
-const INTER_PROCESSOR_INTERRUPT: usize = 0x0073_5049;
+pub(super) const INTER_PROCESSOR_INTERRUPT: usize = 0x0073_5049;
 
 /// A failed BASE call or invalid/unsupported version is not absence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,12 +36,16 @@ pub struct TimerService(());
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HartService(());
 
+/// A native SBI software interrupt service admitted by the BASE probe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IpiService(());
+
 /// Services reported by the running SBI implementation's BASE extension.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SbiServices {
     hart_state_management: Result<Option<HartService>, ProbeError>,
     timer: Result<Option<TimerService>, ProbeError>,
-    inter_processor_interrupt: Result<bool, ProbeError>,
+    ipi: Result<Option<IpiService>, ProbeError>,
 }
 
 impl SbiServices {
@@ -53,7 +57,8 @@ impl SbiServices {
             hart_state_management: supports(&mut base, HART_STATE_MANAGEMENT)
                 .map(|present| present.then_some(HartService(()))),
             timer: supports(&mut base, TIMER).map(|present| present.then_some(TimerService(()))),
-            inter_processor_interrupt: supports(&mut base, INTER_PROCESSOR_INTERRUPT),
+            ipi: supports(&mut base, INTER_PROCESSOR_INTERRUPT)
+                .map(|present| present.then_some(IpiService(()))),
         })
     }
 
@@ -65,8 +70,8 @@ impl SbiServices {
         self.timer
     }
 
-    pub fn inter_processor_interrupt(self) -> Result<bool, ProbeError> {
-        self.inter_processor_interrupt
+    pub fn ipi(self) -> Result<Option<IpiService>, ProbeError> {
+        self.ipi
     }
 }
 

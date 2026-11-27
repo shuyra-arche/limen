@@ -17,7 +17,7 @@ pub(super) enum Direction {
 }
 
 pub(super) struct Edu {
-    registers: DeviceWindow,
+    registers: DeviceWindow<'static>,
     order: fn(),
     now: fn() -> u64,
     timeout: u64,
@@ -26,7 +26,7 @@ pub(super) struct Edu {
 
 impl Edu {
     pub(super) fn admit(
-        mut registers: DeviceWindow,
+        mut registers: DeviceWindow<'static>,
         order: fn(),
         now: fn() -> u64,
         hertz: u64,

@@ -3,8 +3,8 @@
 use core::arch::asm;
 
 use super::probe::{
-    DEBUG_CONSOLE, Extensions, HART_STATE_MANAGEMENT, HartService, ProbeError, SYSTEM_RESET,
-    SbiServices, TIMER, TimerService,
+    DEBUG_CONSOLE, Extensions, HART_STATE_MANAGEMENT, HartService, INTER_PROCESSOR_INTERRUPT,
+    IpiService, ProbeError, SYSTEM_RESET, SbiServices, TIMER, TimerService,
 };
 
 const BASE: usize = 0x10;
@@ -71,6 +71,15 @@ impl TimerService {
     /// The consumer owns the current Hart's comparator and its old obligations.
     pub(crate) fn set(self, count: u64) -> Result<(), isize> {
         match call(TIMER, 0, count as usize, 0, 0).0 {
+            0 => Ok(()),
+            error => Err(error),
+        }
+    }
+}
+
+impl IpiService {
+    pub(crate) fn send(self, hart: usize) -> Result<(), isize> {
+        match call(INTER_PROCESSOR_INTERRUPT, 0, 1, hart, 0).0 {
             0 => Ok(()),
             error => Err(error),
         }

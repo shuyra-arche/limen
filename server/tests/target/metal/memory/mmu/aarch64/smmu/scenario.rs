@@ -1,15 +1,56 @@
-use kernel::entry::boot;
-use kernel::metal::platform::description::devicetree::DeviceTree;
+#[path = "../../../../../support/paging/retirement.rs"]
+mod retirement;
+
+use kernel::metal::memory::mmu::{Retirement, Unbind};
+use kernel::{
+    entry::boot,
+    metal::{
+        memory::mmu::{
+            aarch64::external::smmu::{
+                self, Controller, DeviceOrder, Effect, Refresh, queue::Ring,
+            },
+            access::device::DeviceWindow,
+        },
+        platform::description::devicetree::DeviceTree,
+    },
+};
+use limen_treaty::model::{InternalAddress, PhysicalAddress};
 
 #[path = "stream.rs"]
 mod stream;
+use stream::{IOVA, PATTERNS, order};
+
+static mut COMMANDS: Ring = Ring::EMPTY;
+
+fn retry<T>(mut f: impl FnMut() -> Result<T, smmu::Error>) -> T {
+    for _ in 0..100_000 {
+        match f() {
+            Ok(value) => return value,
+            Err(smmu::Error::Busy) => core::hint::spin_loop(),
+            Err(e) => panic!("SMMUv3 control failed: {e:?}"),
+        }
+    }
+    panic!("SMMUv3 acknowledgement timeout");
+}
+
+fn check_destinations(endpoints: &mut [stream::Endpoint; 2], requester: usize, translated: bool) {
+    let words = [endpoints[0].word(), endpoints[1].word()];
+    for (word, pattern) in words.into_iter().zip(PATTERNS) {
+        unsafe { word.write_volatile(!pattern) };
+    }
+    order();
+    endpoints[requester].write(IOVA);
+    for (index, (word, pattern)) in words.into_iter().zip(PATTERNS).enumerate() {
+        let expected = if translated && index == requester {
+            pattern
+        } else {
+            !pattern
+        };
+        assert_eq!(unsafe { word.read_volatile() }, expected);
+    }
+}
 
 pub(super) fn check(tree: &DeviceTree<'_>) {
-    use kernel::metal::memory::mmu::{
-        aarch64::external::smmu::{self, Controller, DeviceOrder},
-        access::device::DeviceWindow,
-    };
-    use limen_treaty::model::InternalAddress;
     let mut range = None;
     for node in tree.nodes() {
         if let Some(registers) = smmu::registers(node).unwrap() {
@@ -17,54 +58,112 @@ pub(super) fn check(tree: &DeviceTree<'_>) {
         }
     }
     let range = range.expect("virt SMMUv3");
-    // AAVMF retains this device mapping after ExitBootServices. The guest
-    // owns the test endpoint and keeps the firmware disk quiescent after exit.
+    // The retained AAVMF mapping covers this exact physical register scope.
     let mut registers =
         unsafe { DeviceWindow::admit(range, InternalAddress::new(range.start().get())).unwrap() };
+    let (storage, table) = unsafe { stream::directory() };
     let mut controller =
-        unsafe { Controller::admit(&mut registers, DeviceOrder::native()) }.unwrap();
+        unsafe { Controller::admit(&mut registers, DeviceOrder::native(), storage) }.unwrap();
     let profile = controller.profile();
     assert!(profile.stage_two && profile.granule_4k && !profile.enabled);
-    let mut endpoint = stream::Endpoint::open(tree, range);
-    endpoint.prime();
-    unsafe { controller.begin_abort_bypass() }.unwrap();
-    fn retry<T>(mut f: impl FnMut() -> Result<T, smmu::Error>) -> T {
-        for _ in 0..100_000 {
-            match f() {
-                Ok(value) => return value,
-                Err(smmu::Error::Busy) => core::hint::spin_loop(),
-                Err(e) => panic!("SMMUv3 control failed: {e:?}"),
-            }
-        }
-        panic!("SMMUv3 acknowledgement timeout");
+    let mut endpoints = [
+        stream::Endpoint::open(tree, range, 0),
+        stream::Endpoint::open(tree, range, 1),
+    ];
+    for endpoint in &mut endpoints {
+        endpoint.prime();
     }
+    unsafe { controller.begin_abort_bypass() }.unwrap();
     retry(|| controller.observe_abort());
-    endpoint.verify_abort();
-    endpoint.install(&mut controller);
-    use limen_treaty::model::PhysicalAddress;
-    use smmu::queue::{Invalidate, Ring};
-    static mut COMMANDS: Ring = Ring::EMPTY;
+    for endpoint in &mut endpoints {
+        endpoint.verify_abort();
+    }
+    let bindings = [
+        endpoints[0].prepare(&mut controller),
+        endpoints[1].prepare(&mut controller),
+    ];
+    unsafe { controller.begin_install() }.unwrap();
+    retry(|| controller.observe_install());
+    assert_eq!(controller.retained_table(), Some(table));
     let commands = unsafe { &mut *(&raw mut COMMANDS) };
     let physical = PhysicalAddress::new(core::ptr::from_ref(commands).addr() as u64);
     unsafe { controller.open_queue(commands, physical) }.unwrap();
-    for operation in [
-        Invalidate::Stream(stream::RID),
-        Invalidate::StageTwo(1),
-        Invalidate::Stream(1),
-        Invalidate::StageTwo(2),
-    ] {
-        retry(|| controller.submit(operation));
-        assert_eq!(controller.submit(operation), Err(smmu::Error::Active));
-        assert_eq!(controller.unsettled_invalidation(), Some(operation));
-        assert_eq!(retry(|| controller.observe()), operation);
-        assert_eq!(controller.observe(), Err(smmu::Error::Active));
+    let mut previous = None;
+    for binding in bindings {
+        for refresh in [Refresh::Stream, Refresh::StageTwo] {
+            let command = unsafe { controller.begin_refresh(binding, refresh) }.unwrap();
+            let effect = Effect::Refreshed(binding, refresh);
+            assert_eq!(controller.unsettled_effect(), Some(effect));
+            assert_eq!(
+                unsafe { controller.begin_refresh(binding, refresh) },
+                Err(smmu::Error::Busy)
+            );
+            if let Some(previous) = previous {
+                assert_eq!(controller.observe(previous), Err(smmu::Error::Stale));
+            }
+            assert_eq!(retry(|| controller.observe(command)), effect);
+            assert_eq!(controller.observe(command), Err(smmu::Error::Stale));
+            previous = Some(command);
+        }
     }
-    endpoint.verify_translation();
-    endpoint.downgrade();
-    let invalidate = Invalidate::StageTwo(1);
-    retry(|| controller.submit(invalidate));
-    assert_eq!(retry(|| controller.observe()), invalidate);
-    endpoint.verify_downgrade();
-    retry(|| controller.shut_queue());
-    boot::write("\nPASS smmuv3 stage2=1 granule=4096 abort=1 sync=5 dma=1 downgrade=1\n");
+    check_destinations(&mut endpoints, 0, true);
+    check_destinations(&mut endpoints, 1, true);
+    endpoints[0].downgrade(controller.format().unwrap());
+    let binding = bindings[0];
+    let refresh = Refresh::StageTwo;
+    let command = unsafe { controller.begin_refresh(binding, refresh) }.unwrap();
+    assert_eq!(
+        retry(|| controller.observe(command)),
+        Effect::Refreshed(binding, refresh)
+    );
+    check_destinations(&mut endpoints, 0, false);
+    check_destinations(&mut endpoints, 1, true);
+    let previous = command;
+    let (ring, queue) = retry(|| controller.shut_queue());
+    assert_eq!(queue, physical);
+    unsafe { controller.open_queue(ring, queue) }.unwrap();
+    let command = unsafe { controller.begin_unbind(bindings[1]) }.unwrap();
+    assert_eq!(controller.observe(previous), Err(smmu::Error::Stale));
+    assert_eq!(controller.binding(stream::SECOND), None);
+    assert_eq!(controller.pending_command(), Some(command));
+    assert!(controller.pending_retirement(bindings[0]).is_none());
+    let recovered = controller.pending_retirement(bindings[1]).unwrap();
+    let settled = retry(|| match controller.observe_retirement(&recovered) {
+        Ok(Retirement::Pending) => Err(smmu::Error::Busy),
+        result => result,
+    });
+    assert_eq!(settled, Retirement::Settled);
+    assert_eq!(
+        controller.observe_retirement(&recovered),
+        Err(smmu::Error::Stale)
+    );
+    assert!(controller.pending_command().is_none());
+    check_destinations(&mut endpoints, 1, false);
+    let command = unsafe { controller.begin_bind(bindings[1].context()) }.unwrap();
+    let Effect::Bound(replacement) = retry(|| controller.observe(command)) else {
+        panic!("expected the new stream binding");
+    };
+    assert_ne!(replacement, bindings[1]);
+    assert_eq!(
+        unsafe { controller.begin_unbind(bindings[1]) },
+        Err(smmu::Error::Stale)
+    );
+    check_destinations(&mut endpoints, 1, true);
+    for binding in [bindings[0], replacement] {
+        unsafe { retirement::retire(&mut controller, binding) };
+    }
+    let (returned, original) = retry(|| controller.shut_queue());
+    assert_eq!(original, physical);
+    assert_eq!(core::ptr::from_ref(returned).addr() as u64, original.get());
+    assert_eq!(controller.retained_queue(), None);
+    unsafe { controller.begin_shut() }.unwrap();
+    retry(|| controller.observe_shut());
+    assert_eq!(controller.retained_table(), Some(table));
+    assert_eq!(
+        unsafe { controller.begin_install() },
+        Err(smmu::Error::Active)
+    );
+    boot::write(
+        "\nPASS smmuv3 stage2=1 granule=4096 abort=1 sync=5 dma=1 downgrade=1 bindings=2 unbound=1 stale=1 recovered=1 queue-return=2 stopped=1\n",
+    );
 }

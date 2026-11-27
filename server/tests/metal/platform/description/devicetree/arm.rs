@@ -3,7 +3,7 @@ use super::fixture::Fixture;
 use kernel::metal::{
     chrono::aarch64::GenericCounter,
     interrupt::aarch64::{
-        gic::{GicV3, Trigger, internal::PrivateInterrupts},
+        gic::{GicV3, Trigger, redistributor::PrivateInterrupts},
         internal::timer::GenericTimer,
     },
     platform::{
@@ -295,7 +295,7 @@ fn counter_and_timer_validate_only_their_own_facts() {
 
 #[test]
 fn shared_routes_retain_their_domain_and_exclude_private_and_special_ids() {
-    use kernel::metal::interrupt::aarch64::gic::external::Route;
+    use kernel::metal::interrupt::aarch64::gic::distributor::Route;
     for (entry, expected) in [
         ([0, 0, 4], Ok((32, Trigger::LevelHigh))),
         ([0, 987, 1], Ok((1019, Trigger::EdgeRising))),

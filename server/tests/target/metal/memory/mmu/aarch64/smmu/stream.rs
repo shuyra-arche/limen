@@ -1,30 +1,49 @@
-//! One EDU endpoint under the virt PCI host's actual stream mapping.
+//! Two EDU endpoints under the virt PCI host's checked stream mapping.
 use core::arch::asm;
 use kernel::metal::{
     memory::mmu::aarch64::external::smmu::{
-        self, Controller, StreamTable,
+        Binding, Context, Controller, Sequence, Storage, StreamTable,
+        directory::Entry,
         translation::{Access, Format},
     },
     platform::description::devicetree::DeviceTree,
 };
 use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
-const IOVA: u32 = 0x0020_0000;
-const PATTERN: u32 = 0x9e55_e71c;
+pub(super) const IOVA: u32 = 0x0020_0000;
+pub(super) const PATTERNS: [u32; 2] = [0x9e55_e71c, 0x9ad0_815e];
+pub(super) const SECOND: u32 = 7 << 3;
 #[repr(C, align(4096))]
 struct Page([u64; 512]);
-static mut STREAMS: Page = Page([0; 512]);
-static mut L1: Page = Page([0; 512]);
-static mut L2: Page = Page([0; 512]);
-static mut L3: Page = Page([0; 512]);
-static mut DATA: Page = Page([0; 512]);
+#[repr(C, align(4096))]
+struct Directory([Entry; 64]);
+static mut STREAMS: Directory = Directory([const { Entry::EMPTY }; 64]);
+static mut BINDINGS: [Option<Binding>; 2] = [None; 2];
+static mut SEQUENCE: Sequence = Sequence::FRESH;
+static mut TABLES: [[Page; 3]; 2] = [const { [const { Page([0; 512]) }; 3] }; 2];
+static mut DATA: [Page; 2] = [const { Page([0; 512]) }; 2];
 
-fn order() {
+pub(super) fn order() {
     unsafe { asm!("dsb sy", options(nostack, preserves_flags)) }
 }
-fn address(p: *mut Page) -> PhysicalAddress {
+
+fn address<T>(p: *mut T) -> PhysicalAddress {
     PhysicalAddress::new(p.addr() as u64)
 }
+
+pub(super) unsafe fn directory() -> (Storage<'static>, StreamTable) {
+    let base = address(&raw mut STREAMS);
+    (
+        Storage {
+            entries: unsafe { &mut *(&raw mut STREAMS.0) },
+            physical: base,
+            bindings: unsafe { &mut *(&raw mut BINDINGS) },
+            sequence: unsafe { &mut *(&raw mut SEQUENCE) },
+        },
+        StreamTable { base, bits: 6 },
+    )
+}
+
 #[path = "../../../../../support/pci/ecam.rs"]
 mod pci;
 use pci::Edu;
@@ -32,11 +51,12 @@ pub(super) use pci::RID;
 
 pub(super) struct Endpoint {
     edu: Edu,
-    format: Option<Format>,
+    index: usize,
+    requester: u32,
 }
 
 impl Endpoint {
-    pub(super) fn open(tree: &DeviceTree<'_>, expected: PhysicalRange) -> Self {
+    pub(super) fn open(tree: &DeviceTree<'_>, expected: PhysicalRange, index: usize) -> Self {
         fn now() -> u64 {
             let value: u64;
             unsafe { asm!("mrs {}, cntvct_el0", out(reg) value, options(nostack)) };
@@ -44,86 +64,69 @@ impl Endpoint {
         }
         let hertz: u64;
         unsafe { asm!("mrs {}, cntfrq_el0", out(reg) hertz, options(nostack)) };
+        let requester = [RID, SECOND][index];
         Self {
-            edu: Edu::open(tree, expected, RID, None, order, now, hertz),
-            format: None,
+            edu: Edu::open(tree, expected, requester, None, order, now, hertz),
+            index,
+            requester,
         }
     }
-    fn word() -> *mut u32 {
-        (&raw mut DATA).cast()
+
+    fn page(&self) -> *mut Page {
+        unsafe { (&raw mut DATA).cast::<Page>().add(self.index) }
     }
-    fn destination(&mut self, iova: u32, expected: u32) {
-        unsafe { Self::word().write_volatile(!PATTERN) };
-        order();
+
+    pub(super) fn word(&self) -> *mut u32 {
+        self.page().cast()
+    }
+
+    pub(super) fn write(&mut self, iova: u32) {
         self.edu.transfer(iova, true);
-        assert_eq!(unsafe { Self::word().read_volatile() }, expected);
     }
+
     pub(super) fn prime(&mut self) {
-        let pa = u32::try_from(Self::word().addr()).unwrap();
-        assert_ne!(pa, IOVA);
-        unsafe { Self::word().write_volatile(PATTERN) };
+        let word = self.word();
+        let physical = u32::try_from(word.addr()).unwrap();
+        assert_ne!(physical, IOVA);
+        unsafe { word.write_volatile(PATTERNS[self.index]) };
         order();
-        self.edu.transfer(pa, false);
-        self.destination(pa, PATTERN);
+        self.edu.transfer(physical, false);
+        unsafe { word.write_volatile(!PATTERNS[self.index]) };
+        order();
+        self.write(physical);
+        assert_eq!(unsafe { word.read_volatile() }, PATTERNS[self.index]);
     }
+
     pub(super) fn verify_abort(&mut self) {
-        self.destination(Self::word().addr() as u32, !PATTERN);
+        let word = self.word();
+        unsafe { word.write_volatile(!PATTERNS[self.index]) };
+        order();
+        self.write(word.addr() as u32);
+        assert_eq!(unsafe { word.read_volatile() }, !PATTERNS[self.index]);
     }
-    pub(super) fn install(&mut self, controller: &mut Controller<'_>) {
+
+    pub(super) fn prepare(&self, controller: &mut Controller<'_>) -> Binding {
         let format = controller.format().unwrap();
-        unsafe {
-            (&raw mut STREAMS)
-                .cast::<[u64; 8]>()
-                .add(RID as usize)
-                .write(format.stream(address(&raw mut L1), 1).unwrap());
-            (&raw mut L1)
-                .cast::<u64>()
-                .write(format.branch(address(&raw mut L2)).unwrap());
-            (&raw mut L2)
-                .cast::<u64>()
-                .add(1)
-                .write(format.branch(address(&raw mut L3)).unwrap());
-            (&raw mut L3).cast::<u64>().write(
-                format
-                    .leaf(address(&raw mut DATA), Access::ReadWrite)
-                    .unwrap(),
-            );
-            order();
-            let table = StreamTable {
-                base: address(&raw mut STREAMS),
-                bits: 6,
-            };
-            controller.begin_install(table.base, table.bits).unwrap();
-            for _ in 0..100_000 {
-                match controller.observe_install() {
-                    Ok(()) => {
-                        assert_eq!(controller.retained_table(), Some(table));
-                        self.format = Some(format);
-                        return;
-                    }
-                    Err(smmu::Error::Busy) => core::hint::spin_loop(),
-                    Err(e) => panic!("SMMU enable {e:?}"),
-                }
-            }
-        }
-        panic!("SMMU enable timeout");
-    }
-    pub(super) fn verify_translation(&mut self) {
-        self.destination(IOVA, PATTERN);
-    }
-    pub(super) fn downgrade(&self) {
-        let leaf = self
-            .format
-            .as_ref()
-            .unwrap()
-            .leaf(address(&raw mut DATA), Access::Read)
+        let pages = unsafe { &mut (*(&raw mut TABLES))[self.index] };
+        pages[0].0[0] = format.branch(address(&raw mut pages[1])).unwrap();
+        pages[1].0[1] = format.branch(address(&raw mut pages[2])).unwrap();
+        pages[2].0[0] = format
+            .leaf(address(self.page()), Access::ReadWrite)
             .unwrap();
+        order();
+        let context = Context {
+            stream: self.requester,
+            root: address(&raw mut pages[0]),
+            vmid: (self.index + 1) as u8,
+        };
+        unsafe { controller.prepare(context) }.unwrap()
+    }
+
+    pub(super) fn downgrade(&self, format: Format) {
+        let leaf = format.leaf(address(self.page()), Access::Read).unwrap();
         unsafe {
-            (&raw mut L3).cast::<u64>().write_volatile(leaf);
+            (&raw mut (*(&raw mut TABLES))[self.index][2].0[0]).write_volatile(leaf);
         }
         order();
-    }
-    pub(super) fn verify_downgrade(&mut self) {
-        self.destination(IOVA, !PATTERN);
     }
 }

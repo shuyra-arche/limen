@@ -3,6 +3,7 @@
 use super::{Error, Profile};
 use limen_treaty::model::PhysicalAddress;
 
+#[derive(Clone, Copy)]
 pub struct Format(());
 #[derive(Clone, Copy, Debug)]
 pub enum Access {
@@ -28,7 +29,7 @@ impl Format {
     }
     /// Valid, translating STE. Untranslated traffic only, no ATS, PASID or
     /// stall. The caller publishes the complete table while sources are stopped.
-    pub fn stream(&self, root: PhysicalAddress, vmid: u8) -> Result<[u64; 8], Error> {
+    pub(super) fn stream(&self, root: PhysicalAddress, vmid: u8) -> Result<[u64; 8], Error> {
         // T0SZ=32, SL0=1 (start at L1), inner/outer WBWA, inner-shareable,
         // 4 KiB and 32-bit PA. Little-endian AArch64 walk with no HTTU.
         let vtcr: u64 = 32 | (1 << 6) | (1 << 8) | (1 << 10) | (3 << 12);

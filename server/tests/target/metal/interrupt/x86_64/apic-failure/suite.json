@@ -29,12 +29,12 @@
     "server/src/metal/processor/hart/local/**",
     "server/src/metal/processor/hart/mod.rs",
     "server/src/metal/processor/mod.rs",
-    "server/tests/target/support/uefi/Cargo.lock",
     "server/tests/target/support/uefi/Cargo.toml",
     "server/tests/target/support/uefi/build.rs",
-    "server/tests/target/support/uefi/main.rs",
-    "server/tests/target/support/uefi/run.sh",
-    "server/src/metal/sync/**"
+    "server/src/metal/sync/**",
+    "server/tests/target/Cargo.toml",
+    "server/tests/target/Cargo.lock",
+    "server/tests/target/support/uefi/lib.rs"
   ],
   "run": {
     "kind": "board-boot",
@@ -59,9 +59,6 @@
     },
     "launch": {
       "q35": {
-        "features": [
-          "apic-failure"
-        ],
         "expects": [
           "PASS local-apic-failure before=1 after-init=1 retained=1 blocked=2"
         ],

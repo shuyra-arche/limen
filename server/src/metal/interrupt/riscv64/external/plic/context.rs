@@ -1,22 +1,66 @@
-//! One physical domain serializes shared enable words and retains claims.
+//! Independent supervisor contexts, their threshold and original claim.
 
-use super::{Domain, Route, enable, enables, priority, threshold};
-use crate::metal::{
-    interrupt::riscv64::{
-        external::Barrier,
-        internal::supervisor::{Cause, Reception},
-    },
-    memory::mmu::access::device::DeviceWindow,
+use super::{
+    Access, Domain, Failure, RouteState,
+    registers::{claim, enable, enables, threshold},
 };
-use limen_treaty::model::Alignment;
+use crate::metal::{
+    interrupt::riscv64::internal::supervisor::{Cause, Reception},
+    platform::description::devicetree::{DeviceTree, Error},
+    processor::hart::riscv64::description::RiscvCpus,
+};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Failure {
-    Scope,
-    Busy,
-    Capacity,
-    Exhausted,
-    Unconfirmed,
+/// One supervisor context described by the physical controller.
+#[derive(Clone, Copy, Debug)]
+pub struct Destination<'a> {
+    pub(super) domain: Domain<'a>,
+    pub(super) hart: u64,
+    pub(super) index: usize,
+}
+
+impl<'a> Destination<'a> {
+    pub fn read(
+        tree: &DeviceTree<'a>,
+        cpus: &RiscvCpus<'a>,
+        domain: Domain<'a>,
+        hart: u64,
+    ) -> Result<Self, Error> {
+        let node = tree.node(domain.node).ok_or(Error::Conflict)?;
+        if tree.node(cpus.node().id()).is_none() {
+            return Err(Error::Conflict);
+        }
+        if !cpus.cpu(hart)?.is_some_and(|cpu| cpu.enabled()) {
+            return Err(Error::Missing);
+        }
+        let bytes = node
+            .property(b"interrupts-extended")?
+            .ok_or(Error::Missing)?;
+        // Domain checked the shape, length and register extent in this tree.
+        let mut found = None;
+        for (index, pair) in bytes.as_chunks::<8>().0.iter().enumerate() {
+            let cause = u32::from_be_bytes(pair[4..].try_into().unwrap());
+            // Machine and firmware-disabled destinations still occupy indexes.
+            if matches!(cause, 11 | u32::MAX) {
+                continue;
+            }
+            if cause != 9 {
+                return Err(Error::Unsupported);
+            }
+            let handle = u32::from_be_bytes(pair[..4].try_into().unwrap());
+            if cpus.interrupt_hart(handle)? == hart && found.replace(index).is_some() {
+                return Err(Error::Conflict);
+            }
+        }
+        Ok(Self {
+            domain,
+            hart,
+            index: found.ok_or(Error::Missing)?,
+        })
+    }
+
+    pub fn number(self) -> usize {
+        self.index
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,7 +77,17 @@ pub enum State {
 }
 
 impl State {
-    fn excludes_source(self, source: u32) -> bool {
+    pub(super) fn retains_claim(self, source: u32) -> bool {
+        match self {
+            Self::Receiving(_) => true,
+            Self::Received(_, claimed)
+            | Self::Completing(_, claimed)
+            | Self::Awaiting(_, claimed) => claimed == source,
+            _ => false,
+        }
+    }
+
+    pub(super) fn excludes_source(self, source: u32) -> bool {
         match self {
             Self::Prepared | Self::Opening | Self::Open => true,
             Self::Received(_, claimed) | Self::Awaiting(_, claimed) => claimed != source,
@@ -42,61 +96,24 @@ impl State {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SourceState {
-    Prepared,
-    Enabling,
-    Enabled,
-    Disabling,
-}
-
 #[derive(Clone, Copy)]
 struct Context {
     index: usize,
     hart: u64,
+    inherited: u32,
     threshold: u32,
     state: State,
 }
 
-/// Caller-supplied storage for one independent physical context.
+/// Resident storage for one physical supervisor context.
 pub struct ContextSlot(Option<Context>);
 
 impl ContextSlot {
     pub const EMPTY: Self = Self(None);
-}
 
-#[derive(Clone, Copy)]
-struct Source {
-    id: u32,
-    context: usize,
-    priority: u32,
-    state: SourceState,
-}
-
-/// Caller-supplied storage for one physical source and its priority obligation.
-pub struct SourceSlot(Option<Source>);
-
-impl SourceSlot {
-    pub const EMPTY: Self = Self(None);
-}
-
-/// The persistent owner of one domain's context, source and claim records.
-/// The owner can be shared under the composition's actual serialization.
-#[must_use]
-pub struct Controller<'storage, 'tree> {
-    domain: Domain<'tree>,
-    contexts: &'storage mut [ContextSlot],
-    sources: &'storage mut [SourceSlot],
-    next_round: u64,
-}
-
-/// Exclusive short-lived access using the executing Hart's own MMIO window.
-/// Releasing access does not release any route, context or received claim.
-#[must_use]
-pub struct Access<'access, 'storage, 'tree> {
-    controller: &'access mut Controller<'storage, 'tree>,
-    mapping: &'access mut DeviceWindow,
-    barrier: Barrier,
+    pub(super) fn occupied(&self) -> bool {
+        self.0.is_some()
+    }
 }
 
 /// An exact borrow of the context that performed the original claim read.
@@ -120,14 +137,7 @@ impl Claim<'_, '_, '_, '_> {
 
     pub fn expected(&self) -> bool {
         let context = self.owner.controller.contexts[self.slot].0.unwrap();
-        self.owner
-            .lookup_source(self.source)
-            .ok()
-            .is_some_and(|slot| {
-                self.owner.controller.sources[slot].0.is_some_and(|source| {
-                    source.context == context.index && source.state == SourceState::Enabled
-                })
-            })
+        self.owner.route_state_at(self.source, context.index) == Ok(RouteState::Enabled)
     }
 
     /// # Safety
@@ -149,7 +159,7 @@ impl Claim<'_, '_, '_, '_> {
         }
         self.owner
             .set_context(self.slot, State::Completing(self.round, self.source));
-        self.owner.write(threshold(context.index) + 4, self.source);
+        self.owner.write(claim(context.index), self.source);
         self.owner
             .set_context(self.slot, State::Awaiting(self.round, self.source));
         Ok(())
@@ -169,78 +179,30 @@ impl Claim<'_, '_, '_, '_> {
     }
 }
 
-impl<'storage, 'tree> Controller<'storage, 'tree> {
-    /// # Safety
-    /// The caller owns this domain and excludes other writers in admitted
-    /// contexts and admitted source priorities. Retain that authority and
-    /// the original records until all effects settle, including failures.
-    pub unsafe fn admit(
-        domain: Domain<'tree>,
-        contexts: &'storage mut [ContextSlot],
-        sources: &'storage mut [SourceSlot],
-    ) -> Result<Self, Failure> {
-        if contexts.is_empty()
-            || contexts.len() > domain.contexts
-            || sources.is_empty()
-            || sources.len() > domain.sources as usize
-        {
-            return Err(Failure::Scope);
-        }
-        if contexts.iter().any(|slot| slot.0.is_some())
-            || sources.iter().any(|slot| slot.0.is_some())
-        {
-            return Err(Failure::Busy);
-        }
-        Ok(Self {
-            domain,
-            contexts,
-            sources,
-            next_round: 1,
-        })
-    }
-
-    /// Borrow only the executing Hart's MMIO window. Neither a window for
-    /// another domain nor a second concurrent access can enter this owner.
-    ///
-    /// # Safety
-    /// The ordered enable-word readback must complete preceding writes to
-    /// that word on this interconnect, even when the value differs from the
-    /// one requested. A later access may update the same word on another Hart.
-    pub unsafe fn access<'access>(
-        &'access mut self,
-        mapping: &'access mut DeviceWindow,
-        barrier: Barrier,
-    ) -> Result<Access<'access, 'storage, 'tree>, Failure> {
-        if self.domain.registers() != mapping.physical()
-            || !mapping.is_aligned(Alignment::new(4096).unwrap())
-        {
-            return Err(Failure::Scope);
-        }
-        Ok(Access {
-            controller: self,
-            mapping,
-            barrier,
-        })
-    }
-}
-
 impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
     /// # Safety
-    /// The previous context has drained all claims and retained words; the
-    /// caller owns this original Hart's reception line and threshold.
-    pub unsafe fn attach(&mut self, route: Route<'tree>, local: &Reception) -> Result<(), Failure> {
-        self.check_route(route)?;
+    /// The previous context has drained all claims and retained writes.
+    /// The original Hart's reception line stays masked until its owner
+    /// opens this context using the corresponding reception authority.
+    pub unsafe fn prepare(
+        &mut self,
+        destination: Destination<'tree>,
+        requested_threshold: u32,
+    ) -> Result<(), Failure> {
+        if destination.domain.node != self.controller.domain.node {
+            return Err(Failure::Scope);
+        }
+        self.controller
+            .limits
+            .check_threshold(requested_threshold)?;
         let mut context = Context {
-            index: route.index,
-            hart: route.hart,
-            threshold: 0,
+            index: destination.index,
+            hart: destination.hart,
+            inherited: 0,
+            threshold: requested_threshold,
             state: State::Prepared,
         };
-        self.check(context, local)?;
-        if local.enabled() {
-            return Err(Failure::Busy);
-        }
-        let slot = match self.lookup_context(route.index) {
+        let slot = match self.lookup_context(context.index) {
             Ok(slot) if self.controller.contexts[slot].0.unwrap().state == State::Shut => slot,
             Ok(_) => return Err(Failure::Busy),
             Err(_) => self
@@ -255,38 +217,8 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
                 return Err(Failure::Busy);
             }
         }
-        context.threshold = self.read(threshold(context.index));
+        context.inherited = self.read(threshold(context.index));
         self.controller.contexts[slot].0 = Some(context);
-        Ok(())
-    }
-
-    /// # Safety
-    /// The stopped device and its original gateway are exclusive to this
-    /// binding, including priority. Other contexts exclude this source and
-    /// prior deliveries and writes have settled.
-    pub unsafe fn reserve(&mut self, route: Route<'tree>) -> Result<(), Failure> {
-        self.check_route(route)?;
-        let context = self.lookup_context(route.index)?;
-        if !matches!(
-            self.controller.contexts[context].0.unwrap().state,
-            State::Prepared | State::Open
-        ) || self.lookup_source(route.source).is_ok()
-        {
-            return Err(Failure::Busy);
-        }
-        let slot = self
-            .controller
-            .sources
-            .iter()
-            .position(|slot| slot.0.is_none())
-            .ok_or(Failure::Capacity)?;
-        let priority = self.read(priority(route.source));
-        self.controller.sources[slot].0 = Some(Source {
-            id: route.source,
-            context: route.index,
-            priority,
-            state: SourceState::Prepared,
-        });
         Ok(())
     }
 
@@ -295,20 +227,6 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
             .contexts
             .iter()
             .position(|slot| slot.0.is_some_and(|context| context.index == index))
-            .ok_or(Failure::Scope)
-    }
-
-    fn lookup_source(&self, id: u32) -> Result<usize, Failure> {
-        self.controller
-            .sources
-            .iter()
-            .position(|slot| slot.0.is_some_and(|source| source.id == id))
-            .ok_or(Failure::Scope)
-    }
-
-    fn check_route(&self, route: Route<'tree>) -> Result<(), Failure> {
-        (route.domain.node == self.controller.domain.node)
-            .then_some(())
             .ok_or(Failure::Scope)
     }
 
@@ -325,59 +243,15 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
             .state)
     }
 
-    pub fn source(&self, id: u32) -> Result<SourceState, Failure> {
-        Ok(self.controller.sources[self.lookup_source(id)?]
-            .0
-            .unwrap()
-            .state)
+    pub(super) fn holds_claim(&self, id: u32) -> bool {
+        self.controller.contexts.iter().any(|slot| {
+            slot.0
+                .is_some_and(|context| context.state.retains_claim(id))
+        })
     }
 
     fn set_context(&mut self, slot: usize, state: State) {
         self.controller.contexts[slot].0.as_mut().unwrap().state = state;
-    }
-
-    fn read(&mut self, offset: usize) -> u32 {
-        self.barrier.synchronize();
-        let bits = unsafe { self.mapping.read_u32(offset) }.expect("admitted PLIC window");
-        self.barrier.synchronize();
-        bits
-    }
-
-    fn write(&mut self, offset: usize, value: u32) {
-        self.barrier.synchronize();
-        unsafe { self.mapping.write_u32(offset, value) }.expect("admitted PLIC window");
-        self.barrier.synchronize();
-    }
-
-    fn program(&mut self, offset: usize, value: u32) -> Result<(), Failure> {
-        self.write(offset, value);
-        (self.read(offset) == value)
-            .then_some(())
-            .ok_or(Failure::Unconfirmed)
-    }
-
-    fn set_enabled(&mut self, source: Source, enabled: bool) -> Result<(), Failure> {
-        let (register, mask) = enable(source.context, source.id);
-        let current = self.read(register);
-        self.program(register, change_enable(current, mask, enabled))
-    }
-
-    /// # Safety
-    /// A compatible receiver and the source's handler have been prepared.
-    /// Delivery through an open context may follow immediately.
-    pub unsafe fn enable(&mut self, id: u32) -> Result<(), Failure> {
-        let slot = self.lookup_source(id)?;
-        let source = self.controller.sources[slot].0.unwrap();
-        if !matches!(source.state, SourceState::Prepared | SourceState::Enabling)
-            || !self.state(source.context)?.excludes_source(id)
-        {
-            return Err(Failure::Busy);
-        }
-        self.controller.sources[slot].0.as_mut().unwrap().state = SourceState::Enabling;
-        self.program(priority(id), 1)?;
-        self.set_enabled(source, true)?;
-        self.controller.sources[slot].0.as_mut().unwrap().state = SourceState::Enabled;
-        Ok(())
     }
 
     /// # Safety
@@ -387,11 +261,13 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         let slot = self.lookup_context(index)?;
         let context = self.controller.contexts[slot].0.unwrap();
         self.check(context, local)?;
-        if !matches!(context.state, State::Prepared | State::Opening) {
+        if !matches!(context.state, State::Prepared | State::Opening)
+            || (context.state == State::Prepared && local.enabled())
+        {
             return Err(Failure::Busy);
         }
         self.set_context(slot, State::Opening);
-        self.program(threshold(index), 0)?;
+        self.program(threshold(index), context.threshold)?;
         local.set(true);
         if !local.enabled() {
             return Err(Failure::Unconfirmed);
@@ -414,7 +290,7 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         let round = self.controller.next_round;
         self.controller.next_round = round.checked_add(1).ok_or(Failure::Exhausted)?;
         self.set_context(slot, State::Receiving(round));
-        let source = self.read(threshold(index) + 4);
+        let source = self.read(claim(index));
         if source == 0 {
             self.set_context(slot, State::Open);
             return Ok(None);
@@ -445,22 +321,6 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
     }
 
     /// # Safety
-    /// The device, original deliveries and previous writes are drained and
-    /// future assertions from the retiring binding are excluded.
-    pub unsafe fn retire(&mut self, id: u32) -> Result<(), Failure> {
-        let slot = self.lookup_source(id)?;
-        let source = self.controller.sources[slot].0.unwrap();
-        if !self.state(source.context)?.excludes_source(id) {
-            return Err(Failure::Busy);
-        }
-        self.controller.sources[slot].0.as_mut().unwrap().state = SourceState::Disabling;
-        self.set_enabled(source, false)?;
-        self.program(priority(id), source.priority)?;
-        self.controller.sources[slot].0 = None;
-        Ok(())
-    }
-
-    /// # Safety
     /// The original context and gateway effects have settled. Local
     /// masking and restoring the threshold cannot prove that by themselves.
     pub unsafe fn shut(&mut self, index: usize, local: &mut Reception) -> Result<(), Failure> {
@@ -470,11 +330,7 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         if !matches!(
             context.state,
             State::Prepared | State::Opening | State::Open | State::Shutting
-        ) || self
-            .controller
-            .sources
-            .iter()
-            .any(|slot| slot.0.is_some_and(|source| source.context == index))
+        ) || self.has_routes(index)
         {
             return Err(Failure::Busy);
         }
@@ -483,7 +339,7 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         if local.enabled() {
             return Err(Failure::Unconfirmed);
         }
-        self.program(threshold(index), context.threshold)?;
+        self.program(threshold(index), context.inherited)?;
         self.set_context(slot, State::Shut);
         Ok(())
     }
@@ -496,16 +352,35 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         self.controller.contexts[slot].0 = None;
         Ok(())
     }
-}
 
-fn change_enable(current: u32, mask: u32, enabled: bool) -> u32 {
-    if enabled {
-        current | mask
-    } else {
-        current & !mask
+    /// Release a prepared context that never opened and has no routes.
+    pub fn cancel(&mut self, index: usize) -> Result<(), Failure> {
+        let slot = self.lookup_context(index)?;
+        if self.controller.contexts[slot].0.unwrap().state != State::Prepared
+            || self.has_routes(index)
+        {
+            return Err(Failure::Busy);
+        }
+        self.controller.contexts[slot].0 = None;
+        Ok(())
     }
 }
 
 #[cfg(test)]
-#[path = "../../../../../../tests/metal/interrupt/riscv64/external/plic/mod.rs"]
+#[path = "../../../../../../tests/metal/interrupt/riscv64/external/plic/context.rs"]
 mod tests;
+
+impl crate::metal::interrupt::claim::Sealed for Claim<'_, '_, '_, '_> {}
+
+impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_, '_, '_> {
+    type Error = Failure;
+
+    fn source_number(&self) -> u32 {
+        self.source()
+    }
+
+    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::Completion, Failure> {
+        use crate::metal::interrupt::Completion;
+        unsafe { self.complete() }.map(|()| Completion::AwaitingConfirmation)
+    }
+}
