@@ -75,3 +75,9 @@ separate run receipts and artifacts.
 Benchmark CI runs automatically for changes to benchmark implementation or
 shared execution infrastructure, not ordinary Kernel source changes or
 pushes. Select a revision manually to collect a performance baseline.
+
+`summary.json` records descriptive statistics derived from the raw samples:
+minimum, median, maximum, median absolute deviation, median normalized time
+and aggregate throughput. No measurements or outliers are discarded.
+`verify compare <baseline-artifact> <candidate-artifact>` accepts complete
+Bench artifact roots and refuses incompatible or incomplete evidence.

@@ -26,6 +26,10 @@ enum Commands {
         #[arg(long)]
         bench: bool,
     },
+    Compare {
+        baseline: PathBuf,
+        candidate: PathBuf,
+    },
     Symbolize {
         elf: PathBuf,
         serial: PathBuf,
@@ -47,6 +51,10 @@ fn main() {
             bench: true,
         } => bench::run(&image, &evidence_root),
         Commands::Bench { .. } => Err("expected Cargo benchmark invocation (--bench)".into()),
+        Commands::Compare {
+            baseline,
+            candidate,
+        } => bench::compare(&baseline, &candidate),
         Commands::Symbolize {
             elf,
             serial,

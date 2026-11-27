@@ -264,4 +264,28 @@ shared infrastructure, including Host tests of measurement parsing.
 Other architecture measurements require their own admitted or explicitly
 calibrated clocks.
 
+### Descriptive comparison
+
+Each completed image writes `summary.json` alongside its raw measurement.
+The Bench workflow records `benchmark-context.json` with the workload
+fingerprint, compiler, profile, target, QEMU binary digest, and observed Host
+CPU and OS conditions. The fingerprint includes runner and workload inputs,
+not Kernel implementation source, and is deliberately conservative: unrelated
+changes inside a fingerprinted directory may also invalidate comparison.
+
+Extract two successful Bench artifacts and run:
+
+```sh
+"$runner" compare /path/to/baseline /path/to/candidate
+```
+
+Comparison requires the recorded context, firmware contents, platform and
+series definitions to match. It rejects incomplete results, different
+sample counts and duplicate series. It recomputes statistics from raw
+measurements and reports candidate-to-baseline median duration ratios.
+Different source and image revisions are allowed and identified. Equal
+recorded conditions do not establish identical host scheduling or CPU
+frequency. These are descriptive observations, not statistical significance
+or a performance gate.
+
 See [Runner](runner/README.md) for the execution and evidence boundary.

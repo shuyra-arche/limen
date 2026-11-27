@@ -3,6 +3,11 @@ use crate::{Result, evidence, native, require};
 use serde::Serialize;
 use std::{fs, path::Path, str::SplitWhitespace};
 
+mod comparison;
+mod statistics;
+
+pub use comparison::compare;
+
 const SERIES_LIMIT: usize = 16;
 const SAMPLE_LIMIT: usize = 64;
 const PARTICIPANT_LIMIT: usize = 64;
@@ -137,7 +142,11 @@ pub fn run(image: &Path, evidence_root: &Path) -> Result<()> {
     let result = (|| {
         let log = fs::read_to_string(directory.join("serial.log"))?;
         let measurement = decode(&log)?;
-        evidence::json(&directory.join("measurement.json"), &measurement)
+        evidence::json(&directory.join("measurement.json"), &measurement)?;
+        evidence::json(
+            &directory.join("summary.json"),
+            &statistics::summarize(&measurement),
+        )
     })();
     if let Err(error) = &result {
         fs::write(directory.join("measurement-error.txt"), error.to_string())?;
@@ -146,5 +155,5 @@ pub fn run(image: &Path, evidence_root: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-#[path = "tests/bench.rs"]
+#[path = "../tests/bench/mod.rs"]
 mod tests;

@@ -81,12 +81,16 @@ jobs:
           runner="$PWD/server/tests/runner/target/$host/debug/verify"
           echo "LIMEN_TEST_RUNNER=$runner" >> "$GITHUB_ENV"
 
+      - name: Record benchmark context
+        id: context
+        shell: bash
+        run: bash server/tests/runner/ci/benchmark-context.sh
+
       - name: Run native benchmarks
         id: bench
         shell: bash
         run: |
           set -euo pipefail
-          echo bench > .integration/profile.txt
           evidence="$PWD/.integration/bench"
           config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','bench','--evidence-root','$evidence']"
           cargo -Z panic-abort-tests --config "$config" bench --locked \
@@ -102,12 +106,13 @@ jobs:
           TOOLCHAIN: ${{ steps.toolchain.outcome }}
           SOURCE: ${{ steps.source.outcome }}
           RUNNER: ${{ steps.runner.outcome }}
+          CONTEXT: ${{ steps.context.outcome }}
           BENCH: ${{ steps.bench.outcome }}
         run: |
           set -euo pipefail
           mkdir -p .integration/stages
-          printf '{"base_tools":"%s","tools":"%s","toolchain":"%s","source":"%s","runner":"%s","bench":"%s"}\n' \
-            "$BASE_TOOLS" "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$BENCH" \
+          printf '{"base_tools":"%s","tools":"%s","toolchain":"%s","source":"%s","runner":"%s","context":"%s","bench":"%s"}\n' \
+            "$BASE_TOOLS" "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$CONTEXT" "$BENCH" \
             > .integration/stages/outcomes.json
       - name: Preserve benchmark evidence
         if: always()

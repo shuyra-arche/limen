@@ -1,0 +1,99 @@
+use super::{Artifact, report};
+use crate::{bench::decode, evidence};
+use serde_json::json;
+use std::{fs, path::Path};
+
+fn artifact(root: &Path, source: char, sample: u64) {
+    let image = root.join("bench/image");
+    fs::create_dir_all(&image).unwrap();
+    fs::create_dir_all(root.join("stages")).unwrap();
+    let mut outcomes = serde_json::Map::new();
+    for stage in [
+        "base_tools",
+        "tools",
+        "toolchain",
+        "source",
+        "runner",
+        "context",
+        "bench",
+    ] {
+        outcomes.insert(stage.into(), json!("success"));
+    }
+    evidence::json(&root.join("stages/outcomes.json"), &outcomes).unwrap();
+    fs::write(root.join("source.txt"), source.to_string().repeat(40)).unwrap();
+    fs::write(root.join("rustc.txt"), "rustc fixture\n").unwrap();
+    fs::write(root.join("cargo.txt"), "cargo fixture\n").unwrap();
+    let digest = "a".repeat(64);
+    evidence::json(
+        &root.join("benchmark-context.json"),
+        &json!({
+            "schema": 1, "target": "riscv64gc-unknown-none-elf", "profile": "bench",
+            "rustc": "rustc fixture", "cargo": "cargo fixture",
+            "host_kernel": "fixture", "host_os": "fixture", "host_cpu": "fixture",
+            "host_cpus": "4", "host_cpu_quota": "max 100000",
+            "workload_sha256": digest, "qemu_sha256": digest,
+        }),
+    )
+    .unwrap();
+    evidence::json(&image.join("result.json"), &json!({"verdict": "pass"})).unwrap();
+    evidence::json(
+        &image.join("process.json"),
+        &json!({
+            "termination": {"kind": "exited", "value": 97}, "error": null,
+            "cleanup": {"spawned": true, "settled": true,
+                "unexpected_descendants": false, "error": null},
+        }),
+    )
+    .unwrap();
+    evidence::json(
+        &image.join("platform.json"),
+        &json!({"architecture": "riscv64", "harts": 1,
+            "image_sha256": source.to_string().repeat(64)}),
+    )
+    .unwrap();
+    evidence::json(
+        &image.join("firmware.json"),
+        &json!({"code": "fixture", "code_sha256": digest}),
+    )
+    .unwrap();
+    evidence::json(
+        &image.join("tools.json"),
+        &json!({"qemu": "fixture", "runner_sha256": digest}),
+    )
+    .unwrap();
+    let log = format!(
+        "LIMEN_BENCH_V2 0 10000000 1\nLIMEN_BENCH_SERIES fixture 1 1 10 1\nLIMEN_BENCH_SAMPLE 0 {sample}\n"
+    );
+    fs::write(image.join("serial.log"), &log).unwrap();
+    let measurement = decode(&log).unwrap();
+    evidence::json(&image.join("measurement.json"), &measurement).unwrap();
+    evidence::json(
+        &image.join("summary.json"),
+        &crate::bench::statistics::summarize(&measurement),
+    )
+    .unwrap();
+}
+
+#[test]
+fn comparison_rejects_changed_context_and_incomplete_evidence() {
+    let root = std::env::temp_dir().join(format!("kernel-compare-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let before = root.join("before");
+    let after = root.join("after");
+    artifact(&before, 'a', 100);
+    artifact(&after, 'b', 150);
+    let baseline = Artifact::read(&before).unwrap();
+    let mut candidate = Artifact::read(&after).unwrap();
+    let result = report(&baseline, &candidate).unwrap();
+    assert_eq!(
+        result["series"][0]["median_duration_ratio"].as_f64(),
+        Some(1.5)
+    );
+
+    candidate.context["host_cpu"] = json!("different");
+    assert!(report(&baseline, &candidate).is_err());
+
+    fs::remove_file(after.join("bench/image/measurement.json")).unwrap();
+    assert!(Artifact::read(&after).is_err());
+    fs::remove_dir_all(root).unwrap();
+}
