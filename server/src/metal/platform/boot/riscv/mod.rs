@@ -43,7 +43,7 @@ pub(crate) fn established() -> bool {
     status & 2 == 0 && interrupt_enable == 0 && translation == 0 && entry().is_some()
 }
 
-pub(crate) fn entry() -> Option<local::Entry> {
+pub(in crate::metal) fn entry() -> Option<local::Entry> {
     local::Entry::admit(
         native::Entry {
             vector: trap as *const () as usize,

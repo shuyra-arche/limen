@@ -39,8 +39,10 @@ pub(crate) use backend::enter_major;
 #[cfg(limen_firmware = "sbi")]
 pub(crate) use backend::image;
 #[cfg(limen_target)]
+pub(in crate::metal) use backend::entry;
+#[cfg(limen_target)]
 pub(crate) use backend::{
-    DeliveryError, MinorContext, admit, entry, established, minor_context, park, wake_minor,
+    DeliveryError, MinorContext, admit, established, minor_context, park, wake_minor,
 };
 
 /// Major and minor CPUs use the same ordinary startup stack budget.

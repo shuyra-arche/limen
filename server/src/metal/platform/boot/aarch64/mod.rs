@@ -25,7 +25,7 @@ pub(crate) fn established() -> bool {
     daif & 0x3c0 == 0x3c0 && spsel == 1 && entry().is_some()
 }
 
-pub(crate) fn entry() -> Option<local::Entry> {
+pub(in crate::metal) fn entry() -> Option<local::Entry> {
     local::Entry::admit(
         native::Entry {
             vector: vectors as *const () as usize,

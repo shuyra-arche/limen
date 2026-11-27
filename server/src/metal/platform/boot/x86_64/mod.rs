@@ -20,11 +20,7 @@ struct Gate {
     reserved: u32,
 }
 
-#[repr(C, packed)]
-struct Descriptor {
-    limit: u16,
-    base: usize,
-}
+use x86_64::Descriptor;
 
 #[unsafe(naked)]
 extern "sysv64" fn stop() -> ! {
@@ -64,7 +60,7 @@ pub(crate) fn established() -> bool {
     cr0 & (1 << 31) != 0 && flags & (1 << 9) == 0 && entry().is_some()
 }
 
-pub(crate) fn entry() -> Option<local::Entry> {
+pub(in crate::metal) fn entry() -> Option<local::Entry> {
     local::Entry::admit(
         x86_64::Entry {
             base: (&raw const IDT).addr(),

@@ -36,7 +36,9 @@ pub(crate) unsafe fn admit<'a>(
         services.reject(format_args!("FAIL Limen boot: invalid firmware input\n"));
     };
     let Some(entry) = boot::entry() else {
-        services.reject(format_args!("FAIL Limen boot: entry changed before Hart admission\n"));
+        services.reject(format_args!(
+            "FAIL Limen boot: entry changed before Hart admission\n"
+        ));
     };
     unsafe { LOCAL.install(hart, entry) };
     if !local::can_switch() {

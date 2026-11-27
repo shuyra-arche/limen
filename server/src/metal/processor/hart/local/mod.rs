@@ -1,8 +1,8 @@
 //! Trusted local CPU facts and fixed storage.
 
+use core::ptr;
 #[cfg(limen_target)]
 use core::{cell::Cell, ops::Range};
-use core::ptr;
 
 mod node;
 mod protection;

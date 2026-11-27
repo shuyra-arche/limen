@@ -84,17 +84,16 @@ pub(in crate::metal) struct Entry {
     pub(in crate::metal) limit: u16,
 }
 
+/// The machine's packed descriptor-table register layout (GDTR/IDTR).
 #[repr(C, packed)]
-struct Descriptor {
-    limit: u16,
-    base: usize,
+pub(in crate::metal) struct Descriptor {
+    pub(in crate::metal) limit: u16,
+    pub(in crate::metal) base: usize,
 }
 
 pub(in crate::metal) fn entry() -> Option<Entry> {
     let cs: u16;
-    unsafe {
-        asm!("mov {:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags))
-    };
+    unsafe { asm!("mov {:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags)) };
     const PRIVILEGE: u16 = 3;
     if cs & PRIVILEGE != 0 {
         return None;
