@@ -66,6 +66,8 @@ jobs:
         run: |
           rustc -Vv
           rustup component add rustfmt clippy
+      - name: Check build profiles
+        run: bash server/tests/entry/boot/profiles.sh
       - name: Identify compiler
         id: compiler
         run: echo "hash=$(rustc -Vv | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"

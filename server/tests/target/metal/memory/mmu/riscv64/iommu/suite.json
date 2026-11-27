@@ -20,7 +20,7 @@
     "server/src/entry/boot/**",
     "server/src/metal/platform/boot/riscv64/**",
     "server/src/metal/platform/firmware/sbi/**",
-    "server/link.x",
+    "server/src/metal/platform/boot/riscv64/linker.ld",
     "server/src/metal/platform/boot/console.rs",
     "server/src/metal/platform/boot/services.rs",
     "server/src/metal/platform/description/devicetree/**",

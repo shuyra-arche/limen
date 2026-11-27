@@ -43,7 +43,7 @@
     "server/src/metal/processor/hart/riscv64/mod.rs",
     "server/src/metal/processor/hart/riscv64/native.rs",
     "server/src/metal/sync/**",
-    "server/link.x",
+    "server/src/metal/platform/boot/riscv64/linker.ld",
     "server/tests/metal/module/fixture.rs",
     "server/tests/metal/module/probe.rs",
     "server/tests/metal/module/riscv_fixture.rs",

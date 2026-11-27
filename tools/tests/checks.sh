@@ -15,7 +15,9 @@ for path in "${changed[@]}"; do
             ;;
         server/src/metal/platform/boot/handoff/uefi.rs|server/src/metal/platform/firmware/uefi/loader.rs|server/src/metal/processor/hart/aarch64/description.rs|server/src/metal/processor/hart/aarch64/status.rs|server/src/metal/processor/hart/x86_64/status.rs|server/src/metal/processor/execution/description/x86_64.rs|server/src/metal/processor/execution/description/aarch64.rs|server/src/metal/platform/firmware/psci/mod.rs|server/src/metal/interrupt/x86_64/*|server/src/metal/interrupt/aarch64/*|server/src/metal/memory/mmu/x86_64/*|server/src/metal/memory/mmu/aarch64/*|server/src/metal/chrono/aarch64/mod.rs)
             host=true ;;
-        server/src/*|server/link.x)
+        server/src/metal/platform/boot/riscv64/linker.ld)
+            rv64=true ;;
+        server/src/*)
             host=true; rv64=true ;;
         server/tests/metal/sync/contracts.*|server/tests/entry/boot/contracts.*)
             rv64=true ;;

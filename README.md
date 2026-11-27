@@ -31,6 +31,12 @@ require a C linker. Ordinary Cargo commands use the host target; kernel and
 QEMU guest builds must select their hardware target explicitly. The RV64 flags
 in `.cargo/config.toml` still apply to explicit RV64 builds.
 
+The supported kernel image profiles are `riscv64gc-unknown-none-elf` with the
+SBI handoff, and `x86_64-unknown-uefi` or `aarch64-unknown-uefi` with the UEFI
+handoff. Other targets select the portable library. The RV64 provider exports
+its [ELF linker script](server/src/metal/platform/boot/riscv64/linker.ld) to
+the image crate, which supplies the load address and readable DTB extent.
+
 ```sh
 rustc -Vv
 rustup component add rustfmt clippy

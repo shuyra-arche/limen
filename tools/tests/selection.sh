@@ -45,6 +45,12 @@ change server/src/metal/platform/boot/x86_64/mod.rs
 bash "$discover" . "$base" | jq -e 'map(select(.id == "platform-boot").profile) | sort == ["debug","release"]' >/dev/null
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 
+change server/src/metal/platform/boot/riscv64/linker.ld
+expect_suites boot-handoff kernel-execution kernel-execution-harts riscv-module-execution \
+    rv64-interrupt rv64-iommu rv64-ipi rv64-plic-sstc
+[[ $(boards) == rv64 ]]
+bash "$checks" . "$base" | jq -e '.rv64 and ((.host or .runner) | not)' >/dev/null
+
 change server/src/metal/processor/hart/x86_64/native.rs
 [[ $(boards) == q35 ]]
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null

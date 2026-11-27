@@ -21,7 +21,7 @@
     "server/src/entry/boot/**",
     "server/src/metal/platform/boot/riscv64/**",
     "server/src/metal/platform/firmware/sbi/**",
-    "server/link.x",
+    "server/src/metal/platform/boot/riscv64/linker.ld",
     "server/src/basis/**",
     "server/src/metal/sync/**",
     "server/src/metal/memory/allocator/**",
