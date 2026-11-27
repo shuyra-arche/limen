@@ -70,7 +70,7 @@ fn execute(image: &Path, directory: &Path, observe: bool) -> Result<Report> {
     }
 }
 
-pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<()> {
+pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<PathBuf> {
     let image = image.canonicalize()?;
     let evidence = match evidence_root {
         Some(root) => root.join(image.file_name().ok_or("missing executable name")?),
@@ -90,7 +90,8 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
     require(
         report.verdict == Verdict::Pass,
         format!("native guest verdict: {report:?}"),
-    )
+    )?;
+    Ok(directory)
 }
 
 #[cfg(test)]

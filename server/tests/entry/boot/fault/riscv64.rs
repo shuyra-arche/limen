@@ -222,8 +222,7 @@ fn bss_clear_traps_on_the_original_major_stack() {
     assert_eq!(platform.platform.harts, 4);
 
     // The normal run and the fault run use the same actual Cargo artifact.
-    native::run(&image, false, Some(&evidence.join("normal"))).unwrap();
-    let normal = evidence.join("normal").join(image.file_name().unwrap());
+    let normal = native::run(&image, false, Some(&evidence.join("normal"))).unwrap();
     let result = receipt(&normal.join("result.json"));
     assert_eq!(result["verdict"], "pass");
     let process = receipt(&normal.join("process.json"));

@@ -1,4 +1,5 @@
 //! Host-only execution and evidence for native guest tests.
+pub mod bench;
 pub mod evidence;
 pub mod machine;
 pub mod native;

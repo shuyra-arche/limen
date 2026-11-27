@@ -143,6 +143,20 @@ jobs:
             --manifest-path server/tests/target/Cargo.toml -p module-guest \
             --target "$LIMEN_TEST_TARGET" --tests --no-fail-fast "${profile[@]}" \
             2>&1 | tee .integration/stages/module.log
+      # Establish the bench transport on one supported machine/profile.
+      # This is a protocol smoke check, never a performance threshold.
+      - name: Run benchmark transport smoke
+        id: bench
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' && matrix.arch == 'riscv64' && matrix.profile == 'release' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$PWD/.integration/bench"
+          config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','bench','--evidence-root','$evidence']"
+          cargo -Z panic-abort-tests --config "$config" bench --locked \
+            --manifest-path server/tests/target/Cargo.toml -p riscv64-guest \
+            --target "$LIMEN_TEST_TARGET" --bench clock \
+            2>&1 | tee .integration/stages/bench.log
       - name: Record stage outcomes
         if: ${{ !cancelled() }}
         shell: bash
@@ -155,12 +169,13 @@ jobs:
           GUESTS: ${{ steps.guests.outcome }}
           MODULE_TARGET: ${{ steps.module.outcome }}
           MODULE_GUESTS: ${{ steps.module_guests.outcome }}
+          BENCH: ${{ steps.bench.outcome }}
         run: |
           set -euo pipefail
           mkdir -p .integration/stages
           # These are Actions step outcomes, not individual guest verdicts.
-          printf '{"tools":"%s","toolchain":"%s","source":"%s","runner":"%s","observers":"%s","guests":"%s","module_target":"%s","module_guests":"%s"}\n' \
-            "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$OBSERVERS" "$GUESTS" "$MODULE_TARGET" "$MODULE_GUESTS" \
+          printf '{"tools":"%s","toolchain":"%s","source":"%s","runner":"%s","observers":"%s","guests":"%s","module_target":"%s","module_guests":"%s","bench":"%s"}\n' \
+            "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$OBSERVERS" "$GUESTS" "$MODULE_TARGET" "$MODULE_GUESTS" "$BENCH" \
             > .integration/stages/outcomes.json
       - name: Preserve target evidence
         if: always()

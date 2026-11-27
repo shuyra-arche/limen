@@ -34,6 +34,8 @@ Use a fresh evidence root for a repeated run.
 - `qmp` owns the control connection and its shutdown receipt or observation error.
 - `native` interprets the ordinary guest completion contract. Host observers
   interpret their own contracts, not a generic exit status.
+- `bench` reuses native completion and checks the bounded measurement series;
+  it stores measurements separately from the execution verdict.
 - `evidence` supplies shared storage operations without deciding receipt meaning.
 
 `--observe` additionally records QMP over an isolated Unix socket. This does
@@ -58,3 +60,8 @@ architecture is derived from the selected guest target triple, not from
 the Host ISA or a test name. The observation package is deliberately not
 a default workspace member: ordinary Host tests need no installed emulator.
 Target CI runs all its integration targets with native libtest.
+
+Cargo's benchmark invocation selects `verify bench --evidence-root <fresh-root>
+<image> --bench`. A completed guest with incomplete measurements is a failed
+benchmark invocation, not a usable timing result. The raw serial transcript
+and the native execution receipt remain available for investigation.

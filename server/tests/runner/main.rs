@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use kernel_verification::{Result, native, utilities};
+use kernel_verification::{Result, bench, native, utilities};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -18,6 +18,14 @@ enum Commands {
         evidence_root: Option<PathBuf>,
         image: PathBuf,
     },
+    Bench {
+        #[arg(long)]
+        evidence_root: PathBuf,
+        image: PathBuf,
+        // Cargo appends this flag to benchmark executables.
+        #[arg(long)]
+        bench: bool,
+    },
     Symbolize {
         elf: PathBuf,
         serial: PathBuf,
@@ -32,7 +40,13 @@ fn main() {
             observe,
             evidence_root,
             image,
-        } => native::run(&image, observe, evidence_root.as_deref()),
+        } => native::run(&image, observe, evidence_root.as_deref()).map(|_| ()),
+        Commands::Bench {
+            evidence_root,
+            image,
+            bench: true,
+        } => bench::run(&image, &evidence_root),
+        Commands::Bench { .. } => Err("expected Cargo benchmark invocation (--bench)".into()),
         Commands::Symbolize {
             elf,
             serial,

@@ -195,4 +195,37 @@ modify production startup code or produce a patched ELF. Unlike ordinary
 guests, this test asserts external terminal evidence because its expected
 outcome prevents in-guest completion.
 
+## Native benchmarks
+
+Benchmarks use Cargo benchmark targets under the owning test package. They
+share the normal guest entry, linker, machine preparation, process settlement
+and completion contract. The first target, `riscv64-guest:clock`, establishes
+a measurement transport over the admitted RISC-V timebase.
+
+```sh
+target=riscv64gc-unknown-none-elf
+config="target.$target.runner=['$runner','bench','--evidence-root','/tmp/limen-bench']"
+cargo -Z panic-abort-tests --config "$config" bench --locked \
+    --manifest-path server/tests/target/Cargo.toml -p riscv64-guest \
+    --target "$target" --bench clock
+```
+
+Use a fresh evidence root. The benchmark runs 1,024 warmup iterations and
+nine batches of 16,384 clock observations. It retains the admitted counter
+frequency, Hart, iteration count and raw batch durations in nanoseconds.
+Reporting occurs after measurement. The durations include loop and boundary
+observation overhead; this is a transport smoke benchmark, not a calibrated
+estimate of one instruction's cost.
+
+The bench runner first requires native completion and clean process
+retirement, then checks that the declared measurement series is complete.
+Only then is `measurement.json` written. Missing or malformed measurements
+fail the benchmark invocation even if the guest completion verdict is pass.
+QEMU data are emulator observations, not physical hardware results; no
+performance threshold is a correctness criterion. Target CI exercises the
+transport once in the riscv64 Release job, with its own evidence directory
+and stage outcome; it does not run a performance comparison. Other
+architecture measurements require their own admitted or explicitly
+calibrated clocks.
+
 See [Runner](runner/README.md) for the execution and evidence boundary.
