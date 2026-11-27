@@ -1,7 +1,10 @@
 //! Physical fixed-vector notifications through the original xAPIC ICR.
 
 use super::{Destination, Failure, LEVEL_ASSERT, LocalApic, State};
-use crate::metal::platform::description::acpi::Madt;
+use crate::metal::{
+    interrupt::ipi::{Issuance, NotifyHart, Sealed},
+    platform::description::acpi::Madt,
+};
 use core::sync::atomic::{Ordering, fence};
 use limen_treaty::model::PhysicalAddress;
 
@@ -66,7 +69,65 @@ impl IpiSend<'_, '_> {
     }
 }
 
+/// A borrow of the sender bound to the original ready remote receiver.
+pub struct IpiRoute<'a, 'map> {
+    owner: &'a mut LocalApic<'map>,
+    target: IpiTarget,
+}
+
+impl Sealed for IpiRoute<'_, '_> {}
+
+impl NotifyHart for IpiRoute<'_, '_> {
+    type Error = Failure;
+
+    fn notify(&mut self) -> Result<Issuance<Failure>, Failure> {
+        let _issued = unsafe { self.owner.notify(self.target) }?;
+        Ok(Issuance::Pending)
+    }
+
+    fn pending(&mut self) -> Result<Option<Issuance<Failure>>, Failure> {
+        self.owner.reception_context()?;
+        let Some(mut original) = self.owner.pending_ipi() else {
+            return Ok(None);
+        };
+        if original.target() != self.target {
+            return Err(Failure::Busy);
+        }
+        match original.observe() {
+            Ok(()) => Ok(Some(Issuance::Confirmed)),
+            Err(Failure::Unconfirmed) => Ok(Some(Issuance::Pending)),
+            Err(error) => Err(error),
+        }
+    }
+}
+
 impl<'map> LocalApic<'map> {
+    /// # Safety
+    /// The target is the live remote Hart whose original vector, installed
+    /// gate and reception route the caller has qualified. Retain the exact
+    /// remote path through pending issues and independent reception.
+    pub unsafe fn bind_ipi(&mut self, target: IpiTarget) -> Result<IpiRoute<'_, 'map>, Failure> {
+        self.check_ipi_target(target)?;
+        if self.ipi.is_some_and(|original| original != target) {
+            return Err(Failure::Busy);
+        }
+        Ok(IpiRoute {
+            owner: self,
+            target,
+        })
+    }
+
+    fn check_ipi_target(&mut self, target: IpiTarget) -> Result<(), Failure> {
+        self.reception_context()?;
+        if self.base.physical.start() == target.controller
+            && self.hart != usize::from(target.hart())
+        {
+            Ok(())
+        } else {
+            Err(Failure::Scope)
+        }
+    }
+
     /// Request a physical fixed interrupt. Retain the requested target
     /// before the triggering ICR write and across uncertain observation.
     ///
@@ -76,12 +137,7 @@ impl<'map> LocalApic<'map> {
     /// the original vector lease, installed gate and receiving authority.
     /// Keep those alive until the target independently settles the effect.
     pub unsafe fn notify(&mut self, target: IpiTarget) -> Result<IpiSend<'_, 'map>, Failure> {
-        self.reception_context()?;
-        if self.base.physical.start() != target.controller
-            || self.hart == usize::from(target.hart())
-        {
-            return Err(Failure::Scope);
-        }
+        self.check_ipi_target(target)?;
         if self.state != State::Idle || self.ipi.is_some() || !self.idle() {
             return Err(Failure::Busy);
         }

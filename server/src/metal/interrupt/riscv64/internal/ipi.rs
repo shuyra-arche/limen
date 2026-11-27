@@ -1,6 +1,7 @@
 //! Native supervisor doorbells using the admitted SBI firmware service.
 
 use crate::metal::{
+    interrupt::ipi::{Issuance, NotifyHart, Sealed},
     platform::{
         description::devicetree::NodeId,
         firmware::sbi::{HartService, IpiService},
@@ -44,6 +45,38 @@ pub struct Sender<'tree> {
     source: usize,
     harts: HartService,
     interrupts: IpiService,
+    unconfirmed: Option<(usize, isize)>,
+}
+
+/// A borrow of the sender bound to the original ready remote receiver.
+pub struct IpiRoute<'a, 'tree> {
+    owner: &'a mut Sender<'tree>,
+    target: &'a Target<'tree>,
+}
+
+impl Sealed for IpiRoute<'_, '_> {}
+
+impl NotifyHart for IpiRoute<'_, '_> {
+    type Error = Error;
+
+    fn notify(&mut self) -> Result<Issuance<Error>, Error> {
+        match self.owner.notify(self.target) {
+            Ok(()) => Ok(Issuance::Confirmed),
+            Err(error @ Error::Firmware(_)) => Ok(Issuance::Unconfirmed(error)),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn pending(&mut self) -> Result<Option<Issuance<Error>>, Error> {
+        self.owner.check_source()?;
+        match self.owner.unconfirmed {
+            Some((hart, error)) if hart == self.target.hart => {
+                Ok(Some(Issuance::Unconfirmed(Error::Firmware(error))))
+            }
+            Some(_) => Err(Error::Busy),
+            None => Ok(None),
+        }
+    }
 }
 
 impl<'tree> Sender<'tree> {
@@ -69,22 +102,65 @@ impl<'tree> Sender<'tree> {
             source,
             harts,
             interrupts,
+            unconfirmed: None,
         })
+    }
+
+    /// # Safety
+    /// The destination is the original ready receiver for the caller's
+    /// published work. Keep that exact Hart participation and its receiving
+    /// line live through pending issues and independent reception.
+    pub unsafe fn bind_ipi<'a>(
+        &'a mut self,
+        target: &'a Target<'tree>,
+    ) -> Result<IpiRoute<'a, 'tree>, Error> {
+        self.check_target(target)?;
+        if self
+            .unconfirmed
+            .is_some_and(|(hart, _)| hart != target.hart)
+        {
+            return Err(Error::Busy);
+        }
+        Ok(IpiRoute {
+            owner: self,
+            target,
+        })
+    }
+
+    fn check_source(&self) -> Result<(), Error> {
+        if try_current_hart().is_some_and(|hart| hart.get() == self.source) {
+            Ok(())
+        } else {
+            Err(Error::Scope)
+        }
+    }
+
+    fn check_target(&self, target: &Target<'tree>) -> Result<(), Error> {
+        self.check_source()?;
+        if target.scope == self.scope
+            && target.hart != self.source
+            && self.harts.started(target.hart)
+        {
+            Ok(())
+        } else {
+            Err(Error::Scope)
+        }
     }
 
     /// Deliver an idempotent notification to the exact checked destination.
     /// A firmware failure leaves delivery unknown. SBI success reports sending,
     /// while the receiver owns the separately observed pending bit. Publish any
     /// work to the receiver's synchronized mailbox before calling this method.
-    pub fn notify(&self, target: &Target<'tree>) -> Result<(), Error> {
-        if try_current_hart().is_none_or(|hart| hart.get() != self.source)
-            || target.scope != self.scope
-            || target.hart == self.source
-            || !self.harts.started(target.hart)
-        {
-            return Err(Error::Scope);
+    pub fn notify(&mut self, target: &Target<'tree>) -> Result<(), Error> {
+        self.check_target(target)?;
+        if self.unconfirmed.is_some() {
+            return Err(Error::Busy);
         }
-        self.interrupts.send(target.hart).map_err(Error::Firmware)
+        if let Err(error) = self.interrupts.send(target.hart) {
+            self.unconfirmed = Some((target.hart, error));
+            return Err(Error::Firmware(error));
+        }
+        Ok(())
     }
 }
 

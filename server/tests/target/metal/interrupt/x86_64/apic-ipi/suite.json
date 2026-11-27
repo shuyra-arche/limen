@@ -54,6 +54,8 @@
         "server/src/metal/memory/mmu/mod.rs",
         "server/src/metal/platform/description/acpi/madt.rs",
         "server/tests/target/support/uefi/interrupt.rs",
+        "server/tests/target/support/ipi.rs",
+        "server/src/metal/interrupt/ipi.rs",
         "server/src/metal/platform/boot/minor.rs",
         "server/src/metal/interrupt/x86_64/internal/apic/mod.rs",
         "server/src/metal/interrupt/x86_64/internal/apic/ipi.rs",
@@ -64,7 +66,7 @@
     "launch": {
       "q35": {
         "expects": [
-          "PASS local-apic-ipi sent=2 received=2 eoi=2 stale=0 scope-rejected=1"
+          "PASS local-apic-ipi issued=3 rechecked=2 eoi=2 stale=0 scope-rejected=1"
         ]
       }
     },

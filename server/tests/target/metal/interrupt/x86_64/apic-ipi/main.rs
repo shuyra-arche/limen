@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::sync::atomic::{
-    AtomicU32,
+    AtomicUsize,
     Ordering::{Acquire, Relaxed, Release},
 };
 use kernel::{
@@ -23,11 +23,14 @@ use uefi_fixture::{
 
 const VECTOR: u8 = 0xf3;
 static MINOR: boot::Minor = boot::Minor::new();
-static READY: AtomicU32 = AtomicU32::new(0);
-static WORK: AtomicU32 = AtomicU32::new(0);
-static COMPLETED: AtomicU32 = AtomicU32::new(0);
+static READY: AtomicUsize = AtomicUsize::new(0);
+static CLOSED: AtomicUsize = AtomicUsize::new(0);
+static MAILBOX: ipi::Mailbox = ipi::Mailbox::new();
 
-fn await_phase(phase: &AtomicU32, expected: u32) {
+#[path = "../../../../support/ipi.rs"]
+mod ipi;
+
+fn await_phase(phase: &AtomicUsize, expected: usize) {
     let start = q35::tsc();
     let timeout = q35::tsc_frequency();
     while phase.load(Acquire) < expected {
@@ -55,6 +58,7 @@ fn minor(hart: usize, argument: usize) -> ! {
     for round in 1..=2 {
         let gate = unsafe { Window::install(vector.vector()) };
         READY.store(round, Release);
+        MAILBOX.wait_for_issues(round, await_phase);
         let start = q35::tsc();
         let timeout = q35::tsc_frequency();
         while gate.count() == 0 {
@@ -65,13 +69,13 @@ fn minor(hart: usize, argument: usize) -> ! {
         // Production qualifies the receiving Hart against its actual
         // installed diagnostic IDT, so restore it before claiming the ISR.
         drop(gate);
-        let mut claim = unsafe { local.receive(VECTOR) }.unwrap();
-        assert_eq!(claim.vector(), VECTOR);
-        assert_eq!(WORK.load(Acquire), round);
-        unsafe { claim.complete() }.unwrap();
-        assert_eq!(unsafe { claim.complete() }, Err(Failure::Busy));
-        assert_eq!(local.reception(), Reception::Idle);
-        COMPLETED.store(round, Release);
+        MAILBOX.recheck(round, || {
+            let mut claim = unsafe { local.receive(VECTOR) }.unwrap();
+            assert_eq!(claim.vector(), VECTOR);
+            unsafe { claim.complete() }.unwrap();
+            assert_eq!(unsafe { claim.complete() }, Err(Failure::Busy));
+            assert_eq!(local.reception(), Reception::Idle);
+        });
     }
 
     let gate = unsafe { Window::install(vector.vector()) };
@@ -81,7 +85,7 @@ fn minor(hart: usize, argument: usize) -> ! {
     assert_eq!(gate.count(), 0);
     drop(gate);
     local.release_vector(vector).unwrap();
-    COMPLETED.store(3, Release);
+    CLOSED.store(1, Release);
     loop {
         core::hint::spin_loop();
     }
@@ -112,27 +116,14 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     ));
     for round in 1..=2 {
         await_phase(&READY, round);
-        WORK.store(round, Release);
-        {
-            let sent = unsafe { controller.notify(target) }.unwrap();
-            assert_eq!(sent.target().hart() as usize, destination);
-            assert_eq!(sent.target().vector(), VECTOR);
-        }
-        assert!(matches!(
-            unsafe { controller.notify(target) },
-            Err(Failure::Busy)
-        ));
-        let mut sent = controller.pending_ipi().unwrap();
-        assert_eq!(sent.target(), target);
-        sent.observe().unwrap();
-        assert_eq!(sent.observe(), Err(Failure::Busy));
-        assert!(controller.pending_ipi().is_none());
-        await_phase(&COMPLETED, round);
+        let mut route = unsafe { controller.bind_ipi(target) }.unwrap();
+        MAILBOX.publish(&mut route, round, round == 1);
+        MAILBOX.wait_for_recheck(round, await_phase);
     }
-    await_phase(&COMPLETED, 3);
+    await_phase(&CLOSED, 1);
     assert_eq!(controller.reception(), Reception::Idle);
     assert_eq!(READY.load(Relaxed), 2);
-    boot::write("PASS local-apic-ipi sent=2 received=2 eoi=2 stale=0 scope-rejected=1\n");
+    boot::write("PASS local-apic-ipi issued=3 rechecked=2 eoi=2 stale=0 scope-rejected=1\n");
     boot::shutdown(true)
 }
 

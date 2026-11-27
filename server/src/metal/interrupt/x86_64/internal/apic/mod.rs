@@ -320,7 +320,7 @@ mod timer;
 pub use timer::{Countdown, Divider, TimerState};
 
 mod ipi;
-pub use ipi::{IpiSend, IpiTarget};
+pub use ipi::{IpiRoute, IpiSend, IpiTarget};
 
 /// An exclusive, uncommitted startup preparation for one exact target and page.
 /// Dropping it before sending releases the borrow without a hardware effect.

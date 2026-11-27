@@ -241,6 +241,10 @@ change server/src/metal/interrupt/x86_64/internal/apic/ipi.rs
 expect_suites module-execution platform-boot platform-execution x86-64-ioapic x86-64-local-apic-failure x86-64-local-apic-ipi x86-64-local-apic-timer
 change server/src/metal/interrupt/riscv64/internal/ipi.rs
 expect_suites rv64-ipi
+for source in server/src/metal/interrupt/ipi.rs server/tests/target/support/ipi.rs; do
+    change "$source"
+    expect_suites rv64-ipi x86-64-local-apic-ipi
+done
 change server/tests/target/support/clock.rs
 expect_suites aarch64-gic rv64-plic-sstc
 change server/src/metal/chrono/clock.rs

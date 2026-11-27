@@ -47,6 +47,8 @@
     "server/src/metal/memory/mmu/riscv64/internal/pte.rs",
     "server/src/metal/interrupt/riscv64/external/mod.rs",
     "server/tests/target/support/riscv64/reception.rs",
+    "server/tests/target/support/ipi.rs",
+    "server/src/metal/interrupt/ipi.rs",
     "server/src/metal/interrupt/riscv64/internal/ipi.rs",
     "server/src/metal/chrono/clock.rs",
     "server/src/metal/chrono/mod.rs",
@@ -58,10 +60,11 @@
     "kernel": "rv64-ipi",
     "harts": 2,
     "expects": [
-      "PASS rv64-ipi original-hart=1 received=2 cleared=2 shut=1"
+      "PASS rv64-ipi original-hart=1 issued=3 rechecked=2 cleared=2 shut=1"
     ],
     "imports": [
-      "target/support/riscv64"
+      "target/support/riscv64",
+      "target/support/ipi.rs"
     ]
   }
 }
