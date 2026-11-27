@@ -4,7 +4,7 @@ use core::arch::asm;
 
 use super::{Failure, GenericTimer, State};
 use crate::metal::{
-    chrono::{Clock, Deadline},
+    chrono::{Clock, Deadline, aarch64::VirtualCounter},
     interrupt::{
         AbsoluteTimer,
         aarch64::gic::redistributor::{Ppi, StoppedPpi},
@@ -19,7 +19,7 @@ const PENDING: u64 = 4;
 /// Exclusive programming of one actual virtual comparator.
 #[must_use]
 pub struct VirtualTimer<'scope, 'tree, 'map> {
-    clock: &'scope Clock<'tree>,
+    clock: &'scope Clock,
     ppi: &'scope mut Ppi<'tree, 'map>,
     state: State,
 }
@@ -33,10 +33,11 @@ impl<'scope, 'tree, 'map> VirtualTimer<'scope, 'tree, 'map> {
     /// The preceding comparator has no outstanding stop or wake promise.
     pub unsafe fn admit(
         description: GenericTimer<'tree>,
-        clock: &'scope Clock<'tree>,
+        counter: &'scope VirtualCounter<'tree>,
         ppi: &'scope mut Ppi<'tree, 'map>,
     ) -> Result<Self, Failure> {
-        if clock.source() != description.source()
+        let clock = counter.clock();
+        if counter.source() != description.source()
             || ppi.source() != description.source()
             || ppi.domain() != description.domain()
             || ppi.intid() != description.virtual_interrupt().intid
@@ -64,18 +65,14 @@ impl<'scope, 'tree, 'map> VirtualTimer<'scope, 'tree, 'map> {
         self.ppi.stopped_input()
     }
 
-    pub fn rearm_at(&mut self, deadline: Deadline<'_, '_>) -> Result<(), Failure> {
+    pub fn rearm_at(&mut self, deadline: Deadline<'_>) -> Result<(), Failure> {
         let State::Armed(previous) = self.state else {
             return Err(Failure::Busy);
         };
         self.program(Some(previous), deadline)
     }
 
-    fn program(
-        &mut self,
-        previous: Option<u64>,
-        deadline: Deadline<'_, '_>,
-    ) -> Result<(), Failure> {
+    fn program(&mut self, previous: Option<u64>, deadline: Deadline<'_>) -> Result<(), Failure> {
         if !self.ppi.permits_programming(previous.is_some()) {
             return Err(Failure::Busy);
         }
@@ -140,7 +137,7 @@ impl Sealed for VirtualTimer<'_, '_, '_> {}
 impl AbsoluteTimer for VirtualTimer<'_, '_, '_> {
     type Failure = Failure;
 
-    fn arm_at(&mut self, target: Deadline<'_, '_>) -> Result<(), Failure> {
+    fn arm_at(&mut self, target: Deadline<'_>) -> Result<(), Failure> {
         if self.state != State::Idle {
             return Err(Failure::Busy);
         }

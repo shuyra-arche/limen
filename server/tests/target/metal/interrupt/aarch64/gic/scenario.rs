@@ -255,11 +255,12 @@ fn check_virtual_timer(
     let mut ppi = unsafe { frame.reserve_ppi(&bindings, role, 0x10) }.unwrap();
     let mut receiver = unsafe { CpuInterface::admit(frame) }
         .unwrap_or_else(|(_, reason)| panic!("timer PPI CPU Interface: {reason:?}"));
-    let clock = unsafe { counter.clock(major) }.unwrap();
+    let counter = unsafe { counter.bind(major) }.unwrap();
+    let clock = counter.clock();
     for delay in [Duration::from_secs(5), Duration::from_millis(10)] {
         receiver.prepare_ppi(&mut ppi).unwrap();
-        let mut timer = unsafe { VirtualTimer::admit(timer, &clock, &mut ppi) }.unwrap();
-        timer_consumer::arm(&clock, &mut timer, delay);
+        let mut timer = unsafe { VirtualTimer::admit(timer, &counter, &mut ppi) }.unwrap();
+        timer_consumer::arm(clock, &mut timer, delay);
         if delay == Duration::from_secs(5) {
             assert_eq!(timer.stop(), Err(TimerFailure::Busy));
             assert_eq!(
