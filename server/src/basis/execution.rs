@@ -135,10 +135,7 @@ impl Execution {
 
     fn with_unit_room<R>(
         &self,
-        operation: impl FnOnce(
-            &mut Units<KernelBinding>,
-            &mut Room<STACK_CAPACITY>,
-        ) -> Result<R, Error>,
+        operation: impl FnOnce(&mut Units<KernelBinding>, &mut Room<STACK_CAPACITY>) -> Result<R, Error>,
     ) -> Result<R, Error> {
         const { assert!(TURN_CAPACITY >= 2) };
         let mut workspace = TurnWorkspace::<2>::new();
