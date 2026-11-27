@@ -22,16 +22,17 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     fixture::check_handoff(&boot, None);
     let tree = boot.device_tree_description().unwrap();
     let description = GenericCounter::read(&tree).unwrap().unwrap();
-    let local = unsafe { description.clock(boot.hart()) }.unwrap();
-    let distinct = unsafe { description.clock(boot.hart()) }.unwrap();
+    let local = unsafe { description.bind(boot.hart()) }.unwrap();
+    let distinct = unsafe { description.bind(boot.hart()) }.unwrap();
     assert!(
         local
+            .clock()
             .sample()
             .unwrap()
-            .elapsed_since(distinct.sample().unwrap())
+            .elapsed_since(distinct.clock().sample().unwrap())
             .is_none()
     );
-    clock::observe(&local);
+    clock::observe(local.clock());
     let controller = GicV3::read(&tree).unwrap().expect("GIC description");
     scenario::check(&tree, controller, boot.hart());
     boot::shutdown(true)
