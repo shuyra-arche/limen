@@ -8,8 +8,7 @@ const FIELD: usize = 3;
 const XS_MASK: usize = FIELD << XS_SHIFT;
 
 /// FS and VS may be cleared; XS is a read-only summary of other extensions.
-pub(in crate::metal) const WRITABLE_EXTENSIONS: usize =
-    (FIELD << FS_SHIFT) | (FIELD << VS_SHIFT);
+pub(in crate::metal) const WRITABLE_EXTENSIONS: usize = (FIELD << FS_SHIFT) | (FIELD << VS_SHIFT);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Extension {
