@@ -2,7 +2,12 @@ use super::*;
 
 #[test]
 fn global_mask_and_each_extension_state_are_independent() {
-    let states = [Extension::Off, Extension::Initial, Extension::Clean, Extension::Dirty];
+    let states = [
+        Extension::Off,
+        Extension::Initial,
+        Extension::Clean,
+        Extension::Dirty,
+    ];
     assert_eq!(EXTENSIONS, 0x6600);
     for fs in 0..4 {
         for vs in 0..4 {

@@ -25,8 +25,10 @@ impl Access {
 /// Observed permission required by the current save shape, not proof that
 /// the PE implements extensions or can preserve an arbitrary vector state.
 pub(in crate::metal) fn base_simd(bits: usize) -> bool {
-    matches!(Access::from_bits(bits >> FPEN_SHIFT), Access::Privileged | Access::Open)
-        && (bits >> ZEN_SHIFT) & FIELD == 0
+    matches!(
+        Access::from_bits(bits >> FPEN_SHIFT),
+        Access::Privileged | Access::Open
+    ) && (bits >> ZEN_SHIFT) & FIELD == 0
         && (bits >> SMEN_SHIFT) & FIELD == 0
 }
 

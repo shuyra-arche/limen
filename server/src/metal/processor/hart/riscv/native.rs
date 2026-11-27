@@ -22,7 +22,9 @@ pub(in crate::metal::processor::hart) unsafe fn install_local(address: usize) {
 
 pub(in crate::metal::processor::hart) unsafe fn mask_interrupts() -> usize {
     let previous: usize;
-    unsafe { asm!("csrrci {}, sstatus, {mask}", out(reg) previous, mask = const SIE, options(nostack)) };
+    unsafe {
+        asm!("csrrci {}, sstatus, {mask}", out(reg) previous, mask = const SIE, options(nostack))
+    };
     previous & SIE
 }
 

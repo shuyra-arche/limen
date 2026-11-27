@@ -3,7 +3,10 @@ use crate::metal::{
     interrupt::internal::supervisor,
     memory::mmu::internal::riscv::context::Context,
     platform::boot::trap as diagnostic,
-    processor::hart::{local, riscv::{native, status}},
+    processor::hart::{
+        local,
+        riscv::{native, status},
+    },
 };
 use core::arch::{asm, naked_asm};
 

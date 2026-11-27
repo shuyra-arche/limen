@@ -1,13 +1,9 @@
 //! RV64 cooperative continuation transfer within the supervisor address space.
 
-use core::{
-    arch::global_asm,
-    mem::offset_of,
-};
+use core::{arch::global_asm, mem::offset_of};
 
 use crate::metal::{
-    interrupt::internal::supervisor,
-    memory::mmu::internal::riscv::context::Context,
+    interrupt::internal::supervisor, memory::mmu::internal::riscv::context::Context,
     processor::hart::riscv::native,
 };
 
