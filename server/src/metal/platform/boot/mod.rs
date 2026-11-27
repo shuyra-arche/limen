@@ -36,10 +36,10 @@ use handoff::uefi as firmware;
 pub use backend::Startup;
 #[cfg(limen_firmware = "uefi")]
 pub(crate) use backend::enter_major;
-#[cfg(limen_firmware = "sbi")]
-pub(crate) use backend::image;
 #[cfg(limen_target)]
 pub(in crate::metal) use backend::entry;
+#[cfg(limen_firmware = "sbi")]
+pub(crate) use backend::image;
 #[cfg(limen_target)]
 pub(crate) use backend::{
     DeliveryError, MinorContext, admit, established, minor_context, park, wake_minor,
