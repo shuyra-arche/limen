@@ -20,7 +20,9 @@ pub mod region;
 mod returns;
 mod search;
 
-pub use allocation::{Allocation, AllocationConstruction, AllocationId, Cancellation, MappedStorage};
+pub use allocation::{
+    Allocation, AllocationConstruction, AllocationId, Cancellation, MappedStorage,
+};
 pub(crate) use allowance::permit::{AllocationPermit, AllocationPermitSlot, LayoutLimit};
 pub use allowance::{
     Allowance, AllowanceCandidate, AllowanceId, Balance, Budget, BudgetObservation, BudgetProgress,

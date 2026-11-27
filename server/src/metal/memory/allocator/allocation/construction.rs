@@ -182,8 +182,11 @@ impl Allocator {
             let mut plan = work.plan();
             self.plan_construction(&mut plan, id.region(), allowance, construction)?;
             plan.acquire(mode, |held| -> Result<_, Error> {
-                let receiver = held.access(&construction.state).expect("original construction");
-                if matches!(receiver, Preparation::Shut(Some(reservation)) if reservation.id == id) {
+                let receiver = held
+                    .access(&construction.state)
+                    .expect("original construction");
+                if matches!(receiver, Preparation::Shut(Some(reservation)) if reservation.id == id)
+                {
                     self.cancel(held, construction)?;
                     Ok(Cancellation::Cancelled(id))
                 } else {
