@@ -24,26 +24,40 @@ their own compilation boundaries. They are not QEMU scenarios.
 
 ## Native guests
 
-Ordinary hardware tests use the `kernel-guest` package in `target/`.
-Tests that require independently built ELF images use the `module-guest`
-package in `target/module/`. Both share a workspace, lockfile, platform
-description, linker contract and runner. Cargo discovers the images in each
-package's `tests/` directory; adding an image does not require a manifest
-entry. Owner-local code contains the assertions. A guest entry composes
-those assertions with the original Boot handoff.
+The target workspace shares one lockfile and has three genuine build
+boundaries: portable guest code (`kernel-guest`), guest code that requires
+one specific ISA (`riscv64-guest`, `aarch64-guest`, `x86_64-guest`), and
+independently built ELF images (`module-guest`). Cargo discovers integration
+targets within each execution package's `tests/` directory. Test names
+express the behavior, not a compile filter. Adding a test to an existing
+package needs no manifest entry or CI change.
 
-A target name begins with `common-`, the target architecture, or `uefi-`
-where the image requires the UEFI ABI. These names restrict compilation, not
-QEMU hardware configuration. Every image declares its own platform in Rust:
+The `guest-support` library supplies the machine declaration, standard
+startup, compiler-collected harness, panic handler and completion transport.
+A test chooses its own platform, optional firmware preparation and explicit
+Boot callback:
 
 ```rust
-platform::declare!(platform::Platform {
-    interrupt: platform::Interrupt::Aplic,
-    aclint: true,
-    sstc: platform::Setting::Off,
-    ..platform::Platform::native(1)
-});
+guest::entry! {
+    platform: platform::Platform {
+        interrupt: platform::Interrupt::Aplic,
+        aclint: true,
+        sstc: platform::Setting::Off,
+        ..platform::Platform::native(1)
+    },
+    run: |boot| {
+        scenario::check(boot);
+        guest::finish()
+    }
+}
 ```
+
+The shared Boot, migration and synchronization images compile their real
+backend with Rust's target configuration. Special loaders can use the
+library's declaration and completion without adopting its standard entry.
+The strict-NX Module retention case owns such a loader. Owner-local
+assertions remain in Entry, Basis and Metal. One explicit path to an
+owner's test implementation is preferable to a registry of scenarios.
 
 The linked `.testenv` record selects firmware, interrupt controller, Hart
 count, serial topology, IOMMU and PCI devices. The Runner rejects a missing,
@@ -70,18 +84,17 @@ Run a single test with native Cargo selection and a fresh evidence root:
 target=riscv64gc-unknown-none-elf
 config="target.$target.runner=['$runner','native','--evidence-root','/tmp/limen-guest']"
 cargo -Z panic-abort-tests --config "$config" test --locked \
-    --manifest-path server/tests/target/Cargo.toml -p kernel-guest \
-    --target "$target" --test riscv64-aplic
+    --manifest-path server/tests/target/Cargo.toml -p riscv64-guest \
+    --target "$target" --test aplic
 ```
 
 Add `--release` for the optimized image and select a fresh evidence root.
-For independent Module images select `-p module-guest` instead of
-`-p kernel-guest`. The Target workflow selects all guest execution packages
-in the workspace for each architecture and profile. It applies the same
-Cargo-discovered compilation groups to the Host observation package:
-`common-*`, architecture and UEFI, omitting empty groups. Check validates
-all guest and observer targets; an unclassified target is an error rather
-than a silently skipped test.
+For independent Module images select `-p module-guest --test lifecycle`.
+For all ordinary guests, select `-p kernel-guest -p riscv64-guest --tests`
+(or the actual ISA-specific package). Target CI uses `--tests` for the
+selected execution packages. Check verifies package coverage with Cargo
+metadata; it never classifies individual test names. On UEFI, ordinary
+guests run before the extra bare target required by Module is installed.
 Ordinary completion requires QEMU exit 97 and successful process settlement.
 Guest panic, ordinary shutdown, reset, trap and timeout are failures.
 Serial output is diagnostic, never a generic success oracle.
@@ -96,14 +109,15 @@ semihosting is enabled to report completion.
 
 | Owner | Native test entry / contract |
 | --- | --- |
-| Boot | `riscv64-boot-handoff`, `uefi-boot`: original handoff, major/minor stacks, firmware reservation, memory admission and Foundation |
-| Execution | `common-execution-lifecycle`: creation, admission, cancellation, exact departure, return, reap and stack reuse on all architectures |
-| Migration | `riscv64-execution-migration`, `uefi-execution-migration`: cross-Hart continuation, stack, ABI and stale receipts |
-| Participation | `riscv64-execution-participation`: independent occupancies, exact switch-boundary integer registers, Turn/Snapshot, three admitted participants, fourth rejected |
-| Interrupt | `riscv64-aplic`, `riscv64-plic-sstc`, `riscv64-ipi`, `aarch64-gic`, `x86_64-apic-*`, `x86_64-ioapic`: real sources, claims, timer effects and launch failures |
-| CPU translation | `aarch64-paging`, `x86_64-paging`, `riscv64-module-retirement`: retained roots, exact context and actual translation |
-| IO translation | `riscv64-iommu`, `aarch64-smmu`, `x86_64-amdvi`, `x86_64-vtd`: actual EDU DMA, binding, withdrawal and completion |
-| Module | `uefi-module-retention`: strict-NX independent ELF, use draining and retention without withdrawal; `riscv64-module-retirement`: Sv39/Sv48/Sv57, two Harts, dependency-ordered retirement and reuse |
+| Boot | `kernel-guest:boot-handoff`: original SBI/UEFI handoff, major/minor stacks, firmware reservation, memory admission and Foundation |
+| Execution | `kernel-guest:execution-lifecycle`: creation, admission, cancellation, exact departure, return, reap and stack reuse on all architectures |
+| Migration | `kernel-guest:execution-migration`: cross-Hart continuation, stack, ABI and stale receipts |
+| Sync | `kernel-guest:sync`: collected cases and native synchronization contracts, plus the riscv64 enabled-interrupt contract |
+| Participation | `riscv64-guest:execution-participation`: independent occupancies, exact switch-boundary integer registers, Turn/Snapshot, three admitted participants, fourth rejected |
+| Interrupt | `riscv64-guest:aplic,plic-sstc,ipi`, `aarch64-guest:gic`, `x86_64-guest:apic-failure,apic-timer,ioapic,ipi`: real sources, claims, timer effects and launch failures |
+| CPU translation | `aarch64-guest:paging`, `x86_64-guest:paging`, `module-guest:lifecycle` on riscv64: retained roots, exact context and actual translation |
+| IO translation | `riscv64-guest:iommu`, `aarch64-guest:smmu`, `x86_64-guest:amdvi,vtd`: actual EDU DMA, binding, withdrawal and completion |
+| Module | `module-guest:lifecycle`: UEFI strict-NX independent ELF, use draining and retention without withdrawal; riscv64 Sv39/Sv48/Sv57, two Harts, dependency-ordered retirement and reuse |
 
 Host models and compiler contracts do not establish native hardware authority.
 Hardware fixtures exercise actual observations and retained resources. They
@@ -114,9 +128,12 @@ do not replace the future runtime Trap or driver Sign lifecycle.
 The `machine-observer` package in `runner/observe/` uses ordinary Host
 libtest and the shared runner library. Its tests require a selected guest
 architecture, profile and machine tools. The default runner Host tests do
-not select this package. Cargo discovers observation targets just as it
-discovers guest images; CI does not enumerate observation cases. The full
-duration timeout probe is explicitly ignored in its own test definition.
+not select this package. Cargo discovers all its integration targets with
+`--tests`. A small build script derives the observed ISA from the actual
+`LIMEN_TEST_TARGET` triple, independently of the Host compiler target.
+The machine-specific fault test uses libtest's native ignore attribute on
+other guest architectures. The full-duration timeout probe is explicitly
+ignored in its own test definition; CI names neither case.
 
 A terminal boot fault cannot execute a normal guest test assertion. The
 Boot-owned Host test compiles the ordinary RV64 boot guest via Cargo's JSON
@@ -133,10 +150,10 @@ OpenSBI syscon path does not independently expose the SBI reset reason.
 Install `gdb-multiarch` (or set `GDB_MULTIARCH`) for this test.
 
 ```sh
-LIMEN_TEST_PROFILE=debug cargo test --locked \
-    --manifest-path server/tests/runner/Cargo.toml -p machine-observer \
-    --target x86_64-unknown-linux-gnu --test riscv64-boot-fault \
-    -- --test-threads=1
+LIMEN_TEST_TARGET=riscv64gc-unknown-none-elf LIMEN_TEST_PROFILE=debug \
+    cargo test --locked --manifest-path server/tests/runner/Cargo.toml \
+    -p machine-observer --target x86_64-unknown-linux-gnu \
+    --test boot-fault -- --test-threads=1
 ```
 
 The unchanged ELF's hash, machine observation, controller transcript and run

@@ -282,4 +282,3 @@ macro_rules! declare {
         static LIMEN_TEST_PLATFORM: [u8; $crate::platform::SIZE] = ($platform).encode();
     };
 }
-

@@ -6,13 +6,14 @@
 
 use guest::platform;
 
-#[path = "../../entry/boot/sbi/mod.rs"]
-mod native;
+#[path = "../../../metal/interrupt/riscv64/internal/native_ipi.rs"]
+mod scenario;
 
 guest::entry! {
-    platform: platform::Platform::native(4),
+    platform: platform::Platform::native(2),
     run: |boot| {
-        native::check(boot);
+        collected();
+        scenario::check(boot);
         guest::finish()
     }
 }

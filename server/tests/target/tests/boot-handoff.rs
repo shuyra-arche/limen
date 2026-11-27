@@ -6,13 +6,23 @@
 
 use guest::platform;
 
-#[path = "../support/uefi/execution.rs"]
+#[cfg(target_arch = "riscv64")]
+#[path = "../../entry/boot/sbi/mod.rs"]
+mod native;
+#[cfg(target_os = "uefi")]
+#[path = "../../entry/boot/uefi/mod.rs"]
 mod native;
 
 guest::entry! {
     platform: platform::Platform::native(4),
     prepare: native::prepare,
     run: |boot| {
+        #[cfg(target_arch = "riscv64")]
+        {
+            native::check(boot);
+            guest::finish()
+        }
+        #[cfg(target_os = "uefi")]
         native::check(boot, guest::finish)
     }
 }

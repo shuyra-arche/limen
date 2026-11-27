@@ -16,7 +16,14 @@ uefi-fixture.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["module", "support", "support/uefi"]
+members = [
+    "aarch64",
+    "module",
+    "riscv64",
+    "support",
+    "support/uefi",
+    "x86_64",
+]
 default-members = ["."]
 
 [workspace.dependencies]

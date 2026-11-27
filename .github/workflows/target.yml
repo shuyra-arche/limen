@@ -85,47 +85,27 @@ jobs:
           export LIMEN_TEST_RUNNER="$PWD/server/tests/runner/target/$host/debug/verify"
           evidence="$PWD/.integration/guests"
           config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','native','--evidence-root','$evidence']"
-          groups=(common "$LIMEN_TEST_ARCH")
-          if [[ "$LIMEN_TEST_TARGET" == *-uefi ]]; then groups+=(uefi); fi
+          profile=()
+          if [[ "$LIMEN_TEST_PROFILE" == release ]]; then profile+=(--release); fi
 
-          # Cargo is the source of target discovery. Omit groups with no
-          # integration targets, rather than naming a concrete test in CI.
-          select_tests() {
-            local manifest=$1 excluded=$2 names group
-            names=$(cargo metadata --locked --no-deps --format-version 1 \
-                --manifest-path "$manifest" |
-                jq -r --arg excluded "$excluded" '
-                  .packages[] | select(.name != $excluded) |
-                  .targets[] | select(.kind == ["test"]) | .name')
-            selected=()
-            for group in "${groups[@]}"; do
-              if grep -q "^${group}-" <<< "$names"; then
-                selected+=(--test "$group-*")
-              fi
-            done
-          }
+          # Host observers select the actual guest environment, not the host ISA.
+          cargo test --locked --manifest-path "$runner_manifest" \
+            -p machine-observer --target "$host" --tests -- --test-threads=1
 
-          # Observers are ordinary Host libtest targets. They can construct
-          # guests, but are never compiled for the observed ISA.
-          select_tests "$runner_manifest" kernel-verification
-          if (( ${#selected[@]} )); then
-            cargo test --locked --manifest-path "$runner_manifest" \
-              --workspace --exclude kernel-verification --target "$host" \
-              "${selected[@]}" -- --test-threads=1
-          fi
+          # Only the shared and actual ISA-specific guest packages are compiled.
+          # Every Cargo-discovered integration test in those packages runs.
+          cargo -Z panic-abort-tests --config "$config" test --locked \
+            --manifest-path "$guest_manifest" -p kernel-guest -p "$LIMEN_TEST_ARCH-guest" \
+            --target "$LIMEN_TEST_TARGET" --tests "${profile[@]}"
 
-          # UEFI ordinary guests have now built and run without their bare
-          # target installed. Only the independent Module ELF images need it.
+          # Ordinary UEFI guests built and ran without the extra bare target.
+          # Only the independent Module ELF images need that dependency.
           if [[ "$LIMEN_TEST_TARGET" == *-uefi ]]; then
             rustup target add "${LIMEN_TEST_ARCH}-unknown-none"
           fi
-          select_tests "$guest_manifest" uefi-fixture
-          (( ${#selected[@]} > 0 ))
-          profile=()
-          if [[ "$LIMEN_TEST_PROFILE" == release ]]; then profile+=(--release); fi
           cargo -Z panic-abort-tests --config "$config" test --locked \
-            --manifest-path "$guest_manifest" --workspace --exclude uefi-fixture \
-            --target "$LIMEN_TEST_TARGET" "${selected[@]}" "${profile[@]}"
+            --manifest-path "$guest_manifest" -p module-guest \
+            --target "$LIMEN_TEST_TARGET" --tests "${profile[@]}"
       - name: Preserve target evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

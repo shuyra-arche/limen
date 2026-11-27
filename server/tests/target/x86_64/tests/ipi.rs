@@ -6,11 +6,14 @@
 
 use guest::platform;
 
-#[path = "../../metal/interrupt/riscv64/internal/native_ipi.rs"]
+use uefi_fixture as fixture;
+
+#[path = "../../../metal/interrupt/x86_64/internal/apic/native_ipi.rs"]
 mod scenario;
 
 guest::entry! {
     platform: platform::Platform::native(2),
+    prepare: fixture::q35::prepare_minor,
     run: |boot| {
         collected();
         scenario::check(boot);

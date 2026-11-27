@@ -33,7 +33,8 @@ is supervised by the same bounded process executor.
 
 The `kernel-verification` package owns the executable and the shared Host
 library. The `machine-observer` workspace member depends on that library;
-it owns the integration roots that observe actual guests and uses the same
-Cargo architecture/firmware groups as guest tests. It is deliberately not a
-default workspace member: ordinary Host tests need no installed emulator.
-The observation package is selected by Target CI, not by individual case.
+it owns the integration roots that observe actual guests. The observed
+architecture is derived from the selected guest target triple, not from
+the Host ISA or a test name. The observation package is deliberately not
+a default workspace member: ordinary Host tests need no installed emulator.
+Target CI runs all its integration targets with native libtest.

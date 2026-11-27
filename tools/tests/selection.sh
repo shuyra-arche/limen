@@ -25,7 +25,7 @@ bash "$checks" . | jq -e '.host and .runner and .riscv64' >/dev/null
 scope server/src/basis/execution.rs '.host and .riscv64 and (.runner | not)'
 scope server/src/metal/platform/boot/riscv64/linker.ld '.riscv64 and ((.host or .runner) | not)'
 scope server/src/metal/platform/boot/x86_64/mod.rs '((.host or .runner or .riscv64) | not)'
-scope server/tests/target/tests/common-boot.rs '((.host or .runner or .riscv64) | not)'
+scope server/tests/target/tests/boot.rs '((.host or .runner or .riscv64) | not)'
 scope server/tests/target/support/platform.rs '.runner and ((.host or .riscv64) | not)'
 scope server/tests/entry/boot/fault.rs '.runner and ((.host or .riscv64) | not)'
 scope treaty/src/model/address.rs '.host and .runner and .riscv64'

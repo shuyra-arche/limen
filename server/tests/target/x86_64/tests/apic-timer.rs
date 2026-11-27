@@ -6,16 +6,20 @@
 
 use guest::platform;
 
-use uefi_fixture as fixture;
-
-#[path = "../../metal/interrupt/x86_64/internal/apic/native_failure.rs"]
-mod native;
+#[path = "../../../metal/interrupt/x86_64/internal/apic/native_timer.rs"]
+mod timer;
 
 guest::entry! {
     platform: platform::Platform::native(4),
-    prepare: fixture::q35::prepare_minor,
     run: |boot| {
-        native::check(boot);
+        uefi_fixture::check_handoff(&boot, None);
+        collected();
+        timer::check(&boot);
         guest::finish()
     }
+}
+
+#[test_case]
+fn tsc_requires_stable_frequency() {
+    timer::observe_tsc();
 }

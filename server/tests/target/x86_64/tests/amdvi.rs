@@ -8,7 +8,7 @@ use guest::platform;
 
 use uefi_fixture as fixture;
 
-#[path = "../../metal/memory/mmu/x86_64/external/amdvi/native/mod.rs"]
+#[path = "../../../metal/memory/mmu/x86_64/external/amdvi/native/mod.rs"]
 mod native;
 
 guest::entry! {

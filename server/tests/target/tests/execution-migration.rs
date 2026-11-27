@@ -6,12 +6,16 @@
 
 use guest::platform;
 
-#[path = "../../basis/execution/participation.rs"]
+#[cfg(target_arch = "riscv64")]
+#[path = "../support/sbi/execution.rs"]
+mod native;
+#[cfg(target_os = "uefi")]
+#[path = "../support/uefi/execution.rs"]
 mod native;
 
 guest::entry! {
     platform: platform::Platform::native(4),
-    major: (native::MAJOR_BYTES, native::MAJOR_NODES),
+    prepare: native::prepare,
     run: |boot| {
         native::check(boot, guest::finish)
     }

@@ -32,9 +32,9 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
         .unwrap();
     let runner = runner.to_str().expect("UTF-8 runner path");
     let test = if case == "discovery-panic" {
-        "common-sync"
+        "sync"
     } else {
-        "common-outcome"
+        "outcome"
     };
     let evidence = root.join(".integration/transport").join(case);
     let logs = root.join(".integration/transport/cargo").join(case);

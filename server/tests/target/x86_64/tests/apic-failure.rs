@@ -6,11 +6,14 @@
 
 use guest::platform;
 
-#[path = "../../metal/memory/mmu/x86_64/paging.rs"]
+use uefi_fixture as fixture;
+
+#[path = "../../../metal/interrupt/x86_64/internal/apic/native_failure.rs"]
 mod native;
 
 guest::entry! {
     platform: platform::Platform::native(4),
+    prepare: fixture::q35::prepare_minor,
     run: |boot| {
         native::check(boot);
         guest::finish()

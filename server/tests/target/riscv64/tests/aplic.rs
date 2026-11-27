@@ -8,7 +8,7 @@ use guest::platform;
 
 use kernel::metal::sync::treaty::turn_capacity;
 
-#[path = "../../metal/interrupt/riscv64/external/native_aplic.rs"]
+#[path = "../../../metal/interrupt/riscv64/external/native_aplic.rs"]
 mod scenario;
 
 guest::entry! {

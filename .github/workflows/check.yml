@@ -82,30 +82,20 @@ jobs:
           cargo fmt --all -- --check
           cargo fmt --manifest-path server/tests/runner/Cargo.toml --all -- --check
           cargo fmt --manifest-path server/tests/target/Cargo.toml --all -- --check
-      - name: Check target discovery coverage
+      - name: Check execution package coverage
         run: |
-          # The same compilation groups apply to guests and machine observers.
-          # Shared support libraries are dependencies, not execution packages.
-          for workspace in target runner; do
-            case "$workspace" in
-              target) library=uefi-fixture ;;
-              runner) library=kernel-verification ;;
-            esac
-            cargo metadata --locked --no-deps --format-version 1 \
-              --manifest-path "server/tests/$workspace/Cargo.toml" |
-              jq -e --arg library "$library" '
-                [.packages[] | select(.name != $library) |
-                  .targets[] | select(.kind == ["test"]) | .name] as $tests |
-                if ($tests | length) == 0 then
-                  error("no target integration tests discovered")
-                else
-                  [$tests[] | select(test("^(common|riscv64|aarch64|x86_64|uefi)-.+$") | not)]
-                  as $unselected |
-                  if ($unselected | length) == 0 then true
-                  else error("targets excluded by Target CI: \($unselected | join(", "))")
-                  end
-                end'
-          done
+          # A new test is discovered inside an existing execution package.
+          # A new package is an explicit change to the compilation boundary.
+          cargo metadata --locked --no-deps --format-version 1 \
+            --manifest-path server/tests/target/Cargo.toml |
+            jq -e '
+              [.packages[] | select(any(.targets[]; .kind == ["test"])) | .name]
+              | sort == ["aarch64-guest", "kernel-guest", "module-guest", "riscv64-guest", "x86_64-guest"]'
+          cargo metadata --locked --no-deps --format-version 1 \
+            --manifest-path server/tests/runner/Cargo.toml |
+            jq -e '
+              [.packages[] | select(any(.targets[]; .kind == ["test"])) | .name]
+              | sort == ["kernel-verification", "machine-observer"]'
       - name: Check runner
         if: fromJSON(steps.scope.outputs.plan).runner
         run: |

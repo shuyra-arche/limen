@@ -6,20 +6,13 @@
 
 use guest::platform;
 
-#[path = "../../metal/interrupt/x86_64/internal/apic/native_timer.rs"]
-mod timer;
+#[path = "../../../metal/memory/mmu/x86_64/paging.rs"]
+mod native;
 
 guest::entry! {
     platform: platform::Platform::native(4),
     run: |boot| {
-        uefi_fixture::check_handoff(&boot, None);
-        collected();
-        timer::check(&boot);
+        native::check(boot);
         guest::finish()
     }
-}
-
-#[test_case]
-fn tsc_requires_stable_frequency() {
-    timer::observe_tsc();
 }

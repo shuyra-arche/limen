@@ -6,11 +6,11 @@
 
 use guest::platform;
 
-#[path = "../../metal/interrupt/riscv64/external/native_plic.rs"]
+#[path = "../../../metal/interrupt/riscv64/external/native_plic.rs"]
 mod plic;
-#[path = "../support/riscv64/reception.rs"]
+#[path = "../../support/riscv64/reception.rs"]
 mod reception;
-#[path = "../../metal/interrupt/riscv64/internal/timer/native_sstc.rs"]
+#[path = "../../../metal/interrupt/riscv64/internal/timer/native_sstc.rs"]
 mod sstc;
 
 guest::entry! {

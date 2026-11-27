@@ -6,12 +6,12 @@
 
 use guest::platform;
 
-#[path = "../../entry/boot/uefi/mod.rs"]
+#[path = "../../../basis/execution/participation.rs"]
 mod native;
 
 guest::entry! {
     platform: platform::Platform::native(4),
-    prepare: native::prepare,
+    major: (native::MAJOR_BYTES, native::MAJOR_NODES),
     run: |boot| {
         native::check(boot, guest::finish)
     }

@@ -6,7 +6,7 @@
 
 use guest::platform;
 
-#[path = "../../metal/interrupt/aarch64/gic/native/mod.rs"]
+#[path = "../../../metal/interrupt/aarch64/gic/native/mod.rs"]
 mod native;
 
 guest::entry! {

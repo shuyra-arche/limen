@@ -6,7 +6,7 @@
 
 use guest::platform;
 
-#[path = "../../metal/memory/mmu/riscv64/external/iommu/native.rs"]
+#[path = "../../../metal/memory/mmu/riscv64/external/iommu/native.rs"]
 mod native;
 
 guest::entry! {

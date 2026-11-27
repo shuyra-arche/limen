@@ -6,24 +6,27 @@
 
 use guest::platform;
 
-#[path = "../../metal/memory/mmu/aarch64/external/smmu/native/mod.rs"]
+use uefi_fixture as fixture;
+
+#[path = "../../../metal/memory/mmu/x86_64/external/vtd/native/mod.rs"]
 mod native;
 
 guest::entry! {
     platform: platform::Platform {
-        iommu: platform::Iommu::SmmuV3,
+        iommu: platform::Iommu::Vtd,
         ..platform::Platform::native(4)
     }
     .device(platform::Device::Edu {
         slot: 6,
         function: 0,
-        dma_mask: platform::DmaMask::Full32,
+        dma_mask: platform::DmaMask::Default,
     })
     .device(platform::Device::Edu {
         slot: 7,
         function: 0,
-        dma_mask: platform::DmaMask::Full32,
+        dma_mask: platform::DmaMask::Default,
     }),
+    prepare: fixture::q35::calibrate,
     run: |boot| {
         // The native scenario consumes this boot admission once. There is no
         // independently collected case sharing its device state.

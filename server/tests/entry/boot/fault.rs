@@ -27,7 +27,7 @@ fn linked_guest(root: &Path, evidence: &Path) -> PathBuf {
         "-p",
         "kernel-guest",
         "--test",
-        "riscv64-boot-handoff",
+        "boot-handoff",
         "--target",
         "riscv64gc-unknown-none-elf",
         "--no-run",
@@ -53,7 +53,7 @@ fn linked_guest(root: &Path, evidence: &Path) -> PathBuf {
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .filter(|message| {
             message["reason"] == "compiler-artifact"
-                && message["target"]["name"] == "riscv64-boot-handoff"
+                && message["target"]["name"] == "boot-handoff"
                 && message["profile"]["test"] == true
         })
         .filter_map(|message| message["executable"].as_str().map(PathBuf::from))
@@ -275,6 +275,7 @@ fn fault_observation_error(directory: &Path, error: impl std::fmt::Display) -> !
 
 #[cfg(unix)]
 #[test]
+#[cfg_attr(not(limen_guest = "riscv64"), ignore = "requires a riscv64 guest")]
 fn bss_clear_traps_on_the_original_major_stack() {
     use std::os::unix::fs::PermissionsExt;
 
