@@ -244,8 +244,15 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     #[cfg(target_arch = "x86_64")]
     board::check_discovery(&boot, target);
     let major = boot.hart();
-    let startup = board::inspect(&boot, &view);
-    cooperative::run(boot, major, target, startup, |startup| {
+    let mut startup = board::inspect(&boot, &view);
+    #[cfg(target_arch = "x86_64")]
+    if cfg!(feature = "apic-failure") {
+        board::check_failure(&mut startup, target);
+        // Keep the uncertain controller, trampoline and Minor resident
+        // through terminal shutdown. No normal execution in this scenario.
+        boot::shutdown(true);
+    }
+    cooperative::run(boot, major, target, &mut startup, |startup| {
         board::inspect_started(startup, target);
     });
     synchronization::check();

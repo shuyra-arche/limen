@@ -127,7 +127,7 @@ pub(super) fn run(
     boot: Boot<'_>,
     major: usize,
     target: usize,
-    mut startup: Startup,
+    startup: &mut Startup,
     started: impl FnOnce(&Startup),
 ) {
     MAJOR.store(major, Relaxed);
@@ -137,17 +137,17 @@ pub(super) fn run(
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
 
     assert_eq!(
-        unsafe { execution.start_minor(major, minor, &mut startup) },
+        unsafe { execution.start_minor(major, minor, startup) },
         Err(Error::Busy)
     );
-    unsafe { execution.start_minor(target, minor, &mut startup) }.expect("minor admission");
+    unsafe { execution.start_minor(target, minor, startup) }.expect("minor admission");
     while super::OBSERVED.load(Acquire) != target {
         spin_loop();
     }
     assert!(super::MINOR.ready());
-    started(&startup);
+    started(startup);
     assert_eq!(
-        unsafe { execution.start_minor(target, minor, &mut startup) },
+        unsafe { execution.start_minor(target, minor, startup) },
         Err(Error::Busy)
     );
 
