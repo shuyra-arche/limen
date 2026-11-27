@@ -29,6 +29,14 @@ The stack resides in the
 reserved image range. Any later return of early physical memory requires a
 runtime stack handoff, departure of its old users and translation retirement.
 
+Major material reserves one image-resident slot for the parsed DTB, CPU and
+ACPI descriptions. The firmware adapter prepares it once. The full slot
+must lie inside the retained image and outside both startup stacks.
+Independent borrows keep the lifetime of the original descriptor bytes.
+The UEFI ACPI reader is used during parsing and is gone before delivery.
+The backing DTB, ACPI and memory-map ranges retain their own retirement
+conditions.
+
 ## Minor launch
 
 Through the Processor Treaty, the launch owner selects a known inactive CPU

@@ -32,6 +32,7 @@ use crate::metal::processor::executor::local::{
 pub struct MajorMaterial {
     pub(in crate::metal::platform::boot) stack: StackExtent,
     pub(in crate::metal::platform::boot) local: local::Material,
+    pub(in crate::metal::platform::boot) descriptions: super::handoff::DescriptionStorage,
 }
 
 #[cfg(limen_target)]
@@ -43,6 +44,7 @@ impl MajorMaterial {
         Self {
             stack: stack.extent(),
             local: local.material(),
+            descriptions: super::handoff::DescriptionStorage::new(),
         }
     }
 }
@@ -95,8 +97,10 @@ pub fn shutdown(success: bool) -> ! {
 /// Run once on the major CPU in ring 0 with paging (x86) or non-secure EL1 (Arm).
 /// The image must exclusively supply this stack and local storage for the
 /// major CPU and ensure it can hold the complete boot and platform callback.
-/// Keep the image, identity mappings, loader stack and inputs
-/// reserved across delivery.
+/// Keep the image and identity mappings reserved. The loader and its ACPI
+/// read function must remain valid through admission. Descriptor, DTB and
+/// ACPI bytes used by admitted consumers remain independently reserved for
+/// those borrows.
 #[cfg(limen_firmware = "uefi")]
 pub unsafe fn major(
     processor: usize,
