@@ -20,9 +20,7 @@ use super::x86_64 as backend;
 pub(in crate::metal) use backend::stack_pointer;
 pub(crate) use node::QueueNode;
 pub use protection::turn_capacity;
-pub(crate) use protection::{
-    Error, TurnParticipation, begin_leaf, begin_turn, can_switch,
-};
+pub(crate) use protection::{Error, TurnParticipation, begin_leaf, begin_turn, can_switch};
 
 #[cfg(all(test, not(limen_target)))]
 #[path = "../../../../../tests/metal/processor/hart/mod.rs"]

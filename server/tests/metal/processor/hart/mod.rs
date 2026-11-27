@@ -2,7 +2,10 @@
 
 use super::{HartLocal, Storage};
 use crate::metal::sync::TURN_CAPACITY;
-use core::{cell::{Cell, OnceCell}, ptr};
+use core::{
+    cell::{Cell, OnceCell},
+    ptr,
+};
 use std::boxed::Box;
 
 std::thread_local! {
@@ -12,7 +15,8 @@ std::thread_local! {
 
 pub(super) fn local_address() -> usize {
     LOCAL.with(|local| {
-        let hart = local.get_or_init(|| unsafe { Box::leak(Box::new(Storage::<TURN_CAPACITY>::new())).bind() });
+        let hart = local
+            .get_or_init(|| unsafe { Box::leak(Box::new(Storage::<TURN_CAPACITY>::new())).bind() });
         ptr::from_ref(*hart).expose_provenance()
     })
 }
@@ -58,7 +62,10 @@ fn acquisition_uses_the_nodes_supplied_to_this_hart() {
         let mut plan = workspace.plan();
         plan.insert(&first).unwrap();
         plan.insert(&second).unwrap();
-        assert_eq!(plan.acquire(TurnMode::Slow, |_| ()), Err(TurnAcquireError::Capacity));
+        assert_eq!(
+            plan.acquire(TurnMode::Slow, |_| ()),
+            Err(TurnAcquireError::Capacity)
+        );
         assert_eq!(first.acquire(|value| *value), Ok(0));
     })
     .join()

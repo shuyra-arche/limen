@@ -1,6 +1,11 @@
 //! Ordinary execution protection owned by the initialized physical CPU.
 
-use core::{cell::{Cell, OnceCell}, marker::PhantomData, mem::DropGuard, sync::atomic::AtomicBool};
+use core::{
+    cell::{Cell, OnceCell},
+    marker::PhantomData,
+    mem::DropGuard,
+    sync::atomic::AtomicBool,
+};
 
 use super::{HartLocal, QueueNode, backend, ordinary_local};
 

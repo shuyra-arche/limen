@@ -7,9 +7,9 @@ use core::{
 };
 
 use crate::metal::{
-    sync::TURN_CAPACITY,
     platform::boot,
     processor::hart::local::{self, Storage, stack::Stack},
+    sync::TURN_CAPACITY,
 };
 use core::ops::Range;
 
