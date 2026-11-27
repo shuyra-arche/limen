@@ -144,7 +144,62 @@ fn reservation(
     Ok(reservation)
 }
 
+/// Result of inspecting one allocation position for a closed reservation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Cancellation {
+    More,
+    Cancelled(AllocationId),
+    End,
+}
+
 impl Allocator {
+    /// Inspect one position in the original Region. A failed lock attempt
+    /// leaves the cursor unchanged. An end-of-pass resets it for later closes.
+    pub fn cancel_closed(
+        &self,
+        region: RegionId,
+        cursor: &mut usize,
+        mode: TurnMode,
+    ) -> Result<Cancellation, Error> {
+        let region = self.region(region)?;
+        let (capacity, candidate) = region.state.acquire(|state| {
+            let table = &state.allocations;
+            let candidate = table.published_at(*cursor).and_then(|(key, record)| {
+                if let Phase::Reserved(construction) = record.phase {
+                    Some((AllocationId { key }, record.allowance, construction))
+                } else {
+                    None
+                }
+            });
+            (table.capacity(), candidate)
+        })?;
+        if *cursor >= capacity {
+            *cursor = 0;
+            return Ok(Cancellation::End);
+        }
+        let result = if let Some((id, allowance, construction)) = candidate {
+            let mut work = TurnWorkspace::<3>::new();
+            let mut plan = work.plan();
+            self.plan_construction(&mut plan, id.region(), allowance, construction)?;
+            plan.acquire(mode, |held| -> Result<_, Error> {
+                let receiver = held
+                    .access(&construction.state)
+                    .expect("original construction");
+                if matches!(receiver, Preparation::Shut(Some(reservation)) if reservation.id == id)
+                {
+                    self.cancel(held, construction)?;
+                    Ok(Cancellation::Cancelled(id))
+                } else {
+                    Ok(Cancellation::More)
+                }
+            })??
+        } else {
+            Cancellation::More
+        };
+        *cursor += 1;
+        Ok(result)
+    }
+
     pub fn plan_construction<'a>(
         &'a self,
         plan: &mut TurnPlan<'a, '_>,
