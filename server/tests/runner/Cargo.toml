@@ -6,6 +6,9 @@ publish = false
 autotests = false
 
 [workspace]
+resolver = "3"
+members = ["observe"]
+default-members = ["."]
 
 [lib]
 path = "lib.rs"

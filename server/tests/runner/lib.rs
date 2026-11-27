@@ -1,5 +1,9 @@
 //! Host-only execution and evidence for native guest tests.
+pub mod native;
+pub mod platform;
 pub mod process;
+pub mod qmp;
+pub mod utilities;
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::Path, process::Command};
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

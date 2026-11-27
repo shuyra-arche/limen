@@ -24,10 +24,13 @@ their own compilation boundaries. They are not QEMU scenarios.
 
 ## Native guests
 
-All hardware tests use the same `kernel-guest` package in `target/`.
-Cargo discovers the images in `target/tests/`; adding an image does not
-require a Cargo manifest entry. Owner-local code contains the assertions.
-A guest entry composes those assertions with the original Boot handoff.
+Ordinary hardware tests use the `kernel-guest` package in `target/`.
+Tests that require independently built ELF images use the `module-guest`
+package in `target/module/`. Both share a workspace, lockfile, platform
+description, linker contract and runner. Cargo discovers the images in each
+package's `tests/` directory; adding an image does not require a manifest
+entry. Owner-local code contains the assertions. A guest entry composes
+those assertions with the original Boot handoff.
 
 A target name begins with `common-`, the target architecture, or `uefi-`
 where the image requires the UEFI ABI. These names restrict compilation, not
@@ -48,14 +51,16 @@ malformed or unsupported declaration. The kernel still discovers real hardware
 through the original firmware inputs. Debug and Release use the same rules.
 
 Install the exact QEMU version from [qemu.version](qemu.version), the required
-firmware, and the Rust targets. AArch64 and x86_64 UEFI guests also require
-their bare target to build the independent module ELF.
+firmware, and the selected Rust guest target. Only `module-guest` needs the
+additional bare target for its independent AArch64 or x86_64 ELF images;
+ordinary UEFI guests can compile without it.
 
 ```sh
-rustup target add riscv64gc-unknown-none-elf aarch64-unknown-uefi \
-    aarch64-unknown-none x86_64-unknown-uefi x86_64-unknown-none
+rustup target add riscv64gc-unknown-none-elf aarch64-unknown-uefi x86_64-unknown-uefi
+# Only for Module guests on the corresponding UEFI architecture:
+rustup target add aarch64-unknown-none x86_64-unknown-none
 cargo build --locked --manifest-path server/tests/runner/Cargo.toml \
-    --target x86_64-unknown-linux-gnu
+    -p kernel-verification --target x86_64-unknown-linux-gnu
 runner="$PWD/server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify"
 ```
 
@@ -70,10 +75,13 @@ cargo -Z panic-abort-tests --config "$config" test --locked \
 ```
 
 Add `--release` for the optimized image and select a fresh evidence root.
-The Target workflow runs each architecture and profile, using Cargo's
-`--test 'common-*'`, architecture and UEFI filters, not a list of test names.
-Check validates the compilation groups of all Cargo-discovered guest targets;
-an unclassified target is an error rather than a silently skipped test.
+For independent Module images select `-p module-guest` instead of
+`-p kernel-guest`. The Target workflow selects all guest execution packages
+in the workspace for each architecture and profile. It applies the same
+Cargo-discovered compilation groups to the Host observation package:
+`common-*`, architecture and UEFI, omitting empty groups. Check validates
+all guest and observer targets; an unclassified target is an error rather
+than a silently skipped test.
 Ordinary completion requires QEMU exit 97 and successful process settlement.
 Guest panic, ordinary shutdown, reset, trap and timeout are failures.
 Serial output is diagnostic, never a generic success oracle.
@@ -101,7 +109,14 @@ Host models and compiler contracts do not establish native hardware authority.
 Hardware fixtures exercise actual observations and retained resources. They
 do not replace the future runtime Trap or driver Sign lifecycle.
 
-## Terminal observations
+## Host-assisted observations
+
+The `machine-observer` package in `runner/observe/` uses ordinary Host
+libtest and the shared runner library. Its tests require a selected guest
+architecture, profile and machine tools. The default runner Host tests do
+not select this package. Cargo discovers observation targets just as it
+discovers guest images; CI does not enumerate observation cases. The full
+duration timeout probe is explicitly ignored in its own test definition.
 
 A terminal boot fault cannot execute a normal guest test assertion. The
 Boot-owned Host test compiles the ordinary RV64 boot guest via Cargo's JSON
@@ -119,9 +134,9 @@ Install `gdb-multiarch` (or set `GDB_MULTIARCH`) for this test.
 
 ```sh
 LIMEN_TEST_PROFILE=debug cargo test --locked \
-    --manifest-path server/tests/runner/Cargo.toml \
-    --target x86_64-unknown-linux-gnu --test contracts boot_fault:: \
-    -- --ignored --test-threads=1
+    --manifest-path server/tests/runner/Cargo.toml -p machine-observer \
+    --target x86_64-unknown-linux-gnu --test riscv64-boot-fault \
+    -- --test-threads=1
 ```
 
 The unchanged ELF's hash, machine observation, controller transcript and run

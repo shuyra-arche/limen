@@ -1,5 +1,5 @@
 //! Read the test's selected platform before starting QEMU.
-use kernel_verification::{Result, require};
+use crate::{Result, require};
 use object::{Architecture, BinaryFormat, Object, ObjectKind, ObjectSection};
 use std::{fs, path::Path};
 

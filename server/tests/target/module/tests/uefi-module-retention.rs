@@ -4,7 +4,7 @@
 #![test_runner(collection::run)]
 #![reexport_test_harness_main = "collected"]
 
-#[path = "../support/platform.rs"]
+#[path = "../../support/platform.rs"]
 mod platform;
 
 #[cfg(target_arch = "aarch64")]
@@ -20,11 +20,11 @@ platform::declare!(platform::Platform {
 use kernel::entry::boot::Boot;
 use uefi::prelude::*;
 
-#[path = "../support/discovery/collection.rs"]
+#[path = "../../support/discovery/collection.rs"]
 mod collection;
-#[path = "../../metal/module/retention/mod.rs"]
+#[path = "../../../metal/module/retention/mod.rs"]
 mod native;
-#[path = "../support/outcome/mod.rs"]
+#[path = "../../support/outcome/mod.rs"]
 mod outcome;
 
 #[entry]

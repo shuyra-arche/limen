@@ -1,4 +1,4 @@
-use kernel_verification::{Result, require};
+use crate::{Result, require};
 use regex::Regex;
 use std::{fs, path::Path, process::Command};
 

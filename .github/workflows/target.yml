@@ -40,14 +40,13 @@ jobs:
         shell: bash
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl git build-essential
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential jq gdb-multiarch
           case "$LIMEN_TEST_ARCH" in
-            riscv64) qemu=qemu-system-riscv; firmware="opensbi gdb-multiarch" ;;
+            riscv64) qemu=qemu-system-riscv; firmware=opensbi ;;
             aarch64) qemu=qemu-system-arm; firmware=qemu-efi-aarch64 ;;
             x86_64) qemu=qemu-system-x86; firmware=ovmf ;;
           esac
-          read -r -a firmware_packages <<< "$firmware"
-          apt-get install -y --no-install-recommends "${firmware_packages[@]}"
+          apt-get install -y --no-install-recommends "$firmware"
           echo 'deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] https://snapshot.debian.org/archive/debian/20261124T000000Z/ trixie-backports main' > /etc/apt/sources.list.d/qemu.list
           apt-get -o Acquire::Retries=3 update
           apt-get install -y --no-install-recommends -t trixie-backports "$qemu"
@@ -66,11 +65,7 @@ jobs:
             aarch64) target=aarch64-unknown-uefi ;;
             x86_64) target=x86_64-unknown-uefi ;;
           esac
-          if [[ "$target" == *-uefi ]]; then
-            rustup target add "$target" "${LIMEN_TEST_ARCH}-unknown-none"
-          else
-            rustup target add "$target"
-          fi
+          rustup target add "$target"
           echo "LIMEN_TEST_TARGET=$target" >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Record source
@@ -79,24 +74,58 @@ jobs:
           git -c safe.directory="$PWD" rev-parse HEAD > .integration/source.txt
           rustc -Vv > .integration/rustc.txt
           cargo -V > .integration/cargo.txt
-      - name: Test Cargo completion transport
-        run: |
-          cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu --test contracts transport:: -- --ignored --test-threads=1 --skip transport::rejects_timeout
-      - name: Test auto-discovered guests
+      - name: Run target tests
         shell: bash
         run: |
           set -euo pipefail
-          runner="$PWD/server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify"
+          runner_manifest=server/tests/runner/Cargo.toml
+          guest_manifest=server/tests/target/Cargo.toml
+          host=x86_64-unknown-linux-gnu
+          cargo build --locked --manifest-path "$runner_manifest" -p kernel-verification --target "$host"
+          export LIMEN_TEST_RUNNER="$PWD/server/tests/runner/target/$host/debug/verify"
           evidence="$PWD/.integration/guests"
-          config="target.$LIMEN_TEST_TARGET.runner=['$runner','native','--evidence-root','$evidence']"
-          args=()
-          if [[ "$LIMEN_TEST_PROFILE" == release ]]; then args+=(--release); fi
-          if [[ "$LIMEN_TEST_TARGET" == *-uefi ]]; then args+=(--test 'uefi-*'); fi
-          cargo -Z panic-abort-tests --config "$config" test --locked --manifest-path server/tests/target/Cargo.toml -p kernel-guest --test 'common-*' --test "$LIMEN_TEST_ARCH-*" --target "$LIMEN_TEST_TARGET" "${args[@]}"
-      - name: Observe early RV64 boot fault
-        if: matrix.arch == 'riscv64'
-        run: |
-          cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu --test contracts boot_fault:: -- --ignored --test-threads=1
+          config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','native','--evidence-root','$evidence']"
+          groups=(common "$LIMEN_TEST_ARCH")
+          if [[ "$LIMEN_TEST_TARGET" == *-uefi ]]; then groups+=(uefi); fi
+
+          # Cargo is the source of target discovery. Omit groups with no
+          # integration targets, rather than naming a concrete test in CI.
+          select_tests() {
+            local manifest=$1 excluded=$2 names group
+            names=$(cargo metadata --locked --no-deps --format-version 1 \
+                --manifest-path "$manifest" |
+                jq -r --arg excluded "$excluded" '
+                  .packages[] | select(.name != $excluded) |
+                  .targets[] | select(.kind == ["test"]) | .name')
+            selected=()
+            for group in "${groups[@]}"; do
+              if grep -q "^${group}-" <<< "$names"; then
+                selected+=(--test "$group-*")
+              fi
+            done
+          }
+
+          # Observers are ordinary Host libtest targets. They can construct
+          # guests, but are never compiled for the observed ISA.
+          select_tests "$runner_manifest" kernel-verification
+          if (( ${#selected[@]} )); then
+            cargo test --locked --manifest-path "$runner_manifest" \
+              --workspace --exclude kernel-verification --target "$host" \
+              "${selected[@]}" -- --test-threads=1
+          fi
+
+          # UEFI ordinary guests have now built and run without their bare
+          # target installed. Only the independent Module ELF images need it.
+          if [[ "$LIMEN_TEST_TARGET" == *-uefi ]]; then
+            rustup target add "${LIMEN_TEST_ARCH}-unknown-none"
+          fi
+          select_tests "$guest_manifest" uefi-fixture
+          (( ${#selected[@]} > 0 ))
+          profile=()
+          if [[ "$LIMEN_TEST_PROFILE" == release ]]; then profile+=(--release); fi
+          cargo -Z panic-abort-tests --config "$config" test --locked \
+            --manifest-path "$guest_manifest" --workspace --exclude uefi-fixture \
+            --target "$LIMEN_TEST_TARGET" "${selected[@]}" "${profile[@]}"
       - name: Preserve target evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

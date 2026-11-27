@@ -1,4 +1,4 @@
-use kernel_verification::{Result, process};
+use crate::{Result, process};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -172,3 +172,7 @@ pub(super) fn capture(
     }
     shutdown.ok_or_else(|| io::Error::other("missing QMP shutdown"))
 }
+
+#[cfg(test)]
+#[path = "tests/qmp.rs"]
+mod tests;

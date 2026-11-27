@@ -1,11 +1,6 @@
 use clap::{Parser, Subcommand};
-use kernel_verification::Result;
+use kernel_verification::{Result, native, utilities};
 use std::path::PathBuf;
-
-mod native;
-mod platform;
-mod qmp;
-mod utilities;
 
 #[derive(Parser)]
 #[command(about = "Kernel target verification")]

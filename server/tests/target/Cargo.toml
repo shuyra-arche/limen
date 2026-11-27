@@ -15,7 +15,8 @@ uefi-fixture.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["support/uefi"]
+members = ["module", "support/uefi"]
+default-members = ["."]
 
 [workspace.dependencies]
 kernel = { path = "../.." }

@@ -1,6 +1,6 @@
 //! Cargo runner. Only the dedicated machine exit code is success.
 use crate::platform::{self, Firmware, Machine};
-use kernel_verification::{Result, output, process, require};
+use crate::{Result, output, process, require};
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -58,11 +58,11 @@ fn command(machine: &Machine, image: &Path, directory: &Path, observe: bool) -> 
             "QEMU_OPENSBI",
             "/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin",
         ));
-        kernel_verification::json(
+        crate::json(
             &directory.join("firmware.json"),
             &serde_json::json!({
                 "code": firmware,
-                "code_sha256": kernel_verification::digest(&firmware)?,
+                "code_sha256": crate::digest(&firmware)?,
             }),
         )?;
         command
@@ -114,12 +114,12 @@ fn command(machine: &Machine, image: &Path, directory: &Path, observe: bool) -> 
     )?;
     let private_vars = directory.join("vars.fd");
     fs::copy(firmware.join(variables), &private_vars)?;
-    kernel_verification::json(
+    crate::json(
         &directory.join("firmware.json"),
         &serde_json::json!({
             "code": code,
-            "code_sha256": kernel_verification::digest(&code)?,
-            "initial_vars_sha256": kernel_verification::digest(&private_vars)?,
+            "code_sha256": crate::digest(&code)?,
+            "initial_vars_sha256": crate::digest(&private_vars)?,
         }),
     )?;
     command
@@ -177,7 +177,7 @@ fn peripherals(command: &mut Command, machine: &Machine, directory: &Path, obser
 /// Construct and record the selected machine without starting it.
 pub fn prepare(image: &Path, directory: &Path, observe: bool) -> Result<Command> {
     let machine = platform::read(image)?;
-    kernel_verification::json(
+    crate::json(
         &directory.join("platform.json"),
         &serde_json::json!({
             "architecture": machine.architecture,
@@ -189,7 +189,7 @@ pub fn prepare(image: &Path, directory: &Path, observe: bool) -> Result<Command>
             "iommu": format!("{:?}", machine.platform.iommu),
             "serial": format!("{:?}", machine.platform.serial),
             "devices": machine.devices,
-            "image_sha256": kernel_verification::digest(image)?,
+            "image_sha256": crate::digest(image)?,
         }),
     )?;
     let command = command(&machine, image, directory, observe)?;
@@ -202,11 +202,11 @@ pub fn prepare(image: &Path, directory: &Path, observe: bool) -> Result<Command>
             == Some(include_str!("../qemu.version").trim()),
         "unexpected QEMU version",
     )?;
-    kernel_verification::json(
+    crate::json(
         &directory.join("tools.json"),
         &serde_json::json!({
             "qemu": version,
-            "runner_sha256": kernel_verification::digest(&env::current_exe()?)?,
+            "runner_sha256": crate::digest(&env::current_exe()?)?,
         }),
     )?;
     Ok(command)
@@ -218,7 +218,7 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
         Some(root) => root.join(image.file_name().ok_or("missing executable name")?),
         None => PathBuf::from(env::var_os("LIMEN_TEST_EVIDENCE").ok_or("missing evidence path")?),
     };
-    kernel_verification::fresh(&evidence)?;
+    crate::fresh(&evidence)?;
     let directory = evidence.canonicalize()?;
     let mut command = prepare(&image, &directory, observe)?;
     let timeout = Duration::from_secs(45);
@@ -228,7 +228,7 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
         let (outcome, shutdown) = crate::qmp::run_isolated(command, &directory, timeout, None)?;
         match shutdown {
             Ok(shutdown) => {
-                kernel_verification::json(&directory.join("shutdown.json"), &shutdown)?;
+                crate::json(&directory.join("shutdown.json"), &shutdown)?;
             }
             Err(error) => {
                 fs::write(directory.join("qmp-error.txt"), error.to_string())?;
@@ -240,7 +240,7 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
         process::run(&mut command, &directory, timeout)?
     };
     outcome.passed = outcome.exited() && outcome.code == Some(97);
-    kernel_verification::json(&directory.join("result.json"), &outcome)?;
+    crate::json(&directory.join("result.json"), &outcome)?;
     require(
         outcome.passed,
         format!("no explicit test success: {outcome:?}"),

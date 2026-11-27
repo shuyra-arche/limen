@@ -20,18 +20,17 @@ fn cargo_logs(output: &Output, directory: &Path, name: &str) {
 }
 
 fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
-    let architecture = env::var("LIMEN_TEST_ARCH").expect("select T0 architecture");
-    let profile = env::var("LIMEN_TEST_PROFILE").expect("select T0 profile");
+    let architecture = env::var("LIMEN_TEST_ARCH").expect("select guest architecture");
+    let profile = env::var("LIMEN_TEST_PROFILE").expect("select guest profile");
+    let target = env::var("LIMEN_TEST_TARGET").expect("select guest target");
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
+        .join("../../../..")
         .canonicalize()
         .unwrap();
-    let target = match architecture.as_str() {
-        "riscv64" => "riscv64gc-unknown-none-elf",
-        "aarch64" => "aarch64-unknown-uefi",
-        "x86_64" => "x86_64-unknown-uefi",
-        _ => panic!("unsupported T0 architecture: {architecture}"),
-    };
+    let runner = PathBuf::from(env::var_os("LIMEN_TEST_RUNNER").expect("provide built runner"))
+        .canonicalize()
+        .unwrap();
+    let runner = runner.to_str().expect("UTF-8 runner path");
     let test = if case == "discovery-panic" {
         "common-sync"
     } else {
@@ -40,8 +39,8 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
     let evidence = root.join(".integration/transport").join(case);
     let logs = root.join(".integration/transport/cargo").join(case);
     fs::create_dir_all(&logs).unwrap();
-    assert!(!evidence.exists(), "T0 requires fresh evidence");
-    let mut runner = vec![env!("CARGO_BIN_EXE_verify"), "native"];
+    assert!(!evidence.exists(), "transport requires fresh evidence");
+    let mut runner = vec![runner, "native"];
     if case == "reset" {
         runner.push("--observe");
     }
@@ -56,7 +55,7 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
             .args(["--config", &config, "-Z", "panic-abort-tests"])
             .args(["test", "--locked", "--manifest-path"])
             .arg(root.join("server/tests/target/Cargo.toml"))
-            .args(["-p", "kernel-guest", "--test", test, "--target", target])
+            .args(["-p", "kernel-guest", "--test", test, "--target", &target])
             .env("LIMEN_TEST_CASE", case)
             .env("LIMEN_TEST_EVIDENCE", &evidence);
         match profile.as_str() {
@@ -64,7 +63,7 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
             "release" => {
                 cargo.arg("--release");
             }
-            _ => panic!("unsupported T0 profile: {profile}"),
+            _ => panic!("unsupported guest profile: {profile}"),
         }
         cargo
     };
@@ -104,14 +103,12 @@ fn ordinary(architecture: &str) -> i32 {
 }
 
 #[test]
-#[ignore = "requires the pinned target toolchain and QEMU"]
 fn accepts_completed_guest() {
     let (result, _, _) = run("pass", true);
     exited(&result, 97);
 }
 
 #[test]
-#[ignore = "requires the pinned target toolchain and QEMU"]
 fn rejects_guest_panic() {
     let (result, evidence, _) = run("panic", false);
     exited(&result, 99);
@@ -120,21 +117,18 @@ fn rejects_guest_panic() {
 }
 
 #[test]
-#[ignore = "requires the pinned target toolchain and QEMU"]
 fn rejects_ordinary_shutdown() {
     let (result, _, architecture) = run("shutdown", false);
     exited(&result, ordinary(&architecture));
 }
 
 #[test]
-#[ignore = "requires the pinned target toolchain and QEMU"]
 fn rejects_fake_pass_log() {
     let (result, _, architecture) = run("fake-log", false);
     exited(&result, ordinary(&architecture));
 }
 
 #[test]
-#[ignore = "requires the pinned target toolchain and QEMU"]
 fn rejects_illegal_instruction() {
     let (result, evidence, _) = run("trap", false);
     assert_eq!(result["status"], "exited");
@@ -146,7 +140,7 @@ fn rejects_illegal_instruction() {
 }
 
 #[test]
-#[ignore = "requires the pinned target toolchain and QEMU"]
+#[ignore = "full-duration timeout probe; run explicitly"]
 fn rejects_timeout() {
     let (result, _, _) = run("timeout", false);
     assert_eq!(result["status"], "timeout");
@@ -154,14 +148,12 @@ fn rejects_timeout() {
 }
 
 #[test]
-#[ignore = "requires the pinned target toolchain and QEMU"]
 fn accepts_minor_completion() {
     let (result, _, _) = run("minor-pass", true);
     exited(&result, 97);
 }
 
 #[test]
-#[ignore = "requires the pinned target toolchain and QEMU"]
 fn rejects_minor_panic() {
     let (result, evidence, _) = run("minor-panic", false);
     exited(&result, 99);
@@ -170,7 +162,6 @@ fn rejects_minor_panic() {
 }
 
 #[test]
-#[ignore = "requires the pinned target toolchain and QEMU"]
 fn rejects_guest_reset() {
     let (result, evidence, _) = run("reset", false);
     exited(&result, 0);
@@ -180,7 +171,6 @@ fn rejects_guest_reset() {
 }
 
 #[test]
-#[ignore = "requires the pinned target toolchain and QEMU"]
 fn rejects_collected_panic() {
     let (result, evidence, _) = run("discovery-panic", false);
     exited(&result, 99);

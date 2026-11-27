@@ -1,6 +1,7 @@
 //! Observe an actual terminal fault during the production BSS clear.
 //! The linked ELF is never modified. GDB changes only the running guest.
 
+use kernel_verification::{native, platform, qmp};
 use object::{Architecture, Object, ObjectSection, ObjectSymbol};
 use serde_json::Value;
 use std::{
@@ -274,24 +275,23 @@ fn fault_observation_error(directory: &Path, error: impl std::fmt::Display) -> !
 
 #[cfg(unix)]
 #[test]
-#[ignore = "requires the pinned RV64 toolchain, QEMU and GDB"]
 fn bss_clear_traps_on_the_original_major_stack() {
     use std::os::unix::fs::PermissionsExt;
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
+        .join("../../../..")
         .canonicalize()
         .unwrap();
     let evidence = root.join(".integration/boot-fault");
     kernel_verification::fresh(&evidence).unwrap();
     let image = linked_guest(&root, &evidence);
     let hash = kernel_verification::digest(&image).unwrap();
-    let platform = crate::platform::read(&image).unwrap();
+    let platform = platform::read(&image).unwrap();
     assert_eq!(platform.architecture, "riscv64");
     assert_eq!(platform.platform.harts, 4);
 
     // The normal run and the fault run use the same actual Cargo artifact.
-    crate::native::run(&image, false, Some(&evidence.join("normal"))).unwrap();
+    native::run(&image, false, Some(&evidence.join("normal"))).unwrap();
     let normal = evidence.join("normal").join(image.file_name().unwrap());
     let result = receipt(&normal.join("result.json"));
     assert_eq!(result["status"], "exited");
@@ -302,7 +302,7 @@ fn bss_clear_traps_on_the_original_major_stack() {
     let fault = evidence.join("fault");
     kernel_verification::fresh(&fault).unwrap();
     fs::set_permissions(&fault, fs::Permissions::from_mode(0o700)).unwrap();
-    let mut machine = crate::native::prepare(&image, &fault, true).unwrap();
+    let mut machine = native::prepare(&image, &fault, true).unwrap();
     machine.current_dir(&fault).args([
         "-chardev",
         "socket,path=gdb.sock,server=on,wait=off,id=debugger",
@@ -318,7 +318,7 @@ fn bss_clear_traps_on_the_original_major_stack() {
         .arg(&image)
         .args(["-x", "control.gdb"]);
     let (result, shutdown) =
-        crate::qmp::run_isolated(machine, &fault, Duration::from_secs(45), Some(controller))
+        qmp::run_isolated(machine, &fault, Duration::from_secs(45), Some(controller))
             .unwrap_or_else(|error| fault_observation_error(&fault, error));
     let shutdown = shutdown.unwrap_or_else(|error| fault_observation_error(&fault, error));
     kernel_verification::json(&fault.join("shutdown.json"), &shutdown).unwrap();

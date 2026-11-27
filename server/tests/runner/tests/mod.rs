@@ -1,13 +1,4 @@
-#[path = "../../entry/boot/fault.rs"]
-mod boot_fault;
-#[path = "../native.rs"]
-mod native;
-#[path = "../platform.rs"]
-mod platform;
-#[path = "../qmp.rs"]
-mod qmp;
-#[path = "../utilities.rs"]
-mod utilities;
+use kernel_verification::{platform, utilities};
 
 #[cfg(unix)]
 #[test]
@@ -35,7 +26,6 @@ fn symbolizer_preserves_literal_return_addresses() {
 }
 
 mod execution;
-mod transport;
 
 #[test]
 fn platform_record_is_bounded_and_rejects_unsupported_combinations() {
