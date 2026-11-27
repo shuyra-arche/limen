@@ -13,5 +13,7 @@ pub use turn::{
     TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnPlan, TurnPlanError, TurnWorkspace,
 };
 
-/// Maximum number of unique Turn locks in a complete plan on one Hart.
-pub const TURN_CAPACITY: usize = crate::metal::processor::hart::local::TURN_CAPACITY;
+pub use crate::metal::processor::hart::local::turn_capacity;
+
+/// Default node supply selected by the current trusted bootstrap image.
+pub const TURN_CAPACITY: usize = 5;

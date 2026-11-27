@@ -3,12 +3,13 @@ use super::STACK_BYTES;
 use crate::metal::{
     platform::boot,
     platform::boot::handoff::{Descriptions, Facts},
-    processor::hart::local::{self, HartLocal, stack::Stack},
+    processor::hart::local::{self, Storage, stack::Stack},
+    sync::TURN_CAPACITY,
 };
 use core::ops::Range;
 
 pub(in crate::metal) static mut STACK: Stack<STACK_BYTES> = Stack::new();
-static LOCAL: HartLocal = HartLocal::new();
+static LOCAL: Storage<TURN_CAPACITY> = Storage::new();
 
 /// Image-owned stack reservation for the major CPU.
 pub fn stack_range() -> Range<usize> {
@@ -40,7 +41,7 @@ pub(crate) unsafe fn admit<'a>(
             "FAIL Limen boot: entry changed before Hart admission\n"
         ));
     };
-    unsafe { LOCAL.install(hart, entry) };
+    unsafe { LOCAL.bind().install(hart, entry) };
     if !local::can_switch() {
         services.reject(format_args!(
             "FAIL Limen boot: local protection is not idle\n"
