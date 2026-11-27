@@ -19,13 +19,14 @@ use core::{
 use kernel::{
     basis::{
         execution::{Current, Error, EstablishError, Execution, KernelBinding},
-        room::Occupancy,
+        room::{Harts, Occupancy},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::{Boot, shutdown, write},
 };
 
 static mut STACKS: Stacks = Stacks::new();
+static mut HARTS: Harts<1> = Harts::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
@@ -116,9 +117,13 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     // Individual interrupt sources remain masked. SIE makes the execution
     // environment unsupported before the constructor binds the stack supply.
     unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-    let rejected = Execution::new(boot, unsafe { &mut *stacks }, unsafe {
-        &mut *(&raw mut RECORDS)
-    });
+    let harts = &raw mut HARTS;
+    let rejected = Execution::new(
+        boot,
+        unsafe { &mut *stacks },
+        unsafe { &mut *(&raw mut RECORDS) },
+        unsafe { &mut *harts },
+    );
     unsafe { asm!("csrci sstatus, 2", options(nostack)) };
     let Err(failure) = rejected else {
         panic!("execution admitted with interrupts enabled");
@@ -127,11 +132,19 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert_eq!(failure.boot.hart(), major);
     assert_eq!(failure.boot.device_tree(), device_tree);
     assert!(core::ptr::eq(failure.stacks, stacks));
-    let runtime = Execution::new(failure.boot, failure.stacks, failure.records)
+    assert!(core::ptr::eq(failure.harts, harts));
+    let runtime = Execution::new(failure.boot, failure.stacks, failure.records, failure.harts)
         .map_err(|failure| failure.reason)
-        .expect("original handoff and stack supply can be retried");
+        .expect("original handoff and independent supplies can be retried");
     unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     let execution = execution();
+    assert_eq!(execution.enter(), Err(Error::Unsupported));
+    unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
+    assert_eq!(execution.attach(), Err(Error::Unsupported));
+    unsafe { asm!("csrci sstatus, 2", options(nostack)) };
+    assert_eq!(execution.enter(), Err(Error::Unsupported));
+    execution.attach().expect("attach actual boot Hart");
+    assert_eq!(execution.attach(), Err(Error::Busy));
     let a = unsafe { execution.create(first) }.expect("first unit");
     let dormant = unsafe { execution.create(abandoned) }.expect("dormant unit");
     assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));

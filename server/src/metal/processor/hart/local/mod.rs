@@ -59,12 +59,21 @@ impl Entry {
     }
 }
 
+#[cfg(limen_cooperative)]
+#[derive(Clone, Copy)]
+struct CooperativeBinding {
+    scope: usize,
+    slot: usize,
+}
+
 /// Fixed storage belonging to the verified physical CPU that took this entry.
 pub(in crate::metal) struct HartLocal {
     #[cfg(limen_target)]
     identity: Cell<usize>,
     #[cfg(limen_target)]
     entry: Cell<Option<Entry>>,
+    #[cfg(limen_cooperative)]
+    cooperative: Cell<Option<CooperativeBinding>>,
     protection: protection::LocalProtection,
 }
 
@@ -79,6 +88,8 @@ impl HartLocal {
             identity: Cell::new(0),
             #[cfg(limen_target)]
             entry: Cell::new(None),
+            #[cfg(limen_cooperative)]
+            cooperative: Cell::new(None),
             protection: protection::LocalProtection::new(),
         }
     }
@@ -126,6 +137,31 @@ pub(crate) fn current_hart() -> HartId {
 #[cfg(limen_target)]
 pub(crate) fn try_current_hart() -> Option<HartId> {
     Some(HartId::new(ordinary_local()?.identity.get()))
+}
+
+#[cfg(limen_cooperative)]
+pub(in crate::metal) fn cooperative_attached() -> bool {
+    ordinary_local().is_some_and(|local| local.cooperative.get().is_some())
+}
+
+/// Same-Hart discovery of the permanently associated machine record.
+#[cfg(limen_cooperative)]
+pub(in crate::metal) fn cooperative_slot(scope: usize) -> Option<(HartId, usize)> {
+    let local = ordinary_local()?;
+    let binding = local.cooperative.get()?;
+    (binding.scope == scope).then_some((HartId::new(local.identity.get()), binding.slot))
+}
+
+/// The caller has committed the current Hart's unique Room participation
+/// under protection. The supplied machine record remains stable, is not
+/// reused, and no ordinary entry may interleave this publication.
+#[cfg(limen_cooperative)]
+pub(in crate::metal) unsafe fn bind_cooperative(scope: usize, slot: usize) {
+    let local = ordinary_local().expect("verified ordinary Hart");
+    assert!(local.cooperative.get().is_none());
+    local
+        .cooperative
+        .set(Some(CooperativeBinding { scope, slot }));
 }
 
 #[cfg(limen_target)]
