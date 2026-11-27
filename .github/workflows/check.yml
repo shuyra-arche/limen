@@ -41,6 +41,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -52,6 +53,7 @@ jobs:
           plan=$(bash tools/tests/checks.sh "$PWD" "$BASE_SHA")
           echo "plan=$plan" >> "$GITHUB_OUTPUT"
       - name: Check repository contracts
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           bash tools/tests/layout.sh
           bash tools/tests/release.sh
@@ -59,15 +61,20 @@ jobs:
           bash tools/check-tooling.sh
           bash tools/tests/selection.sh
       - name: Install host toolchain
+        id: toolchain
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           rustc -Vv
           rustup component add rustfmt clippy
       - name: Check build profiles
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: bash server/tests/entry/boot/profiles.sh
       - name: Identify compiler
         id: compiler
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: echo "hash=$(rustc -Vv | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Cache host compilation
+        if: ${{ !cancelled() && steps.compiler.outcome == 'success' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -77,12 +84,19 @@ jobs:
           key: kernel-host-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler.outputs.hash }}-${{ hashFiles('Cargo.lock', 'server/tests/runner/Cargo.lock', '**/Cargo.toml', '.github/workflows/check.yml') }}
           restore-keys: |
             kernel-host-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler.outputs.hash }}-
-      - name: Check formatting
-        run: |
-          cargo fmt --all -- --check
-          cargo fmt --manifest-path server/tests/runner/Cargo.toml --all -- --check
-          cargo fmt --manifest-path server/tests/target/Cargo.toml --all -- --check
+      # Formatting and static checks remain required, but do not gate
+      # independent execution. Each step retains its native failure status.
+      - name: Check workspace formatting
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo fmt --all -- --check
+      - name: Check runner formatting
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo fmt --manifest-path server/tests/runner/Cargo.toml --all -- --check
+      - name: Check target formatting
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        run: cargo fmt --manifest-path server/tests/target/Cargo.toml --all -- --check
       - name: Check execution package coverage
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         run: |
           # A new test is discovered inside an existing execution package.
           # A new package is an explicit change to the compilation boundary.
@@ -97,28 +111,35 @@ jobs:
               [.packages[] | select(any(.targets[]; .kind == ["test"])) | .name]
               | sort == ["kernel-verification", "machine-observer"]'
       - name: Check runner
-        if: fromJSON(steps.scope.outputs.plan).runner
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.scope.outcome == 'success' && fromJSON(steps.scope.outputs.plan).runner }}
         run: |
           cargo clippy --locked --manifest-path server/tests/runner/Cargo.toml --workspace --all-targets --target x86_64-unknown-linux-gnu -- -Dwarnings
-      - name: Test host contracts
+      - name: Test workspace Host contracts
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.scope.outcome == 'success' && fromJSON(steps.scope.outputs.plan).host }}
         env:
           RUSTFLAGS: "-Dwarnings"
-          PLAN: ${{ steps.scope.outputs.plan }}
-        run: |
-          if jq -e .host <<<"$PLAN" >/dev/null; then
-            # Exercise the ordinary Host default; a freestanding default
-            # would make Rust's native test harness unavailable.
-            cargo test --locked --workspace
-            bash treaty/tests/compiler/check.sh
-          fi
-          if jq -e .runner <<<"$PLAN" >/dev/null; then
-            cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
-          fi
-      - name: Build RV64 workspace in both profiles
-        if: fromJSON(steps.scope.outputs.plan).riscv64
-        run: |
-          rustup target add riscv64gc-unknown-none-elf
-          cargo build --locked --workspace --target riscv64gc-unknown-none-elf
-          cargo build --locked --workspace --target riscv64gc-unknown-none-elf --release
-          bash server/tests/metal/sync/contracts.sh
-          bash server/tests/entry/boot/contracts.sh
+        run: cargo test --locked --workspace --no-fail-fast
+      - name: Test Treaty compiler contracts
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.scope.outcome == 'success' && fromJSON(steps.scope.outputs.plan).host }}
+        run: bash treaty/tests/compiler/check.sh
+      - name: Test runner Host contracts
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.scope.outcome == 'success' && fromJSON(steps.scope.outputs.plan).runner }}
+        env:
+          RUSTFLAGS: "-Dwarnings"
+        run: cargo test --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu --no-fail-fast
+      - name: Install riscv64 target
+        id: riscv64
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && steps.scope.outcome == 'success' && fromJSON(steps.scope.outputs.plan).riscv64 }}
+        run: rustup target add riscv64gc-unknown-none-elf
+      - name: Build riscv64 Debug
+        if: ${{ !cancelled() && steps.riscv64.outcome == 'success' }}
+        run: cargo build --locked --workspace --target riscv64gc-unknown-none-elf
+      - name: Build riscv64 Release
+        if: ${{ !cancelled() && steps.riscv64.outcome == 'success' }}
+        run: cargo build --locked --workspace --target riscv64gc-unknown-none-elf --release
+      - name: Test Sync compiler contracts
+        if: ${{ !cancelled() && steps.riscv64.outcome == 'success' }}
+        run: bash server/tests/metal/sync/contracts.sh
+      - name: Test Boot compiler contracts
+        if: ${{ !cancelled() && steps.riscv64.outcome == 'success' }}
+        run: bash server/tests/entry/boot/contracts.sh

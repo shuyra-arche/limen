@@ -37,6 +37,7 @@ jobs:
       LIMEN_TEST_PROFILE: ${{ matrix.profile }}
     steps:
       - name: Install tools
+        id: tools
         shell: bash
         run: |
           apt-get update
@@ -54,6 +55,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned toolchain
+        id: toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -69,43 +71,97 @@ jobs:
           echo "LIMEN_TEST_TARGET=$target" >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Record source
+        id: source
         run: |
           mkdir -p .integration
           git -c safe.directory="$PWD" rev-parse HEAD > .integration/source.txt
           rustc -Vv > .integration/rustc.txt
           cargo -V > .integration/cargo.txt
-      - name: Run target tests
+      - name: Prepare target runner
+        id: runner
         shell: bash
         run: |
           set -euo pipefail
-          runner_manifest=server/tests/runner/Cargo.toml
-          guest_manifest=server/tests/target/Cargo.toml
+          mkdir -p .integration/stages
           host=x86_64-unknown-linux-gnu
-          cargo build --locked --manifest-path "$runner_manifest" -p kernel-verification --target "$host"
-          export LIMEN_TEST_RUNNER="$PWD/server/tests/runner/target/$host/debug/verify"
+          cargo build --locked --manifest-path server/tests/runner/Cargo.toml \
+            -p kernel-verification --target "$host" 2>&1 | tee .integration/stages/runner.log
+          runner="$PWD/server/tests/runner/target/$host/debug/verify"
+          echo "LIMEN_TEST_RUNNER=$runner" >> "$GITHUB_ENV"
+
+      # Each stage depends on the prepared runner, not the verdict of another
+      # stage. A failed step still fails the job; no continue-on-error is used.
+      - name: Run Host observers
+        id: observers
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path server/tests/runner/Cargo.toml \
+            -p machine-observer --target x86_64-unknown-linux-gnu \
+            --tests --no-fail-fast -- --test-threads=1 \
+            2>&1 | tee .integration/stages/observers.log
+
+      - name: Run ordinary guests
+        id: guests
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
           evidence="$PWD/.integration/guests"
           config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','native','--evidence-root','$evidence']"
           profile=()
           if [[ "$LIMEN_TEST_PROFILE" == release ]]; then profile+=(--release); fi
-
-          # Host observers select the actual guest environment, not the host ISA.
-          cargo test --locked --manifest-path "$runner_manifest" \
-            -p machine-observer --target "$host" --tests -- --test-threads=1
-
-          # Only the shared and actual ISA-specific guest packages are compiled.
-          # Every Cargo-discovered integration test in those packages runs.
           cargo -Z panic-abort-tests --config "$config" test --locked \
-            --manifest-path "$guest_manifest" -p kernel-guest -p "$LIMEN_TEST_ARCH-guest" \
-            --target "$LIMEN_TEST_TARGET" --tests "${profile[@]}"
+            --manifest-path server/tests/target/Cargo.toml -p kernel-guest -p "$LIMEN_TEST_ARCH-guest" \
+            --target "$LIMEN_TEST_TARGET" --tests --no-fail-fast "${profile[@]}" \
+            2>&1 | tee .integration/stages/guests.log
 
-          # Ordinary UEFI guests built and ran without the extra bare target.
-          # Only the independent Module ELF images need that dependency.
+      # Only Module needs an additional bare target on UEFI. Its preparation
+      # is independent of whether ordinary guests passed.
+      - name: Prepare Module target
+        id: module
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
           if [[ "$LIMEN_TEST_TARGET" == *-uefi ]]; then
-            rustup target add "${LIMEN_TEST_ARCH}-unknown-none"
+            rustup target add "${LIMEN_TEST_ARCH}-unknown-none" 2>&1 | tee .integration/stages/module-target.log
           fi
+
+      - name: Run Module guests
+        id: module_guests
+        if: ${{ !cancelled() && steps.module.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$PWD/.integration/module"
+          config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','native','--evidence-root','$evidence']"
+          profile=()
+          if [[ "$LIMEN_TEST_PROFILE" == release ]]; then profile+=(--release); fi
           cargo -Z panic-abort-tests --config "$config" test --locked \
-            --manifest-path "$guest_manifest" -p module-guest \
-            --target "$LIMEN_TEST_TARGET" --tests "${profile[@]}"
+            --manifest-path server/tests/target/Cargo.toml -p module-guest \
+            --target "$LIMEN_TEST_TARGET" --tests --no-fail-fast "${profile[@]}" \
+            2>&1 | tee .integration/stages/module.log
+      - name: Record stage outcomes
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          TOOLS: ${{ steps.tools.outcome }}
+          TOOLCHAIN: ${{ steps.toolchain.outcome }}
+          SOURCE: ${{ steps.source.outcome }}
+          RUNNER: ${{ steps.runner.outcome }}
+          OBSERVERS: ${{ steps.observers.outcome }}
+          GUESTS: ${{ steps.guests.outcome }}
+          MODULE_TARGET: ${{ steps.module.outcome }}
+          MODULE_GUESTS: ${{ steps.module_guests.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p .integration/stages
+          # These are Actions step outcomes, not individual guest verdicts.
+          printf '{"tools":"%s","toolchain":"%s","source":"%s","runner":"%s","observers":"%s","guests":"%s","module_target":"%s","module_guests":"%s"}\n' \
+            "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$OBSERVERS" "$GUESTS" "$MODULE_TARGET" "$MODULE_GUESTS" \
+            > .integration/stages/outcomes.json
       - name: Preserve target evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

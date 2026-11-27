@@ -50,7 +50,14 @@ fn run(case: &str, verdict: &str) -> (Value, PathBuf, String) {
             .args(["--config", &config, "-Z", "panic-abort-tests"])
             .args(["test", "--locked", "--manifest-path"])
             .arg(root.join("server/tests/target/Cargo.toml"))
-            .args(["-p", "kernel-guest", "--test", "outcome", "--target", &target])
+            .args([
+                "-p",
+                "kernel-guest",
+                "--test",
+                "outcome",
+                "--target",
+                &target,
+            ])
             .env("LIMEN_TEST_CASE", case)
             .env("LIMEN_TEST_EVIDENCE", &evidence);
         match profile.as_str() {

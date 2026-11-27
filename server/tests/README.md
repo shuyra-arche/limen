@@ -109,8 +109,18 @@ For independent Module images select `-p module-guest --test lifecycle`.
 For all ordinary guests, select `-p kernel-guest -p riscv64-guest --tests`
 (or the actual ISA-specific package). Target CI uses `--tests` for the
 selected execution packages. Check verifies package coverage with Cargo
-metadata; it never classifies individual test names. On UEFI, ordinary
-guests run before the extra bare target required by Module is installed.
+metadata; it never classifies individual test names. Each architecture/profile
+job builds the runner once. Host observers, ordinary guests and Module
+guests run as separate required steps with Cargo's `--no-fail-fast`.
+A failing stage does not suppress another stage whose prerequisites are
+available; any required failure still fails the job. A Cargo build failure
+can prevent execution of targets in that invocation. On UEFI, only Module
+requires the additional bare target, installed after the ordinary guest step.
+The artifact retains per-stage Cargo logs and Actions step outcomes under
+`.integration/stages/` (not a substitute for individual guest verdicts),
+ordinary guest evidence under `.integration/guests/`, Module evidence under
+`.integration/module/`, and the observer-owned records. A skipped or
+cancelled stage is not evidence of a pass.
 Ordinary completion requires QEMU exit 97 and successful process settlement.
 The Runner records process facts separately from the native verdict. Guest
 panic, ordinary shutdown, reset and trap are failures; deadline expiry is a
