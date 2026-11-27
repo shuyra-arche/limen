@@ -7,7 +7,8 @@ use limen_treaty::model::PhysicalRange;
 use crate::metal::{
     identity::treaty::Generation,
     memory::{
-        allocator::treaty::{AllocationId, MappedStorage, Retired},
+        access::treaty::ram::{MappedRange, RetainedRange},
+        allocator::treaty::{Allocation, AllocationId, MappedStorage, Retired},
         mmu::treaty::TableId,
     },
     sync::treaty::{TurnAccess, TurnLock, TurnPlan},
@@ -25,9 +26,15 @@ struct State {
 }
 
 struct Record {
-    material: MappedStorage<'static>,
+    allocation: Allocation,
+    mapping: Mapping,
     owner: TableId,
     access: Option<Access>,
+}
+
+enum Mapping {
+    Exclusive(MappedRange<'static>),
+    Retained(RetainedRange<'static>),
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -82,8 +89,10 @@ impl CellSlot {
         let material = material.take().expect("original issued material");
         let allocation = material.id();
         let physical = material.physical();
+        let (issued, mapping) = material.into_parts();
         state.cell = Some(Record {
-            material,
+            allocation: issued,
+            mapping: Mapping::Exclusive(mapping),
             owner,
             access: None,
         });
@@ -214,10 +223,57 @@ impl Cell {
         access: &CellAccess,
     ) -> Result<&'held mut [MaybeUninit<u8>], Error> {
         let record = self.record(held, access.0)?;
+        let Mapping::Exclusive(mapping) = &mut record.mapping else {
+            return Err(Error::Access);
+        };
         if record.access != Some(Access::Accepted) {
             return Err(Error::Access);
         }
-        Ok(record.material.bytes())
+        Ok(mapping.bytes())
+    }
+
+    /// Retain the exact storage while ending its exclusive byte reference.
+    pub(crate) fn freeze(&self, held: &mut CellTurn<'_>, access: &CellAccess) -> Result<(), Error> {
+        let record = self.record(held, access.0)?;
+        if record.access != Some(Access::Accepted)
+            || !matches!(record.mapping, Mapping::Exclusive(_))
+        {
+            return Err(Error::Access);
+        }
+        let record = held.state.cell.take().expect("checked Cell access");
+        let Mapping::Exclusive(mapping) = record.mapping else {
+            unreachable!("checked exclusive mapping");
+        };
+        held.state.cell = Some(Record {
+            mapping: Mapping::Retained(mapping.into_retained()),
+            ..record
+        });
+        Ok(())
+    }
+
+    /// # Safety
+    /// The original owner has excluded all hardware and conflicting access to
+    /// this page and kept its original working mapping live.
+    pub(crate) unsafe fn thaw(
+        &self,
+        held: &mut CellTurn<'_>,
+        access: &CellAccess,
+    ) -> Result<(), Error> {
+        let record = self.record(held, access.0)?;
+        if record.access != Some(Access::Accepted)
+            || !matches!(record.mapping, Mapping::Retained(_))
+        {
+            return Err(Error::Access);
+        }
+        let record = held.state.cell.take().expect("checked Cell access");
+        let Mapping::Retained(mapping) = record.mapping else {
+            unreachable!("checked retained mapping");
+        };
+        held.state.cell = Some(Record {
+            mapping: Mapping::Exclusive(unsafe { mapping.into_exclusive() }),
+            ..record
+        });
+        Ok(())
     }
 
     /// Withdraw the original table's only private use and end its mapped borrow.
@@ -238,14 +294,18 @@ impl Cell {
         if access.is_some_and(|access| access.0.cell != self.id || access.0.owner != owner) {
             return Err(Error::Scope);
         }
-        let (allocation, _) = state
-            .cell
-            .take()
-            .expect("validated Cell")
-            .material
-            .into_parts();
-        // No operation exposed this privately owned page to hardware, and
-        // the original software borrow ended when its Cell was withdrawn.
+        if !matches!(record.mapping, Mapping::Exclusive(_)) {
+            return Err(Error::Access);
+        }
+        let Record {
+            allocation,
+            mapping,
+            ..
+        } = state.cell.take().expect("validated Cell");
+        let Mapping::Exclusive(_ended) = mapping else {
+            unreachable!("checked exclusive mapping");
+        };
+        // Hardware reachability has ended and the former mapping is no longer used.
         Ok(unsafe { allocation.retire() })
     }
 }

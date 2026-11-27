@@ -52,10 +52,6 @@ impl<'a> MappedStorage<'a> {
         self.mapping.address()
     }
 
-    pub(crate) fn bytes(&mut self) -> &mut [core::mem::MaybeUninit<u8>] {
-        self.mapping.bytes()
-    }
-
     /// Recover the two original inputs from a private preparation. This
     /// does not retire the mapping, the Allocation, or any hardware effect.
     pub fn into_parts(self) -> (Allocation, MappedRange<'a>) {

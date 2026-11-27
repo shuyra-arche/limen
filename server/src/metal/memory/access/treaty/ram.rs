@@ -1,6 +1,6 @@
 //! Exclusive storage in a real, already established CPU mapping.
 
-use core::{mem::MaybeUninit, ptr::NonNull, slice};
+use core::{marker::PhantomData, mem::MaybeUninit, ptr::NonNull, slice};
 
 use limen_treaty::model::{ByteLength, PhysicalRange};
 
@@ -16,6 +16,36 @@ pub enum Error {
 pub struct MappedRange<'a> {
     physical: PhysicalRange,
     bytes: &'a mut [MaybeUninit<u8>],
+}
+
+/// The original mapped storage with its exclusive byte reference ended.
+/// Its owner keeps the mapping and backing RAM resident while hardware may
+/// access the bytes.
+#[must_use]
+pub(crate) struct RetainedRange<'a> {
+    physical: PhysicalRange,
+    bytes: NonNull<[MaybeUninit<u8>]>,
+    lifetime: PhantomData<&'a mut [MaybeUninit<u8>]>,
+}
+
+// Moving this unique retention does not access the mapped bytes or change
+// their virtual address. The original owner retains every hardware duty.
+unsafe impl Send for RetainedRange<'_> {}
+
+impl<'a> RetainedRange<'a> {
+    /// Recover exclusive access through the original pointer and mapping.
+    ///
+    /// # Safety
+    /// The original owner must have retired or excluded all hardware and
+    /// conflicting software access to the entire range. The backing storage
+    /// must still be valid at its original mapping with compatible
+    /// attributes and remain exclusively borrowed through the returned use.
+    pub(crate) unsafe fn into_exclusive(mut self) -> MappedRange<'a> {
+        MappedRange {
+            physical: self.physical,
+            bytes: unsafe { self.bytes.as_mut() },
+        }
+    }
 }
 
 impl<'a> MappedRange<'a> {
@@ -81,6 +111,16 @@ impl<'a> MappedRange<'a> {
 
     pub(crate) fn into_bytes(self) -> &'a mut [MaybeUninit<u8>] {
         self.bytes
+    }
+
+    /// End the ordinary exclusive reference while retaining the original
+    /// mapping, storage and pointer provenance for its owner.
+    pub(crate) fn into_retained(self) -> RetainedRange<'a> {
+        RetainedRange {
+            physical: self.physical,
+            bytes: NonNull::from_mut(self.bytes),
+            lifetime: PhantomData,
+        }
     }
 
     /// Consume one exclusive borrow and derive two disjoint borrows. This

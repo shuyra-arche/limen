@@ -1,6 +1,8 @@
 //! Shared CPU translation and I/O binding contracts.
 
-pub use super::table::{TableError, TableFormat, TableId, TableStore};
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+pub use super::table::LocalRoot;
+pub use super::table::{TableBranch, TableError, TableFormat, TableId, TableStore};
 
 mod installation;
 pub use installation::Installation;

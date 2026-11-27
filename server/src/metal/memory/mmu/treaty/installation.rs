@@ -55,6 +55,11 @@ mod bound {
         pub fn root(self) -> Option<PhysicalAddress> {
             self.root
         }
+
+        #[cfg(target_arch = "aarch64")]
+        pub(in crate::metal::memory::mmu) fn profile(self) -> Profile {
+            self.profile
+        }
     }
 
     /// Hardware readback of this local installation and its original context.

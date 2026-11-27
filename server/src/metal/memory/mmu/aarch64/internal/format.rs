@@ -19,6 +19,11 @@ pub struct Format {
 }
 
 impl Format {
+    #[cfg(all(limen_target, target_arch = "aarch64"))]
+    pub(in crate::metal::memory::mmu) const fn root(self) -> Root {
+        self.root
+    }
+
     /// The entire untagged address must belong to this root’s 48-bit region.
     pub fn is_canonical(self, address: InternalAddress) -> bool {
         let upper = match self.root {
