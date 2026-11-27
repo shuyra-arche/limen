@@ -1,0 +1,11 @@
+[package]
+name = "machine-observer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autobins = false
+
+[dev-dependencies]
+kernel-verification = { path = ".." }
+object = { version = "=0.37.3", default-features = false, features = ["read_core", "elf", "pe", "std", "unaligned"] }
+serde_json = "1"

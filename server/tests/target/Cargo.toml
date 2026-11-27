@@ -1,22 +1,37 @@
+[package]
+name = "kernel-guest"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autobins = false
+
+[features]
+# Select the measurement callback in a shared guest entry.
+bench = []
+
+[dependencies]
+guest.workspace = true
+kernel.workspace = true
+limen-treaty.workspace = true
+
+[target.'cfg(target_os = "uefi")'.dependencies]
+uefi.workspace = true
+uefi-fixture.workspace = true
+
 [workspace]
 resolver = "3"
 members = [
-    "basis/execution/platforms",
-    "entry/platforms",
-    "metal/interrupt/aarch64/gic",
-    "metal/interrupt/x86_64/apic-failure",
-    "metal/interrupt/x86_64/apic-ipi",
-    "metal/interrupt/x86_64/apic-timer",
-    "metal/interrupt/x86_64/ioapic",
-    "metal/memory/mmu/aarch64/paging",
-    "metal/memory/mmu/aarch64/smmu",
-    "metal/memory/mmu/x86_64/amdvi",
-    "metal/memory/mmu/x86_64/paging",
-    "metal/memory/mmu/x86_64/vtd",
+    "aarch64",
+    "module",
+    "riscv64",
+    "support",
     "support/uefi",
+    "x86_64",
 ]
+default-members = ["."]
 
 [workspace.dependencies]
+guest = { package = "guest-support", path = "support" }
 kernel = { path = "../.." }
 limen-treaty = { path = "../../../treaty" }
 uefi = "=0.41.0"

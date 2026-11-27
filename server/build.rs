@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf};
 
-const RV64_LINKER: &str = "src/metal/platform/boot/riscv64/linker.ld";
+const RISCV64_LINKER: &str = "src/metal/platform/boot/riscv64/linker.ld";
 
 enum Handoff {
     Sbi,
@@ -59,8 +59,8 @@ fn main() {
     }
     if let Image::RiscvElf = profile.image {
         let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("kernel manifest path"));
-        let script = root.join(RV64_LINKER);
-        println!("cargo::rerun-if-changed={RV64_LINKER}");
+        let script = root.join(RISCV64_LINKER);
+        println!("cargo::rerun-if-changed={RISCV64_LINKER}");
         println!("cargo::metadata=linker_script={}", script.display());
     }
 }

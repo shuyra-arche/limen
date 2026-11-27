@@ -1,4 +1,4 @@
-use crate::{Result, json, require};
+use crate::{Result, evidence, require};
 use serde::Serialize;
 use std::{
     fs,
@@ -9,13 +9,24 @@ use std::{
 
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// What the host actually observed, independently of any test contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+pub enum Termination {
+    NotStarted,
+    Exited(i32),
+    Signaled(i32),
+    Timeout,
+    Unavailable,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Outcome {
     pub command: String,
-    pub status: String,
-    pub code: Option<i32>,
+    pub termination: Termination,
     pub elapsed_seconds: f64,
-    pub passed: bool,
+    pub error: Option<String>,
+    cleanup: Cleanup,
 }
 
 #[derive(Debug, Serialize)]
@@ -31,12 +42,18 @@ struct Cleanup {
 }
 
 impl Outcome {
-    pub fn exited(&self) -> bool {
-        self.status == "exited"
+    /// Complete execution and retirement evidence, without unexpected descendants.
+    pub fn clean(&self) -> bool {
+        self.error.is_none()
+            && self.cleanup.spawned
+            && self.cleanup.settled
+            && !self.cleanup.unexpected_descendants
+            && self.cleanup.error.is_none()
     }
 
+    /// The conventional exit-zero contract of a Host tool, not a guest verdict.
     pub fn success(&self) -> bool {
-        self.exited() && self.code == Some(0)
+        self.clean() && self.termination == Termination::Exited(0)
     }
 }
 
@@ -58,14 +75,11 @@ pub fn run_with_stdio(
 ) -> Result<Outcome> {
     let mut result = Outcome {
         command: format!("{command:?}"),
-        status: "spawn-error".into(),
-        code: None,
+        termination: Termination::NotStarted,
         elapsed_seconds: 0.0,
-        passed: false,
+        error: None,
+        cleanup: cleanup_result(None, false, false, 0, true, None),
     };
-    let result_path = directory.join("result.json");
-    let cleanup_path = directory.join("cleanup.json");
-    json(&result_path, &result)?;
     command
         .stdin(stdin)
         .stdout(stdout)
@@ -80,34 +94,29 @@ pub fn run_with_stdio(
     #[cfg(target_os = "linux")]
     {
         if let Err(error) = become_child_subreaper() {
-            result.status = "cleanup-setup-failed".into();
-            json(
-                &cleanup_path,
-                &cleanup_result(None, false, false, 0, false, Some(error.to_string())),
-            )?;
-            json(&result_path, &result)?;
-            return Err(error.into());
+            result.error = Some(error.to_string());
+            return record(directory, result);
         }
-        install_parent_death_signal(command)?;
+        if let Err(error) = install_parent_death_signal(command) {
+            result.error = Some(error.to_string());
+            return record(directory, result);
+        }
     }
 
     let start = Instant::now();
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            json(
-                &cleanup_path,
-                &cleanup_result(None, false, false, 0, true, None),
-            )?;
-            return Err(error.into());
+            result.error = Some(error.to_string());
+            result.elapsed_seconds = start.elapsed().as_secs_f64();
+            return record(directory, result);
         }
     };
     let process_group = child.id();
-    let mut wait_error = None;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                set_exit(&mut result, status);
+                result.termination = termination(status);
                 break;
             }
             Ok(None) if start.elapsed() < timeout => {
@@ -118,9 +127,9 @@ pub fn run_with_stdio(
                 let _ = kill_group(process_group);
                 let _ = child.kill();
                 if let Err(error) = child.wait() {
-                    wait_error = Some(error);
+                    result.error = Some(error.to_string());
                 }
-                result.status = "timeout".into();
+                result.termination = Termination::Timeout;
                 break;
             }
             Err(error) => {
@@ -128,44 +137,36 @@ pub fn run_with_stdio(
                 let _ = kill_group(process_group);
                 let _ = child.kill();
                 let _ = child.wait();
-                wait_error = Some(error);
-                result.status = "wait-error".into();
+                result.error = Some(error.to_string());
+                result.termination = Termination::Unavailable;
                 break;
             }
         }
     }
 
     result.elapsed_seconds = start.elapsed().as_secs_f64();
-    let cleanup = cleanup_group(process_group);
-    json(&cleanup_path, &cleanup)?;
-    if result.success() && (!cleanup.settled || cleanup.unexpected_descendants) {
-        result.status = "cleanup-failed".into();
-        result.passed = false;
-    }
-    json(&result_path, &result)?;
-
-    if let Some(error) = wait_error {
-        return Err(error.into());
-    }
-    require(
-        result.status != "exited"
-            || (!cleanup.unexpected_descendants && cleanup.settled && cleanup.error.is_none()),
-        format!(
-            "child process group cleanup invalidated the exit result: {}",
-            directory.display()
-        ),
-    )?;
-    Ok(result)
+    result.cleanup = cleanup_group(process_group);
+    record(directory, result)
 }
 
-fn set_exit(result: &mut Outcome, status: ExitStatus) {
-    result.code = status.code();
-    result.status = if status.code().is_some() {
-        "exited"
-    } else {
-        "signal"
+/// The executor writes only observations; callers decide what they prove.
+fn record(directory: &Path, outcome: Outcome) -> Result<Outcome> {
+    evidence::json(&directory.join("process.json"), &outcome)?;
+    Ok(outcome)
+}
+
+fn termination(status: ExitStatus) -> Termination {
+    if let Some(code) = status.code() {
+        return Termination::Exited(code);
     }
-    .into();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return Termination::Signaled(signal);
+        }
+    }
+    Termination::Unavailable
 }
 
 fn cleanup_result(
@@ -328,14 +329,4 @@ fn cleanup_group(process_group: u32) -> Cleanup {
         elapsed_seconds: 0.0,
         error: Some("process-group settlement is only verified on Linux".into()),
     }
-}
-
-pub fn build(command: &mut Command, directory: &Path) -> Result<()> {
-    let mut result = run(command, directory, Duration::from_secs(900))?;
-    result.passed = result.success();
-    json(&directory.join("result.json"), &result)?;
-    require(
-        result.success(),
-        format!("build failed: {} ({})", directory.display(), result.status),
-    )
 }

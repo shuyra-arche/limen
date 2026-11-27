@@ -1,0 +1,136 @@
+name: Bench
+
+on:
+  # Validate changes to the benchmark implementation and shared execution
+  # facilities. Ordinary kernel changes do not automatically measure timing.
+  pull_request:
+    paths:
+      - '.github/workflows/bench.yml'
+      - 'rust-toolchain.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'server/Cargo.toml'
+      - 'server/build.rs'
+      - 'server/tests/qemu.version'
+      - 'server/tests/runner/**'
+      - '!server/tests/runner/observe/**'
+      - '!server/tests/runner/tests/**'
+      - 'server/tests/target/Cargo.toml'
+      - 'server/tests/target/Cargo.lock'
+      - 'server/tests/target/build.rs'
+      - 'server/tests/target/support/**'
+      - 'server/tests/target/**/Cargo.toml'
+      - 'server/tests/target/**/build.rs'
+      - 'server/tests/target/**/benches/**'
+      # An integration entry may provide either or both purposes.
+      - 'server/tests/target/**/tests/**'
+      - 'server/benches/**'
+      - '!**/*.md'
+      - '!**/*.mdx'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kernel-bench-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bench:
+    name: riscv64 / bench
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    timeout-minutes: 20
+    env:
+      LIMEN_TEST_ARCH: riscv64
+    steps:
+      - name: Install base tools
+        id: base_tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential jq
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install QEMU and firmware
+        id: tools
+        shell: bash
+        run: bash server/tests/runner/ci/qemu.sh "$LIMEN_TEST_ARCH"
+      - name: Install pinned toolchain
+        id: toolchain
+        shell: bash
+        run: bash server/tests/runner/ci/toolchain.sh "$LIMEN_TEST_ARCH"
+      - name: Record source
+        id: source
+        run: |
+          mkdir -p .integration
+          git -c safe.directory="$PWD" rev-parse HEAD > .integration/source.txt
+          rustc -Vv > .integration/rustc.txt
+          cargo -V > .integration/cargo.txt
+      - name: Prepare target runner
+        id: runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .integration/stages
+          host=x86_64-unknown-linux-gnu
+          cargo build --locked --manifest-path server/tests/runner/Cargo.toml \
+            -p kernel-verification --target "$host" 2>&1 | tee .integration/stages/runner.log
+          runner="$PWD/server/tests/runner/target/$host/debug/verify"
+          echo "LIMEN_TEST_RUNNER=$runner" >> "$GITHUB_ENV"
+
+      - name: Record benchmark context
+        id: context
+        shell: bash
+        run: bash server/tests/runner/ci/benchmark-context.sh
+
+      - name: Build candidate guest images
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo -Z panic-abort-tests bench --locked --no-run --message-format=json \
+            --manifest-path server/tests/target/Cargo.toml \
+            -p kernel-guest -p "$LIMEN_TEST_ARCH-guest" --features "kernel-guest/bench,$LIMEN_TEST_ARCH-guest/bench" \
+            --target "$LIMEN_TEST_TARGET" --tests --benches \
+            > .integration/stages/artifacts.jsonl
+
+      - name: Run selected benchmark images
+        id: bench
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$LIMEN_TEST_RUNNER" bench-set \
+            --artifacts .integration/stages/artifacts.jsonl \
+            --evidence-root .integration \
+            2>&1 | tee .integration/stages/bench.log
+      - name: Record stage outcomes
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          BASE_TOOLS: ${{ steps.base_tools.outcome }}
+          TOOLS: ${{ steps.tools.outcome }}
+          TOOLCHAIN: ${{ steps.toolchain.outcome }}
+          SOURCE: ${{ steps.source.outcome }}
+          RUNNER: ${{ steps.runner.outcome }}
+          CONTEXT: ${{ steps.context.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          BENCH: ${{ steps.bench.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p .integration/stages
+          printf '{"base_tools":"%s","tools":"%s","toolchain":"%s","source":"%s","runner":"%s","context":"%s","build":"%s","bench":"%s"}\n' \
+            "$BASE_TOOLS" "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$CONTEXT" "$BUILD" "$BENCH" \
+            > .integration/stages/outcomes.json
+      - name: Preserve benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: bench-riscv64
+          path: .integration/
+          include-hidden-files: true
+          if-no-files-found: warn

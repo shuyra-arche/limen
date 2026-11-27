@@ -32,8 +32,6 @@ pub mod q35;
 mod virt;
 #[cfg(target_arch = "x86_64")]
 use q35 as board;
-#[cfg(target_arch = "x86_64")]
-pub mod interrupt;
 #[cfg(target_arch = "aarch64")]
 use virt as board;
 
@@ -59,10 +57,6 @@ pub fn check_minor(minor: &Minor, hart: usize) {
 }
 
 pub fn load(prepare: impl FnOnce() -> Result<(), Status>) -> Status {
-    assert_eq!(
-        kernel::metal::sync::treaty::LeafLock::new(()).attempt(|()| ()),
-        Err(kernel::metal::sync::treaty::LeafError::Context)
-    );
     let loaded = match uefi::boot::open_protocol_exclusive::<uefi::proto::loaded_image::LoadedImage>(
         uefi::boot::image_handle(),
     ) {

@@ -1,0 +1,15 @@
+[package]
+name = "aarch64-guest"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autobins = false
+
+[dependencies]
+guest.workspace = true
+kernel.workspace = true
+limen-treaty.workspace = true
+
+[target.'cfg(target_os = "uefi")'.dependencies]
+uefi.workspace = true
+uefi-fixture.workspace = true

@@ -198,5 +198,5 @@ impl<'a> Controller<'a> {
 }
 
 #[cfg(test)]
-#[path = "../../../../../../../tests/metal/memory/mmu/x86_64/external/vtd.rs"]
+#[path = "../../../../../../../tests/metal/memory/mmu/x86_64/external/vtd/mod.rs"]
 mod tests;

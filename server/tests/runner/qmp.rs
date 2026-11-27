@@ -1,4 +1,4 @@
-use kernel_verification::{Result, process};
+use crate::{Result, evidence, process};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -16,38 +16,102 @@ pub struct Shutdown {
     pub reason: String,
 }
 
-pub fn run(
+// A private control socket keeps QMP independent of guest and firmware stdout.
+#[cfg(unix)]
+pub fn run_isolated(
     mut command: Command,
     directory: &Path,
     timeout: Duration,
+    controller: Option<Command>,
 ) -> Result<(process::Outcome, io::Result<Shutdown>)> {
-    let serial = directory.join("serial.log");
-    File::create(&serial)?;
+    use std::{
+        fs,
+        os::unix::net::UnixListener,
+        process::Stdio,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+
+    let socket = directory.join("qmp.sock");
     let transcript = File::create(directory.join("qmp.jsonl"))?;
-    command
-        .args(["-display", "none", "-serial"])
-        .arg(format!("file:{}", serial.display()))
-        .args(["-S", "-qmp", "stdio"]);
-    let (stdin, commands) = io::pipe()?;
-    let (messages, stdout) = io::pipe()?;
-    let monitor = thread::spawn(move || capture(BufReader::new(messages), commands, transcript));
-    let outcome = process::run_with_stdio(
-        &mut command,
-        directory,
-        timeout,
-        stdin.into(),
-        stdout.into(),
-    );
-    // Command also owns pipe ends after spawning, including when spawn fails.
-    drop(command);
-    let shutdown = monitor.join().map_err(|_| "QMP reader panicked")?;
-    Ok((outcome?, shutdown))
+    let stdout = File::create(directory.join("stdout.log"))?;
+    let listener = UnixListener::bind(&socket)?;
+    let result: Result<(process::Outcome, io::Result<Shutdown>)> = (|| {
+        listener.set_nonblocking(true)?;
+        command
+            .args(["-S", "-qmp"])
+            .arg(format!("unix:{},server=off", socket.display()));
+        let finished = AtomicBool::new(false);
+        thread::scope(|scope| {
+            let finished = &finished;
+            let listener = &listener;
+            let monitor = scope.spawn(move || {
+                let (stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            if finished.load(Ordering::Acquire) {
+                                return Err(io::Error::other("QMP did not connect"));
+                            }
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => return Err(error),
+                    }
+                };
+                stream.set_nonblocking(false)?;
+                stream.set_read_timeout(Some(timeout))?;
+                stream.set_write_timeout(Some(timeout))?;
+                let commands = stream.try_clone()?;
+                let control = controller.map(|mut controller| {
+                    move || {
+                        let result =
+                            process::run(&mut controller, &directory.join("controller"), timeout)
+                                .map_err(|error| io::Error::other(error.to_string()))?;
+                        if !result.success() {
+                            return Err(io::Error::other(format!(
+                                "external controller failed: {result:?}"
+                            )));
+                        }
+                        Ok(())
+                    }
+                });
+                capture(BufReader::new(stream), commands, transcript, control)
+            });
+            let outcome = process::run_with_stdio(
+                &mut command,
+                directory,
+                timeout,
+                Stdio::null(),
+                stdout.into(),
+            );
+            finished.store(true, Ordering::Release);
+            let shutdown = monitor.join().map_err(|_| "QMP reader panicked")?;
+            Ok((outcome?, shutdown))
+        })
+    })();
+    fs::remove_file(socket)?;
+    let (outcome, shutdown) = result?;
+    match &shutdown {
+        Ok(shutdown) => evidence::json(&directory.join("shutdown.json"), shutdown)?,
+        Err(error) => fs::write(directory.join("qmp-error.txt"), error.to_string())?,
+    }
+    Ok((outcome, shutdown))
+}
+
+#[cfg(not(unix))]
+pub fn run_isolated(
+    _command: Command,
+    _directory: &Path,
+    _timeout: Duration,
+    _controller: Option<Command>,
+) -> Result<(process::Outcome, io::Result<Shutdown>)> {
+    Err("isolated QMP observation requires a Unix host".into())
 }
 
 pub(super) fn capture(
     mut input: impl BufRead,
     mut commands: impl Write,
     mut transcript: impl Write,
+    mut controller: Option<impl FnOnce() -> io::Result<()>>,
 ) -> io::Result<Shutdown> {
     let mut bytes = Vec::new();
     let mut next = || -> io::Result<Option<Value>> {
@@ -69,6 +133,7 @@ pub(super) fn capture(
         r#"{{"execute":"qmp_capabilities","id":"capabilities"}}"#
     )?;
     commands.flush()?;
+    let external = controller.is_some();
     let mut started = false;
     let mut acknowledged = false;
     let mut shutdown = None;
@@ -78,12 +143,22 @@ pub(super) fn capture(
         }
         match (message["id"].as_str(), message["event"].as_str()) {
             (Some("capabilities"), _) if !started && message["return"].is_object() => {
-                // The VM is paused until its event consumer has negotiated QMP.
-                writeln!(commands, r#"{{"execute":"cont","id":"start"}}"#)?;
-                commands.flush()?;
+                // Exactly one owner may resume the paused VM. Negotiate QMP
+                // before giving execution control to an external controller.
+                if let Some(control) = controller.take() {
+                    control()?;
+                } else {
+                    writeln!(commands, r#"{{"execute":"cont","id":"start"}}"#)?;
+                    commands.flush()?;
+                }
                 started = true;
             }
-            (Some("start"), _) if started && !acknowledged && message["return"].is_object() => {
+            (Some("start"), _)
+                if !external && started && !acknowledged && message["return"].is_object() =>
+            {
+                acknowledged = true;
+            }
+            (None, Some("RESUME")) if external && started => {
                 acknowledged = true;
             }
             (Some(_), _) => return Err(io::Error::other("unexpected QMP reply")),
@@ -102,3 +177,7 @@ pub(super) fn capture(
     }
     shutdown.ok_or_else(|| io::Error::other("missing QMP shutdown"))
 }
+
+#[cfg(test)]
+#[path = "tests/qmp.rs"]
+mod tests;

@@ -31,7 +31,7 @@ fn read_scope(bytes: &[u8]) -> RiscvCpus<'_> {
 }
 
 #[test]
-fn rv64_mmu_description_bounds_the_supported_paged_modes() {
+fn riscv64_mmu_description_bounds_the_supported_paged_modes() {
     for (property, maximum, supported) in [
         (b"riscv,none\0", MaximumMode::Bare, [false, false, false]),
         (

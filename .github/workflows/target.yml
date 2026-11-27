@@ -2,39 +2,17 @@ name: Target
 
 on:
   pull_request:
-    paths:
-      - "server/src/**"
-      - "treaty/src/**"
-      - "treaty/Cargo.toml"
-      - "server/tests/**"
-      - "server/Cargo.toml"
-      - "server/build.rs"
-      - "Cargo.toml"
-      - ".cargo/config.toml"
-      - "tools/tests/**"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/target.yml"
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.mdx'
+      - 'docs/**'
   push:
     branches: [main]
-    paths:
-      - "server/src/**"
-      - "treaty/src/**"
-      - "treaty/Cargo.toml"
-      - "server/tests/**"
-      - "server/Cargo.toml"
-      - "server/build.rs"
-      - "Cargo.toml"
-      - ".cargo/config.toml"
-      - "tools/tests/**"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/target.yml"
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.mdx'
+      - 'docs/**'
   workflow_dispatch:
-
-defaults:
-  run:
-    shell: bash
 
 permissions:
   contents: read
@@ -44,106 +22,136 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  discover:
-    name: Discover test projects
-    runs-on: ubuntu-latest
-    outputs:
-      plan: ${{ steps.projects.outputs.plan }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - id: projects
-        name: Select affected owners
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
-        run: |
-          set -euo pipefail
-          plan="$(bash tools/tests/discover.sh "$GITHUB_WORKSPACE" "$BASE_SHA")"
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$plan" == '[]' ]]; then
-            echo "::error::No target suites discovered."
-            exit 1
-          fi
-          echo "plan=$plan" >> "$GITHUB_OUTPUT"
-          echo "$plan" | jq .
-
   target:
-    name: Selected H4 guests
-    needs: discover
-    if: needs.discover.outputs.plan != '[]'
+    name: ${{ matrix.arch }} / ${{ matrix.profile }}
     runs-on: ubuntu-latest
     container: debian:trixie
-    timeout-minutes: 30
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [riscv64, aarch64, x86_64]
+        profile: [debug, release]
     env:
-      QEMU_RISCV64: qemu-system-riscv64
-      QEMU_OPENSBI: /usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin
-      PLAN: ${{ needs.discover.outputs.plan }}
+      LIMEN_TEST_ARCH: ${{ matrix.arch }}
+      LIMEN_TEST_PROFILE: ${{ matrix.profile }}
     steps:
-      - name: Install target tools
+      - name: Install base tools
+        id: base_tools
+        shell: bash
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl git build-essential jq
-          packages=()
-          firmware=()
-          for platform in $(jq -r 'map(.platform) | unique[]' <<<"$PLAN"); do
-            case "$platform" in
-              rv64) packages+=(qemu-system-riscv); firmware+=(opensbi) ;;
-              q35)  packages+=(qemu-system-x86); firmware+=(ovmf) ;;
-              virt) packages+=(qemu-system-arm); firmware+=(qemu-efi-aarch64) ;;
-              host) ;;
-              *) exit 2 ;;
-            esac
-          done
-          if (( ${#firmware[@]} )); then apt-get install -y --no-install-recommends "${firmware[@]}"; fi
-          if (( ${#packages[@]} )); then
-            echo "deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] https://snapshot.debian.org/archive/debian/20261124T000000Z/ trixie-backports main" > /etc/apt/sources.list.d/qemu.list
-            apt-get -o Acquire::Retries=3 update
-            apt-get install -y --no-install-recommends -t trixie-backports "${packages[@]}"
-          fi
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential jq gdb-multiarch
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Install pinned Rust toolchain
+      - name: Install QEMU and firmware
+        id: tools
+        shell: bash
+        run: bash server/tests/runner/ci/qemu.sh "$LIMEN_TEST_ARCH"
+      - name: Install pinned toolchain
+        id: toolchain
+        shell: bash
+        run: bash server/tests/runner/ci/toolchain.sh "$LIMEN_TEST_ARCH"
+      - name: Record source
+        id: source
+        run: |
+          mkdir -p .integration
+          git -c safe.directory="$PWD" rev-parse HEAD > .integration/source.txt
+          rustc -Vv > .integration/rustc.txt
+          cargo -V > .integration/cargo.txt
+      - name: Prepare target runner
+        id: runner
+        shell: bash
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
-          sh /tmp/rustup.sh -y --profile minimal --default-toolchain none
-          source "$HOME/.cargo/env"
-          rustc -Vv
-          targets=()
-          for platform in $(jq -r 'map(.platform) | unique[]' <<<"$PLAN"); do
-            case "$platform" in
-              rv64) targets+=(riscv64gc-unknown-none-elf) ;;
-              q35)  targets+=(x86_64-unknown-uefi) ;;
-              virt) targets+=(aarch64-unknown-uefi) ;;
-              host) ;;
-              *) exit 2 ;;
-            esac
-          done
-          if (( ${#targets[@]} )); then rustup target add "${targets[@]}"; fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - name: Run project-owned verification
+          mkdir -p .integration/stages
+          host=x86_64-unknown-linux-gnu
+          cargo build --locked --manifest-path server/tests/runner/Cargo.toml \
+            -p kernel-verification --target "$host" 2>&1 | tee .integration/stages/runner.log
+          runner="$PWD/server/tests/runner/target/$host/debug/verify"
+          echo "LIMEN_TEST_RUNNER=$runner" >> "$GITHUB_ENV"
+
+      # Each stage depends on the prepared runner, not the verdict of another
+      # stage. A failed step still fails the job; no continue-on-error is used.
+      - name: Run Host observers
+        id: observers
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' }}
+        shell: bash
         run: |
           set -euo pipefail
-          cargo build --locked --manifest-path server/tests/runner/Cargo.toml --target x86_64-unknown-linux-gnu
-          runner="$GITHUB_WORKSPACE/server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify"
-          mkdir -p "$GITHUB_WORKSPACE/.integration"
-          batch_status=0
-          fault_status=0
-          bash tools/tests/batch.sh "$runner" "$GITHUB_WORKSPACE/.integration/evidence" || batch_status=$?
-          bash server/tests/target/entry/boot/fault.sh "$runner" "$GITHUB_WORKSPACE/.integration/evidence" || fault_status=$?
-          (( batch_status == 0 && fault_status == 0 ))
-      - name: Preserve project evidence
+          cargo test --locked --manifest-path server/tests/runner/Cargo.toml \
+            -p machine-observer --target x86_64-unknown-linux-gnu \
+            --tests --no-fail-fast -- --test-threads=1 \
+            2>&1 | tee .integration/stages/observers.log
+
+      - name: Run ordinary guests
+        id: guests
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$PWD/.integration/guests"
+          config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','native','--evidence-root','$evidence']"
+          profile=()
+          if [[ "$LIMEN_TEST_PROFILE" == release ]]; then profile+=(--release); fi
+          cargo -Z panic-abort-tests --config "$config" test --locked \
+            --manifest-path server/tests/target/Cargo.toml -p kernel-guest -p "$LIMEN_TEST_ARCH-guest" \
+            --target "$LIMEN_TEST_TARGET" --tests --no-fail-fast "${profile[@]}" \
+            2>&1 | tee .integration/stages/guests.log
+
+      # Only Module needs an additional bare target on UEFI. Its preparation
+      # is independent of whether ordinary guests passed.
+      - name: Prepare Module target
+        id: module
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$LIMEN_TEST_TARGET" == *-uefi ]]; then
+            rustup target add "${LIMEN_TEST_ARCH}-unknown-none" 2>&1 | tee .integration/stages/module-target.log
+          fi
+
+      - name: Run Module guests
+        id: module_guests
+        if: ${{ !cancelled() && steps.module.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$PWD/.integration/module"
+          config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','native','--evidence-root','$evidence']"
+          profile=()
+          if [[ "$LIMEN_TEST_PROFILE" == release ]]; then profile+=(--release); fi
+          cargo -Z panic-abort-tests --config "$config" test --locked \
+            --manifest-path server/tests/target/Cargo.toml -p module-guest \
+            --target "$LIMEN_TEST_TARGET" --tests --no-fail-fast "${profile[@]}" \
+            2>&1 | tee .integration/stages/module.log
+      - name: Record stage outcomes
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          BASE_TOOLS: ${{ steps.base_tools.outcome }}
+          TOOLS: ${{ steps.tools.outcome }}
+          TOOLCHAIN: ${{ steps.toolchain.outcome }}
+          SOURCE: ${{ steps.source.outcome }}
+          RUNNER: ${{ steps.runner.outcome }}
+          OBSERVERS: ${{ steps.observers.outcome }}
+          GUESTS: ${{ steps.guests.outcome }}
+          MODULE_TARGET: ${{ steps.module.outcome }}
+          MODULE_GUESTS: ${{ steps.module_guests.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p .integration/stages
+          # These are Actions step outcomes, not individual guest verdicts.
+          printf '{"base_tools":"%s","tools":"%s","toolchain":"%s","source":"%s","runner":"%s","observers":"%s","guests":"%s","module_target":"%s","module_guests":"%s"}\n' \
+            "$BASE_TOOLS" "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$OBSERVERS" "$GUESTS" "$MODULE_TARGET" "$MODULE_GUESTS" \
+            > .integration/stages/outcomes.json
+      - name: Preserve target evidence
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: target-h4
+          name: target-${{ matrix.arch }}-${{ matrix.profile }}
+          path: .integration/
           include-hidden-files: true
-          path: |
-            .integration/evidence/
-            server/tests/target/**/target/evidence/
           if-no-files-found: warn

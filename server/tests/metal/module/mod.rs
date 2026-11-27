@@ -262,7 +262,7 @@ fn rejects_malformed_permissions_note_and_relative_record() {
 }
 
 #[test]
-fn rv64_entry_needs_the_file_bytes_for_its_instruction_width() {
+fn riscv64_entry_needs_the_file_bytes_for_its_instruction_width() {
     let (machine, source) = IMAGES[0];
     let mut bytes = source.to_vec();
     let text = programs(source)
@@ -294,7 +294,7 @@ fn selects_a_unique_provider_from_the_original_images() {
 }
 
 #[test]
-fn selects_distinct_rv64_geometry_and_root_images() {
+fn selects_distinct_riscv64_geometry_and_root_images() {
     let (machine, geometry) = IMAGES[0];
     let sources = [geometry, ROOTS[0].1, ROOTS[1].1, ROOTS[2].1];
     let contracts = [

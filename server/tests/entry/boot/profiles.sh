@@ -17,11 +17,11 @@ directives() {
 
 linker=src/metal/platform/boot/riscv64/linker.ld
 [[ -f "$root/server/$linker" ]]
-rv64=$(build riscv64gc-unknown-none-elf riscv64 none | directives)
+riscv64=$(build riscv64gc-unknown-none-elf riscv64 none | directives)
 expected=$(printf '%s\n' 'cargo::rustc-cfg=limen_target' 'cargo::rustc-cfg=limen_firmware="sbi"' \
     'cargo::rustc-cfg=limen_cooperative' "cargo::rerun-if-changed=$linker" \
     "cargo::metadata=linker_script=$root/server/$linker")
-[[ $rv64 == "$expected" ]]
+[[ $riscv64 == "$expected" ]]
 
 expected=$(printf '%s\n' 'cargo::rustc-cfg=limen_target' 'cargo::rustc-cfg=limen_firmware="uefi"' \
     'cargo::rustc-cfg=limen_cooperative')
