@@ -3,7 +3,7 @@
 mod construction;
 mod storage;
 
-pub use construction::AllocationConstruction;
+pub use construction::{AllocationConstruction, Cancellation};
 pub use storage::MappedStorage;
 
 use core::ptr;
