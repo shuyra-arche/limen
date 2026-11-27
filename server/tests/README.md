@@ -159,9 +159,12 @@ architecture, profile and machine tools. The default runner Host tests do
 not select this package. Cargo discovers all its integration targets with
 `--tests`. A small build script derives the observed ISA from the actual
 `LIMEN_TEST_TARGET` triple, independently of the Host compiler target.
-The machine-specific fault test uses libtest's native ignore attribute on
-other guest architectures. The full-duration timeout probe is explicitly
-ignored in its own test definition; CI names neither case. The outcome Guest
+The Boot Fault suite compiles the common observation and diagnostic tests on
+every Host. Its riscv64 backend is compiled only for a selected riscv64 guest
+on Unix; other guest architectures do not register that case. This is a
+firmware-entry-specific BSS contract, not proof of UEFI early fault behavior.
+The full-duration timeout probe remains explicitly ignored in its own test
+definition because of its cost; CI names neither case. The outcome Guest
 owns transport and nested compiler-collection probes; ordinary synchronization
 tests do not contain injected harness failures.
 

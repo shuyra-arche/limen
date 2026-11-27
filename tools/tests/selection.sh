@@ -27,6 +27,7 @@ scope server/src/metal/platform/boot/riscv64/linker.ld '.riscv64 and ((.host or 
 scope server/src/metal/platform/boot/x86_64/mod.rs '((.host or .runner or .riscv64) | not)'
 scope server/tests/target/tests/boot.rs '((.host or .runner or .riscv64) | not)'
 scope server/tests/target/support/platform.rs '.runner and ((.host or .riscv64) | not)'
-scope server/tests/entry/boot/fault.rs '.runner and ((.host or .riscv64) | not)'
+scope server/tests/entry/boot/fault/mod.rs '.runner and ((.host or .riscv64) | not)'
+scope server/tests/entry/boot/fault/riscv64.rs '.runner and ((.host or .riscv64) | not)'
 scope treaty/src/model/address.rs '.host and .runner and .riscv64'
 echo 'host check scope contracts passed'
