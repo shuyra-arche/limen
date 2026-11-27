@@ -2,7 +2,7 @@
 
 use crate::metal::platform::description::devicetree::{DeviceTree, Error, Node, NodeId};
 
-pub(super) const AFFINITY_MASK: u64 = 0xff00ffffff;
+pub(in crate::metal) const AFFINITY_MASK: u64 = 0xff00ffffff;
 const CPU_LIMIT: usize = 64;
 
 /// A processor described in the original tree. Its Hart must still enter

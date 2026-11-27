@@ -2,8 +2,11 @@ use core::sync::atomic::Ordering::Acquire;
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
 use super::{
-    Allocator, Error, REGION_LIMIT, RegionDescription, RegionId, RegionOrigin,
-    region::buddy::{self, Revision, Scan},
+    Allocator, Error, RegionDescription, RegionId, RegionOrigin,
+    region::{
+        Revision,
+        buddy::{self, Scan},
+    },
 };
 
 /// The recipient's intended use, independent of the physical range selected.
@@ -103,7 +106,7 @@ enum Pass {
 /// One exact source/request and fixed per-Region observation workspace. Each
 /// step runs one bounded local operation and leaves no held lock behind.
 #[must_use]
-pub struct Lookup {
+pub struct Lookup<'work> {
     source: &'static Allocator,
     request: Request,
     count: usize,
@@ -111,8 +114,16 @@ pub struct Lookup {
     visited: usize,
     pass: Pass,
     scan: Option<Scan<'static>>,
-    observations: [Option<Revision>; REGION_LIMIT],
+    observations: &'work mut [LookupObservation],
     blocked: bool,
+}
+
+/// Actual caller-provided storage for one Region's geometry observation.
+#[derive(Clone, Copy)]
+pub struct LookupObservation(Option<Revision>);
+
+impl LookupObservation {
+    pub const EMPTY: Self = Self(None);
 }
 
 // A scan visit or cursor advance is one step. Fast lookup and exact edits
@@ -120,11 +131,12 @@ pub struct Lookup {
 const SCAN_STEPS: usize = 64;
 
 impl Allocator {
-    pub fn lookup(
+    pub fn lookup<'work>(
         &'static self,
         request: Request,
         start: Option<RegionId>,
-    ) -> Result<Lookup, Error> {
+        observations: &'work mut [LookupObservation],
+    ) -> Result<Lookup<'work>, Error> {
         if !self.config.granule_alignment().is_aligned(request.length()) {
             return Err(Error::Layout);
         }
@@ -137,6 +149,8 @@ impl Allocator {
         if start.is_some() && first >= count {
             return Err(Error::Stale);
         }
+        let observations = observations.get_mut(..count).ok_or(Error::Capacity)?;
+        observations.fill(LookupObservation::EMPTY);
         Ok(Lookup {
             source: self,
             request,
@@ -145,13 +159,13 @@ impl Allocator {
             visited: 0,
             pass: Pass::Observe,
             scan: None,
-            observations: [None; REGION_LIMIT],
+            observations,
             blocked: false,
         })
     }
 }
 
-impl Lookup {
+impl Lookup<'_> {
     pub fn step(&mut self) -> Result<Search, Error> {
         let result = match self.pass {
             Pass::Observe if self.visited == self.count => {
@@ -214,7 +228,12 @@ impl Lookup {
     }
 
     fn index(&self) -> usize {
-        (self.first + self.visited) % self.count
+        let tail = self.count - self.first;
+        if self.visited < tail {
+            self.first + self.visited
+        } else {
+            self.visited - tail
+        }
     }
 
     fn observe(&mut self) -> Result<Search, Error> {
@@ -260,7 +279,7 @@ impl Lookup {
                 if !revision.preserves(revision) {
                     return Err(Error::Changed);
                 }
-                self.observations[index] = Some(revision);
+                self.observations[index] = LookupObservation(Some(revision));
                 self.visited += 1;
                 Ok(Search::Pending)
             }
@@ -270,7 +289,7 @@ impl Lookup {
     fn verify(&mut self) -> Result<Search, Error> {
         let index = self.index();
         self.visited += 1;
-        if let Some(observed) = self.observations[index] {
+        if let Some(observed) = self.observations[index].0 {
             let region = &self.source.regions[index];
             let current = region.state.acquire(|state| state.buddy().revision())?;
             if !current.preserves(observed) {

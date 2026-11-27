@@ -73,16 +73,15 @@ pub struct Supervisor {
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 mod native {
     use super::{Cause, Error, Operations, Reception, Supervisor};
-    use crate::metal::processor::hart::local::try_current_hart;
+    use crate::metal::processor::hart::{local::try_current_hart, riscv};
     use core::{arch::asm, marker::PhantomData};
 
     fn valid(hart: u64) -> bool {
-        let status: usize;
-        unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nostack, nomem)) };
-        try_current_hart().is_some_and(|current| current.get() as u64 == hart) && status & 2 == 0
+        try_current_hart().is_some_and(|current| current.get() as u64 == hart)
+            && riscv::native::status().masked()
     }
 
-    fn enabled() -> usize {
+    pub(super) fn enabled() -> usize {
         let enabled: usize;
         unsafe { asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem)) };
         enabled
@@ -134,4 +133,10 @@ mod native {
             Ok(Self { timer, external })
         }
     }
+}
+
+/// Observe the actual full supervisor enable register; no control is granted.
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+pub(in crate::metal) fn all_masked() -> bool {
+    native::enabled() == 0
 }

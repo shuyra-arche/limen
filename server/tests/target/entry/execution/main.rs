@@ -18,14 +18,15 @@ use core::{
 
 use kernel::{
     basis::{
-        execution::{Current, Error, EstablishError, Execution},
+        execution::{Current, Error, EstablishError, Execution, KernelBinding},
         room::Occupancy,
-        unit::{End, Lifecycle, Stacks, UnitId},
+        unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::{Boot, shutdown, write},
 };
 
 static mut STACKS: Stacks = Stacks::new();
+static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 static FIRST_STACK: AtomicUsize = AtomicUsize::new(0);
@@ -115,7 +116,9 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     // Individual interrupt sources remain masked. SIE makes the execution
     // environment unsupported before the constructor binds the stack supply.
     unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-    let rejected = Execution::new(boot, unsafe { &mut *stacks });
+    let rejected = Execution::new(boot, unsafe { &mut *stacks }, unsafe {
+        &mut *(&raw mut RECORDS)
+    });
     unsafe { asm!("csrci sstatus, 2", options(nostack)) };
     let Err(failure) = rejected else {
         panic!("execution admitted with interrupts enabled");
@@ -124,7 +127,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert_eq!(failure.boot.hart(), major);
     assert_eq!(failure.boot.device_tree(), device_tree);
     assert!(core::ptr::eq(failure.stacks, stacks));
-    let runtime = Execution::new(failure.boot, failure.stacks)
+    let runtime = Execution::new(failure.boot, failure.stacks, failure.records)
         .map_err(|failure| failure.reason)
         .expect("original handoff and stack supply can be retried");
     unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
@@ -150,9 +153,13 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         execution.lifecycle(dormant),
         Ok(Lifecycle::Ended(End::Cancelled))
     );
+    // The original result remains live, but its stack is already reusable.
+    let b = unsafe { execution.create(second) }.expect("reuse stack before Reap");
+    assert_eq!(
+        execution.lifecycle(dormant),
+        Ok(Lifecycle::Ended(End::Cancelled))
+    );
     assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
-
-    let b = unsafe { execution.create(second) }.expect("reuse dormant slot");
     assert_ne!(dormant, b);
     assert_eq!(execution.stop_dormant(dormant), Err(Error::Gone));
     assert_eq!(execution.submit(dormant), Err(Error::Gone));
@@ -169,6 +176,42 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     unsafe { asm!("csrci sstatus, 2", options(nostack)) };
     assert_eq!(rejected, Err(Error::Unsupported));
     assert_eq!(execution.pending_leave(), Ok(None));
+
+    // Change only the actual FS field: the integer-only kernel target
+    // executes no FP instructions, so no extended state is consumed.
+    let mut observed: usize;
+    unsafe {
+        asm!(
+            "csrs sstatus, {initial}",
+            "csrr {observed}, sstatus",
+            initial = in(reg) 1usize << 13,
+            observed = out(reg) observed,
+            options(nostack),
+        );
+    }
+    let rejected = execution.enter();
+    unsafe { asm!("csrc sstatus, {}", in(reg) 3usize << 13, options(nostack)) };
+    assert_ne!(observed & (3 << 13), 0, "QEMU exposes the actual FS field");
+    assert_eq!(rejected, Err(Error::Unsupported));
+    assert_eq!(execution.pending_leave(), Ok(None));
+
+    // Global SIE is still off. A single locally enabled source is a
+    // different admission failure and must not be mistaken for global SIE.
+    unsafe {
+        asm!(
+            "csrs sie, {timer}",
+            "csrr {observed}, sie",
+            timer = in(reg) 1usize << 5,
+            observed = out(reg) observed,
+            options(nostack),
+        );
+    }
+    let rejected = execution.enter();
+    unsafe { asm!("csrc sie, {}", in(reg) 1usize << 5, options(nostack)) };
+    assert_ne!(observed & (1 << 5), 0);
+    assert_eq!(rejected, Err(Error::Unsupported));
+    assert_eq!(execution.pending_leave(), Ok(None));
+    write("PASS native-control fs=1 source-mask=1 restored=1\n");
 
     let initial = dispatch(a);
     assert_eq!(initial.admission(), a_admission);

@@ -11,9 +11,9 @@ use core::{
 };
 use kernel::{
     basis::{
-        execution::{Current, Error, Execution},
+        execution::{Current, Error, Execution, KernelBinding},
         room::Occupancy,
-        unit::{End, Lifecycle, Stacks, UnitId},
+        unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::{self, Boot, Startup},
 };
@@ -28,6 +28,7 @@ mod x86_64;
 use x86_64 as registers;
 
 static mut STACKS: Stacks = Stacks::new();
+static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static MAJOR: AtomicUsize = AtomicUsize::new(usize::MAX);
 static PHASE: AtomicUsize = AtomicUsize::new(0);
@@ -131,9 +132,14 @@ pub(super) fn run(
     started: impl FnOnce(&Startup),
 ) {
     MAJOR.store(major, Relaxed);
-    let runtime = Execution::with_minor(boot, unsafe { &mut *(&raw mut STACKS) }, &super::MINOR)
-        .map_err(|failure| failure.reason)
-        .expect("native cooperative profile");
+    let runtime = Execution::with_minor(
+        boot,
+        unsafe { &mut *(&raw mut STACKS) },
+        unsafe { &mut *(&raw mut RECORDS) },
+        &super::MINOR,
+    )
+    .map_err(|failure| failure.reason)
+    .expect("native cooperative profile");
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
 
     assert_eq!(

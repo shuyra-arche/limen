@@ -73,6 +73,13 @@ impl Minor {
         }
     }
 
+    /// Publish the complete launch, including all inputs the target may read.
+    /// Called by the native startup owner before any wake command.
+    pub(in crate::metal) fn publish(&self) {
+        assert_eq!(self.state.load(Ordering::Relaxed), State::Preparing as u32);
+        self.state.store(PUBLISHED, Ordering::Release);
+    }
+
     /// Returns whether the target CPU has installed and verified its startup state.
     pub fn ready(&self) -> bool {
         self.state.load(Ordering::Acquire) == State::Ready as u32
@@ -118,8 +125,7 @@ impl Minor {
                 argument,
             }));
         }
-        self.state.store(PUBLISHED, Ordering::Release);
-
+        // Each native path completes its actual machine inputs before publishing.
         let result = unsafe { boot::wake_minor(self, hart, method) };
         if matches!(result, Err(StartError::Rejected(_))) {
             self.state.store(State::Idle as u32, Ordering::Release);
@@ -141,7 +147,8 @@ pub(crate) extern "C" fn arrive(hart: usize, minor: &'static Minor) -> ! {
     assert!(minor.established(hart));
     // `Entered` identifies this CPU as the sole initializer of this resident
     // local record. The terminal vectors cannot observe its partial setup.
-    unsafe { minor.local.install(hart) };
+    let entry = boot::entry().expect("verified minor entry");
+    unsafe { minor.local.install(hart, entry) };
     assert!(local::can_switch(), "minor Hart protection is not idle");
     minor.state.store(State::Ready as u32, Ordering::Release);
     (launch.entry)(hart, launch.argument)

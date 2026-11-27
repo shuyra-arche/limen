@@ -16,6 +16,7 @@ pub(crate) unsafe fn wake_minor(
     hart: usize,
     Startup::Sbi(service): &mut Startup,
 ) -> Result<(), StartError> {
+    slot.publish();
     service
         .start(
             hart,
@@ -50,6 +51,8 @@ unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
         "tail {loaded}",
         "3: wfi",
         "j 3b",
+        interrupt_enable = const super::status::SIE,
+        extensions = const super::status::WRITABLE_EXTENSIONS,
         vector = sym super::trap,
         state = const minor::STATE_OFFSET,
         published = const minor::PUBLISHED,

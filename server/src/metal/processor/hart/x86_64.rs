@@ -43,3 +43,32 @@ pub(crate) fn stack_pointer() -> usize {
 pub(in crate::metal) unsafe fn clear_local() {
     unsafe { install_local(0) };
 }
+
+/// Actual interrupt descriptor table control in ring zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::metal) struct Entry {
+    pub(in crate::metal) base: usize,
+    pub(in crate::metal) limit: u16,
+}
+
+/// The machine's packed descriptor-table register layout (GDTR/IDTR).
+#[repr(C, packed)]
+pub(in crate::metal) struct Descriptor {
+    pub(in crate::metal) limit: u16,
+    pub(in crate::metal) base: usize,
+}
+
+pub(in crate::metal) fn entry() -> Option<Entry> {
+    let cs: u16;
+    unsafe { asm!("mov {:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags)) };
+    const PRIVILEGE: u16 = 3;
+    if cs & PRIVILEGE != 0 {
+        return None;
+    }
+    let mut idtr = Descriptor { limit: 0, base: 0 };
+    unsafe { asm!("sidt [{}]", in(reg) &mut idtr, options(nostack, preserves_flags)) };
+    Some(Entry {
+        base: idtr.base,
+        limit: idtr.limit,
+    })
+}

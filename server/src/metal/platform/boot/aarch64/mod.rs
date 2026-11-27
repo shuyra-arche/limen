@@ -1,7 +1,10 @@
 use crate::metal::{
     platform::boot::handoff::{Descriptions, Facts, uefi},
     platform::boot::trap as diagnostic,
-    processor::hart::aarch64::native,
+    processor::hart::{
+        aarch64::{native, status},
+        local,
+    },
 };
 mod major;
 pub(crate) use major::major as enter_major;
@@ -17,24 +20,18 @@ pub(crate) unsafe fn admit<'a>(
 }
 
 pub(crate) fn established() -> bool {
-    let (daif, spsel): (usize, usize);
-    unsafe {
-        asm!("mrs {}, DAIF", "mrs {}, SPSel", out(reg) daif, out(reg) spsel,
-             options(nostack, nomem, preserves_flags));
-    }
-    daif & 0x3c0 == 0x3c0 && spsel == 1 && entry_installed()
+    native::masked_stack() && entry().is_some()
 }
 
-pub(crate) fn entry_installed() -> bool {
-    let el: usize;
-    unsafe { asm!("mrs {}, CurrentEL", out(reg) el, options(nostack, nomem, preserves_flags)) };
-    if el != 4 {
-        return false;
-    }
-    let vector: usize;
-    unsafe { asm!("mrs {}, VBAR_EL1", out(reg) vector, options(nostack, nomem, preserves_flags)) };
-    vector == vectors as *const () as usize
+pub(in crate::metal) fn entry() -> Option<local::Entry> {
+    local::Entry::admit(
+        native::Entry {
+            vector: vectors as *const () as usize,
+        },
+        diagnostic::stack_range(),
+    )
 }
+
 pub(crate) fn park() -> ! {
     loop {
         unsafe { asm!("wfe", options(nomem, nostack)) };
@@ -58,7 +55,7 @@ unsafe extern "C" fn vectors() -> ! {
         ".balign 128",
         ".set slot, slot + 1",
         ".endr",
-        "2: msr daifset, #15",
+        "2: msr daifset, #{exceptions}",
         "adrp x2, {top}",
         "add x2, x2, :lo12:{top}",
         "3: ldaxr x3, [x2]",
@@ -70,6 +67,7 @@ unsafe extern "C" fn vectors() -> ! {
         "b {capture}",
         "4: wfe",
         "b 4b",
+        exceptions = const status::ALL_EXCEPTIONS,
         top = sym diagnostic::TOP,
         capture = sym capture,
     );

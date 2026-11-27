@@ -14,6 +14,7 @@ use limen_treaty::model::PhysicalRange;
 mod allocation;
 mod allowance;
 pub(crate) mod bootstrap;
+mod directory;
 pub mod pool;
 pub mod region;
 mod returns;
@@ -21,14 +22,17 @@ mod search;
 
 pub use allocation::{Allocation, AllocationConstruction, AllocationId, MappedStorage};
 pub(crate) use allowance::permit::{AllocationPermit, AllocationPermitSlot, LayoutLimit};
-pub use allowance::{Allowance, AllowanceCandidate, AllowanceId, Balance};
+pub use allowance::{
+    Allowance, AllowanceCandidate, AllowanceId, Balance, Budget, BudgetObservation, BudgetProgress,
+};
 pub(crate) use bootstrap::RootInitialization;
 pub use bootstrap::{Config, Initial, RootStorage};
 pub use region::{Grant, RegionDescription, RegionOrigin};
 pub use returns::{Pending, Retired, ReturnId, ReturnReceipt, Returned};
-pub use search::{Candidate, Lookup, RamPurpose, Request, Search};
+pub use search::{Candidate, Lookup, LookupObservation, RamPurpose, Request, Search};
 
 use allowance::{AllowanceSlot, Free};
+use directory::Directory;
 use region::Region;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,10 +66,6 @@ impl From<TurnAcquireError> for Error {
     }
 }
 
-/// Maximum Region count, including delayed admission positions. Exact source
-/// inspection needs this many nodes plus the directory node.
-pub const REGION_LIMIT: usize = 3;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SourceId(usize);
 
@@ -93,7 +93,7 @@ impl RegionId {
 pub struct Allocator {
     config: Config,
     root: PhysicalRange,
-    directory: TurnLock<()>,
+    directory: TurnLock<Directory>,
     published: AtomicUsize,
     regions: &'static [Region],
     allowances: &'static [TurnLock<AllowanceSlot>],
