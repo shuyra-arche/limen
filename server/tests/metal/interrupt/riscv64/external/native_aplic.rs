@@ -253,7 +253,7 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
             .is_none()
     );
     let mut previous = 0;
-    for _ in 0..2 {
+    for round in 0..2 {
         domain.enable(&mut context, route.id()).unwrap();
         assert_eq!(
             domain.source(route.id()).unwrap(),
@@ -291,13 +291,27 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
             domain.source(route.id()).unwrap(),
             aplic::Source::Masked(route.mode())
         );
-        let mut receiver = domain.receiver(&mut context).unwrap();
-        let mut claim = claim_consumer::pending(&mut receiver, receipt);
         assert_eq!(uart_read(&mut serial, 2) & 0x0f, 2, "UART THRE cause");
         uart_write(&mut serial, 1, 0);
-        // The test has consumed this notification and disabled the actual
-        // source. There is no separate software binding in this scenario.
+        assert_eq!(
+            unsafe { domain.retire_source(&mut context, route.id()) },
+            Err(aplic::Failure::Busy)
+        );
+        let mut receiver = domain.receiver(&mut context).unwrap();
+        let mut claim = claim_consumer::pending(&mut receiver, receipt);
+        // The device cause is clear, but retirement required the original
+        // recorded claim above to settle before freeing this source.
         unsafe { consumer::finish(&mut claim, route.id(), Completion::Settled) };
+        unsafe { domain.retire_source(&mut context, route.id()) }.unwrap();
+        assert_eq!(domain.state(), aplic::State::Open);
+        assert_eq!(domain.source(route.id()), Ok(Source::Vacant));
+        assert_eq!(
+            domain.enable(&mut context, route.id()),
+            Err(aplic::Failure::Busy)
+        );
+        if round == 0 {
+            unsafe { domain.configure(&mut context, route) }.unwrap();
+        }
     }
     assert!(domain.receiver(&mut context).unwrap().current().is_none());
     assert!(
@@ -308,6 +322,17 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
             .unwrap()
             .is_none()
     );
+    // Mask an enabled, quiet source under its original route before the last
+    // retirement. No interrupt or IDC shutdown is needed to return it.
+    unsafe { domain.configure(&mut context, route) }.unwrap();
+    domain.enable(&mut context, route.id()).unwrap();
+    assert_eq!(
+        unsafe { domain.retire_source(&mut context, route.id()) },
+        Err(aplic::Failure::Busy)
+    );
+    domain.mask_source(&mut context, route.id()).unwrap();
+    assert_eq!(domain.source(route.id()), Ok(Source::Masked(route.mode())));
+    unsafe { domain.retire_source(&mut context, route.id()) }.unwrap();
     unsafe { domain.shut(&mut context) }.unwrap();
     assert_eq!(domain.state(), aplic::State::Shut);
     assert_eq!(domain.source(route.id()).unwrap(), aplic::Source::Vacant);
@@ -334,7 +359,7 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
     drop(serial);
     boot_diagnostic::write("\nPASS device-window widths=2 rejected=5\n");
     boot_diagnostic::write(
-        "\nPASS aplic-direct received=2 cleared=2 stale=1 shutdown=1 states=1 rejected=1\n",
+        "\nPASS aplic-direct received=2 cleared=2 rebound=1 retained=2 shutdown=1\n",
     );
 }
 

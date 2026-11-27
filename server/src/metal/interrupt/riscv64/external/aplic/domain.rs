@@ -214,6 +214,62 @@ impl<'description, 'resources> Domain<'description, 'resources> {
         Ok(())
     }
 
+    /// Mask future deliveries on the original source without discarding a
+    /// pending input. The operator can resume the same binding to drain it.
+    pub fn mask_source(&mut self, context: &mut Context<'_>, source: u32) -> Result<(), Failure> {
+        self.quiet(context)?;
+        match (self.state, self.source(source)?) {
+            (State::Open, Source::Enabled(mode)) => self.mask(context, source, mode),
+            (State::Open | State::Prepared, Source::Masked(_)) => Ok(()),
+            (State::Uncertain(Effect::Mask(original)), Source::Masking(_))
+                if original == source =>
+            {
+                self.confirm_mask(context, source)
+            }
+            _ => Err(Failure::Busy),
+        }
+    }
+
+    /// Retire one source while its original IDC remains available to the
+    /// other sources. A pending event retains the original configuration.
+    ///
+    /// # Safety
+    /// The caller owns the bound device, has stopped new effects from its
+    /// original use, and has excluded earlier effects still in transit to
+    /// this controller. Preserve that exclusion and any outstanding software
+    /// association until retirement succeeds. An already recorded claim or
+    /// pending input still needs its own original delivery path.
+    pub unsafe fn retire_source(
+        &mut self,
+        context: &mut Context<'_>,
+        source: u32,
+    ) -> Result<(), Failure> {
+        self.quiet(context)?;
+        if !matches!(self.state, State::Prepared | State::Open) {
+            return Err(Failure::Busy);
+        }
+        match self.source(source)? {
+            Source::Masked(mode) if self.source_quiet(source, mode) => {
+                self.sources.set(source, Source::Retiring(mode));
+                self.registers
+                    .set_source(source, SourceConfiguration::Inactive);
+            }
+            Source::Retiring(_) => {}
+            _ => return Err(Failure::Busy),
+        }
+        if !SourceConfiguration::Inactive.confirms(self.registers.source(source)) {
+            return Err(Failure::Unconfirmed);
+        }
+        self.sources.set(source, Source::Vacant);
+        Ok(())
+    }
+
+    fn source_quiet(&mut self, source: u32, mode: Mode) -> bool {
+        !self.registers.enabled(source)
+            && !self.registers.pending(source)
+            && (!matches!(mode, Mode::LevelHigh | Mode::LevelLow) || !self.registers.input(source))
+    }
+
     /// Keep the original mode even if masking is unconfirmed.
     pub(super) fn mask(
         &mut self,
@@ -230,8 +286,8 @@ impl<'description, 'resources> Domain<'description, 'resources> {
         Ok(())
     }
 
-    /// Reconcile the original IDC mask from native enable readback.
-    pub(super) fn confirm_claim_mask(
+    /// Reconcile the original source mask from native enable readback.
+    pub(super) fn confirm_mask(
         &mut self,
         context: &mut Context<'_>,
         source: u32,
