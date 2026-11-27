@@ -16,8 +16,7 @@ use crate::metal::{
 };
 
 use super::{
-    Allocator, AllowanceId, Error, Region, RegionDescription, RegionId, RegionOrigin,
-    SourceId,
+    Allocator, AllowanceId, Error, Region, RegionDescription, RegionId, RegionOrigin, SourceId,
     allocation::{Allocation, AllocationId, AllocationRecord, Phase},
     allowance::{Allowance, AllowanceSlot, Balance, Free},
     region::{

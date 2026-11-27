@@ -96,8 +96,14 @@ impl Allocator {
         let (debit, credit) = held
             .access_pair(&from.state, &to.state)
             .ok_or(Error::Protection)?;
-        let left = debit.unassigned().checked_sub(amount).ok_or(Error::Balance)?;
-        let right = credit.unassigned().checked_add(amount).ok_or(Error::Balance)?;
+        let left = debit
+            .unassigned()
+            .checked_sub(amount)
+            .ok_or(Error::Balance)?;
+        let right = credit
+            .unassigned()
+            .checked_add(amount)
+            .ok_or(Error::Balance)?;
         debit.set_unassigned(left);
         credit.set_unassigned(right);
         Ok(())

@@ -54,10 +54,7 @@ impl RootPlan {
         ]
     }
 
-    fn take_storage<'m>(
-        &self,
-        mapping: &mut Option<MappedRange<'m>>,
-    ) -> RootStorage<'m> {
+    fn take_storage<'m>(&self, mapping: &mut Option<MappedRange<'m>>) -> RootStorage<'m> {
         let mut storage = mapping.take().expect("checked mapping");
         let start = storage.physical().start();
         if self.physical.start() != start {

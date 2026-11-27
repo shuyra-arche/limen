@@ -281,7 +281,10 @@ impl Allocator {
         }
         let amount = record.physical.length().get();
         let credit = if open { 0 } else { amount };
-        let unassigned = state.unassigned().checked_add(credit).ok_or(Error::Balance)?;
+        let unassigned = state
+            .unassigned()
+            .checked_add(credit)
+            .ok_or(Error::Balance)?;
         state
             .buddy()
             .release(record.physical)

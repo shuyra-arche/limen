@@ -208,7 +208,10 @@ impl Allowance {
             if amount != 0 {
                 let region = region.ok_or(Error::Balance)?;
                 let state = held.access(&region.state).expect("credit Region");
-                let next = state.unassigned().checked_add(amount).ok_or(Error::Balance)?;
+                let next = state
+                    .unassigned()
+                    .checked_add(amount)
+                    .ok_or(Error::Balance)?;
                 state.set_unassigned(next);
             }
             held.access(slot).expect("Allowance").state = SlotState::Shutting {

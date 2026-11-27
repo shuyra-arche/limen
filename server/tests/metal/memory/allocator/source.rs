@@ -204,13 +204,11 @@ fn only_the_original_source_can_resolve_region_and_allowance_slots() {
     );
     assert_eq!(allowance.shut(Some(other_region), Fast), Err(Error::Stale));
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok(budget)
     );
     assert_eq!(
-        inspect_budget(other)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(other).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok(other_budget)
     );
 
@@ -230,8 +228,7 @@ fn only_the_original_source_can_resolve_region_and_allowance_slots() {
     allowance.reclaim(Fast).ok().unwrap();
     source.acknowledge(receipt).unwrap();
     assert_eq!(
-        inspect_budget(other)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(other).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok(other_budget)
     );
 
@@ -268,7 +265,12 @@ fn metadata_candidate(source: &'static Allocator) -> crate::metal::memory::alloc
         Metadata,
     )
     .unwrap();
-    let Search::Candidate(candidate) = source.lookup(request, None, &mut [LookupObservation::EMPTY; 3]).unwrap().step().unwrap() else {
+    let Search::Candidate(candidate) = source
+        .lookup(request, None, &mut [LookupObservation::EMPTY; 3])
+        .unwrap()
+        .step()
+        .unwrap()
+    else {
         panic!("expected the fixture's free metadata page");
     };
     candidate
@@ -361,7 +363,9 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
             )
             .unwrap();
             let mut lookup_observations = [LookupObservation::EMPTY; 3];
-            let mut lookup = source.lookup(request, None, &mut lookup_observations).unwrap();
+            let mut lookup = source
+                .lookup(request, None, &mut lookup_observations)
+                .unwrap();
             loop {
                 match lookup.step().unwrap() {
                     Search::Pending => {}
@@ -551,8 +555,7 @@ fn issue_and_allowance_shut_order_the_same_charge() {
     assert_eq!(balance.available().get(), 0);
     let capacity = initial_capacity(source);
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity - before.occupied().get()))
     );
 }
@@ -633,8 +636,7 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
     let (source, allowance) = source(&mut initial, 10 * PAGE);
     let capacity = initial_capacity(source);
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity - 10 * PAGE))
     );
     let mut halves = [None, None];
@@ -681,8 +683,7 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
     let done = source.finish_return(receipt, Slow).unwrap();
     assert_eq!(done.physical, pages(0, 3));
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity))
     );
     allowance.reclaim(Slow).ok().unwrap();
@@ -762,7 +763,9 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
     )
     .unwrap();
     let mut lookup_observations = [LookupObservation::EMPTY; 3];
-    let mut lookup = source.lookup(request, None, &mut lookup_observations).unwrap();
+    let mut lookup = source
+        .lookup(request, None, &mut lookup_observations)
+        .unwrap();
     loop {
         match lookup.step().unwrap() {
             Search::Pending => {}
@@ -772,7 +775,9 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
     }
 
     let mut lookup_observations = [LookupObservation::EMPTY; 3];
-    let mut lookup = source.lookup(request, Some(left), &mut lookup_observations).unwrap();
+    let mut lookup = source
+        .lookup(request, Some(left), &mut lookup_observations)
+        .unwrap();
     // Observe the negative left Region, then make a qualifying range free.
     assert!(matches!(lookup.step(), Ok(Search::Pending)));
     let material = initial.take().unwrap();
@@ -786,7 +791,9 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
         }
     }
     let mut positive_observations = [LookupObservation::EMPTY; 3];
-    let mut positive = source.lookup(request, None, &mut positive_observations).unwrap();
+    let mut positive = source
+        .lookup(request, None, &mut positive_observations)
+        .unwrap();
     let Search::Candidate(candidate) = positive.step().unwrap() else {
         panic!("the stable freed range was not found");
     };
@@ -825,8 +832,7 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
         Some(Error::Range)
     );
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok(budget_before_grant)
     );
     let mut grant = unsafe { retired(later).grant(source, description) }.unwrap();
@@ -841,8 +847,7 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
     }
     let capacity = initial_capacity(source) + 4 * PAGE;
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity - 3 * PAGE))
     );
     assert_eq!(allowance.balance().unwrap().occupied().get(), 0);
@@ -870,7 +875,9 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     )
     .unwrap();
     let mut lookup_observations = [LookupObservation::EMPTY; 3];
-    let mut lookup = source.lookup(request, None, &mut lookup_observations).unwrap();
+    let mut lookup = source
+        .lookup(request, None, &mut lookup_observations)
+        .unwrap();
     let Search::Candidate(candidate) = lookup.step().unwrap() else {
         panic!("free granule")
     };
@@ -913,8 +920,7 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
     assert_eq!(allowance.balance().unwrap().reserved().get(), 0);
     let capacity = initial_capacity(source);
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity - 3 * PAGE))
     );
 }
@@ -953,8 +959,7 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
     assert_eq!(second.balance().unwrap().capacity().get(), 3 * PAGE);
     assert_eq!(source.allowance_candidate(), Err(Error::AllowanceCapacity));
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity - 6 * PAGE))
     );
 
@@ -1047,7 +1052,11 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
     .unwrap();
 
     for receipt in &mut receipts[1..] {
-        let Search::Candidate(candidate) = source.lookup(request, None, &mut [LookupObservation::EMPTY; 3]).unwrap().step().unwrap()
+        let Search::Candidate(candidate) = source
+            .lookup(request, None, &mut [LookupObservation::EMPTY; 3])
+            .unwrap()
+            .step()
+            .unwrap()
         else {
             panic!("exact grain was not refunded");
         };
@@ -1074,7 +1083,12 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
         source.finish_return(receipt.unwrap(), Slow).unwrap();
     }
 
-    let Search::Candidate(candidate) = source.lookup(request, None, &mut [LookupObservation::EMPTY; 3]).unwrap().step().unwrap() else {
+    let Search::Candidate(candidate) = source
+        .lookup(request, None, &mut [LookupObservation::EMPTY; 3])
+        .unwrap()
+        .step()
+        .unwrap()
+    else {
         panic!("metadata saturation cannot rule out a physical range");
     };
     let construction = &*Box::leak(Box::new(AllocationConstruction::new()));
@@ -1120,9 +1134,13 @@ fn skip_only_advances_the_lookup_with_an_outstanding_candidate() {
     )
     .unwrap();
     let mut first_observations = [LookupObservation::EMPTY; 3];
-    let mut first = source.lookup(request, None, &mut first_observations).unwrap();
+    let mut first = source
+        .lookup(request, None, &mut first_observations)
+        .unwrap();
     let mut second_observations = [LookupObservation::EMPTY; 3];
-    let mut second = source.lookup(request, None, &mut second_observations).unwrap();
+    let mut second = source
+        .lookup(request, None, &mut second_observations)
+        .unwrap();
     let Search::Candidate(observed) = first.step().unwrap() else {
         panic!("the first lookup has an eligible grain");
     };
@@ -1194,7 +1212,9 @@ fn source_directory_scale_is_independent_of_joint_lock_capacity() {
         Err(Error::Capacity)
     ));
     let mut lookup_observations = [LookupObservation::EMPTY; REGIONS];
-    let mut lookup = source.lookup(request, None, &mut lookup_observations).unwrap();
+    let mut lookup = source
+        .lookup(request, None, &mut lookup_observations)
+        .unwrap();
     loop {
         match lookup.step().unwrap() {
             Search::Pending => {}
@@ -1259,7 +1279,9 @@ fn source_directory_scale_is_independent_of_joint_lock_capacity() {
     let debits = [(to, ByteLength::new(total))];
     let mut work = TurnWorkspace::<3>::new();
     let mut plan = work.plan();
-    source.plan_allowance(&mut plan, candidate, &debits).unwrap();
+    source
+        .plan_allowance(&mut plan, candidate, &debits)
+        .unwrap();
     plan.acquire(Fast, |held| unsafe {
         source.open_allowance(held, candidate, &debits, &mut receiver)
     })
