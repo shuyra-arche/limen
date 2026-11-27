@@ -55,6 +55,15 @@ pub(in crate::metal::processor::executor) unsafe fn restore_interrupts(previous:
     unsafe { asm!("msr daif, {}", in(reg) previous, options(nostack)) };
 }
 
+/// Wait once in the admitted EL1 profile with local IRQ/FIQ masks set.
+///
+/// # Safety
+/// WFI is permitted, and the original wake source remains enabled at the
+/// interrupt controller until the ordinary owner rechecks it.
+pub(in crate::metal) unsafe fn wait_for_interrupt() {
+    unsafe { asm!("dsb sy", "wfi", options(nostack, preserves_flags)) };
+}
+
 pub(crate) fn stack_pointer() -> usize {
     let sp: usize;
     unsafe { asm!("mov {}, sp", out(reg) sp, options(nomem, nostack)) };

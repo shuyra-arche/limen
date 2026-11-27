@@ -13,4 +13,4 @@ mod native;
 #[cfg(all(limen_target, target_arch = "aarch64"))]
 pub(super) use native::local;
 #[cfg(all(limen_target, target_arch = "aarch64"))]
-pub use native::{Claim, CpuInterface, available};
+pub use native::{Claim, CpuInterface, Wake, available};

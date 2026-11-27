@@ -12,7 +12,11 @@ use super::super::{
 };
 use crate::metal::{
     interrupt::treaty::{ClaimConfirmation, ClaimId, Completion, HardwareClaim},
-    processor::{description::aarch64::status, executor::aarch64::native::boot_identity},
+    processor::{
+        description::aarch64::status,
+        executor::aarch64::native::boot_identity,
+        treaty::{can_switch, wait_for_interrupt},
+    },
 };
 
 pub(in crate::metal::interrupt::aarch64::gic) fn local(affinity: usize) -> bool {
@@ -50,6 +54,14 @@ fn mode() -> Option<Mode> {
     } else {
         Mode::Split
     })
+}
+
+/// Observation after consulting the work owner and optionally waiting once.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Wake {
+    Ready,
+    Pending,
+    Recheck,
 }
 
 /// One preallocated reception slot for this CPU Interface and its live frame.
@@ -131,6 +143,49 @@ impl<'map> CpuInterface<'map> {
         };
         signal.phase = Phase::Sent;
         Ok(())
+    }
+
+    /// Consult the original work owner and wait once with the given admitted
+    /// Group 1 SGI live. Recheck without reading IAR or dropping priority.
+    /// The original owner retains pending delivery, even after a spurious WFI.
+    ///
+    /// # Safety
+    /// WFI and wake are supported by the installed EL1 profile. The live SGI
+    /// targets this Frame and its distributor routing stays enabled. Work
+    /// retains a wake path and discoverable state across the final check;
+    /// `ready` is bounded and retains no ordinary protection or owner borrow.
+    pub unsafe fn wait_for_sgi(
+        &mut self,
+        id: u8,
+        mut ready: impl FnMut() -> bool,
+    ) -> Result<Wake, Failure> {
+        self.context()?;
+        if self.state != State::Empty || !can_switch() || !self.frame.awake() {
+            return Err(Failure::Busy);
+        }
+        let priority = self.frame.signal_priority(id).ok_or(Failure::Scope)?;
+        let (mask, running): (u64, u64);
+        unsafe {
+            asm!("mrs {}, ICC_PMR_EL1", "mrs {}, ICC_RPR_EL1", out(reg) mask, out(reg) running,
+                 options(nostack, nomem, preserves_flags));
+        }
+        if u64::from(priority) >= (mask & 0xff) || running & 0xff != 0xff {
+            return Err(Failure::Busy);
+        }
+        if ready() {
+            return Ok(Wake::Ready);
+        }
+        if self.frame.signal_pending(id) {
+            return Ok(Wake::Pending);
+        }
+        unsafe { wait_for_interrupt() };
+        if ready() {
+            Ok(Wake::Ready)
+        } else if self.frame.signal_pending(id) {
+            Ok(Wake::Pending)
+        } else {
+            Ok(Wake::Recheck)
+        }
     }
 
     /// Prepare the exact PPI for a producer after the original input is quiet.

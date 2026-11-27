@@ -22,7 +22,7 @@ use core::{
     cell::UnsafeCell,
     fmt::Write,
     ptr,
-    sync::atomic::{AtomicBool, AtomicPtr, Ordering},
+    sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
     time::Duration,
 };
 use kernel::metal::{
@@ -30,9 +30,9 @@ use kernel::metal::{
     interrupt::aarch64::{
         gic::{
             GicV3,
-            cpu_interface::{CpuInterface, available},
+            cpu_interface::{CpuInterface, Wake, available},
             distributor::{Barrier, Distributor, Route, Slot, State as SpiState},
-            reception::State,
+            reception::{Failure as ReceptionFailure, State},
             redistributor::{
                 Frame, FrameHandoff, Redistributor, Slot as FrameSlot,
                 input::description::PrivateInterrupts,
@@ -106,10 +106,12 @@ static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
 static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
 static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static MINOR_FRAME: LeafLock<Option<FrameHandoff<'static>>> = LeafLock::new(None);
-static MINOR_OBSERVED: AtomicBool = AtomicBool::new(false);
 static MINOR_SIGNAL: LeafLock<Option<Sgi<'static>>> = LeafLock::new(None);
-static SIGNAL_ISSUED: AtomicBool = AtomicBool::new(false);
-static SIGNAL_OBSERVED: AtomicBool = AtomicBool::new(false);
+static SIGNAL_READY: AtomicUsize = AtomicUsize::new(0);
+static FINAL_CHECK: AtomicUsize = AtomicUsize::new(0);
+static SIGNAL_WORK: AtomicUsize = AtomicUsize::new(0);
+static SIGNAL_ISSUED: AtomicUsize = AtomicUsize::new(0);
+static SIGNAL_OBSERVED: AtomicUsize = AtomicUsize::new(0);
 const SIGNAL_ID: u8 = 12;
 
 struct Reception {
@@ -236,56 +238,122 @@ fn observe_minor(processor: usize, _: usize) -> ! {
             options(nostack)
         );
     }
-    let mut receiver = unsafe { CpuInterface::admit(frame) }
-        .unwrap_or_else(|(_, reason)| panic!("original SGI CPU Interface: {reason:?}"));
-    let signal = unsafe { receiver.reserve_sgi(SIGNAL_ID, 0x10) }.expect("original minor SGI");
-    MINOR_SIGNAL
-        .acquire(|slot| {
-            assert!(slot.is_none());
-            *slot = Some(signal);
-        })
-        .unwrap();
-    MINOR_OBSERVED.store(true, Ordering::Release);
-    while !SIGNAL_ISSUED.load(Ordering::Acquire) {
-        unsafe { asm!("wfe", options(nostack, nomem)) };
-    }
-    let signal = MINOR_SIGNAL
-        .acquire(Option::take)
-        .unwrap()
-        .expect("original sent SGI");
-    unsafe {
-        MINOR_IRQ.owner().0.get().write(Some(Reception {
-            processor,
-            receiver,
+    assert_eq!(unsafe { MINOR_VECTORS.install() }, Ok(()));
+    assert_eq!(
+        unsafe { MINOR_VECTORS.install() },
+        Err(InstallError::Occupied)
+    );
+    for round in 1..=3 {
+        let mut receiver = unsafe { CpuInterface::admit(frame) }
+            .unwrap_or_else(|(_, reason)| panic!("original SGI CPU Interface: {reason:?}"));
+        let signal = unsafe { receiver.reserve_sgi(SIGNAL_ID, 0x10) }.expect("original minor SGI");
+        MINOR_SIGNAL
+            .acquire(|slot| {
+                assert!(slot.is_none());
+                *slot = Some(signal);
+            })
+            .unwrap();
+        RETURN_READY.store(false, Ordering::Relaxed);
+        assert_eq!(
+            unsafe { receiver.wait_for_sgi(SIGNAL_ID + 1, || false) },
+            Err(ReceptionFailure::Scope)
+        );
+        assert_eq!(
+            IRQ_TURN.acquire(|_| unsafe { receiver.wait_for_sgi(SIGNAL_ID, || false) }),
+            Ok(Err(ReceptionFailure::Busy)),
+        );
+        unsafe { asm!("msr ICC_PMR_EL1, {}", "isb", in(reg) 0x10u64, options(nostack)) };
+        assert_eq!(
+            unsafe { receiver.wait_for_sgi(SIGNAL_ID, || false) },
+            Err(ReceptionFailure::Busy)
+        );
+        unsafe { asm!("msr ICC_PMR_EL1, {}", "isb", in(reg) 0x80u64, options(nostack)) };
+        SIGNAL_READY.store(round, Ordering::Release);
+        check_idle(&mut receiver, round);
+        assert!(!RETURN_READY.load(Ordering::Acquire));
+        let signal = MINOR_SIGNAL
+            .acquire(Option::take)
+            .unwrap()
+            .expect("original sent SGI");
+        unsafe {
+            MINOR_IRQ.owner().0.get().write(Some(Reception {
+                processor,
+                receiver,
+                signal,
+            }))
+        };
+        assert_eq!(IRQ_TURN.acquire(|_| ()), Ok(()));
+        check_return();
+        assert_eq!(IRQ_TURN.acquire(|_| ()), Ok(()));
+        let Reception {
+            mut receiver,
             signal,
-        }));
-        MINOR_VECTORS.install().unwrap();
-        assert_eq!(MINOR_VECTORS.install(), Err(InstallError::Occupied));
+            ..
+        } = unsafe {
+            (&mut *MINOR_IRQ.owner().0.get())
+                .take()
+                .expect("returned local SGI")
+        };
+        assert_eq!(receiver.state(), State::Empty);
+        assert!(receiver.receive().unwrap().is_none());
+        frame = receiver
+            .release()
+            .unwrap_or_else(|_| panic!("minor SGI remains live"));
+        frame.retire_sgi(signal).unwrap();
+        SIGNAL_OBSERVED.store(round, Ordering::Release);
     }
-    assert_eq!(IRQ_TURN.acquire(|_| ()), Ok(()));
-    check_return();
-    assert_eq!(IRQ_TURN.acquire(|_| ()), Ok(()));
-    let Reception {
-        mut receiver,
-        signal,
-        ..
-    } = unsafe {
-        (&mut *MINOR_IRQ.owner().0.get())
-            .take()
-            .expect("returned local SGI")
-    };
-    assert_eq!(receiver.state(), State::Empty);
-    assert!(receiver.receive().unwrap().is_none());
-    let mut frame = receiver
-        .release()
-        .unwrap_or_else(|_| panic!("minor SGI remains live"));
-    frame.retire_sgi(signal).unwrap();
-    SIGNAL_OBSERVED.store(true, Ordering::Release);
     loop {
         // Keep the original Frame reserved for this PE until guest shutdown.
         core::hint::black_box(&mut frame);
         unsafe { asm!("wfe", options(nostack, nomem)) };
     }
+}
+
+fn check_idle(receiver: &mut CpuInterface<'_>, round: usize) {
+    if round == 1 {
+        await_round(&SIGNAL_ISSUED, round);
+        assert_eq!(
+            unsafe { receiver.wait_for_sgi(SIGNAL_ID, || signal_work(round)) },
+            Ok(Wake::Ready),
+        );
+        return;
+    }
+    if round == 2 {
+        let wake = unsafe {
+            receiver.wait_for_sgi(SIGNAL_ID, || {
+                assert!(!signal_work(round));
+                FINAL_CHECK.store(round, Ordering::Release);
+                // The real send wins after the work snapshot but before the
+                // receiver's last hardware pending check.
+                await_round(&SIGNAL_ISSUED, round);
+                false
+            })
+        };
+        assert_eq!(wake, Ok(Wake::Pending));
+        return;
+    }
+
+    let limit = time_count() + 3 * time_frequency();
+    let mut announced = false;
+    loop {
+        let wake = unsafe {
+            receiver.wait_for_sgi(SIGNAL_ID, || {
+                if !announced {
+                    assert!(!signal_work(round));
+                    FINAL_CHECK.store(round, Ordering::Release);
+                    announced = true;
+                    return false;
+                }
+                signal_work(round)
+            })
+        }
+        .unwrap();
+        if wake != Wake::Recheck {
+            break;
+        }
+        assert!(time_count() < limit, "SGI idle wake timeout");
+    }
+    await_round(&SIGNAL_ISSUED, round);
 }
 
 fn start_minor(tree: &DeviceTree<'_>, processor: usize, frame: Frame<'static>) {
@@ -302,54 +370,68 @@ fn start_minor(tree: &DeviceTree<'_>, processor: usize, frame: Frame<'static>) {
         .unwrap();
     let mut startup = Startup::Psci(psci);
     unsafe { MINOR.start(processor, observe_minor, 0, &mut startup) }.unwrap();
-    let start: u64;
-    let frequency: u64;
-    unsafe {
-        asm!("mrs {}, CNTVCT_EL0", "mrs {}, CNTFRQ_EL0", out(reg) start, out(reg) frequency, options(nostack))
-    };
-    while !MINOR_OBSERVED.load(Ordering::Acquire) {
-        let now: u64;
-        unsafe { asm!("mrs {}, CNTVCT_EL0", out(reg) now, options(nostack)) };
-        assert!(
-            now.wrapping_sub(start) < frequency * 3,
-            "minor GICR observation timeout"
-        );
-    }
+    await_round(&SIGNAL_READY, 1);
     assert!(MINOR.ready());
     unsafe { psci.verify_affinity(processor, true) }.unwrap();
+}
+
+fn time_count() -> u64 {
+    let count;
+    unsafe { asm!("mrs {}, CNTVCT_EL0", out(reg) count, options(nostack, nomem)) };
+    count
+}
+
+fn time_frequency() -> u64 {
+    let frequency;
+    unsafe { asm!("mrs {}, CNTFRQ_EL0", out(reg) frequency, options(nostack, nomem)) };
+    frequency
+}
+
+fn signal_work(round: usize) -> bool {
+    SIGNAL_WORK.load(Ordering::Acquire) == round
+}
+
+fn await_round(state: &AtomicUsize, round: usize) {
+    let limit = time_count() + 3 * time_frequency();
+    while state.load(Ordering::Acquire) != round {
+        assert!(time_count() < limit, "peer SGI round timeout");
+        core::hint::spin_loop();
+    }
 }
 
 fn check_signal(frame: Frame<'static>) -> Frame<'static> {
     let mut sender = unsafe { CpuInterface::admit(frame) }
         .unwrap_or_else(|(_, reason)| panic!("original SGI sender: {reason:?}"));
-    let mut signal = MINOR_SIGNAL
-        .acquire(Option::take)
-        .unwrap()
-        .expect("admitted minor SGI");
-    sender.send_sgi(&mut signal).unwrap();
-    assert!(sender.send_sgi(&mut signal).is_err());
-    MINOR_SIGNAL
-        .acquire(|slot| {
-            assert!(slot.is_none());
-            *slot = Some(signal);
-        })
-        .unwrap();
-    SIGNAL_ISSUED.store(true, Ordering::Release);
-    unsafe { asm!("sev", options(nostack, nomem)) };
-    let start: u64;
-    let frequency: u64;
-    unsafe {
-        asm!("mrs {}, CNTVCT_EL0", "mrs {}, CNTFRQ_EL0", out(reg) start, out(reg) frequency, options(nostack))
-    };
-    while !SIGNAL_OBSERVED.load(Ordering::Acquire) {
-        let now: u64;
-        unsafe { asm!("mrs {}, CNTVCT_EL0", out(reg) now, options(nostack)) };
-        assert!(
-            now.wrapping_sub(start) < frequency * 3,
-            "minor SGI completion timeout"
-        );
+    for round in 1..=3 {
+        await_round(&SIGNAL_READY, round);
+        if round > 1 {
+            await_round(&FINAL_CHECK, round);
+        }
+        if round == 3 {
+            let send_after = time_count() + time_frequency() / 100;
+            while time_count() < send_after {
+                core::hint::spin_loop();
+            }
+        }
+        let mut signal = MINOR_SIGNAL
+            .acquire(Option::take)
+            .unwrap()
+            .expect("admitted minor SGI");
+        SIGNAL_WORK.store(round, Ordering::Release);
+        sender.send_sgi(&mut signal).unwrap();
+        assert!(sender.send_sgi(&mut signal).is_err());
+        MINOR_SIGNAL
+            .acquire(|slot| {
+                assert!(slot.is_none());
+                *slot = Some(signal);
+            })
+            .unwrap();
+        SIGNAL_ISSUED.store(round, Ordering::Release);
+        await_round(&SIGNAL_OBSERVED, round);
     }
-    boot_diagnostic::write("PASS arm-sgi target=1 irq=1 claim=1 eoi=1 restored=1 retired=1\n");
+    boot_diagnostic::write(
+        "PASS arm-sgi target=1 irq=3 claim=3 eoi=3 restored=3 retired=3 idle=3\n",
+    );
     sender
         .release()
         .unwrap_or_else(|_| panic!("major SGI interface busy"))

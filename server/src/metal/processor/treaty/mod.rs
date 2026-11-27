@@ -63,6 +63,8 @@ pub use super::execution::runtime::{Entry, InstallError, RuntimeTrap};
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 pub use super::execution::runtime::{SoftwareInterrupt, TimerInterrupt};
 
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+pub(in crate::metal) use super::executor::aarch64::native::wait_for_interrupt;
 #[cfg(all(limen_target, target_arch = "riscv64", limen_firmware = "sbi"))]
 pub(in crate::metal) use super::executor::riscv64::native::wait_for_interrupt;
 
