@@ -69,6 +69,8 @@ pub(super) fn check(madt: Madt<'_>, hart: usize, local: &mut LocalApic<'_>) {
         io::write8(UART + 1, 0);
         let mut claim = local.current().unwrap();
         consumer::finish(&mut claim, u32::from(VECTOR), Completion::Settled);
+        assert!(claim.confirm().is_err());
+        assert!(local.current().is_none());
         let lease = controller.retire(route.gsi).unwrap();
         local.release_vector(lease).unwrap();
     }

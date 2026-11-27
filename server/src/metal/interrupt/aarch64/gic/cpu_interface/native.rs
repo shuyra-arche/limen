@@ -276,6 +276,12 @@ impl<'map> crate::metal::interrupt::Receive for CpuInterface<'map> {
 
     fn pending_claim(&mut self) -> Result<Option<Self::Claim<'_>>, Failure> {
         self.context()?;
+        if matches!(
+            self.state,
+            State::Reading | State::DroppingPriority(_) | State::Deactivating(_)
+        ) {
+            return Err(Failure::Busy);
+        }
         Ok(self.claim())
     }
 }

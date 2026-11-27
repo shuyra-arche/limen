@@ -54,6 +54,11 @@ impl Claim<'_, '_> {
     pub unsafe fn complete(&mut self) -> Result<(), Failure> {
         self.owner.complete(self.vector)
     }
+
+    /// Check whether this claim's original EOI cleared its ISR bit.
+    pub fn confirm(&mut self) -> Result<(), Failure> {
+        self.owner.confirm_reception(self.vector)
+    }
 }
 
 impl<'map> LocalApic<'map> {
@@ -95,7 +100,7 @@ impl<'map> LocalApic<'map> {
 
     /// Reborrow the original reception without a new vector entry.
     pub fn current(&mut self) -> Option<Claim<'_, 'map>> {
-        let Reception::Received(vector) = self.reception else {
+        let (Reception::Received(vector) | Reception::Unconfirmed(vector)) = self.reception else {
             return None;
         };
         Some(Claim {
@@ -170,7 +175,7 @@ impl<'map> LocalApic<'map> {
 
     /// Observe the same outstanding EOI without issuing another write.
     /// Retain the original route until the original ISR bit clears.
-    pub fn confirm_reception(&mut self, vector: u8) -> Result<(), Failure> {
+    fn confirm_reception(&mut self, vector: u8) -> Result<(), Failure> {
         self.reception_context()?;
         if self.reception != Reception::Unconfirmed(vector) {
             return Err(Failure::Busy);
@@ -205,6 +210,10 @@ impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_> {
 
     unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::Completion, Failure> {
         use crate::metal::interrupt::Completion;
-        unsafe { self.complete() }.map(|()| Completion::Settled)
+        match unsafe { self.complete() } {
+            Ok(()) => Ok(Completion::Settled),
+            Err(Failure::Unconfirmed) => Ok(Completion::AwaitingConfirmation),
+            Err(error) => Err(error),
+        }
     }
 }
