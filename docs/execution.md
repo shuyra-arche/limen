@@ -12,15 +12,18 @@ RV64 uses Bare translation and integer continuations. The UEFI profiles
 validate their respective native save shapes before entry.
 
 On rejection, `EstablishFailure` returns the original Major, Terminal and
-storage for retry. Each Executor uses `Execution::attach` after its
-trusted entry. The image uses `processor::treaty::Minor` to start secondary
-processors. Processor retains a launch with uncertain delivery. Room's protected
-admission and Processor's reserved machine record are published together.
-The current Executor locates its own machine record in the original scope.
-A duplicate or exhausted attempt fails before publication. Each machine
-record owns a 32 KiB dispatcher stack. After attachment the trusted platform calls
-`Execution::run` once to enter that stack. The original startup stack stays
-reserved while the running closure or firmware description borrows it.
+storage for retry. The image uses `processor::treaty::Minor` to start secondary
+processors. Processor retains a launch with uncertain delivery.
+
+After trusted entry the image calls `Execution::run` with a resident
+`RuntimeEntry`. Processor binds one machine record to the current Executor
+and transfers to that record's 32 KiB dispatcher stack. The entry's input
+stays in its own permanent storage. The image settles or transfers
+obligations of the abandoned frames before switching. Any firmware borrows
+or outstanding machine effects retain their own retirement conditions.
+The callback calls `Execution::attach` from the dispatcher stack to publish
+Room participation. Only then can Room give this Executor an occupancy.
+Duplicate and exhausted stack requests fail before publishing a binding.
 
 Trusted Unit entries must fit their stack and preserve the selected supervisor
 execution profile. `create` pins the Unit to its creating processor.
@@ -30,6 +33,8 @@ compatible processor and yields without retaining processor-local resources.
 ## Dispatch and settlement
 
 Room's `submit` establishes one admission and returns its `AdmissionId`.
+Trusted entry can create and submit a Unit before any Executor attaches.
+Ready retains its original affinity until a compatible participant is available.
 Ready and participation indices locate that admission's authoritative placement. Each
 dispatch establishes a fresh occupancy for the same admission, identifying
 the Unit, processor and original participation. Metal enters through the Unit's

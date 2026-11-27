@@ -161,9 +161,7 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         if self.admitted(unit) {
             return Err(Error::Busy);
         }
-        if affinity.is_some_and(|processor| self.participation(processor).is_none()) {
-            return Err(Error::Unsupported);
-        }
+        // Ready preserves affinity even before its target participates.
         let slot = self
             .units
             .iter()

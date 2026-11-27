@@ -29,7 +29,7 @@ pub fn check(boot: Boot<'_>, complete: fn() -> !) -> ! {
     super::run(
         boot,
         target,
-        &mut Startup::Sbi(service),
+        Startup::Sbi(service),
         observe,
         |_| {},
         complete,

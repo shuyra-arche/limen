@@ -222,7 +222,7 @@ pub(in crate::metal::processor) fn ordinary_local() -> Option<&'static Executor>
 }
 
 #[cfg(limen_cooperative)]
-pub(in crate::metal) fn cooperative_attached() -> bool {
+pub(in crate::metal) fn cooperative_bound() -> bool {
     ordinary_local().is_some_and(|local| local.cooperative.get().is_some())
 }
 
@@ -234,9 +234,8 @@ pub(in crate::metal) fn cooperative_slot(scope: usize) -> Option<(ProcessorId, u
     (binding.scope == scope).then_some((local.identity(), binding.slot))
 }
 
-/// The caller has committed the current processor's unique Room participation
-/// under protection. The supplied machine record remains stable, is not
-/// reused, and no ordinary entry may interleave this publication.
+/// The caller has reserved a unique machine record for this Executor. The record
+/// remains stable and no ordinary entry may interleave this publication.
 #[cfg(limen_cooperative)]
 pub(in crate::metal) unsafe fn bind_cooperative(scope: usize, slot: usize) {
     let local = ordinary_local().expect("verified ordinary processor");

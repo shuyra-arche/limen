@@ -67,6 +67,15 @@ impl From<TurnAcquireError> for Error {
     }
 }
 
+impl From<treaty::RuntimeError> for Error {
+    fn from(error: treaty::RuntimeError) -> Self {
+        match error {
+            treaty::RuntimeError::Bound => Self::Busy,
+            treaty::RuntimeError::Capacity => Self::Capacity,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EstablishError {
     WrongProcessor,
@@ -89,6 +98,24 @@ pub struct EstablishFailure<const PARTICIPANTS: usize> {
 pub struct KernelBinding {
     entry: Entry,
     affinity: Option<ProcessorId>,
+}
+
+/// The trusted runtime entry and its input in permanent storage.
+pub struct RuntimeEntry<T: 'static> {
+    entry: fn(&'static T) -> !,
+    input: T,
+}
+
+impl<T: 'static> RuntimeEntry<T> {
+    pub const fn new(entry: fn(&'static T) -> !, input: T) -> Self {
+        Self { entry, input }
+    }
+
+    extern "C" fn enter(argument: *const ()) -> ! {
+        // The only caller transfers a static reference to this original entry.
+        let runtime = unsafe { &*argument.cast::<Self>() };
+        (runtime.entry)(&runtime.input)
+    }
 }
 
 /// Cooperative coordination of Unit and Room across participating Executors.
@@ -161,30 +188,23 @@ impl Execution {
         treaty::current(self.dispatchers).ok_or(Error::Unsupported)
     }
 
-    /// Attach the current Executor after its trusted entry. This is independent
-    /// of firmware launch; every participant takes the same path.
+    /// Attach the current Executor from its permanent dispatcher stack.
     pub fn attach(&self) -> Result<(), Error> {
-        let id = treaty::try_current_processor().ok_or(Error::Protection)?;
         if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
         }
+        let (id, local) = self.local()?;
         if !treaty::can_switch() {
+            return Err(Error::Protection);
+        }
+        if !local.on_dispatcher_stack() {
             return Err(Error::Protection);
         }
         if turn_capacity().ok_or(Error::Protection)? < 2 {
             return Err(Error::Capacity);
         }
-        self.room.acquire(|room| {
-            if treaty::attached() {
-                return Err(Error::Busy);
-            }
-            let record = treaty::reserve(self.dispatchers).ok_or(Error::Capacity)?;
-            room.attach(id)?;
-            // The reserved machine record and Room admission now belong to
-            // this processor. Local publication cannot interleave with reentry.
-            unsafe { record.bind() };
-            Ok(())
-        })?
+        self.room.acquire(|room| room.attach(id))??;
+        Ok(())
     }
 
     /// Construct a dormant Kernel Unit. Its entry's return value is its End.
@@ -197,7 +217,7 @@ impl Execution {
     /// interrupt and extension restrictions. Any local borrow must allow suspension at
     /// `yield_now`. The Unit stays on the constructing processor.
     pub unsafe fn create(&self, entry: Entry) -> Result<UnitId, Error> {
-        let (processor, _) = self.local()?;
+        let processor = treaty::try_current_processor().ok_or(Error::Protection)?;
         self.create_unit(entry, Some(processor))
     }
 
@@ -210,7 +230,6 @@ impl Execution {
     /// processor-local borrows and protection before Yield and reacquire local state
     /// on the destination processor.
     pub unsafe fn create_migratable(&self, entry: Entry) -> Result<UnitId, Error> {
-        self.local()?;
         self.create_unit(entry, None)
     }
 
@@ -223,7 +242,6 @@ impl Execution {
     }
 
     pub fn submit(&self, unit: UnitId) -> Result<AdmissionId, Error> {
-        self.local()?;
         self.with_unit_room(|units, room| {
             let affinity = units.live(unit)?.0.affinity;
             room.submit(unit, affinity).map_err(Error::from)
@@ -234,7 +252,6 @@ impl Execution {
     /// A successful submission wins against this operation. After a
     /// cancellation, use `finish_end` and `reap` to release the slot.
     pub fn stop_dormant(&self, unit: UnitId) -> Result<(), Error> {
-        self.local()?;
         self.with_unit_room(|units, room| {
             if room.admitted(unit) {
                 return Err(Error::Busy);
@@ -243,25 +260,30 @@ impl Execution {
         })
     }
 
-    /// Transfer once to this participating Executor's resident 32 KiB dispatcher stack.
-    /// The input and all older frames remain live; success never returns.
+    /// Transfer once to the current Executor's resident 32 KiB dispatcher stack.
+    /// The entry can then attach this Executor to Room. Success never returns.
     ///
     /// # Safety
     /// The trusted dispatch loop and its callees must fit the supplied stack
-    /// and preserve the native profile and local entry. Keep every borrowed
-    /// input and the previous stack reserved for the entire handoff.
-    pub unsafe fn run<F: FnMut() -> !>(&'static self, dispatch: &mut F) -> Result<!, Error> {
-        let (_, local) = self.local()?;
+    /// and preserve the native profile and local entry. Before switching,
+    /// settle or transfer all obligations of the abandoned frames. The owner
+    /// of the boot material must establish its independent retirement evidence.
+    pub unsafe fn run<T>(&'static self, entry: &'static RuntimeEntry<T>) -> Result<!, Error> {
+        treaty::try_current_processor().ok_or(Error::Protection)?;
         if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
         }
         if !treaty::can_switch() {
             return Err(Error::Protection);
         }
-        if local.started() {
-            return Err(Error::Busy);
+        unsafe {
+            treaty::start_runtime(
+                self.dispatchers,
+                RuntimeEntry::<T>::enter,
+                core::ptr::from_ref(entry).cast(),
+            )
         }
-        unsafe { local.start(dispatch) }
+        .map_err(Error::from)
     }
 
     /// Run one ready Unit until it yields or returns on its own stack.
@@ -321,14 +343,12 @@ impl Execution {
     }
 
     pub fn lifecycle(&self, unit: UnitId) -> Result<Lifecycle, Error> {
-        self.local()?;
         self.units
             .acquire(|units| units.lifecycle(unit))?
             .map_err(Error::from)
     }
 
     pub fn finish_end(&self, unit: UnitId) -> Result<(), Error> {
-        self.local()?;
         self.with_unit_room(|units, room| {
             units.lifecycle(unit)?;
             if room.admitted(unit) {
@@ -342,7 +362,6 @@ impl Execution {
     }
 
     pub fn reap(&self, unit: UnitId) -> Result<End, Error> {
-        self.local()?;
         self.units
             .acquire(|units| units.reap(unit))?
             .map_err(Error::from)

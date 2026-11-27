@@ -12,8 +12,8 @@ mod cooperative;
 pub use cooperative::Dispatchers;
 #[cfg(limen_cooperative)]
 pub(crate) use cooperative::{
-    Context, Dispatcher, LeaveReceipt, LocalExecution, attached, cooperative_ready, current,
-    reserve,
+    Context, Dispatcher, LeaveReceipt, LocalExecution, RuntimeError, cooperative_ready, current,
+    start_runtime,
 };
 
 /// Hardware identity of a logical processor in its original scope.

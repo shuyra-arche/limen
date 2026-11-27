@@ -51,7 +51,6 @@ pub(in crate::metal::processor) const DISPATCH_BYTES: usize = 32 * 1024;
 pub(crate) struct Dispatcher<Occupancy> {
     pub(in crate::metal::processor) reserved: AtomicBool,
     pub(in crate::metal::processor) stack: Stack<DISPATCH_BYTES>,
-    pub(in crate::metal::processor) started: Cell<bool>,
     pub(in crate::metal::processor) dispatcher: Context,
     pub(in crate::metal::processor) state: Cell<State<Occupancy>>,
 }
@@ -70,7 +69,6 @@ impl<Occupancy> Dispatcher<Occupancy> {
         Self {
             reserved: AtomicBool::new(false),
             stack: Stack::new(),
-            started: Cell::new(false),
             dispatcher: Context::new(),
             state: Cell::new(State::Idle),
         }

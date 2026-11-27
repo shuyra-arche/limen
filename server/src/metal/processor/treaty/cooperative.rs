@@ -17,11 +17,6 @@ pub(crate) fn cooperative_ready() -> bool {
     native::ready()
 }
 
-/// Whether the current Executor has already joined the cooperative prefix.
-pub(crate) fn attached() -> bool {
-    local::cooperative_attached()
-}
-
 /// Discover the current Executor's bound machine record. The local
 /// locator grants no Unit admission or Occupancy.
 pub(crate) fn current<Occupancy: 'static>(
@@ -54,43 +49,34 @@ impl<Occupancy, const CAPACITY: usize> Default for Dispatchers<Occupancy, CAPACI
     }
 }
 
-/// One unused machine record held while the matching Room admission can fail.
-pub(crate) struct Reservation<Occupancy: 'static> {
+pub(crate) enum RuntimeError {
+    Bound,
+    Capacity,
+}
+
+/// Bind one permanent machine record and transfer to its own stack.
+///
+/// The caller has verified ordinary entry and excluded local interruption.
+/// The entry and argument must remain resident across the stack switch.
+pub(crate) unsafe fn start_runtime<Occupancy: 'static>(
     records: &'static [Dispatcher<Occupancy>],
-    slot: Option<usize>,
-}
-
-pub(crate) fn reserve<Occupancy: 'static>(
-    records: &'static [Dispatcher<Occupancy>],
-) -> Option<Reservation<Occupancy>> {
-    let slot = records.iter().position(|record| {
-        record
-            .reserved
-            .compare_exchange(false, true, Relaxed, Relaxed)
-            .is_ok()
-    })?;
-    Some(Reservation {
-        records,
-        slot: Some(slot),
-    })
-}
-
-impl<Occupancy> Reservation<Occupancy> {
-    /// Room has admitted the current Executor and excludes competing ordinary entry
-    /// until its original machine record has been published.
-    pub(crate) unsafe fn bind(mut self) {
-        let slot = self.slot.expect("unbound machine record");
-        unsafe { local::bind_cooperative(self.records.as_ptr().addr(), slot) };
-        self.slot = None;
+    entry: extern "C" fn(*const ()) -> !,
+    argument: *const (),
+) -> Result<!, RuntimeError> {
+    if local::cooperative_bound() {
+        return Err(RuntimeError::Bound);
     }
-}
-
-impl<Occupancy> Drop for Reservation<Occupancy> {
-    fn drop(&mut self) {
-        if let Some(slot) = self.slot {
-            self.records[slot].reserved.store(false, Relaxed);
-        }
-    }
+    let slot = records
+        .iter()
+        .position(|record| {
+            record
+                .reserved
+                .compare_exchange(false, true, Relaxed, Relaxed)
+                .is_ok()
+        })
+        .ok_or(RuntimeError::Capacity)?;
+    unsafe { local::bind_cooperative(records.as_ptr().addr(), slot) };
+    unsafe { native::start_stack(records[slot].stack.top(), entry, argument) }
 }
 
 impl Context {
@@ -113,32 +99,9 @@ impl<Occupancy> LeaveReceipt<Occupancy> {
 }
 
 impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
-    pub(crate) fn started(&self) -> bool {
-        self.record.started.get()
-    }
-
     pub(crate) fn on_dispatcher_stack(&self) -> bool {
         let top = self.record.stack.top();
-        self.started() && (top - DISPATCH_BYTES..top).contains(&local::stack_pointer())
-    }
-
-    /// The caller has excluded every previous entry and checked this processor's
-    /// ordinary profile. The previous frame stays resident with the borrowed
-    /// dispatch input; this path never makes that stack reclaimable.
-    pub(crate) unsafe fn start<F: FnMut() -> !>(&self, dispatch: &mut F) -> ! {
-        extern "C" fn enter<F: FnMut() -> !>(argument: *const ()) -> ! {
-            let dispatch = unsafe { &mut *argument.cast_mut().cast::<F>() };
-            dispatch()
-        }
-
-        assert!(!self.record.started.replace(true));
-        unsafe {
-            native::start_stack(
-                self.record.stack.top(),
-                enter::<F>,
-                core::ptr::from_mut(dispatch).cast(),
-            )
-        }
+        (top - DISPATCH_BYTES..top).contains(&local::stack_pointer())
     }
 
     pub(crate) fn running(&self) -> Option<Occupancy> {
