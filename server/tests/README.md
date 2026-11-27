@@ -253,8 +253,11 @@ QEMU data are emulator observations, not physical hardware results; no
 performance threshold is a correctness criterion. The independent Bench
 workflow runs the discovered benchmark targets with Cargo's optimized bench
 profile on riscv64; it has separate triggers, concurrency, job results and
-evidence artifacts. It runs on relevant pull requests and main pushes, or
-by workflow dispatch. Target CI runs correctness tests only. Both workflows
+evidence artifacts. It runs automatically only on pull requests changing
+benchmark code or its shared build and execution facilities. Ordinary kernel
+changes and pushes do not automatically run measurements; select a revision
+with workflow dispatch once the workflow is on the default branch.
+Target CI runs correctness tests only. Both workflows
 share the pinned QEMU and Rust preparation scripts in `runner/ci/`, but
 neither workflow depends on the other's verdict. Check still validates
 shared infrastructure, including Host tests of measurement parsing.

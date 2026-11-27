@@ -230,7 +230,13 @@ pub fn check(boot: Boot<'_>) {
     let major = boot.hart();
     assert!(major < HARTS);
     for hart in 0..HARTS {
-        assert!(boot.riscv_cpus().cpu(hart as u64).unwrap().unwrap().enabled());
+        assert!(
+            boot.riscv_cpus()
+                .cpu(hart as u64)
+                .unwrap()
+                .unwrap()
+                .enabled()
+        );
     }
     assert!(boot.riscv_cpus().cpu(HARTS as u64).unwrap().is_none());
     let timebase = RiscvTimebase::describe(boot.riscv_cpus()).unwrap().unwrap();
@@ -238,7 +244,11 @@ pub fn check(boot: Boot<'_>) {
     let clock = counter.clock();
 
     JOINED.store(1 << major, Release);
-    let hsm = boot.sbi_services().hart_state_management().unwrap().unwrap();
+    let hsm = boot
+        .sbi_services()
+        .hart_state_management()
+        .unwrap()
+        .unwrap();
     let mut startup = Startup::Sbi(hsm);
     for (index, hart) in (0..HARTS).filter(|&hart| hart != major).enumerate() {
         unsafe { MINORS[index].start(hart, minor, index + 1, &mut startup) }.unwrap();

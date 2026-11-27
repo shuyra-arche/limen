@@ -71,3 +71,7 @@ The independent Bench workflow selects `--benches --no-fail-fast` for the
 currently supported riscv64 benchmark package. Target CI selects
 `--tests` only. The workflows share environment preparation but retain
 separate run receipts and artifacts.
+
+Benchmark CI runs automatically for changes to benchmark implementation or
+shared execution infrastructure, not ordinary Kernel source changes or
+pushes. Select a revision manually to collect a performance baseline.

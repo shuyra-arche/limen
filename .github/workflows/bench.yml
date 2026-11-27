@@ -1,6 +1,8 @@
 name: Bench
 
 on:
+  # Validate changes to the benchmark implementation and shared execution
+  # facilities. Ordinary kernel changes do not automatically measure timing.
   pull_request:
     paths:
       - '.github/workflows/bench.yml'
@@ -10,8 +12,6 @@ on:
       - '.cargo/**'
       - 'server/Cargo.toml'
       - 'server/build.rs'
-      - 'server/src/**'
-      - 'treaty/**'
       - 'server/tests/qemu.version'
       - 'server/tests/runner/**'
       - '!server/tests/runner/observe/**'
@@ -20,36 +20,10 @@ on:
       - 'server/tests/target/Cargo.lock'
       - 'server/tests/target/build.rs'
       - 'server/tests/target/support/**'
-      - 'server/tests/target/riscv64/Cargo.toml'
-      - 'server/tests/target/riscv64/build.rs'
-      - 'server/tests/target/riscv64/benches/**'
-      - 'server/tests/metal/sync/bench/**'
-      - '!**/*.md'
-      - '!**/*.mdx'
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/bench.yml'
-      - 'rust-toolchain.toml'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.cargo/**'
-      - 'server/Cargo.toml'
-      - 'server/build.rs'
-      - 'server/src/**'
-      - 'treaty/**'
-      - 'server/tests/qemu.version'
-      - 'server/tests/runner/**'
-      - '!server/tests/runner/observe/**'
-      - '!server/tests/runner/tests/**'
-      - 'server/tests/target/Cargo.toml'
-      - 'server/tests/target/Cargo.lock'
-      - 'server/tests/target/build.rs'
-      - 'server/tests/target/support/**'
-      - 'server/tests/target/riscv64/Cargo.toml'
-      - 'server/tests/target/riscv64/build.rs'
-      - 'server/tests/target/riscv64/benches/**'
-      - 'server/tests/metal/sync/bench/**'
+      - 'server/tests/target/**/Cargo.toml'
+      - 'server/tests/target/**/build.rs'
+      - 'server/tests/target/**/benches/**'
+      - 'server/tests/metal/**/bench/**'
       - '!**/*.md'
       - '!**/*.mdx'
   workflow_dispatch:
