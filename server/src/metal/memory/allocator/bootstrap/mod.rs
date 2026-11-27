@@ -19,6 +19,7 @@ use super::{
     Allocator, AllowanceId, Error, Region, RegionDescription, RegionId, RegionOrigin, SourceId,
     allocation::{Allocation, AllocationId, AllocationRecord, Phase},
     allowance::{Allowance, AllowanceSlot, Balance, Free},
+    directory::{Directory, Link},
     region::{
         Backing,
         buddy::{Geometry, Root},
@@ -79,6 +80,7 @@ impl Config {
         let mut root = Layout::new::<Allocator>();
         for element in [
             array::<Region>(self.regions)?,
+            array::<Link>(self.regions)?,
             array::<TurnLock<AllowanceSlot>>(self.allowances)?,
         ] {
             root = root.extend(element).map_err(|_| Error::Layout)?.0;
@@ -206,10 +208,15 @@ impl<'r, 'a, Descriptions: Iterator<Item = RegionDescription> + Clone>
         }
         let mut committed = 0u64;
         let mut total = ByteLength::new(0);
+        let mut previous: Option<PhysicalRange> = None;
         for (index, description) in descriptions.clone().enumerate() {
             if index >= config.regions {
                 return Err(Error::Capacity);
             }
+            if previous.is_some_and(|prior| prior.end() > description.physical.start()) {
+                return Err(Error::Overlap);
+            }
+            previous = Some(description.physical);
             config.geometry(description)?;
             total = total
                 .checked_add(description.physical.length())
@@ -324,6 +331,9 @@ fn initialize(
     let place = &mut carve.take::<Allocator>(1)[0];
     let source_id = SourceId(ptr::from_mut(place).addr());
     let regions = carve.take::<Region>(config.regions);
+    let links = carve.take::<Link>(config.regions);
+    links.fill(MaybeUninit::new(Link::EMPTY));
+    let mut directory = Directory::new(filled(links));
     let allowances = carve.take::<TurnLock<AllowanceSlot>>(config.allowances);
     for (index, slot) in allowances.iter_mut().enumerate() {
         let entry = if index == 0 {
@@ -361,6 +371,9 @@ fn initialize(
     let mut charged = capacity;
     let mut published = 0;
     for (index, description) in descriptions.enumerate() {
+        let plan = directory
+            .prepare(&regions[..index], description.physical, config.maximum)
+            .expect("preflighted disjoint Region list");
         let region = &mut regions[index];
         let geometry = config.geometry(description).expect("preflighted Region");
         region.initialize(description, geometry, config.edits);
@@ -378,13 +391,14 @@ fn initialize(
                 .expect("initial ranges preflighted");
             item.staged = Some(state.record(item.physical, allowance, Phase::Issued));
         }
+        directory.insert(Slot::new(index).expect("checked Region slot"), plan);
         published += 1;
     }
 
     let source = place.write(Allocator {
         config,
         root: reserved,
-        directory: TurnLock::new(()),
+        directory: TurnLock::new(directory),
         published: AtomicUsize::new(0),
         regions,
         allowances: filled(allowances),
