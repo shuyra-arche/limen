@@ -1,4 +1,4 @@
-use super::super::{Series, statistics};
+use super::super::{measurement::Series, statistics};
 
 fn measured(samples: &[u64]) -> Series {
     Series {

@@ -197,9 +197,11 @@ outcome prevents in-guest completion.
 
 ## Native benchmarks
 
-Benchmarks use Cargo benchmark targets under the owning test package. They
-share the normal guest entry, linker, machine preparation, process settlement
-and completion contract. The first target, `riscv64-guest:clock`, establishes
+Benchmark bodies live in the owning domain under `server/benches/`. The
+existing target-only Guest packages provide the Cargo benchmark entry points
+under their own `benches/` directories. They share the normal guest entry,
+linker, machine preparation, process settlement and completion contract.
+No separate benchmark workspace or lockfile is required. The first target, `riscv64-guest:clock`, establishes
 a measurement transport over the admitted RISC-V timebase. The Sync owner
 also provides two independent images, selected by their machine topology:
 
@@ -267,11 +269,13 @@ calibrated clocks.
 ### Descriptive comparison
 
 Each completed image writes `summary.json` alongside its raw measurement.
-The Bench workflow records `benchmark-context.json` with the workload
-fingerprint, compiler, profile, target, QEMU binary digest, and observed Host
-CPU and OS conditions. The fingerprint includes runner and workload inputs,
-not Kernel implementation source, and is deliberately conservative: unrelated
-changes inside a fingerprinted directory may also invalidate comparison.
+The Bench workflow records `benchmark-context.json` with shared execution
+inputs, compiler, profile, target, QEMU binary digest, and observed Host
+CPU and OS conditions. Each benchmark image records its own `workload.json`
+from Cargo's Rust dependency-information file, including the source hashes
+of that image's entry and owner-local measurement modules. Shared inputs
+remain conservative, but unrelated benchmark images do not share a
+workload identity. Record from the same unchanged checkout as the build.
 
 Extract two successful Bench artifacts and run:
 
@@ -279,10 +283,14 @@ Extract two successful Bench artifacts and run:
 "$runner" compare /path/to/baseline /path/to/candidate
 ```
 
-Comparison requires the recorded context, firmware contents, platform and
-series definitions to match. It rejects incomplete results, different
-sample counts and duplicate series. It recomputes statistics from raw
-measurements and reports candidate-to-baseline median duration ratios.
+Comparison first requires complete artifact evidence and compatible shared
+execution context. It compares only matching series with equal local
+workload inputs, firmware, platform, sample count and other series
+definitions. Added, removed or changed workloads appear under
+`uncompared` without a ratio. Series in the same image share an identity
+because their execution can affect one another. No comparable series is
+a failed comparison. Statistics are recomputed from raw measurements;
+candidate-to-baseline median duration ratios remain descriptive.
 Different source and image revisions are allowed and identified. Equal
 recorded conditions do not establish identical host scheduling or CPU
 frequency. These are descriptive observations, not statistical significance

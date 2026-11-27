@@ -7,7 +7,7 @@
 
 use guest::platform;
 
-#[path = "../../../metal/sync/bench/shared.rs"]
+#[path = "../../../../benches/metal/sync/shared/mod.rs"]
 mod sync;
 
 guest::entry! {

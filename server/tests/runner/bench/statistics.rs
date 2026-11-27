@@ -1,5 +1,5 @@
 //! Descriptive statistics over complete, validated raw batch observations.
-use super::{Measurement, Series};
+use super::measurement::{Measurement, Series};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -12,8 +12,8 @@ pub(super) struct Summary<'a> {
     pub(super) median_batch_ns: f64,
     max_batch_ns: u64,
     mad_batch_ns: f64,
-    pub(super) median_ns_per_operation: f64,
-    pub(super) median_operations_per_second: f64,
+    median_ns_per_operation: f64,
+    median_operations_per_second: f64,
 }
 
 fn median(sorted: &[f64]) -> f64 {

@@ -1,5 +1,5 @@
 use super::{Artifact, report};
-use crate::{bench::decode, evidence};
+use crate::{bench::measurement::decode, evidence};
 use serde_json::json;
 use std::{fs, path::Path};
 
@@ -27,12 +27,20 @@ fn artifact(root: &Path, source: char, sample: u64) {
     evidence::json(
         &root.join("benchmark-context.json"),
         &json!({
-            "schema": 1, "target": "riscv64gc-unknown-none-elf", "profile": "bench",
+            "schema": 2, "target": "riscv64gc-unknown-none-elf", "profile": "bench",
             "rustc": "rustc fixture", "cargo": "cargo fixture",
             "host_kernel": "fixture", "host_os": "fixture", "host_cpu": "fixture",
             "host_cpus": "4", "host_cpu_quota": "max 100000",
-            "workload_sha256": digest, "qemu_sha256": digest,
+            "execution_sha256": digest, "qemu_sha256": digest,
         }),
+    )
+    .unwrap();
+    evidence::json(
+        &image.join("workload.json"),
+        &json!({"schema": 1, "inputs": {
+            "server/benches/metal/chrono/clock.rs": digest,
+            "server/tests/target/riscv64/benches/clock.rs": digest,
+        }}),
     )
     .unwrap();
     evidence::json(&image.join("result.json"), &json!({"verdict": "pass"})).unwrap();
@@ -93,7 +101,54 @@ fn comparison_rejects_changed_context_and_incomplete_evidence() {
     candidate.context["host_cpu"] = json!("different");
     assert!(report(&baseline, &candidate).is_err());
 
+    let mut candidate = Artifact::read(&after).unwrap();
+    let workload_path = after.join("bench/image/workload.json");
+    let mut workload: serde_json::Value =
+        serde_json::from_slice(&fs::read(&workload_path).unwrap()).unwrap();
+    workload["inputs"]["server/benches/metal/chrono/clock.rs"] = json!("b".repeat(64));
+    evidence::json(&workload_path, &workload).unwrap();
+    candidate.cases.get_mut("fixture").unwrap().workload =
+        crate::bench::workload::Workload::read(&workload_path).unwrap();
+    let changed = report(&baseline, &candidate).unwrap();
+    assert_eq!(changed["series"], json!([]));
+    assert_eq!(
+        changed["uncompared"][0]["reason"],
+        "different workload inputs"
+    );
+
     fs::remove_file(after.join("bench/image/measurement.json")).unwrap();
     assert!(Artifact::read(&after).is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn unrelated_series_remains_comparable_when_another_workload_changes() {
+    let root = std::env::temp_dir().join(format!("kernel-compare-local-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let before = root.join("before");
+    let after = root.join("after");
+    artifact(&before, 'a', 100);
+    artifact(&after, 'b', 150);
+    let mut baseline = Artifact::read(&before).unwrap();
+    let mut candidate = Artifact::read(&after).unwrap();
+
+    for (artifact, directory) in [(&mut baseline, &before), (&mut candidate, &after)] {
+        let mut independent = Artifact::read(directory).unwrap();
+        let mut case = independent.cases.remove("fixture").unwrap();
+        case.series.name = "unchanged".into();
+        artifact.cases.insert("unchanged".into(), case);
+    }
+    let workload_path = after.join("bench/image/workload.json");
+    let mut workload: serde_json::Value =
+        serde_json::from_slice(&fs::read(&workload_path).unwrap()).unwrap();
+    workload["inputs"]["server/benches/metal/chrono/clock.rs"] = json!("b".repeat(64));
+    evidence::json(&workload_path, &workload).unwrap();
+    candidate.cases.get_mut("fixture").unwrap().workload =
+        crate::bench::workload::Workload::read(&workload_path).unwrap();
+
+    let result = report(&baseline, &candidate).unwrap();
+    assert_eq!(result["series"].as_array().unwrap().len(), 1);
+    assert_eq!(result["series"][0]["name"], "unchanged");
+    assert_eq!(result["uncompared"][0]["name"], "fixture");
     fs::remove_dir_all(root).unwrap();
 }

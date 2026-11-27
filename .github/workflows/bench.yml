@@ -23,7 +23,7 @@ on:
       - 'server/tests/target/**/Cargo.toml'
       - 'server/tests/target/**/build.rs'
       - 'server/tests/target/**/benches/**'
-      - 'server/tests/metal/**/bench/**'
+      - 'server/benches/**'
       - '!**/*.md'
       - '!**/*.mdx'
   workflow_dispatch:

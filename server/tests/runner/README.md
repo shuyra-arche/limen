@@ -80,4 +80,6 @@ pushes. Select a revision manually to collect a performance baseline.
 minimum, median, maximum, median absolute deviation, median normalized time
 and aggregate throughput. No measurements or outliers are discarded.
 `verify compare <baseline-artifact> <candidate-artifact>` accepts complete
-Bench artifact roots and refuses incompatible or incomplete evidence.
+Bench artifact roots. Shared execution context must match; workload identity
+is local to the actual image's source dependencies in `workload.json`.
+Incompatible individual series are explicitly reported without ratios.

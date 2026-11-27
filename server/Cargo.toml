@@ -6,6 +6,7 @@ edition.workspace = true
 publish = false
 autobins = false
 autotests = false
+autobenches = false
 
 [lib]
 path = "src/lib.rs"

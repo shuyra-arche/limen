@@ -12,8 +12,11 @@ use kernel::metal::{
         treaty::Clock,
     },
     processor::treaty::{LocalStorage, Minor, Stack, Startup},
-    sync::treaty::{LeafLock, Supply, TurnLock},
+    sync::treaty::Supply,
 };
+
+mod alternating;
+mod contention;
 
 const PEERS: usize = 3;
 const HARTS: usize = PEERS + 1;
@@ -28,115 +31,55 @@ static MINORS: [Minor; PEERS] = [
     Minor::new(&STACKS[1], &LOCALS[1]),
     Minor::new(&STACKS[2], &LOCALS[2]),
 ];
-
-static LEAF: LeafLock<usize> = LeafLock::new(0);
-static TURN: TurnLock<usize> = TurnLock::new(0);
-static ATOMIC: AtomicUsize = AtomicUsize::new(0);
-static BATON: AtomicUsize = AtomicUsize::new(0);
 static JOINED: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy)]
-#[repr(usize)]
 enum Mode {
-    LeafShared = 1,
-    TurnShared,
-    AtomicAlternating,
-    LeafAlternating,
-    TurnAlternating,
+    Contention(contention::Lock),
+    Alternating(alternating::Work),
 }
 
 const MODES: [Mode; 5] = [
-    Mode::LeafShared,
-    Mode::TurnShared,
-    Mode::AtomicAlternating,
-    Mode::LeafAlternating,
-    Mode::TurnAlternating,
+    Mode::Contention(contention::Lock::Leaf),
+    Mode::Contention(contention::Lock::Turn),
+    Mode::Alternating(alternating::Work::Atomic),
+    Mode::Alternating(alternating::Work::Locked(contention::Lock::Leaf)),
+    Mode::Alternating(alternating::Work::Locked(contention::Lock::Turn)),
 ];
 
 impl Mode {
-    fn decode(value: usize) -> Self {
-        MODES[value.checked_sub(1).unwrap()]
-    }
-
     fn name(self) -> &'static str {
         match self {
-            Self::LeafShared => "leaf-shared",
-            Self::TurnShared => "turn-shared",
-            Self::AtomicAlternating => "atomic-alternating",
-            Self::LeafAlternating => "leaf-alternating",
-            Self::TurnAlternating => "turn-alternating",
+            Self::Contention(lock) => lock.name(),
+            Self::Alternating(work) => work.name(),
         }
     }
 
-    fn alternating(self) -> bool {
-        matches!(
-            self,
-            Self::AtomicAlternating | Self::LeafAlternating | Self::TurnAlternating
-        )
-    }
-
     fn participants(self) -> usize {
-        if self.alternating() { 2 } else { HARTS }
+        match self {
+            Self::Contention(_) => HARTS,
+            Self::Alternating(_) => 2,
+        }
     }
 
     fn reset(self) {
-        BATON.store(0, Relaxed);
         match self {
-            Self::LeafShared | Self::LeafAlternating => {
-                LEAF.acquire(|value| *value = 0).unwrap();
-            }
-            Self::TurnShared | Self::TurnAlternating => {
-                TURN.acquire(|value| *value = 0).unwrap();
-            }
-            Self::AtomicAlternating => ATOMIC.store(0, Relaxed),
+            Self::Contention(lock) => lock.reset(),
+            Self::Alternating(work) => work.reset(),
         }
     }
 
     fn run(self, slot: usize, iterations: usize) {
-        let alternating = self.alternating();
         match self {
-            Self::LeafShared | Self::LeafAlternating => {
-                repeat(slot, iterations, alternating, || {
-                    LEAF.acquire(|value| *value += 1).unwrap();
-                });
-            }
-            Self::TurnShared | Self::TurnAlternating => {
-                repeat(slot, iterations, alternating, || {
-                    TURN.acquire(|value| *value += 1).unwrap();
-                });
-            }
-            Self::AtomicAlternating => repeat(slot, iterations, true, || {
-                ATOMIC.fetch_add(1, Relaxed);
-            }),
+            Self::Contention(lock) => lock.run(iterations),
+            Self::Alternating(work) => work.run(slot, iterations),
         }
     }
 
     fn verify(self, iterations: usize) {
-        let count = match self {
-            Self::LeafShared | Self::LeafAlternating => LEAF.acquire(|value| *value).unwrap(),
-            Self::TurnShared | Self::TurnAlternating => TURN.acquire(|value| *value).unwrap(),
-            Self::AtomicAlternating => ATOMIC.load(Acquire),
-        };
-        assert_eq!(count, iterations * self.participants());
-        if self.alternating() {
-            assert_eq!(BATON.load(Acquire), 0);
-        }
-    }
-}
-
-fn repeat(slot: usize, iterations: usize, alternating: bool, mut work: impl FnMut()) {
-    if alternating {
-        assert!(slot < 2);
-        for _ in 0..iterations {
-            while BATON.load(Acquire) != slot {
-                spin_loop();
-            }
-            work();
-            BATON.store(1 - slot, Release);
-        }
-    } else {
-        for _ in 0..iterations {
-            work();
+        match self {
+            Self::Contention(lock) => lock.verify(iterations * HARTS),
+            Self::Alternating(work) => work.verify(iterations),
         }
     }
 }
@@ -171,7 +114,7 @@ impl Batch {
         loop {
             let epoch = previous + 1;
             wait(&self.epoch, epoch);
-            let mode = Mode::decode(self.mode.load(Relaxed));
+            let mode = MODES[self.mode.load(Relaxed)];
             let iterations = self.iterations.load(Relaxed);
             if slot >= mode.participants() {
                 // Inactive Harts acknowledge before timing begins.
@@ -188,11 +131,12 @@ impl Batch {
         }
     }
 
-    fn run(&self, clock: &Clock, mode: Mode, iterations: usize, timed: bool) -> u64 {
+    fn run(&self, clock: &Clock, index: usize, iterations: usize, timed: bool) -> u64 {
+        let mode = MODES[index];
         // Every previous participant is settled before publishing a new batch.
         mode.reset();
         let epoch = self.epoch.load(Relaxed) + 1;
-        self.mode.store(mode as usize, Relaxed);
+        self.mode.store(index, Relaxed);
         self.iterations.store(iterations, Relaxed);
         self.epoch.store(epoch, Release);
         for ready in &self.ready {
@@ -256,10 +200,10 @@ pub fn check(boot: Boot<'_>) {
     wait(&JOINED, (1 << HARTS) - 1);
 
     let mut samples = [[0_u64; SAMPLES]; MODES.len()];
-    for (mode, elapsed) in MODES.into_iter().zip(&mut samples) {
-        BATCH.run(clock, mode, WARMUP, false);
+    for (index, elapsed) in samples.iter_mut().enumerate() {
+        BATCH.run(clock, index, WARMUP, false);
         for sample in elapsed {
-            *sample = BATCH.run(clock, mode, ITERATIONS, true);
+            *sample = BATCH.run(clock, index, ITERATIONS, true);
         }
     }
     let series: [bench::Series<'_>; MODES.len()] = core::array::from_fn(|index| {
