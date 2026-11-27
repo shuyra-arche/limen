@@ -160,47 +160,54 @@ fn run_minor(_: usize, argument: usize) -> ! {
     assert_eq!(execution.enter(), Err(Error::Unsupported));
     execution.attach().expect("attach actual minor Hart");
     assert_eq!(execution.attach(), Err(Error::Busy));
-    turn::minor();
-    snapshot::observe();
-    assert_eq!(
-        execution.enter(),
-        Ok(None),
-        "minor must reject the Ready Unit pinned to major"
-    );
-    publish(Phase::AffinityChecked);
-    wait(Phase::FirstRunning);
-    let Scenario { first, minor, .. } = scenario();
-    assert_eq!(execution.enter(), Ok(None));
-    assert_eq!(execution.lifecycle(first), Ok(Lifecycle::Live));
-    assert_eq!(execution.finish_end(first), Err(Error::Busy));
-    assert_eq!(execution.submit(first), Err(Error::Busy));
+    assert_eq!(execution.enter(), Err(Error::Protection));
+    let mut schedule = || {
+        let mark = core::hint::black_box(0u8);
+        let address = core::hint::black_box(&mark) as *const u8 as usize;
+        assert!(!MINOR.stack_range().contains(&address));
+        turn::minor();
+        snapshot::observe();
+        assert_eq!(
+            execution.enter(),
+            Ok(None),
+            "minor must reject the Ready Unit pinned to major"
+        );
+        publish(Phase::AffinityChecked);
+        wait(Phase::FirstRunning);
+        let Scenario { first, minor, .. } = scenario();
+        assert_eq!(execution.enter(), Ok(None));
+        assert_eq!(execution.lifecycle(first), Ok(Lifecycle::Live));
+        assert_eq!(execution.finish_end(first), Err(Error::Busy));
+        assert_eq!(execution.submit(first), Err(Error::Busy));
 
-    let other = unsafe { execution.create(second) }.expect("create on minor");
-    execution.submit(other).expect("admit on minor");
-    finish(execution, dispatch(execution, other, minor), 41);
-    // The original Unit left its stack. Its exact receipt remains unconsumed.
-    assert_eq!(execution.enter(), Ok(None));
-    assert_eq!(execution.pending_leave(), Ok(None));
-    assert_eq!(execution.finish_end(first), Err(Error::Busy));
-    publish(Phase::WithheldChecked);
+        let other = unsafe { execution.create(second) }.expect("create on minor");
+        execution.submit(other).expect("admit on minor");
+        finish(execution, dispatch(execution, other, minor), 41);
+        // The original Unit left its stack. Its exact receipt remains unconsumed.
+        assert_eq!(execution.enter(), Ok(None));
+        assert_eq!(execution.pending_leave(), Ok(None));
+        assert_eq!(execution.finish_end(first), Err(Error::Busy));
+        publish(Phase::WithheldChecked);
 
-    wait(Phase::OldVacated);
-    let migrated = dispatch(execution, first, minor);
-    // The major wrote PREVIOUS once and published it in FirstStopped.
-    let previous = unsafe { (&*(&raw const PREVIOUS)).assume_init_read() };
-    assert_ne!(migrated, previous);
-    assert_eq!(migrated.admission(), previous.admission());
-    assert_eq!(execution.vacate(previous), Err(Error::Gone));
-    assert_eq!(execution.pending_leave(), Ok(Some(migrated)));
-    publish(Phase::MigratedStopped);
+        wait(Phase::OldVacated);
+        let migrated = dispatch(execution, first, minor);
+        // The major wrote PREVIOUS once and published it in FirstStopped.
+        let previous = unsafe { (&*(&raw const PREVIOUS)).assume_init_read() };
+        assert_ne!(migrated, previous);
+        assert_eq!(migrated.admission(), previous.admission());
+        assert_eq!(execution.vacate(previous), Err(Error::Gone));
+        assert_eq!(execution.pending_leave(), Ok(Some(migrated)));
+        publish(Phase::MigratedStopped);
 
-    wait(Phase::ReplayChecked);
-    assert_eq!(execution.pending_leave(), Ok(Some(migrated)));
-    finish(execution, migrated, 0x1234_5678);
-    publish(Phase::MigratedEnded);
-    loop {
-        spin_loop();
-    }
+        wait(Phase::ReplayChecked);
+        assert_eq!(execution.pending_leave(), Ok(Some(migrated)));
+        finish(execution, migrated, 0x1234_5678);
+        publish(Phase::MigratedEnded);
+        loop {
+            spin_loop();
+        }
+    };
+    unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
 }
 
 fn run_third(hart: usize, argument: usize) -> ! {
@@ -211,14 +218,21 @@ fn run_third(hart: usize, argument: usize) -> ! {
         .expect("third supplied participation slot");
     observe(hart);
     assert_eq!(execution.attach(), Err(Error::Busy));
-    let unit =
-        unsafe { execution.create(|current| current.hart() as u64) }.expect("create on third Hart");
-    execution.submit(unit).expect("admit on third Hart");
-    finish(execution, dispatch(execution, unit, hart), hart as u64);
-    EXTRA.store(1, Release);
-    loop {
-        spin_loop();
-    }
+    assert_eq!(execution.enter(), Err(Error::Protection));
+    let mut schedule = || {
+        let mark = core::hint::black_box(0u8);
+        let address = core::hint::black_box(&mark) as *const u8 as usize;
+        assert!(!THIRD.stack_range().contains(&address));
+        let unit =
+            unsafe { execution.create(|current| current.hart() as u64) }.expect("create on third Hart");
+        execution.submit(unit).expect("admit on third Hart");
+        finish(execution, dispatch(execution, unit, hart), hart as u64);
+        EXTRA.store(1, Release);
+        loop {
+            spin_loop();
+        }
+    };
+    unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
 }
 
 fn run_fourth(_: usize, argument: usize) -> ! {
@@ -262,71 +276,78 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     execution.attach().expect("attach actual boot Hart");
     assert_eq!(execution.attach(), Err(Error::Busy));
-    let argument = core::ptr::from_ref(execution).expose_provenance();
-    // The continuation holds scalar locals, the Unit stack and shared fixture
-    // state across Yield. It holds no Hart-local resource.
-    let a = unsafe { execution.create_migratable(first) }.expect("migratable Unit");
-    let pinned = unsafe { execution.create(pinned) }.expect("create on major");
-    execution.submit(pinned).expect("admit pinned Unit");
-    assert!(matches!(
-        unsafe { MINOR.start(8, run_minor, argument, &mut Startup::Sbi(service)) },
-        Err(StartError::Rejected(_))
-    ));
-    unsafe {
-        (&mut *(&raw mut SCENARIO)).write(Scenario {
-            first: a,
-            major,
-            minor: minor_hart,
-        });
-        MINOR
-            .start(minor_hart, run_minor, argument, &mut Startup::Sbi(service))
-            .expect("start actual minor Hart");
-    }
-    turn::major();
-    snapshot::publish();
-    wait(Phase::AffinityChecked);
-    finish(execution, dispatch(execution, pinned, major), 17);
-    execution.submit(a).expect("admit migratable Unit");
+    assert_eq!(execution.enter(), Err(Error::Protection));
+    let mut schedule = || {
+        let mark = core::hint::black_box(0u8);
+        let address = core::hint::black_box(&mark) as *const u8 as usize;
+        assert!(!kernel::entry::boot::stack_range().contains(&address));
+        let argument = core::ptr::from_ref(execution).expose_provenance();
+        // The continuation holds scalar locals, the Unit stack and shared fixture
+        // state across Yield. It holds no Hart-local resource.
+        let a = unsafe { execution.create_migratable(first) }.expect("migratable Unit");
+        let pinned = unsafe { execution.create(pinned) }.expect("create on major");
+        execution.submit(pinned).expect("admit pinned Unit");
+        assert!(matches!(
+            unsafe { MINOR.start(8, run_minor, argument, &mut Startup::Sbi(service)) },
+            Err(StartError::Rejected(_))
+        ));
+        unsafe {
+            (&mut *(&raw mut SCENARIO)).write(Scenario {
+                first: a,
+                major,
+                minor: minor_hart,
+            });
+            MINOR
+                .start(minor_hart, run_minor, argument, &mut Startup::Sbi(service))
+                .expect("start actual minor Hart");
+        }
+        turn::major();
+        snapshot::publish();
+        wait(Phase::AffinityChecked);
+        finish(execution, dispatch(execution, pinned, major), 17);
+        execution.submit(a).expect("admit migratable Unit");
 
-    let previous = dispatch(execution, a, major);
-    unsafe { (&mut *(&raw mut PREVIOUS)).write(previous) };
-    publish(Phase::FirstStopped);
-    wait(Phase::WithheldChecked);
-    assert_eq!(execution.pending_leave(), Ok(Some(previous)));
-    execution
-        .vacate(previous)
-        .expect("major settles original Yield");
-    publish(Phase::OldVacated);
+        let previous = dispatch(execution, a, major);
+        unsafe { (&mut *(&raw mut PREVIOUS)).write(previous) };
+        publish(Phase::FirstStopped);
+        wait(Phase::WithheldChecked);
+        assert_eq!(execution.pending_leave(), Ok(Some(previous)));
+        execution
+            .vacate(previous)
+            .expect("major settles original Yield");
+        publish(Phase::OldVacated);
 
-    wait(Phase::MigratedStopped);
-    assert_eq!(execution.vacate(previous), Err(Error::Gone));
-    assert_eq!(execution.finish_end(a), Err(Error::Busy));
-    assert_eq!(execution.enter(), Ok(None));
-    publish(Phase::ReplayChecked);
-    wait(Phase::MigratedEnded);
-    assert_eq!(execution.lifecycle(a), Err(Error::Gone));
-    assert_eq!(limen_register_probe_migrated.load(Relaxed), 1);
+        wait(Phase::MigratedStopped);
+        assert_eq!(execution.vacate(previous), Err(Error::Gone));
+        assert_eq!(execution.finish_end(a), Err(Error::Busy));
+        assert_eq!(execution.enter(), Ok(None));
+        publish(Phase::ReplayChecked);
+        wait(Phase::MigratedEnded);
+        assert_eq!(execution.lifecycle(a), Err(Error::Gone));
+        assert_eq!(limen_register_probe_migrated.load(Relaxed), 1);
 
-    // Three participants have independent machine records while the Unit
-    // stack supply still has only two positions. The fourth actual entry
-    // cannot publish a partial participation or a local dispatcher locator.
-    unsafe { THIRD.start(third, run_third, argument, &mut Startup::Sbi(service)) }
-        .expect("start third actual Hart");
-    while EXTRA.load(Acquire) != 1 {
-        spin_loop();
-    }
-    assert!(THIRD.ready());
-    unsafe { FOURTH.start(fourth, run_fourth, argument, &mut Startup::Sbi(service)) }
-        .expect("start fourth actual Hart");
-    while EXTRA.load(Acquire) != 2 {
-        spin_loop();
-    }
-    assert!(FOURTH.ready());
+        // Three participants have independent machine records while the Unit
+        // stack supply still has only two positions. The fourth actual entry
+        // cannot publish a partial participation or a local dispatcher locator.
+        unsafe { THIRD.start(third, run_third, argument, &mut Startup::Sbi(service)) }
+            .expect("start third actual Hart");
+        while EXTRA.load(Acquire) != 1 {
+            spin_loop();
+        }
+        assert!(THIRD.ready());
+        unsafe { FOURTH.start(fourth, run_fourth, argument, &mut Startup::Sbi(service)) }
+            .expect("start fourth actual Hart");
+        while EXTRA.load(Acquire) != 2 {
+            spin_loop();
+        }
+        assert!(FOURTH.ready());
 
-    write(
-        "PASS kernel-execution-harts active=2 turn=1 snap=1 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1 participants=3 capacity=1\n",
-    );
-    shutdown(true)
+        write(
+            "PASS kernel-execution-harts active=2 turn=1 snap=1 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1 participants=3 capacity=1\n",
+        );
+        shutdown(true)
+    };
+    unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
 }
 
 struct Console;
