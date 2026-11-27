@@ -1,4 +1,4 @@
-//! The separate link-wrapped probe observes the production switch boundary.
+//! This optional link-wrapped probe observes the production switch boundary.
 use core::{
     arch::global_asm,
     sync::atomic::{AtomicUsize, Ordering},

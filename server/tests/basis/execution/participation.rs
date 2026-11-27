@@ -277,6 +277,10 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     );
     let major = boot.hart();
     assert!(major < 4, "unexpected QEMU Boot Hart");
+    for hart in 0..4 {
+        assert!(boot.riscv_cpus().cpu(hart).unwrap().unwrap().enabled());
+    }
+    assert!(boot.riscv_cpus().cpu(4).unwrap().is_none());
     let mut others = (0..4).filter(|&hart| hart != major);
     let minor_hart = others.next().unwrap();
     let third = others.next().unwrap();

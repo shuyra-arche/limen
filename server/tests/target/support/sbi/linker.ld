@@ -12,3 +12,7 @@ limen_test_text_start = ADDR(.text);
 limen_test_text_end = ADDR(.text) + SIZEOF(.text);
 limen_test_read_only = ADDR(.rodata);
 limen_test_writable = ADDR(.data);
+
+/* Only an image defining __wrap_limen_switch_context supplies a probe.
+   Otherwise every wrapped reference resolves directly to the real address. */
+PROVIDE(__wrap_limen_switch_context = __real_limen_switch_context);

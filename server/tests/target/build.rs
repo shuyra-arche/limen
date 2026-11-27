@@ -46,6 +46,10 @@ fn main() {
     let extension = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("support/sbi/linker.ld");
     println!("cargo::rustc-link-arg-tests=-T{}", extension.display());
     println!("cargo::rustc-link-arg-tests=--entry=limen_test_image_entry");
+    // Without a probe, the script aliases the wrapped reference directly
+    // to the original function. Retain that definition through section GC.
+    println!("cargo::rustc-link-arg-tests=--wrap=limen_switch_context");
+    println!("cargo::rustc-link-arg-tests=--undefined=__real_limen_switch_context");
     println!("cargo::rerun-if-changed={script}");
     println!("cargo::rerun-if-changed={}", extension.display());
 }
