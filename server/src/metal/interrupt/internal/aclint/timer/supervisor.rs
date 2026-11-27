@@ -2,7 +2,7 @@
 
 use super::Description;
 use crate::metal::{
-    chrono::riscv::Counter,
+    chrono::riscv64::Counter,
     interrupt::internal::supervisor::{Cause, Reception},
     platform::firmware::sbi::TimerService,
 };

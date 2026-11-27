@@ -4,7 +4,7 @@ use core::num::NonZeroU32;
 
 use crate::metal::{
     platform::description::devicetree::{Error, NodeId},
-    processor::hart::riscv::description::RiscvCpus,
+    processor::hart::riscv64::description::RiscvCpus,
 };
 
 #[derive(Clone, Copy)]

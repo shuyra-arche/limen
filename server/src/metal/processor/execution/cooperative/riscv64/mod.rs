@@ -4,7 +4,7 @@ use core::{arch::global_asm, mem::offset_of};
 
 use crate::metal::{
     interrupt::internal::supervisor, memory::mmu::internal::riscv::context::Context,
-    processor::hart::riscv::native,
+    processor::hart::riscv64::native,
 };
 
 /// The native integer-only switch is valid in the verified Bare environment.

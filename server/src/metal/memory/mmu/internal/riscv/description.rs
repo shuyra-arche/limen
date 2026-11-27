@@ -3,7 +3,7 @@
 use super::Mode;
 use crate::metal::{
     platform::description::devicetree::{Error, NodeId},
-    processor::hart::riscv::description::RiscvCpu,
+    processor::hart::riscv64::description::RiscvCpu,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

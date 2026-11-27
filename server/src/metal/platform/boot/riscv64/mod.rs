@@ -5,7 +5,7 @@ use crate::metal::{
     platform::boot::trap as diagnostic,
     processor::hart::{
         local,
-        riscv::{native, status},
+        riscv64::{native, status},
     },
 };
 use core::arch::{asm, naked_asm};

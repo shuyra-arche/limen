@@ -107,7 +107,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     }
     let range = range.expect("a platform IOMMU");
     // The VM has one quiesced EDU function, no PCI ATS, and Bare SATP.
-    let hertz = kernel::metal::chrono::riscv::RiscvTimebase::describe(boot.riscv_cpus())
+    let hertz = kernel::metal::chrono::riscv64::RiscvTimebase::describe(boot.riscv_cpus())
         .unwrap()
         .unwrap()
         .hertz();

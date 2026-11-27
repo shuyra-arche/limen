@@ -4,7 +4,7 @@ use kernel::metal::processor::{
     execution::description::aarch64,
     hart::{
         aarch64::status as arm,
-        riscv::status::{Extension, Status},
+        riscv64::status::{Extension, Status},
     },
 };
 

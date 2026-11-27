@@ -5,8 +5,8 @@ use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use kernel::metal::{
-    chrono::riscv::RiscvTimebase,
-    processor::execution::description::riscv::RiscvExtension, processor::execution::description::riscv::RiscvIsa,
+    chrono::riscv64::RiscvTimebase,
+    processor::execution::description::riscv64::RiscvExtension, processor::execution::description::riscv64::RiscvIsa,
     platform::description::devicetree::memory::Source,
     memory::mmu::internal::riscv::description::{MaximumMode, RiscvMmu},
 };

@@ -2,7 +2,7 @@
 
 use crate::metal::{
     platform::description::devicetree::{Error, NodeId},
-    processor::hart::riscv::description::RiscvCpu,
+    processor::hart::riscv64::description::RiscvCpu,
 };
 
 const EXTENSION_LIMIT: usize = 192;

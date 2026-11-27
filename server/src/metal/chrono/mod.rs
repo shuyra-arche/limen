@@ -1,2 +1,2 @@
 pub mod aarch64;
-pub mod riscv;
+pub mod riscv64;

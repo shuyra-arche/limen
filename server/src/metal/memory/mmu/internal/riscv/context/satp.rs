@@ -3,7 +3,7 @@
 use core::{arch::asm, marker::PhantomData};
 
 use super::{super::description::RiscvMmu, Context};
-use crate::metal::processor::hart::{local::try_current_hart, riscv::native};
+use crate::metal::processor::hart::{local::try_current_hart, riscv64::native};
 
 impl Context {
     pub fn current() -> Option<Self> {

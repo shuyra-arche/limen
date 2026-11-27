@@ -51,7 +51,9 @@ impl<'a> Boot<'a> {
 
     /// CPU scope already checked at the SBI handoff.
     #[cfg(limen_firmware = "sbi")]
-    pub fn riscv_cpus(&self) -> &crate::metal::processor::hart::riscv::description::RiscvCpus<'a> {
+    pub fn riscv_cpus(
+        &self,
+    ) -> &crate::metal::processor::hart::riscv64::description::RiscvCpus<'a> {
         self.descriptions
             .cpus
             .as_ref()

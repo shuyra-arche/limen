@@ -178,7 +178,7 @@ fn rejects_registers_in_an_unsupported_address_domain() {
     assert_eq!(serial.register(0), Err(Error::Unsupported));
 }
 
-mod riscv;
+mod riscv64;
 
 mod arm;
 

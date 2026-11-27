@@ -40,7 +40,7 @@ CPU node can supply source-scoped MMU mode and ISA extension facts. The
 `/cpus` node can supply a timebase frequency. Boot exposes the independently
 probed SBI HSM, TIME and IPI extensions. A minor starts through SBI HSM
 with its resident record in `a1`.
-[RV64 entry](../server/src/metal/platform/boot/riscv/) · [SBI](../server/src/metal/platform/firmware/sbi/)
+[RV64 entry](../server/src/metal/platform/boot/riscv64/) · [SBI](../server/src/metal/platform/firmware/sbi/)
 
 ## UEFI loader
 

@@ -2,7 +2,7 @@
 
 use crate::metal::{
     platform::description::devicetree::{DeviceTree, Error, NodeId},
-    processor::hart::riscv::description::RiscvCpus,
+    processor::hart::riscv64::description::RiscvCpus,
 };
 use limen_treaty::model::{ByteLength, PhysicalRange};
 

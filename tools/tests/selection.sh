@@ -39,7 +39,7 @@ change server/src/metal/processor/hart/x86_64/native.rs
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 change server/src/metal/processor/hart/aarch64/native.rs
 [[ $(boards) == virt ]]
-change server/src/metal/processor/hart/riscv/native.rs
+change server/src/metal/processor/hart/riscv64/native.rs
 [[ $(boards) == rv64 ]]
 change server/src/metal/processor/hart/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
@@ -171,10 +171,10 @@ change server/src/metal/platform/boot/services.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/platform/description/devicetree/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '.host' >/dev/null
-for source in server/src/metal/processor/hart/riscv/description.rs \
-              server/src/metal/processor/execution/description/riscv.rs \
-              server/src/metal/chrono/riscv/mod.rs; do
+bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
+for source in server/src/metal/processor/hart/riscv64/description.rs \
+              server/src/metal/processor/execution/description/riscv64.rs \
+              server/src/metal/chrono/riscv64/mod.rs; do
     change "$source"
     [[ $(boards) == rv64 ]]
     bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
@@ -223,7 +223,7 @@ bash "$checks" . "$base" | jq -e '.host' >/dev/null
 
 # Boot and cooperative admission now consume the actual SATP context and
 # supervisor enable/status observations, not independent raw comparisons.
-for source in server/src/metal/processor/hart/riscv/status.rs \
+for source in server/src/metal/processor/hart/riscv64/status.rs \
               server/src/metal/interrupt/internal/supervisor.rs \
               server/src/metal/memory/mmu/internal/riscv/mode.rs \
               server/src/metal/memory/mmu/internal/riscv/context/mod.rs \
@@ -253,9 +253,6 @@ mkdir -p server/src/metal/platform/boot/aarch64
 git mv server/src/metal/platform/boot/{x86_64,aarch64}/example.rs
 git commit -qm rename
 [[ $(bash "$discover" . "$previous" | jq -r 'map(.platform)|unique|join(" ")') == 'q35 virt' ]]
-change server/src/metal/devicetree/mod.rs
-[[ $(bash "$discover" . "$base") == "$full" ]]
-bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 change server/src/metal/processor/hart/local/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/tests/metal/memory/allocator/source.rs

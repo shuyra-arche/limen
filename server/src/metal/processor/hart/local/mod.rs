@@ -12,7 +12,7 @@ pub(in crate::metal) mod stack;
 #[cfg(all(limen_target, target_arch = "aarch64"))]
 use super::aarch64::native as backend;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
-use super::riscv::native as backend;
+use super::riscv64::native as backend;
 #[cfg(all(limen_target, target_arch = "x86_64"))]
 use super::x86_64::native as backend;
 

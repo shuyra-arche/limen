@@ -66,5 +66,5 @@ impl Status {
 }
 
 #[cfg(test)]
-#[path = "../../../../../tests/metal/processor/hart/riscv/status.rs"]
+#[path = "../../../../../tests/metal/processor/hart/riscv64/status.rs"]
 mod tests;

@@ -2,7 +2,7 @@
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
-        chrono::riscv::{Counter, RiscvTimebase},
+        chrono::riscv64::{Counter, RiscvTimebase},
         interrupt::external::plic::{Barrier, Context, Failure, Route, State},
         memory::mmu::internal::device::DeviceWindow,
     },

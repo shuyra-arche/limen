@@ -16,14 +16,14 @@ pub(crate) use trap::stack_range as trap_stack_range;
 #[cfg(all(limen_target, target_arch = "aarch64"))]
 mod aarch64;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
-mod riscv;
+mod riscv64;
 #[cfg(all(limen_target, target_arch = "x86_64"))]
 mod x86_64;
 
 #[cfg(all(limen_target, target_arch = "aarch64"))]
 use self::aarch64 as backend;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
-use self::riscv as backend;
+use self::riscv64 as backend;
 #[cfg(all(limen_target, target_arch = "x86_64"))]
 use self::x86_64 as backend;
 

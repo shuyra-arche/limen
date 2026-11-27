@@ -2,12 +2,12 @@
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
-        chrono::riscv::{Counter, RiscvTimebase},
+        chrono::riscv64::{Counter, RiscvTimebase},
         interrupt::internal::{
             sstc::{Failure, State, Timer},
             supervisor::Reception,
         },
-        processor::execution::description::riscv::RiscvIsa,
+        processor::execution::description::riscv64::RiscvIsa,
     },
 };
 

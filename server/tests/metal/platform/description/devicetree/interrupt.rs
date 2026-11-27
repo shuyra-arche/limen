@@ -1,6 +1,6 @@
 //! Physical target indices, source scope and machine timer geometry.
 use super::Fixture;
-use kernel::metal::processor::hart::riscv::description::RiscvCpus;
+use kernel::metal::processor::hart::riscv64::description::RiscvCpus;
 use kernel::metal::{
     interrupt::{external::aplic, internal::aclint::timer},
     platform::description::devicetree::{DeviceTree, Error},

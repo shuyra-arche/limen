@@ -6,7 +6,7 @@ use limen_treaty::model::InternalAddress;
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
-        chrono::riscv::{Counter, RiscvTimebase},
+        chrono::riscv64::{Counter, RiscvTimebase},
         interrupt::{
             external::aplic::{self, Direct, Mode},
             internal::{

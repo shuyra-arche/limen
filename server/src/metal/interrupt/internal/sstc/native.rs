@@ -1,10 +1,10 @@
 use super::{Failure, State};
 use crate::metal::{
-    chrono::riscv::Counter,
+    chrono::riscv64::Counter,
     interrupt::internal::supervisor::{Cause, Reception},
     processor::{
-        execution::description::riscv::{RiscvExtension, RiscvIsa},
-        hart::riscv::description::RiscvCpu,
+        execution::description::riscv64::{RiscvExtension, RiscvIsa},
+        hart::riscv64::description::RiscvCpu,
     },
 };
 use core::arch::asm;
