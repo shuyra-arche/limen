@@ -172,7 +172,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
     // Change only the actual FS field: the integer-only kernel target
     // executes no FP instructions, so no extended state is consumed.
-    let observed: usize;
+    let mut observed: usize;
     unsafe {
         asm!(
             "csrs sstatus, {initial}",
