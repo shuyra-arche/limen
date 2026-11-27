@@ -2,9 +2,9 @@
 
 use kernel::metal::interrupt::treaty::{ClaimConfirmation, Completion, HardwareClaim};
 
-#[path = "../../../../support/interrupt.rs"]
+#[path = "../../../../../../target/support/interrupt.rs"]
 mod consumer;
-#[path = "../../../../support/route.rs"]
+#[path = "../../../../../../target/support/route.rs"]
 mod route_consumer;
 
 use core::arch::asm;

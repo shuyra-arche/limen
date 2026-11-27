@@ -5,13 +5,13 @@ use kernel::metal::interrupt::treaty::{AbsoluteTimer, ClaimId, Completion, Hardw
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::metal::processor::treaty::{LocalStorage, Minor, Stack, Startup};
 
-#[path = "../../../../support/claim.rs"]
+#[path = "../../../../../target/support/claim.rs"]
 mod claim_consumer;
-#[path = "../../../../support/interrupt.rs"]
+#[path = "../../../../../target/support/interrupt.rs"]
 mod consumer;
-#[path = "../../../../support/route.rs"]
+#[path = "../../../../../target/support/route.rs"]
 mod route_consumer;
-#[path = "../../../../support/timer.rs"]
+#[path = "../../../../../target/support/timer.rs"]
 mod timer_consumer;
 
 use core::{

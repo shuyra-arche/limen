@@ -5,7 +5,9 @@ use std::{fs, path::Path};
 
 #[path = "../target/support/platform.rs"]
 mod declaration;
-pub use declaration::{Board, Firmware, Interrupt, Platform, Setting};
+pub use declaration::{
+    Board, Device, DmaMask, Firmware, Interrupt, Iommu, Platform, Serial, Setting,
+};
 
 #[derive(Debug)]
 pub struct Machine {
@@ -13,6 +15,8 @@ pub struct Machine {
     pub platform: Platform,
     pub board: String,
     pub cpu: Option<&'static str>,
+    pub devices: Vec<String>,
+    pub secondary_serial: bool,
 }
 
 impl Machine {
@@ -25,7 +29,7 @@ impl Machine {
             (1..=64).contains(&platform.harts),
             "invalid test Hart count",
         )?;
-        let (architecture, board, cpu) = match (
+        let (architecture, mut board, cpu) = match (
             architecture,
             format,
             platform.board,
@@ -73,18 +77,72 @@ impl Machine {
                 Board::Q35,
                 Firmware::Ovmf,
                 Interrupt::Apic,
-            ) if !platform.aclint && platform.sstc == Setting::Default => (
-                "x86_64",
-                "q35".into(),
-                None,
-            ),
-            _ => return Err(format!("unsupported image/platform combination: {platform:?}").into()),
+            ) if !platform.aclint && platform.sstc == Setting::Default => {
+                ("x86_64", "q35".into(), None)
+            }
+            _ => {
+                return Err(format!("unsupported image/platform combination: {platform:?}").into());
+            }
         };
+        let mut devices = Vec::new();
+        match (architecture, platform.iommu) {
+            (_, Iommu::None) => {}
+            ("riscv64", Iommu::Riscv) => board.push_str(",iommu-sys=on"),
+            ("aarch64", Iommu::SmmuV3) => board.push_str(",iommu=smmuv3"),
+            ("x86_64", Iommu::AmdVi) => devices.push("amd-iommu,dma-remap=on".into()),
+            ("x86_64", Iommu::Vtd) => devices.push("intel-iommu".into()),
+            _ => return Err("unsupported IOMMU for this machine".into()),
+        }
+        let secondary_serial = match (architecture, platform.serial) {
+            (_, Serial::Default) => false,
+            ("aarch64", Serial::Second) => true,
+            ("x86_64", Serial::Isa) => {
+                devices.push("isa-serial,index=0".into());
+                false
+            }
+            _ => return Err("unsupported serial topology for this machine".into()),
+        };
+        let mut occupied = [false; 32];
+        let mut ended = false;
+        for device in platform.devices {
+            let Some(device) = device else {
+                ended = true;
+                continue;
+            };
+            require(!ended, "noncontiguous device description")?;
+            match device {
+                Device::Edu {
+                    slot,
+                    function,
+                    dma_mask,
+                } => {
+                    // Only standalone PCI functions are presently supported.
+                    require(
+                        (1..32).contains(&slot) && function == 0,
+                        "unsupported PCI address",
+                    )?;
+                    require(!occupied[usize::from(slot)], "duplicate PCI address")?;
+                    occupied[usize::from(slot)] = true;
+                    let bus = if architecture == "x86_64" {
+                        ",bus=pcie.0"
+                    } else {
+                        ""
+                    };
+                    let mask = match dma_mask {
+                        DmaMask::Default => "",
+                        DmaMask::Full32 => ",dma_mask=0xffffffff",
+                    };
+                    devices.push(format!("edu{bus},addr={slot:02x}.{function}{mask}"));
+                }
+            }
+        }
         Ok(Self {
             architecture,
             platform,
             board,
             cpu,
+            devices,
+            secondary_serial,
         })
     }
 }

@@ -5,6 +5,8 @@
     "release"
   ],
   "sources": [
+    "server/tests/metal/interrupt/aarch64/gic/native/mod.rs",
+    "server/tests/metal/interrupt/aarch64/gic/native/scenario.rs",
     "server/src/metal/interrupt/treaty/mod.rs",
     "server/src/metal/interrupt/treaty/absolute.rs",
     "server/src/metal/interrupt/treaty/route.rs",

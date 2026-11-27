@@ -209,7 +209,7 @@ mod transport;
 #[test]
 fn platform_record_is_bounded_and_rejects_unsupported_combinations() {
     use object::{Architecture, BinaryFormat};
-    use platform::{Board, Firmware, Interrupt, Machine, Platform, Setting};
+    use platform::{Board, Firmware, Interrupt, Iommu, Machine, Platform, Serial, Setting};
 
     let original = Platform {
         board: Board::Virt,
@@ -218,19 +218,25 @@ fn platform_record_is_bounded_and_rejects_unsupported_combinations() {
         harts: 1,
         aclint: true,
         sstc: Setting::Off,
+        iommu: Iommu::None,
+        serial: Serial::Default,
+        devices: [None; 4],
     };
     let bytes = original.encode();
     assert_eq!(Platform::decode(&bytes), Some(original));
     assert!(Platform::decode(&bytes[..15]).is_none());
     for (index, value) in [
         (0, 0),
-        (8, 2),
+        (8, 1),
         (9, 0),
         (10, 0),
         (11, 0),
         (13, 2),
         (14, 3),
-        (15, 1),
+        (15, 5),
+        (16, 3),
+        (17, 1),
+        (20, 2),
     ] {
         let mut invalid = bytes;
         invalid[index] = value;
@@ -267,4 +273,90 @@ fn platform_record_is_bounded_and_rejects_unsupported_combinations() {
     }
     assert!(Machine::admit(Architecture::Riscv64, BinaryFormat::Pe, original).is_err());
     assert!(Machine::admit(Architecture::X86_64, BinaryFormat::Elf, original).is_err());
+}
+
+#[test]
+fn platform_device_topology_is_composed_without_test_identity() {
+    use object::{Architecture, BinaryFormat};
+    use platform::{
+        Board, Device, DmaMask, Firmware, Interrupt, Iommu, Machine, Platform, Serial, Setting,
+    };
+
+    let device = |slot| Device::Edu {
+        slot,
+        function: 0,
+        dma_mask: DmaMask::Full32,
+    };
+    let original = Platform {
+        board: Board::Virt,
+        firmware: Firmware::OpenSbi,
+        interrupt: Interrupt::Plic,
+        harts: 1,
+        aclint: false,
+        sstc: Setting::Default,
+        iommu: Iommu::Riscv,
+        serial: Serial::Default,
+        devices: [None; 4],
+    }
+    .device(device(6))
+    .device(device(7));
+    assert_eq!(Platform::decode(&original.encode()), Some(original));
+    let machine = Machine::admit(Architecture::Riscv64, BinaryFormat::Elf, original).unwrap();
+    assert_eq!(machine.board, "virt,aia=none,aclint=off,iommu-sys=on");
+    assert_eq!(
+        machine.devices,
+        [
+            "edu,addr=06.0,dma_mask=0xffffffff",
+            "edu,addr=07.0,dma_mask=0xffffffff",
+        ]
+    );
+    for invalid in [
+        original.device(device(6)),
+        original.device(device(32)),
+        Platform {
+            iommu: Iommu::Vtd,
+            ..original
+        },
+        Platform {
+            serial: Serial::Second,
+            ..original
+        },
+    ] {
+        assert!(Machine::admit(Architecture::Riscv64, BinaryFormat::Elf, invalid).is_err());
+    }
+    let mut missing = original.encode();
+    missing[20..24].fill(0);
+    assert!(Platform::decode(&missing).is_none());
+
+    let arm = Platform {
+        firmware: Firmware::Aavmf,
+        interrupt: Interrupt::GicV3,
+        harts: 4,
+        iommu: Iommu::SmmuV3,
+        serial: Serial::Second,
+        ..original
+    };
+    let machine = Machine::admit(Architecture::Aarch64, BinaryFormat::Pe, arm).unwrap();
+    assert!(machine.board.ends_with(",iommu=smmuv3"));
+    assert!(machine.secondary_serial);
+
+    let x86 = Platform {
+        board: Board::Q35,
+        firmware: Firmware::Ovmf,
+        interrupt: Interrupt::Apic,
+        harts: 4,
+        iommu: Iommu::Vtd,
+        serial: Serial::Isa,
+        ..original
+    };
+    let machine = Machine::admit(Architecture::X86_64, BinaryFormat::Pe, x86).unwrap();
+    assert_eq!(
+        machine.devices,
+        [
+            "intel-iommu",
+            "isa-serial,index=0",
+            "edu,bus=pcie.0,addr=06.0,dma_mask=0xffffffff",
+            "edu,bus=pcie.0,addr=07.0,dma_mask=0xffffffff",
+        ]
+    );
 }

@@ -5,6 +5,7 @@
     "release"
   ],
   "sources": [
+    "server/tests/metal/memory/mmu/riscv64/external/iommu/native.rs",
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
     "server/src/metal/mod.rs",
@@ -79,6 +80,7 @@
       "PASS riscv-iommu sv39=1 directory=1 replacement-rejected=1 off=1 fences=130 walk=1 fault=1 dma=1 downgrade=1 bindings=2 unbound=1 stale=1 recovered=1 queue-return=2"
     ],
     "imports": [
+      "metal/memory/mmu/riscv64/external/iommu/native.rs",
       "target/support/pci/ecam.rs",
       "target/support/pci/edu.rs"
     ],

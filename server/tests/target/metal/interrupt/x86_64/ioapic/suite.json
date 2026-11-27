@@ -5,6 +5,8 @@
     "release"
   ],
   "sources": [
+    "server/tests/metal/interrupt/x86_64/external/ioapic/native/mod.rs",
+    "server/tests/metal/interrupt/x86_64/external/ioapic/native/scenario.rs",
     "server/src/entry/boot/**",
     "server/src/entry/mod.rs",
     "server/src/lib.rs",

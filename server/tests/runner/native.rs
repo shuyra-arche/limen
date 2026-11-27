@@ -63,9 +63,7 @@ fn command(machine: &Machine, image: &Path, directory: &Path, observe: bool) -> 
             .arg("-kernel")
             .arg(image)
             .args(["-semihosting-config", semihost]);
-        if !observe {
-            command.args(["-serial", "stdio"]);
-        }
+        peripherals(&mut command, machine, directory, observe);
         return Ok(command);
     }
 
@@ -122,11 +120,25 @@ fn command(machine: &Machine, image: &Path, directory: &Path, observe: bool) -> 
             ))
             .args(["-device", "virtio-blk-pci,drive=esp"])
             .args(["-semihosting-config", semihost]);
-        if !observe {
-            command.args(["-serial", "stdio"]);
+    }
+    peripherals(&mut command, machine, directory, observe);
+    Ok(command)
+}
+
+fn peripherals(command: &mut Command, machine: &Machine, directory: &Path, observe: bool) {
+    if machine.architecture != "x86_64" {
+        command.arg("-serial").arg(if observe {
+            format!("file:{}", directory.join("serial.log").display())
+        } else {
+            "stdio".into()
+        });
+        if machine.secondary_serial {
+            command.args(["-serial", "null"]);
         }
     }
-    Ok(command)
+    for device in &machine.devices {
+        command.args(["-device", device]);
+    }
 }
 
 pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<()> {
@@ -147,6 +159,9 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
             "harts": machine.platform.harts,
             "machine": machine.board,
             "cpu": machine.cpu,
+            "iommu": format!("{:?}", machine.platform.iommu),
+            "serial": format!("{:?}", machine.platform.serial),
+            "devices": machine.devices,
             "image_sha256": kernel_verification::digest(&image)?,
         }),
     )?;

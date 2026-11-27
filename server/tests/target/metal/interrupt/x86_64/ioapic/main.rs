@@ -1,14 +1,12 @@
 #![no_std]
 #![no_main]
 
-use kernel::entry::boot;
-use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::{entry::boot::Boot, metal::platform::boot::treaty as diagnostic};
 use uefi::prelude::*;
 use uefi_fixture as fixture;
 
-use fixture::{interrupt, q35};
-
-mod scenario;
+#[path = "../../../../../metal/interrupt/x86_64/external/ioapic/native/mod.rs"]
+mod native;
 
 #[entry]
 fn main() -> Status {
@@ -16,17 +14,9 @@ fn main() -> Status {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
-    fixture::check_handoff(&boot, None);
-    let mut window = q35::local_window(&boot);
-    unsafe { interrupt::prepare(&mut window) };
-    let mut controller = q35::local_controller(&boot, window);
-    scenario::check(
-        boot.acpi().unwrap().madt().unwrap(),
-        boot.hart(),
-        &mut controller,
-    );
-    boot_diagnostic::shutdown(true)
+extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
+    native::check(boot);
+    diagnostic::shutdown(true)
 }
 
 #[panic_handler]

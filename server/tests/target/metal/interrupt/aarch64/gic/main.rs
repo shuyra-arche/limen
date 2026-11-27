@@ -1,20 +1,12 @@
 #![no_std]
 #![no_main]
 
-use kernel::entry::boot;
-use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::{entry::boot::Boot, metal::platform::boot::treaty as diagnostic};
 use uefi::prelude::*;
 use uefi_fixture as fixture;
 
-use kernel::metal::{
-    chrono::aarch64::description::GenericCounter, interrupt::aarch64::gic::GicV3,
-    processor::treaty::HartId,
-};
-
-#[path = "../../../../support/clock.rs"]
-mod clock;
-
-mod scenario;
+#[path = "../../../../../metal/interrupt/aarch64/gic/native/mod.rs"]
+mod native;
 
 #[entry]
 fn main() -> Status {
@@ -22,27 +14,9 @@ fn main() -> Status {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
-    fixture::check_handoff(&boot, None);
-    let tree = boot.device_tree_description().unwrap();
-    let description = GenericCounter::read(&tree).unwrap().unwrap();
-    assert!(unsafe { description.bind(boot.hart() ^ 1) }.is_err());
-    let local = unsafe { description.bind(boot.hart()) }.unwrap();
-    let distinct = unsafe { description.bind(boot.hart()) }.unwrap();
-    let hart = HartId::new(boot.hart());
-    assert_eq!(local.clock().hart(), hart.get());
-    assert!(
-        local
-            .clock()
-            .sample()
-            .unwrap()
-            .elapsed_since(distinct.clock().sample().unwrap())
-            .is_none()
-    );
-    clock::observe(local.clock());
-    let controller = GicV3::read(&tree).unwrap().expect("GIC description");
-    scenario::check(&tree, controller, boot.hart());
-    boot_diagnostic::shutdown(true)
+extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
+    native::check(boot);
+    diagnostic::shutdown(true)
 }
 
 #[panic_handler]

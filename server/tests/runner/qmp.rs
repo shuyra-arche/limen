@@ -60,16 +60,12 @@ pub fn run_isolated(
     };
 
     let socket = directory.join("qmp.sock");
-    let serial = directory.join("serial.log");
-    File::create(&serial)?;
     let transcript = File::create(directory.join("qmp.jsonl"))?;
     let stdout = File::create(directory.join("stdout.log"))?;
     let listener = UnixListener::bind(&socket)?;
     let result = (|| {
         listener.set_nonblocking(true)?;
         command
-            .args(["-display", "none", "-serial"])
-            .arg(format!("file:{}", serial.display()))
             .args(["-S", "-qmp"])
             .arg(format!("unix:{},server=off", socket.display()));
         let finished = AtomicBool::new(false);
