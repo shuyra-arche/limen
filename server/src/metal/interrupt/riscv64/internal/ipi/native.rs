@@ -3,7 +3,10 @@
 use crate::metal::{
     interrupt::treaty::{Issuance, NotifyProcessor, ipi::Sealed},
     platform::firmware::treaty::sbi::{HartService, IpiService},
-    processor::{description::riscv64::cpu::RiscvCpus, treaty::try_current_processor},
+    processor::{
+        description::riscv64::cpu::RiscvCpus,
+        treaty::{SoftwareInterrupt, try_current_processor},
+    },
 };
 
 use super::super::supervisor::Reception;
@@ -214,7 +217,23 @@ impl Receiver {
     /// A concurrent notification can reassert it before observation and must
     /// be handled via the original mailbox protocol.
     pub fn acknowledge(&mut self) -> Result<(), Error> {
-        if !self.pending()? {
+        self.current()?;
+        self.acknowledge_pending()
+    }
+
+    /// Clear the same admitted software line from its actual trap layer.
+    pub fn acknowledge_interrupt(
+        &mut self,
+        interrupt: &SoftwareInterrupt<'_>,
+    ) -> Result<(), Error> {
+        if interrupt.processor().get() as u64 != self.0.hart() {
+            return Err(Error::Scope);
+        }
+        self.acknowledge_pending()
+    }
+
+    fn acknowledge_pending(&mut self) -> Result<(), Error> {
+        if !self.0.pending() {
             return Err(Error::Busy);
         }
         self.0.clear_software();

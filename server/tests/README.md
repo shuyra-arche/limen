@@ -171,8 +171,10 @@ semihosting is enabled to report completion.
 | Module | `module-guest:lifecycle`: UEFI strict-NX independent ELF, use draining and retention without withdrawal; riscv64 Sv39/Sv48/Sv57, two processors, dependency-ordered retirement and reuse |
 
 Host models and compiler contracts do not establish native hardware authority.
-Hardware fixtures exercise actual observations and retained resources. They
-do not replace the future runtime Trap or driver Sign lifecycle.
+The riscv64 IPI guest uses the permanent supervisor software trap vector on
+the receiving processor. It checks real peer delivery, coalescing, same-layer
+return and ordinary synchronization after the IRQ. The timer and external IRQ
+fixtures still exercise their individual controller contracts.
 
 ## Host-assisted observations
 
