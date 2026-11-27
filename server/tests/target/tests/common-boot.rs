@@ -15,7 +15,8 @@ extern "Rust" fn limen_platform_ready(mut boot: Boot<'_>) -> ! {
     assert!(!boot.stack_range().is_empty());
     let _major = boot.take_major().expect("original major ownership");
     assert!(boot.take_major().is_none());
-    support::complete()
+    collected();
+    support::finish()
 }
 
 #[test_case]

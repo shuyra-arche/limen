@@ -33,9 +33,9 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
         _ => panic!("unsupported T0 architecture: {architecture}"),
     };
     let test = if case == "discovery-panic" {
-        "sync"
+        "common-sync"
     } else {
-        "outcome"
+        "common-outcome"
     };
     let evidence = root.join(".integration/t0").join(case);
     let logs = root.join(".integration/t0/cargo").join(case);

@@ -10,6 +10,7 @@ use uefi_fixture as fixture;
 mod pages;
 use pages::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 
+#[path = "../../../../../../metal/memory/mmu/aarch64/paging.rs"]
 mod scenario;
 
 #[entry]

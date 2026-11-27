@@ -18,8 +18,7 @@ fn main() -> uefi::Status {
 mod collection;
 pub use collection::run;
 
-pub fn complete() -> ! {
-    crate::collected();
+pub fn finish() -> ! {
     outcome::finish(true)
 }
 

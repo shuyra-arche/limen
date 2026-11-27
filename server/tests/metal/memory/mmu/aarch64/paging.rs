@@ -6,7 +6,7 @@ use kernel::metal::memory::mmu::{
 };
 use limen_treaty::model::PhysicalAddress;
 
-#[path = "../../../../../support/paging/installation.rs"]
+#[path = "../../../../target/support/paging/installation.rs"]
 mod installation;
 
 static EMPTY: Page = Page([0; 512]);

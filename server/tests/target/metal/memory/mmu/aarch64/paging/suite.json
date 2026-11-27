@@ -37,6 +37,7 @@
     "server/src/metal/processor/executor/mod.rs",
     "server/src/metal/processor/treaty/mod.rs",
     "server/src/metal/processor/mod.rs",
+    "server/tests/metal/memory/mmu/aarch64/paging.rs",
     "server/tests/target/support/uefi/Cargo.toml",
     "server/tests/target/support/uefi/build.rs",
     "server/src/metal/sync/**",

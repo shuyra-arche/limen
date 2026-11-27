@@ -72,7 +72,8 @@
         "server/src/metal/chrono/mod.rs",
         "server/src/metal/chrono/x86_64/tsc.rs",
         "server/src/metal/platform/description/acpi/madt.rs",
-        "server/tests/target/support/uefi/interrupt.rs"
+        "server/tests/target/support/uefi/interrupt.rs",
+        "server/tests/metal/interrupt/x86_64/internal/apic/native_timer.rs"
       ]
     },
     "launch": {

@@ -62,6 +62,7 @@ name = "kernel-guest"
 version = "0.0.0"
 dependencies = [
  "kernel",
+ "limen-treaty",
  "uefi",
  "uefi-fixture",
 ]
