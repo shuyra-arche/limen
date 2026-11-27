@@ -72,6 +72,8 @@ pub enum State {
     Opening,
     Open,
     Receiving(u64),
+    /// The original destructive read did not identify any valid source.
+    Uncertain(u64, u32),
     Received(u64, u32),
     Completing(u64, u32),
     Awaiting(u64, u32),
@@ -82,7 +84,9 @@ pub enum State {
 impl State {
     fn reborrowable_claim(self) -> Result<Option<(u64, u32)>, Failure> {
         match self {
-            Self::Receiving(_) | Self::Completing(..) => Err(Failure::Unconfirmed),
+            Self::Receiving(_) | Self::Uncertain(..) | Self::Completing(..) => {
+                Err(Failure::Unconfirmed)
+            }
             Self::Received(round, source) | Self::Awaiting(round, source) => {
                 Ok(Some((round, source)))
             }
@@ -90,9 +94,17 @@ impl State {
         }
     }
 
+    fn observe_receive(round: u64, raw: u32, sources: u32) -> Self {
+        match raw {
+            0 => Self::Open,
+            source if source <= sources => Self::Received(round, source),
+            unknown => Self::Uncertain(round, unknown),
+        }
+    }
+
     pub(super) fn retains_claim(self, source: u32) -> bool {
         match self {
-            Self::Receiving(_) => true,
+            Self::Receiving(_) | Self::Uncertain(..) => true,
             Self::Received(_, claimed)
             | Self::Completing(_, claimed)
             | Self::Awaiting(_, claimed) => claimed == source,
@@ -237,7 +249,12 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         }
         if !matches!(
             context.state,
-            State::Open | State::Received(..) | State::Awaiting(..)
+            State::Open
+                | State::Receiving(_)
+                | State::Uncertain(..)
+                | State::Received(..)
+                | State::Completing(..)
+                | State::Awaiting(..)
         ) {
             return Err(Failure::Busy);
         }
@@ -366,12 +383,9 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         let round = self.controller.next_round;
         self.controller.next_round = round.checked_add(1).ok_or(Failure::Exhausted)?;
         self.set_context(slot, State::Receiving(round));
-        let source = self.read(claim(context.index));
-        if source == 0 {
-            self.set_context(slot, State::Open);
-            return Ok(None);
-        }
-        self.set_context(slot, State::Received(round, source));
+        let raw = self.read(claim(context.index));
+        let observed = State::observe_receive(round, raw, self.controller.domain.sources);
+        self.set_context(slot, observed);
         self.current_slot(slot, local)
     }
 
