@@ -1,7 +1,6 @@
 //! RISC-V supervisor local reception lines, independent of their producers.
 
-use crate::metal::processor::hart::{local::try_current_hart, riscv::native};
-use core::{arch::asm, marker::PhantomData};
+use core::marker::PhantomData;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Cause {
@@ -23,6 +22,13 @@ pub enum Error {
     Context,
 }
 
+/// Native operations belonging to the original supervisor reception source.
+struct Operations {
+    valid: fn(u64) -> bool,
+    enabled: fn() -> usize,
+    set: fn(usize, bool),
+}
+
 /// Exclusive control of one supervisor reception line of the admitted Hart.
 /// Does not install a Trap entry, grant global interrupt enable, or retire a
 /// controller. The producer borrows this line for its whole active lifetime.
@@ -30,18 +36,11 @@ pub enum Error {
 pub struct Reception {
     hart: u64,
     cause: Cause,
+    operations: &'static Operations,
     local: PhantomData<*mut ()>,
 }
 
 impl Reception {
-    fn new(hart: u64, cause: Cause) -> Self {
-        Self {
-            hart,
-            cause,
-            local: PhantomData,
-        }
-    }
-
     pub fn hart(&self) -> u64 {
         self.hart
     }
@@ -51,41 +50,16 @@ impl Reception {
     }
 
     pub(crate) fn valid(&self) -> bool {
-        try_current_hart().is_some_and(|hart| hart.get() as u64 == self.hart)
-            && native::status().masked()
+        (self.operations.valid)(self.hart)
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        enabled_sources() & self.cause.mask() != 0
-    }
-
-    pub(crate) fn pending(&self) -> bool {
-        let pending: usize;
-        unsafe { asm!("csrr {}, sip", out(reg) pending, options(nostack, nomem)) };
-        pending & self.cause.mask() != 0
+        (self.operations.enabled)() & self.cause.mask() != 0
     }
 
     pub(crate) fn set(&mut self, enabled: bool) {
-        let mask = self.cause.mask();
-        unsafe {
-            if enabled {
-                asm!("csrs sie, {}", in(reg) mask, options(nostack));
-            } else {
-                asm!("csrc sie, {}", in(reg) mask, options(nostack));
-            }
-        }
+        (self.operations.set)(self.cause.mask(), enabled);
     }
-}
-
-fn enabled_sources() -> usize {
-    let enabled;
-    unsafe { asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem)) };
-    enabled
-}
-
-/// Observe the actual full supervisor enable register; no control is granted.
-pub(in crate::metal) fn all_masked() -> bool {
-    enabled_sources() == 0
 }
 
 /// The two independently borrowable reception lines handed off by Entry.
@@ -96,16 +70,73 @@ pub struct Supervisor {
     pub external: Reception,
 }
 
-impl Supervisor {
-    /// # Safety
-    /// The trusted major entry owns this Hart's local lines and calls this
-    /// exactly once, before delivering them to any consumer.
-    pub(crate) unsafe fn admit(hart: u64) -> Result<Self, Error> {
-        let timer = Reception::new(hart, Cause::Timer);
-        let external = Reception::new(hart, Cause::External);
-        if !timer.valid() || timer.enabled() || external.enabled() {
-            return Err(Error::Context);
-        }
-        Ok(Self { timer, external })
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+mod native {
+    use super::{Cause, Error, Operations, Reception, Supervisor};
+    use crate::metal::processor::hart::{local::try_current_hart, riscv};
+    use core::{arch::asm, marker::PhantomData};
+
+    fn valid(hart: u64) -> bool {
+        try_current_hart().is_some_and(|current| current.get() as u64 == hart)
+            && riscv::native::status().masked()
     }
+
+    pub(super) fn enabled() -> usize {
+        let enabled: usize;
+        unsafe { asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem)) };
+        enabled
+    }
+
+    fn set(mask: usize, enabled: bool) {
+        unsafe {
+            if enabled {
+                asm!("csrs sie, {}", in(reg) mask, options(nostack));
+            } else {
+                asm!("csrc sie, {}", in(reg) mask, options(nostack));
+            }
+        }
+    }
+
+    static OPERATIONS: Operations = Operations {
+        valid,
+        enabled,
+        set,
+    };
+
+    impl Reception {
+        fn new(hart: u64, cause: Cause) -> Self {
+            Self {
+                hart,
+                cause,
+                operations: &OPERATIONS,
+                local: PhantomData,
+            }
+        }
+
+        pub(crate) fn pending(&self) -> bool {
+            let pending: usize;
+            unsafe { asm!("csrr {}, sip", out(reg) pending, options(nostack, nomem)) };
+            pending & self.cause.mask() != 0
+        }
+    }
+
+    impl Supervisor {
+        /// # Safety
+        /// The trusted major entry owns this Hart's local lines and calls
+        /// this exactly once, before delivering them to any consumer.
+        pub(crate) unsafe fn admit(hart: u64) -> Result<Self, Error> {
+            let timer = Reception::new(hart, Cause::Timer);
+            let external = Reception::new(hart, Cause::External);
+            if !timer.valid() || timer.enabled() || external.enabled() {
+                return Err(Error::Context);
+            }
+            Ok(Self { timer, external })
+        }
+    }
+}
+
+/// Observe the actual full supervisor enable register; no control is granted.
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+pub(in crate::metal) fn all_masked() -> bool {
+    native::enabled() == 0
 }
