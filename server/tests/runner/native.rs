@@ -11,12 +11,7 @@ fn variable(name: &str, default: &str) -> String {
     env::var(name).unwrap_or_else(|_| default.into())
 }
 
-fn command(
-    architecture: &str,
-    image: &Path,
-    directory: &Path,
-    observe: bool,
-) -> Result<Command> {
+fn command(architecture: &str, image: &Path, directory: &Path, observe: bool) -> Result<Command> {
     let mut command = Command::new(match architecture {
         "riscv64" => variable("QEMU_RISCV64", "qemu-system-riscv64"),
         "aarch64" => variable("QEMU_AARCH64", "qemu-system-aarch64"),
@@ -36,22 +31,26 @@ fn command(
         "none",
         "-no-reboot",
     ]);
-    let semihost = [
-        "-semihosting-config",
-        "enable=on,target=native,userspace=off",
-    ];
+    // Semihosting diagnostics must not share the QMP control stream.
+    let semihost = if observe && architecture != "x86_64" {
+        command.arg("-chardev").arg(format!(
+            "file,id=semihost,path={}",
+            directory.join("semihost.log").display()
+        ));
+        "enable=on,target=native,userspace=off,chardev=semihost"
+    } else {
+        "enable=on,target=native,userspace=off"
+    };
     if architecture == "riscv64" {
         command
-            .args([
-                "-machine", "virt", "-cpu", "rv64", "-m", "128M", "-bios",
-            ])
+            .args(["-machine", "virt", "-cpu", "rv64", "-m", "128M", "-bios"])
             .arg(variable(
                 "QEMU_OPENSBI",
                 "/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin",
             ))
             .arg("-kernel")
             .arg(image)
-            .args(semihost);
+            .args(["-semihosting-config", semihost]);
         if !observe {
             command.args(["-serial", "stdio"]);
         }
@@ -118,7 +117,7 @@ fn command(
                 esp.display()
             ))
             .args(["-device", "virtio-blk-pci,drive=esp"])
-            .args(semihost);
+            .args(["-semihosting-config", semihost]);
         if !observe {
             command.args(["-serial", "stdio"]);
         }
