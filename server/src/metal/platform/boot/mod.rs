@@ -40,18 +40,9 @@ pub(crate) use backend::enter_major;
 pub(crate) use backend::image;
 #[cfg(limen_target)]
 pub(crate) use backend::{
-    DeliveryError, MinorContext, admit, established, minor_context, park, wake_minor,
+    DeliveryError, MinorContext, admit, entry, established, minor_context, park, wake_minor,
 };
 
 /// Major and minor CPUs use the same ordinary startup stack budget.
 #[cfg(limen_target)]
 pub(in crate::metal) const STACK_BYTES: usize = 32 * 1024;
-
-/// During bootstrap, terminal vectors switch to the diagnostic stack before
-/// invoking Rust. Ordinary entry and Hart protection require the installed
-/// bootstrap vectors and must exclude that terminal stack.
-#[cfg(limen_target)]
-pub(crate) fn ordinary_entry() -> bool {
-    backend::entry_installed()
-        && !trap::stack_range().contains(&crate::metal::processor::hart::local::stack_pointer())
-}

@@ -1,7 +1,7 @@
 use crate::metal::{
     platform::boot::handoff::{Descriptions, Facts, uefi},
     platform::boot::trap as diagnostic,
-    processor::hart::aarch64::native,
+    processor::hart::{aarch64::native, local},
 };
 mod major;
 pub(crate) use major::major as enter_major;
@@ -22,19 +22,18 @@ pub(crate) fn established() -> bool {
         asm!("mrs {}, DAIF", "mrs {}, SPSel", out(reg) daif, out(reg) spsel,
              options(nostack, nomem, preserves_flags));
     }
-    daif & 0x3c0 == 0x3c0 && spsel == 1 && entry_installed()
+    daif & 0x3c0 == 0x3c0 && spsel == 1 && entry().is_some()
 }
 
-pub(crate) fn entry_installed() -> bool {
-    let el: usize;
-    unsafe { asm!("mrs {}, CurrentEL", out(reg) el, options(nostack, nomem, preserves_flags)) };
-    if el != 4 {
-        return false;
-    }
-    let vector: usize;
-    unsafe { asm!("mrs {}, VBAR_EL1", out(reg) vector, options(nostack, nomem, preserves_flags)) };
-    vector == vectors as *const () as usize
+pub(crate) fn entry() -> Option<local::Entry> {
+    local::Entry::admit(
+        native::Entry {
+            vector: vectors as *const () as usize,
+        },
+        diagnostic::stack_range(),
+    )
 }
+
 pub(crate) fn park() -> ! {
     loop {
         unsafe { asm!("wfe", options(nomem, nostack)) };

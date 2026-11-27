@@ -141,7 +141,8 @@ pub(crate) extern "C" fn arrive(hart: usize, minor: &'static Minor) -> ! {
     assert!(minor.established(hart));
     // `Entered` identifies this CPU as the sole initializer of this resident
     // local record. The terminal vectors cannot observe its partial setup.
-    unsafe { minor.local.install(hart) };
+    let entry = boot::entry().expect("verified minor entry");
+    unsafe { minor.local.install(hart, entry) };
     assert!(local::can_switch(), "minor Hart protection is not idle");
     minor.state.store(State::Ready as u32, Ordering::Release);
     (launch.entry)(hart, launch.argument)

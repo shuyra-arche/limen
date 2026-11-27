@@ -137,6 +137,26 @@ pub fn check_enabled() {
 
     let leaf = LeafLock::new(());
     let turn = TurnLock::new(());
+
+    // A vectored mode change leaves synchronous exceptions at the same
+    // base. All interrupt sources are masked; restore before assertions.
+    let original: usize;
+    let observed: usize;
+    unsafe {
+        asm!("csrr {}, stvec", out(reg) original, options(nostack));
+        asm!("csrw stvec, {}", in(reg) original | 1, options(nostack));
+        asm!("csrr {}, stvec", out(reg) observed, options(nostack));
+    }
+    let rejected_leaf = leaf.attempt(|()| ());
+    let rejected_turn = turn.acquire(|()| ());
+    unsafe { asm!("csrw stvec, {}", in(reg) original, options(nostack)) };
+    assert_eq!(observed, original | 1);
+    assert_eq!(rejected_leaf, Err(LeafError::Context));
+    assert_eq!(rejected_turn, Err(TurnAcquireError::Context));
+    assert_eq!(local_interrupt_state(), 0);
+    assert_eq!(turn.acquire(|()| ()), Ok(()));
+    kernel::entry::boot::write("PASS hart-entry revalidated=1 restored=1\n");
+
     // The boot fixture proved that all supervisor interrupt sources are
     // disabled, so setting the global bit cannot enter the terminal vector.
     unsafe { asm!("csrsi sstatus, 2", options(nostack)) };

@@ -1,7 +1,7 @@
 //! Trusted local CPU facts and fixed storage.
 
 #[cfg(limen_target)]
-use core::cell::Cell;
+use core::{cell::Cell, ops::Range};
 use core::ptr;
 
 mod node;
@@ -23,19 +23,48 @@ pub(crate) use protection::{
     Error, TURN_CAPACITY, TurnParticipation, begin_leaf, begin_turn, can_switch,
 };
 
-#[cfg(limen_target)]
-use crate::metal::platform::boot::ordinary_entry;
-
 #[cfg(all(test, not(limen_target)))]
 #[path = "../../../../../tests/metal/processor/hart/mod.rs"]
 mod backend;
-#[cfg(all(test, not(limen_target)))]
-use backend::ordinary_entry;
+/// Verified native entry and the independent terminal stack exclusion.
+#[cfg(limen_target)]
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct Entry {
+    native: backend::Entry,
+    start: usize,
+    end: usize,
+}
+
+#[cfg(limen_target)]
+impl Entry {
+    /// Check actual installed controls against the entry owner's expected
+    /// representation. The caller still owns all vector/stack lifetimes.
+    pub(in crate::metal) fn admit(
+        expected: backend::Entry,
+        terminal: Range<usize>,
+    ) -> Option<Self> {
+        if terminal.is_empty() || backend::entry() != Some(expected) {
+            return None;
+        }
+        let entry = Self {
+            native: expected,
+            start: terminal.start,
+            end: terminal.end,
+        };
+        entry.permits(expected).then_some(entry)
+    }
+
+    fn permits(self, observed: backend::Entry) -> bool {
+        self.native == observed && !(self.start..self.end).contains(&backend::stack_pointer())
+    }
+}
 
 /// Fixed storage belonging to the verified physical CPU that took this entry.
 pub(in crate::metal) struct HartLocal {
     #[cfg(limen_target)]
     identity: Cell<usize>,
+    #[cfg(limen_target)]
+    entry: Cell<Option<Entry>>,
     protection: protection::LocalProtection,
 }
 
@@ -48,23 +77,44 @@ impl HartLocal {
         Self {
             #[cfg(limen_target)]
             identity: Cell::new(0),
+            #[cfg(limen_target)]
+            entry: Cell::new(None),
             protection: protection::LocalProtection::new(),
         }
     }
 
     /// The caller owns this freshly initialized CPU and permanent local storage.
-    /// No ordinary interrupt or continuation may enter during installation.
+    /// The actual entry owner keeps the verified vectors and terminal stack
+    /// alive. No ordinary interrupt or continuation may enter during install.
     #[cfg(limen_target)]
-    pub(in crate::metal) unsafe fn install(&'static self, identity: usize) {
+    pub(in crate::metal) unsafe fn install(&'static self, identity: usize, entry: Entry) {
+        assert!(backend::entry().is_some_and(|observed| entry.permits(observed)));
+        assert!(self.entry.get().is_none());
+        self.entry.set(Some(entry));
         self.identity.set(identity);
         unsafe { backend::install_local(ptr::from_ref(self).expose_provenance()) };
     }
 }
 
 fn installed() -> Option<&'static HartLocal> {
-    // Verified boot clears the local register before installing the vector,
-    // then writes only the permanent local's address before ordinary entry.
+    // The trusted machine entry clears the local register before any ordinary
+    // Rust call. Until another trusted entry takes over, it is either zero or
+    // the exact installed permanent local address. This is not a mechanism
+    // for interpreting an arbitrary inherited or user-controlled register.
     unsafe { ptr::with_exposed_provenance::<HartLocal>(backend::local_address()).as_ref() }
+}
+
+/// Only a trusted current kernel entry can acquire ordinary local protection.
+#[cfg(limen_target)]
+fn ordinary_local() -> Option<&'static HartLocal> {
+    let observed = backend::entry()?;
+    let local = installed()?;
+    local.entry.get()?.permits(observed).then_some(local)
+}
+
+#[cfg(all(test, not(limen_target)))]
+fn ordinary_local() -> Option<&'static HartLocal> {
+    installed()
 }
 
 #[cfg(limen_target)]
@@ -75,10 +125,7 @@ pub(crate) fn current_hart() -> HartId {
 /// Fallible admission check for hardware consumers at their local boundary.
 #[cfg(limen_target)]
 pub(crate) fn try_current_hart() -> Option<HartId> {
-    if !ordinary_entry() {
-        return None;
-    }
-    Some(HartId::new(installed()?.identity.get()))
+    Some(HartId::new(ordinary_local()?.identity.get()))
 }
 
 #[cfg(limen_target)]
