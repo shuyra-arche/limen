@@ -265,11 +265,11 @@ fn terminal_diagnostic_must_match_the_observed_registers() {
 fn fault_observation_error(directory: &Path, error: impl std::fmt::Display) -> ! {
     let read = |name: &str| fs::read_to_string(directory.join(name)).unwrap_or_default();
     panic!(
-        "{error}\nGDB stdout:\n{}\nGDB stderr:\n{}\nQMP:\n{}\nMachine result:\n{}",
+        "{error}\nGDB stdout:\n{}\nGDB stderr:\n{}\nQMP:\n{}\nMachine process:\n{}",
         read("controller/serial.log"),
         read("controller/stderr.log"),
         read("qmp.jsonl"),
-        read("result.json"),
+        read("process.json"),
     )
 }
 
@@ -295,9 +295,13 @@ fn bss_clear_traps_on_the_original_major_stack() {
     native::run(&image, false, Some(&evidence.join("normal"))).unwrap();
     let normal = evidence.join("normal").join(image.file_name().unwrap());
     let result = receipt(&normal.join("result.json"));
-    assert_eq!(result["status"], "exited");
-    assert_eq!(result["code"], 97);
-    assert_eq!(result["passed"], true);
+    assert_eq!(result["verdict"], "pass");
+    let process = receipt(&normal.join("process.json"));
+    assert_eq!(process["termination"]["kind"], "exited");
+    assert_eq!(process["termination"]["value"], 97);
+    assert_eq!(process["cleanup"]["settled"], true);
+    assert_eq!(process["cleanup"]["unexpected_descendants"], false);
+    assert!(process["cleanup"]["error"].is_null());
 
     let layout = Layout::read(&image);
     let fault = evidence.join("fault");

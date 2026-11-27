@@ -19,7 +19,7 @@ fn cargo_logs(output: &Output, directory: &Path, name: &str) {
     fs::write(directory.join(format!("{name}.stderr")), &output.stderr).unwrap();
 }
 
-fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
+fn run(case: &str, verdict: &str) -> (Value, PathBuf, String) {
     let architecture = env::var("LIMEN_TEST_ARCH").expect("select guest architecture");
     let profile = env::var("LIMEN_TEST_PROFILE").expect("select guest profile");
     let target = env::var("LIMEN_TEST_TARGET").expect("select guest target");
@@ -79,23 +79,24 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
     cargo_logs(&output, &logs, "run");
     assert_eq!(
         output.status.success(),
-        passed,
+        verdict == "pass",
         "{case}: unexpected Cargo exit: {}\n{}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
     let result = receipt(&evidence.join("result.json"));
-    assert_eq!(result["passed"], passed, "{case}: {result}");
-    let cleanup = receipt(&evidence.join("cleanup.json"));
+    assert_eq!(result["verdict"], verdict, "{case}: {result}");
+    let process = receipt(&evidence.join("process.json"));
+    let cleanup = &process["cleanup"];
     assert_eq!(cleanup["settled"], true);
     assert_eq!(cleanup["unexpected_descendants"], false);
     assert!(cleanup["error"].is_null());
-    (result, evidence, architecture)
+    (process, evidence, architecture)
 }
 
 fn exited(result: &Value, code: i32) {
-    assert_eq!(result["status"], "exited", "{result}");
-    assert_eq!(result["code"], code, "{result}");
+    assert_eq!(result["termination"]["kind"], "exited", "{result}");
+    assert_eq!(result["termination"]["value"], code, "{result}");
 }
 
 fn ordinary(architecture: &str) -> i32 {
@@ -104,13 +105,13 @@ fn ordinary(architecture: &str) -> i32 {
 
 #[test]
 fn accepts_completed_guest() {
-    let (result, _, _) = run("pass", true);
+    let (result, _, _) = run("pass", "pass");
     exited(&result, 97);
 }
 
 #[test]
 fn rejects_guest_panic() {
-    let (result, evidence, _) = run("panic", false);
+    let (result, evidence, _) = run("panic", "fail");
     exited(&result, 99);
     let serial = fs::read_to_string(evidence.join("serial.log")).unwrap();
     assert!(serial.contains("T0 intentional assertion failure"));
@@ -118,21 +119,23 @@ fn rejects_guest_panic() {
 
 #[test]
 fn rejects_ordinary_shutdown() {
-    let (result, _, architecture) = run("shutdown", false);
+    let (result, _, architecture) = run("shutdown", "fail");
     exited(&result, ordinary(&architecture));
 }
 
 #[test]
 fn rejects_fake_pass_log() {
-    let (result, _, architecture) = run("fake-log", false);
+    let (result, _, architecture) = run("fake-log", "fail");
     exited(&result, ordinary(&architecture));
 }
 
 #[test]
 fn rejects_illegal_instruction() {
-    let (result, evidence, _) = run("trap", false);
-    assert_eq!(result["status"], "exited");
-    let code = result["code"].as_i64().expect("guest exit code");
+    let (result, evidence, _) = run("trap", "fail");
+    assert_eq!(result["termination"]["kind"], "exited");
+    let code = result["termination"]["value"]
+        .as_i64()
+        .expect("guest exit code");
     assert_ne!(code, 97);
     assert_ne!(code, 99);
     let serial = fs::read_to_string(evidence.join("serial.log")).unwrap();
@@ -142,20 +145,20 @@ fn rejects_illegal_instruction() {
 #[test]
 #[ignore = "full-duration timeout probe; run explicitly"]
 fn rejects_timeout() {
-    let (result, _, _) = run("timeout", false);
-    assert_eq!(result["status"], "timeout");
-    assert!(result["code"].is_null());
+    let (result, _, _) = run("timeout", "timeout");
+    assert_eq!(result["termination"]["kind"], "timeout");
+    assert!(result["termination"]["value"].is_null());
 }
 
 #[test]
 fn accepts_minor_completion() {
-    let (result, _, _) = run("minor-pass", true);
+    let (result, _, _) = run("minor-pass", "pass");
     exited(&result, 97);
 }
 
 #[test]
 fn rejects_minor_panic() {
-    let (result, evidence, _) = run("minor-panic", false);
+    let (result, evidence, _) = run("minor-panic", "fail");
     exited(&result, 99);
     let serial = fs::read_to_string(evidence.join("serial.log")).unwrap();
     assert!(serial.contains("T0 intentional minor assertion failure"));
@@ -163,7 +166,7 @@ fn rejects_minor_panic() {
 
 #[test]
 fn rejects_guest_reset() {
-    let (result, evidence, _) = run("reset", false);
+    let (result, evidence, _) = run("reset", "fail");
     exited(&result, 0);
     let shutdown = receipt(&evidence.join("shutdown.json"));
     assert_eq!(shutdown["guest"], true);
@@ -172,7 +175,7 @@ fn rejects_guest_reset() {
 
 #[test]
 fn rejects_collected_panic() {
-    let (result, evidence, _) = run("discovery-panic", false);
+    let (result, evidence, _) = run("discovery-panic", "fail");
     exited(&result, 99);
     let serial = fs::read_to_string(evidence.join("serial.log")).unwrap();
     assert!(serial.contains("T1 intentional collected test failure"));

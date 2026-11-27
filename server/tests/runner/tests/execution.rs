@@ -1,4 +1,4 @@
-use kernel_verification::process;
+use kernel_verification::process::{self, Termination};
 use std::{fs, process::Command, thread, time::Duration};
 fn scratch(name: &str) -> std::path::PathBuf {
     let root = std::env::temp_dir().join(format!("kernel-{name}-{}", std::process::id()));
@@ -10,10 +10,14 @@ fn scratch(name: &str) -> std::path::PathBuf {
 #[test]
 fn process_reports_exit_and_failure_without_interpreting_stdout() {
     let root = scratch("exit");
-    for (name, script, status, code) in [
-        ("good", "echo PASS", "exited", Some(0)),
-        ("failed", "echo PASS; exit 3", "exited", Some(3)),
-        ("signal", "echo PASS; kill -TERM $$", "signal", None),
+    for (name, script, termination) in [
+        ("good", "echo PASS", Termination::Exited(0)),
+        ("failed", "echo PASS; exit 3", Termination::Exited(3)),
+        (
+            "signal",
+            "echo PASS; kill -TERM $$",
+            Termination::Signaled(libc::SIGTERM),
+        ),
     ] {
         let result = process::run(
             Command::new("sh").args(["-c", script]),
@@ -21,9 +25,8 @@ fn process_reports_exit_and_failure_without_interpreting_stdout() {
             Duration::from_secs(2),
         )
         .unwrap();
-        assert_eq!(result.status, status);
-        assert_eq!(result.code, code);
-        assert_eq!(result.success(), code == Some(0));
+        assert_eq!(result.termination, termination);
+        assert_eq!(result.success(), termination == Termination::Exited(0));
         assert_eq!(
             fs::read_to_string(root.join(name).join("serial.log")).unwrap(),
             "PASS\n"
@@ -40,11 +43,12 @@ fn deadline_kills_even_after_success_marker() {
         Duration::from_millis(100),
     )
     .unwrap();
-    assert_eq!(result.status, "timeout");
+    assert_eq!(result.termination, Termination::Timeout);
     assert!(!result.success());
     assert!(result.elapsed_seconds < 5.0);
-    let cleanup: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("cleanup.json")).unwrap()).unwrap();
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("process.json")).unwrap()).unwrap();
+    let cleanup = &receipt["cleanup"];
     assert_eq!(cleanup["settled"], true);
     fs::remove_dir_all(root).unwrap();
 }
@@ -59,10 +63,11 @@ fn successful_leader_cannot_leave_a_background_process() {
         Duration::from_secs(2),
     )
     .unwrap();
-    let cleanup: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("cleanup.json")).unwrap()).unwrap();
-    assert_eq!(result.code, Some(0));
-    assert_eq!(result.status, "cleanup-failed");
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("process.json")).unwrap()).unwrap();
+    let cleanup = &receipt["cleanup"];
+    assert_eq!(result.termination, Termination::Exited(0));
+    assert!(!result.clean());
     assert!(!result.success());
     assert_eq!(cleanup["unexpected_descendants"], true);
     assert_eq!(cleanup["killed"], true);
@@ -80,14 +85,15 @@ fn nonzero_exit_with_a_background_process_is_not_a_clean_business_result() {
         &root,
         Duration::from_secs(2),
     );
-    assert!(result.is_err());
+    let result = result.unwrap();
+    assert_eq!(result.termination, Termination::Exited(2));
+    assert!(!result.clean());
+    assert!(!result.success());
     let receipt: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("result.json")).unwrap()).unwrap();
-    let cleanup: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("cleanup.json")).unwrap()).unwrap();
-    assert_eq!(receipt["status"], "exited");
-    assert_eq!(receipt["code"], 2);
-    assert_eq!(receipt["passed"], false);
+        serde_json::from_slice(&fs::read(root.join("process.json")).unwrap()).unwrap();
+    assert_eq!(receipt["termination"]["kind"], "exited");
+    assert_eq!(receipt["termination"]["value"], 2);
+    let cleanup = &receipt["cleanup"];
     assert_eq!(cleanup["unexpected_descendants"], true);
     assert_eq!(cleanup["settled"], true);
     assert!(cleanup["reaped"].as_u64().unwrap() >= 1);
@@ -117,22 +123,21 @@ fn large_output_cannot_deadlock_pipes() {
     fs::remove_dir_all(root).unwrap();
 }
 #[test]
-fn failed_launch_preserves_a_failed_result() {
+fn failed_launch_preserves_the_unstarted_process_receipt() {
     let root = scratch("spawn");
-    assert!(
-        process::run(
-            &mut Command::new("/nonexistent/vanllia-qemu"),
-            &root,
-            Duration::from_secs(1)
-        )
-        .is_err()
-    );
-    let result: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("result.json")).unwrap()).unwrap();
-    assert_eq!(result["status"], "spawn-error");
-    assert_eq!(result["passed"], false);
-    let cleanup: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("cleanup.json")).unwrap()).unwrap();
+    let outcome = process::run(
+        &mut Command::new("/nonexistent/vanllia-qemu"),
+        &root,
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!(outcome.termination, Termination::NotStarted);
+    assert!(!outcome.clean());
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("process.json")).unwrap()).unwrap();
+    assert_eq!(receipt["termination"]["kind"], "not-started");
+    assert!(receipt["error"].is_string());
+    let cleanup = &receipt["cleanup"];
     assert_eq!(cleanup["spawned"], false);
     assert_eq!(cleanup["settled"], true);
     fs::remove_dir_all(root).unwrap();

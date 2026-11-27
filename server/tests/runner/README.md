@@ -11,8 +11,15 @@ failure through a distinct exit status. Ordinary firmware shutdown, panic,
 timeout and reset are not success. Stdout is retained only as diagnostics.
 
 Each image has its own fresh evidence directory with the platform and image
-hash, firmware hashes, tool identity, process output, cleanup and result
-receipts. UEFI variable files are copied before use. CI records the checked-out
+hash, firmware hashes, tool identity, and process output. The executor writes
+`process.json` with the observed termination, execution error and cleanup
+receipt. Only the native test boundary writes `result.json`, with a
+`pass`, `fail`, `timeout` or `inconclusive` verdict and reason. Incomplete
+execution or retirement evidence cannot become a pass. A reached deadline is
+recorded as a timeout even if cleanup remains uncertain; inspect the process
+receipt separately. Missing or malformed receipts are not successful runs.
+Host observers own their assertions; a successful process exit alone is not
+a guest verdict. UEFI variable files are copied before use. CI records the checked-out
 source revision and compiler. No test changes the checked-out source.
 Use a fresh evidence root for a repeated run.
 

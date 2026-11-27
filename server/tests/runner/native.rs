@@ -1,6 +1,7 @@
-//! Cargo runner. Only the dedicated machine exit code is success.
+//! Cargo runner. Native test verdicts require complete execution evidence.
 use crate::platform::{self, Firmware, Machine};
 use crate::{Result, output, process, require};
+use serde::Serialize;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -212,6 +213,76 @@ pub fn prepare(image: &Path, directory: &Path, observe: bool) -> Result<Command>
     Ok(command)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum Verdict {
+    Pass,
+    Fail,
+    Timeout,
+    Inconclusive,
+}
+
+#[derive(Debug, Serialize)]
+struct Report {
+    verdict: Verdict,
+    reason: String,
+}
+
+impl Report {
+    fn new(verdict: Verdict, reason: impl Into<String>) -> Self {
+        Self {
+            verdict,
+            reason: reason.into(),
+        }
+    }
+}
+
+fn judge(outcome: &process::Outcome, observation_complete: bool) -> Report {
+    use process::Termination;
+    if outcome.termination == Termination::Timeout {
+        return Report::new(Verdict::Timeout, "execution deadline reached");
+    }
+    if !outcome.clean() || !observation_complete {
+        return Report::new(
+            Verdict::Inconclusive,
+            "incomplete or conflicting execution and retirement evidence",
+        );
+    }
+    match outcome.termination {
+        Termination::Exited(97) => Report::new(Verdict::Pass, "explicit guest completion"),
+        Termination::Exited(99) => Report::new(Verdict::Fail, "explicit guest failure"),
+        Termination::Exited(_) | Termination::Signaled(_) => {
+            Report::new(Verdict::Fail, "guest terminated without explicit completion")
+        }
+        _ => Report::new(Verdict::Inconclusive, "unknown termination"),
+    }
+}
+
+fn execute(image: &Path, directory: &Path, observe: bool) -> Result<Report> {
+    let mut command = prepare(image, directory, observe)?;
+    let timeout = Duration::from_secs(45);
+    if observe {
+        let (outcome, shutdown) = crate::qmp::run_isolated(command, directory, timeout, None)?;
+        let complete = match shutdown {
+            Ok(shutdown) => {
+                let consistent = shutdown.guest
+                    && (outcome.termination != process::Termination::Exited(97)
+                        || shutdown.reason == "guest-shutdown");
+                crate::json(&directory.join("shutdown.json"), &shutdown)?;
+                consistent
+            }
+            Err(error) => {
+                fs::write(directory.join("qmp-error.txt"), error.to_string())?;
+                false
+            }
+        };
+        Ok(judge(&outcome, complete))
+    } else {
+        let outcome = process::run(&mut command, directory, timeout)?;
+        Ok(judge(&outcome, true))
+    }
+}
+
 pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<()> {
     let image = image.canonicalize()?;
     let evidence = match evidence_root {
@@ -220,29 +291,21 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
     };
     crate::fresh(&evidence)?;
     let directory = evidence.canonicalize()?;
-    let mut command = prepare(&image, &directory, observe)?;
-    let timeout = Duration::from_secs(45);
-    let mut outcome = if observe {
-        // External observation is optional; ordinary Cargo tests need only
-        // the dedicated completion status.
-        let (outcome, shutdown) = crate::qmp::run_isolated(command, &directory, timeout, None)?;
-        match shutdown {
-            Ok(shutdown) => {
-                crate::json(&directory.join("shutdown.json"), &shutdown)?;
-            }
-            Err(error) => {
-                fs::write(directory.join("qmp-error.txt"), error.to_string())?;
-                return Err(error.into());
-            }
-        }
-        outcome
-    } else {
-        process::run(&mut command, &directory, timeout)?
-    };
-    outcome.passed = outcome.exited() && outcome.code == Some(97);
-    crate::json(&directory.join("result.json"), &outcome)?;
+    let path = directory.join("result.json");
+    // An interrupted attempt cannot retain a successful verdict from an earlier run.
+    crate::json(
+        &path,
+        &Report::new(Verdict::Inconclusive, "execution incomplete"),
+    )?;
+    let report = execute(&image, &directory, observe)
+        .unwrap_or_else(|error| Report::new(Verdict::Inconclusive, error.to_string()));
+    crate::json(&path, &report)?;
     require(
-        outcome.passed,
-        format!("no explicit test success: {outcome:?}"),
+        report.verdict == Verdict::Pass,
+        format!("native guest verdict: {report:?}"),
     )
 }
+
+#[cfg(test)]
+#[path = "tests/native.rs"]
+mod tests;

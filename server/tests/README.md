@@ -96,7 +96,9 @@ selected execution packages. Check verifies package coverage with Cargo
 metadata; it never classifies individual test names. On UEFI, ordinary
 guests run before the extra bare target required by Module is installed.
 Ordinary completion requires QEMU exit 97 and successful process settlement.
-Guest panic, ordinary shutdown, reset, trap and timeout are failures.
+The Runner records process facts separately from the native verdict. Guest
+panic, ordinary shutdown, reset and trap are failures; deadline expiry is a
+timeout, and incomplete execution or retirement evidence is inconclusive.
 Serial output is diagnostic, never a generic success oracle.
 
 The Runner uses the default OpenSBI, OVMF and AAVMF locations or the
