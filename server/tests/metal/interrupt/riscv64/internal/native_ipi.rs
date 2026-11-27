@@ -109,7 +109,7 @@ pub fn check(boot: Boot<'_>) {
         MAILBOX.publish(&mut route, round, round == 1);
         MAILBOX.wait_for_recheck(round, |state, expected| wait(state, expected, hertz as u64));
     }
-    boot_diagnostic::write("PASS rv64-ipi original-hart=1 issued=3 rechecked=2 cleared=2 shut=1\n");
+    boot_diagnostic::write("PASS riscv64-ipi original-hart=1 issued=3 rechecked=2 cleared=2 shut=1\n");
 }
 
 #[cfg(test)]
