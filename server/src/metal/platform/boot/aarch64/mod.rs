@@ -1,7 +1,10 @@
 use crate::metal::{
     platform::boot::handoff::{Descriptions, Facts, uefi},
     platform::boot::trap as diagnostic,
-    processor::hart::{aarch64::native, local},
+    processor::hart::{
+        aarch64::{native, status},
+        local,
+    },
 };
 mod major;
 pub(crate) use major::major as enter_major;
@@ -52,7 +55,7 @@ unsafe extern "C" fn vectors() -> ! {
         ".balign 128",
         ".set slot, slot + 1",
         ".endr",
-        "2: msr daifset, #15",
+        "2: msr daifset, #{exceptions}",
         "adrp x2, {top}",
         "add x2, x2, :lo12:{top}",
         "3: ldaxr x3, [x2]",
@@ -64,6 +67,7 @@ unsafe extern "C" fn vectors() -> ! {
         "b {capture}",
         "4: wfe",
         "b 4b",
+        exceptions = const status::ALL_EXCEPTIONS,
         top = sym diagnostic::TOP,
         capture = sym capture,
     );

@@ -6,7 +6,9 @@ use core::{
     mem::offset_of,
 };
 
-use crate::metal::platform::firmware::psci::Psci;
+use crate::metal::{
+    platform::firmware::psci::Psci, processor::hart::aarch64::description::AFFINITY_MASK,
+};
 #[derive(Clone, Copy)]
 pub enum Startup {
     Psci(Psci),
@@ -62,16 +64,16 @@ pub(crate) unsafe fn wake_minor(
 #[unsafe(naked)]
 unsafe extern "C" fn minor(slot: *const Minor) -> ! {
     naked_asm!(
-        "msr daifset, #15",
+        "msr daifset, #{exceptions}",
         "mrs x2, CurrentEL",
-        "cmp x2, #4",
+        "cmp x2, #{level}",
         "b.ne 3f",
-        "msr spsel, #1",
+        "msr spsel, #{stack_select}",
         "msr tpidr_el1, xzr",
         "mov x1, x0",
         "mrs x0, mpidr_el1",
-        "mov x2, #0xffffff",
-        "movk x2, #0xff, lsl #32",
+        "mov x2, #{affinity_low}",
+        "movk x2, #{affinity_high}, lsl #32",
         "and x0, x0, x2",
         // Acquire the publication before using the identity or saved EL1 state.
         "add x2, x1, #{state}",
@@ -113,6 +115,11 @@ unsafe extern "C" fn minor(slot: *const Minor) -> ! {
         "b {arrive}",
         "3: wfe",
         "b 3b",
+        exceptions = const super::status::ALL_EXCEPTIONS,
+        level = const super::status::EL1,
+        stack_select = const super::status::SP_EL1,
+        affinity_low = const (AFFINITY_MASK & 0xffff_ffff),
+        affinity_high = const (AFFINITY_MASK >> 32),
         ctx = const offset_of!(Minor,context),
         hart = const minor::HART_OFFSET,
         stack = const minor::STACK_OFFSET,

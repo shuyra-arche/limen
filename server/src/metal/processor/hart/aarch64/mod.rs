@@ -4,4 +4,4 @@ pub mod description;
 pub(in crate::metal) mod native;
 
 #[cfg(any(test, all(limen_target, target_arch = "aarch64")))]
-mod status;
+pub(in crate::metal) mod status;
