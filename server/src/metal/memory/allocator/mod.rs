@@ -21,7 +21,9 @@ mod search;
 
 pub use allocation::{Allocation, AllocationConstruction, AllocationId, MappedStorage};
 pub(crate) use allowance::permit::{AllocationPermit, AllocationPermitSlot, LayoutLimit};
-pub use allowance::{Allowance, AllowanceCandidate, AllowanceId, Balance, Budget, BudgetObservation, BudgetProgress};
+pub use allowance::{
+    Allowance, AllowanceCandidate, AllowanceId, Balance, Budget, BudgetObservation, BudgetProgress,
+};
 pub(crate) use bootstrap::RootInitialization;
 pub use bootstrap::{Config, Initial, RootStorage};
 pub use region::{Grant, RegionDescription, RegionOrigin};

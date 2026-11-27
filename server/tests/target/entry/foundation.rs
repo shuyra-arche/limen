@@ -5,8 +5,9 @@ use kernel::{
     entry::boot::{self, Boot, Retirement as PhysicalRetirement},
     metal::{
         memory::allocator::{
-            Allocation, AllocationConstruction, AllocationId, Allocator, Allowance, BudgetObservation, BudgetProgress, Candidate, LookupObservation,
-            Config, Error as SourceError, Initial, MappedStorage, Pending,
+            Allocation, AllocationConstruction, AllocationId, Allocator, Allowance,
+            BudgetObservation, BudgetProgress, Candidate, Config, Error as SourceError, Initial,
+            LookupObservation, MappedStorage, Pending,
             RamPurpose::Metadata,
             Request, ReturnId, ReturnReceipt, Returned, Search,
             pool::{

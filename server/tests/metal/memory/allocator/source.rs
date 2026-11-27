@@ -2,9 +2,9 @@ use crate::{
     basis::pend::{Error as PendError, Handle, Initial as InitialPend, PendSpace, Revoker},
     metal::{
         memory::allocator::{
-            Allocation, Allocator, Allowance, BudgetObservation, BudgetProgress, Config, Error, Initial, LookupObservation, Pending,
-            RamPurpose::Metadata, RegionDescription, RegionOrigin, Request, Retired, ReturnId,
-            Search,
+            Allocation, Allocator, Allowance, BudgetObservation, BudgetProgress, Config, Error,
+            Initial, LookupObservation, Pending, RamPurpose::Metadata, RegionDescription,
+            RegionOrigin, Request, Retired, ReturnId, Search,
         },
         memory::mmu::internal::access::MappedRange,
         sync::{
@@ -1139,4 +1139,145 @@ fn skip_only_advances_the_lookup_with_an_outstanding_candidate() {
         panic!("the second lookup did not advance");
     };
     assert_eq!(independent.physical(), observed.physical());
+}
+
+#[test]
+fn source_directory_scale_is_independent_of_joint_lock_capacity() {
+    use crate::metal::sync::{TURN_CAPACITY, TurnWorkspace};
+
+    const REGIONS: usize = 6;
+    assert!(REGIONS > TURN_CAPACITY);
+    let mut receiver = None;
+    bootstrap(|regions, mapping| {
+        let config = Config {
+            regions: REGIONS,
+            maximum: ByteLength::new(32 * PAGE),
+            allocations: 1,
+            returns: 1,
+            ..CONFIG
+        };
+        unsafe { regions.allocator(mapping, config, 0, &mut receiver, &mut []) }
+            .unwrap()
+            .unwrap();
+    });
+    let allowance = receiver.take().unwrap();
+    let source = allowance.source();
+    let initial_count = source.regions().count();
+    assert_eq!(initial_count, 2);
+
+    for index in initial_count..REGIONS {
+        let physical = pages(16 + index as u64, 17 + index as u64);
+        let description = RegionDescription {
+            physical,
+            origin: ATTRIBUTES,
+        };
+        let mut grant = unsafe { retired(physical).grant(source, description) }.unwrap();
+        grant.admit(Fast).unwrap();
+    }
+    let regions = source.regions().collect::<Vec<_>>();
+    assert_eq!(regions.len(), REGIONS);
+
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(PAGE).unwrap(),
+        pages(30, 31),
+        None,
+        Metadata,
+    )
+    .unwrap();
+    assert!(matches!(
+        source.lookup(request, None, &mut [LookupObservation::EMPTY; REGIONS - 1]),
+        Err(Error::Capacity)
+    ));
+    assert!(matches!(
+        source.budget(&mut [BudgetObservation::EMPTY; REGIONS - 1]),
+        Err(Error::Capacity)
+    ));
+    let mut lookup_observations = [LookupObservation::EMPTY; REGIONS];
+    let mut lookup = source.lookup(request, None, &mut lookup_observations).unwrap();
+    loop {
+        match lookup.step().unwrap() {
+            Search::Pending => {}
+            Search::NoRange => break,
+            Search::Candidate(_) => panic!("unmanaged range was exposed"),
+        }
+    }
+
+    let from = regions[2].0;
+    let to = regions[0].0;
+    let move_budget = |from, to, amount| {
+        let mut work = TurnWorkspace::<2>::new();
+        let mut plan = work.plan();
+        source.plan_budget_transfer(&mut plan, from, to).unwrap();
+        plan.acquire(Fast, |held| unsafe {
+            source.transfer_budget(held, from, to, amount)
+        })
+        .unwrap()
+        .unwrap();
+    };
+
+    // Even moving credit away and back invalidates the first observation.
+    let mut observations = [BudgetObservation::EMPTY; REGIONS];
+    let mut budget = source.budget(&mut observations).unwrap();
+    for _ in 0..REGIONS {
+        assert_eq!(budget.step(), Ok(BudgetProgress::Pending));
+    }
+    move_budget(from, to, ByteLength::new(PAGE));
+    move_budget(to, from, ByteLength::new(PAGE));
+    loop {
+        match budget.step() {
+            Ok(BudgetProgress::Pending) => {}
+            Err(Error::Changed) => break,
+            _ => panic!("a budget ABA survived the second pass"),
+        }
+    }
+
+    let total = regions.iter().fold(0, |sum, (_, description)| {
+        sum + description.physical.length().get()
+    });
+    for &(id, description) in &regions[1..] {
+        move_budget(id, to, description.physical.length());
+    }
+
+    // The source still has all its credit; only placement has changed.
+    let mut observations = [BudgetObservation::EMPTY; REGIONS];
+    let mut budget = source.budget(&mut observations).unwrap();
+    loop {
+        match budget.step().unwrap() {
+            BudgetProgress::Pending => {}
+            BudgetProgress::Complete(managed, free) => {
+                assert_eq!(managed.get(), total);
+                assert_eq!(free, managed);
+                break;
+            }
+        }
+    }
+
+    // Assign credit drawn from every Region with just three simultaneous
+    // locks, not one for every Region in the source.
+    let candidate = source.allowance_candidate().unwrap();
+    let debits = [(to, ByteLength::new(total))];
+    let mut work = TurnWorkspace::<3>::new();
+    let mut plan = work.plan();
+    source.plan_allowance(&mut plan, candidate, &debits).unwrap();
+    plan.acquire(Fast, |held| unsafe {
+        source.open_allowance(held, candidate, &debits, &mut receiver)
+    })
+    .unwrap()
+    .unwrap();
+    let second = receiver.take().unwrap();
+    assert_eq!(second.balance().unwrap().capacity().get(), total);
+
+    let mut observations = [BudgetObservation::EMPTY; REGIONS];
+    let mut budget = source.budget(&mut observations).unwrap();
+    loop {
+        match budget.step().unwrap() {
+            BudgetProgress::Pending => {}
+            BudgetProgress::Complete(managed, free) => {
+                assert_eq!(managed.get(), total);
+                assert_eq!(free.get(), 0);
+                break;
+            }
+        }
+    }
 }

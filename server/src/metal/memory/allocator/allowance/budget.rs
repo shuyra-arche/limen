@@ -4,6 +4,7 @@ use core::sync::atomic::Ordering::Acquire;
 use limen_treaty::model::ByteLength;
 
 use crate::metal::sync::{TurnAccess, TurnPlan};
+
 use super::super::{Allocator, Error, RegionId, region::Revision};
 
 /// Actual storage for one Region's independent budget revision.
@@ -125,10 +126,12 @@ impl Budget<'_> {
                 if !revision.preserves(revision) {
                     return Err(Error::Changed);
                 }
-                self.managed = self.managed
+                self.managed = self
+                    .managed
                     .checked_add(region.description().physical.length())
                     .ok_or(Error::Balance)?;
-                self.unassigned = self.unassigned
+                self.unassigned = self
+                    .unassigned
                     .checked_add(ByteLength::new(amount))
                     .ok_or(Error::Balance)?;
                 self.observations[self.index] = BudgetObservation(revision);
@@ -139,14 +142,18 @@ impl Budget<'_> {
             }
             Pass::Verify => {
                 let current = self.source.regions[self.index]
-                    .state.acquire(|state| state.budget().1)?;
+                    .state
+                    .acquire(|state| state.budget().1)?;
                 if !current.preserves(self.observations[self.index].0) {
                     return Err(Error::Changed);
                 }
                 self.index += 1;
             }
             Pass::Directory => {
-                let count_now = self.source.directory.acquire(|_| self.source.published.load(Acquire))?;
+                let count_now = self
+                    .source
+                    .directory
+                    .acquire(|_| self.source.published.load(Acquire))?;
                 if count_now != count {
                     return Err(Error::Changed);
                 }

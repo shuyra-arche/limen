@@ -18,7 +18,10 @@ use kernel::{
     },
 };
 
-use super::{foundation::inspect_budget, memory::{extent, mapped, retirement}};
+use super::{
+    foundation::inspect_budget,
+    memory::{extent, mapped, retirement},
+};
 
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 

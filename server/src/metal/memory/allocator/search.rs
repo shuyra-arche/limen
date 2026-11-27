@@ -3,7 +3,10 @@ use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
 use super::{
     Allocator, Error, RegionDescription, RegionId, RegionOrigin,
-    region::{Revision, buddy::{self, Scan}},
+    region::{
+        Revision,
+        buddy::{self, Scan},
+    },
 };
 
 /// The recipient's intended use, independent of the physical range selected.

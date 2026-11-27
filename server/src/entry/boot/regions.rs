@@ -61,7 +61,8 @@ impl RootPlan {
         let mut storage = mapping.take().expect("checked mapping");
         let start = storage.physical().start();
         if self.physical.start() != start {
-            let offset = physical
+            let offset = self
+                .physical
                 .start()
                 .distance(start)
                 .expect("checked root offset");
