@@ -1,3 +1,4 @@
+use kernel::entry::hook::Binding;
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::metal::processor::treaty::{InstallError, Irq, Minor, RuntimeTrap, Startup};
 use kernel::metal::{
@@ -43,8 +44,9 @@ static READY: AtomicUsize = AtomicUsize::new(0);
 static CLOSED: AtomicUsize = AtomicUsize::new(0);
 static CAPTURED: AtomicUsize = AtomicUsize::new(0);
 static TURN: TurnLock<()> = TurnLock::new(());
-static TRAP: RuntimeTrap = RuntimeTrap::new(VECTOR, interrupt);
-static MAJOR_TRAP: RuntimeTrap = RuntimeTrap::new(VECTOR, unexpected_irq);
+static TRAP: RuntimeTrap = RuntimeTrap::new(VECTOR, RECEPTION.entry());
+static MAJOR_TRAP: RuntimeTrap = RuntimeTrap::new(VECTOR, TERMINAL_ON_IRQ.entry());
+static TERMINAL_ON_IRQ: Binding<()> = Binding::new((), unexpected_irq);
 
 struct Receiver {
     processor: usize,
@@ -59,7 +61,8 @@ struct LocalReceiver(UnsafeCell<Option<Receiver>>);
 // and the non-nesting IRQ borrow ends before the interrupted code resumes.
 unsafe impl Sync for LocalReceiver {}
 
-static RECEIVER: LocalReceiver = LocalReceiver(UnsafeCell::new(None));
+static RECEPTION: Binding<LocalReceiver> =
+    Binding::new(LocalReceiver(UnsafeCell::new(None)), interrupt);
 
 static NMI_READY: AtomicUsize = AtomicUsize::new(0);
 static NMI_RESUME: AtomicUsize = AtomicUsize::new(0);
@@ -185,13 +188,13 @@ fn actual_ist(vector: u8) -> (u8, usize) {
     (selector, unsafe { slot.read_unaligned() })
 }
 
-fn unexpected_irq(_: Irq<'_>) {
+fn unexpected_irq(_: &(), _: Irq<'_>) {
     panic!("the source processor never opens its runtime IRQ gate");
 }
 
-fn interrupt(mut irq: Irq<'_>) {
+fn interrupt(owner: &LocalReceiver, mut irq: Irq<'_>) {
     assert_eq!(TURN.acquire(|_| ()), Err(TurnAcquireError::Context));
-    let receiver = unsafe { (&mut *RECEIVER.0.get()).as_mut().expect("admitted vector") };
+    let receiver = unsafe { (&mut *owner.0.get()).as_mut().expect("admitted vector") };
     assert_eq!(irq.processor().get(), receiver.processor);
     assert_eq!(irq.vector(), receiver.original.vector());
     let stack: usize;
@@ -304,7 +307,7 @@ fn minor(processor: usize, argument: usize) -> ! {
     assert_ne!(nmi_slot, double_fault_slot);
     assert_ne!(nmi_stack, double_fault_stack);
     unsafe {
-        RECEIVER.0.get().write(Some(Receiver {
+        RECEPTION.owner().0.get().write(Some(Receiver {
             processor,
             controller: local,
             original,
@@ -323,7 +326,7 @@ fn minor(processor: usize, argument: usize) -> ! {
         }
         await_vector(round + 1);
         MAILBOX.recheck(round, || {
-            let receiver = unsafe { (&*RECEIVER.0.get()).as_ref().unwrap() };
+            let receiver = unsafe { (&*RECEPTION.owner().0.get()).as_ref().unwrap() };
             assert_eq!(receiver.controller.reception(), Reception::Idle);
         });
     }
@@ -337,7 +340,7 @@ fn minor(processor: usize, argument: usize) -> ! {
         original,
         ..
     } = unsafe {
-        (&mut *RECEIVER.0.get())
+        (&mut *RECEPTION.owner().0.get())
             .take()
             .expect("retired IRQ context")
     };

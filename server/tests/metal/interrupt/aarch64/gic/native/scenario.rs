@@ -1,6 +1,7 @@
 //! QEMU virt hands the guest an identity-mapped physical GIC with a single
 //! security state. Keep the PE IRQ/FIQ masks closed and poll its real IAR.
 
+use kernel::entry::hook::Binding;
 use kernel::metal::interrupt::treaty::{AbsoluteTimer, ClaimId, Completion, HardwareClaim};
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::metal::processor::treaty::{
@@ -123,14 +124,15 @@ struct LocalReception(UnsafeCell<Option<Reception>>);
 // and the handler's borrow ends before the original continuation resumes.
 unsafe impl Sync for LocalReception {}
 
-static MINOR_IRQ: LocalReception = LocalReception(UnsafeCell::new(None));
-static MINOR_VECTORS: RuntimeTrap = RuntimeTrap::new(handle_irq);
+static MINOR_IRQ: Binding<LocalReception> =
+    Binding::new(LocalReception(UnsafeCell::new(None)), handle_irq);
+static MINOR_VECTORS: RuntimeTrap = RuntimeTrap::new(MINOR_IRQ.entry());
 static RETURN_READY: AtomicBool = AtomicBool::new(false);
 static IRQ_TURN: TurnLock<()> = TurnLock::new(());
 
-fn handle_irq(irq: Irq<'_>) {
+fn handle_irq(owner: &LocalReception, irq: Irq<'_>) {
     assert_eq!(IRQ_TURN.acquire(|_| ()), Err(TurnAcquireError::Context));
-    let original = unsafe { (&mut *MINOR_IRQ.0.get()).as_mut().expect("prepared SGI") };
+    let original = unsafe { (&mut *owner.0.get()).as_mut().expect("prepared SGI") };
     assert_eq!(irq.processor().get(), original.processor);
     let mut claim = original
         .receiver
@@ -252,7 +254,7 @@ fn observe_minor(processor: usize, _: usize) -> ! {
         .unwrap()
         .expect("original sent SGI");
     unsafe {
-        MINOR_IRQ.0.get().write(Some(Reception {
+        MINOR_IRQ.owner().0.get().write(Some(Reception {
             processor,
             receiver,
             signal,
@@ -268,7 +270,7 @@ fn observe_minor(processor: usize, _: usize) -> ! {
         signal,
         ..
     } = unsafe {
-        (&mut *MINOR_IRQ.0.get())
+        (&mut *MINOR_IRQ.owner().0.get())
             .take()
             .expect("returned local SGI")
     };
@@ -358,13 +360,24 @@ struct TimerRoute<'local, 'clock, 'tree> {
     timer: &'local mut VirtualTimer<'clock, 'tree, 'static>,
 }
 
-static TIMER_ROUTE: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-static TIMER_RETURNED: AtomicBool = AtomicBool::new(false);
-static MAJOR_VECTORS: RuntimeTrap = RuntimeTrap::new(handle_timer);
+struct LocalTimerRoute {
+    active: AtomicPtr<()>,
+    returned: AtomicBool,
+}
 
-fn handle_timer(interrupt: Irq<'_>) {
+static TIMER_ROUTE: Binding<LocalTimerRoute> = Binding::new(
+    LocalTimerRoute {
+        active: AtomicPtr::new(ptr::null_mut()),
+        returned: AtomicBool::new(false),
+    },
+    handle_timer,
+);
+static MAJOR_VECTORS: RuntimeTrap = RuntimeTrap::new(TIMER_ROUTE.entry());
+
+fn handle_timer(owner: &LocalTimerRoute, interrupt: Irq<'_>) {
     assert_eq!(IRQ_TURN.acquire(|_| ()), Err(TurnAcquireError::Context));
-    let pointer = TIMER_ROUTE
+    let pointer = owner
+        .active
         .load(Ordering::Acquire)
         .cast::<TimerRoute<'_, '_, '_>>();
     // Only the major processor enters here, while receive_timer exclusively
@@ -375,12 +388,14 @@ fn handle_timer(interrupt: Irq<'_>) {
     claim
         .complete_ppi(route.timer.stopped_ppi().unwrap())
         .unwrap();
-    TIMER_RETURNED.store(true, Ordering::Release);
+    owner.returned.store(true, Ordering::Release);
 }
 
 fn receive_timer(mut route: TimerRoute<'_, '_, '_>, until: u64) {
+    let owner = TIMER_ROUTE.owner();
     assert!(
-        TIMER_ROUTE
+        owner
+            .active
             .swap(ptr::from_mut(&mut route).cast(), Ordering::Release)
             .is_null()
     );
@@ -397,16 +412,16 @@ fn receive_timer(mut route: TimerRoute<'_, '_, '_>, until: u64) {
             "3: mrs {restored}, DAIF",
             "msr daifset, #2",
             "isb",
-            observed = in(reg) TIMER_RETURNED.as_ptr(),
+            observed = in(reg) owner.returned.as_ptr(),
             until = in(reg) until,
             restored = out(reg) restored,
             out("x8") _,
             options(nostack),
         );
     }
-    TIMER_ROUTE.store(ptr::null_mut(), Ordering::Relaxed);
+    owner.active.store(ptr::null_mut(), Ordering::Relaxed);
     assert_eq!(restored & 0x80, 0);
-    assert!(TIMER_RETURNED.swap(false, Ordering::Acquire));
+    assert!(owner.returned.swap(false, Ordering::Acquire));
 }
 
 fn check_virtual_timer(

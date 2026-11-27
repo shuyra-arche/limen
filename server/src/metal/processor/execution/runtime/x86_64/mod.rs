@@ -23,7 +23,7 @@ use super::{
         profile::x86_64::{StateControl, base_xcr0},
         terminal::{Terminal, x86_64 as terminal},
     },
-    InstallError,
+    Capture, Entry, InstallError,
 };
 use tables::Tables;
 
@@ -42,16 +42,16 @@ pub struct RuntimeTrap {
     tables: Tables,
     occupied: AtomicBool,
     vector: u8,
-    irq: for<'frame> fn(Irq<'frame>),
+    entry: Entry,
 }
 
 impl RuntimeTrap {
-    pub const fn new(vector: u8, irq: for<'frame> fn(Irq<'frame>)) -> Self {
+    pub const fn new(vector: u8, entry: Entry) -> Self {
         Self {
             tables: Tables::new(),
             occupied: AtomicBool::new(false),
             vector,
-            irq,
+            entry,
         }
     }
 
@@ -232,7 +232,9 @@ extern "sysv64" fn dispatch(frame: &mut Frame) {
     {
         Terminal::early().reject(format_args!("FAIL Limen IRQ cannot return to this frame\n"));
     }
-    (runtime.irq)(Irq::new(frame, processor, runtime));
+    runtime
+        .entry
+        .handle(Capture::Interrupt(Irq::new(frame, processor, runtime)));
 }
 
 #[unsafe(naked)]

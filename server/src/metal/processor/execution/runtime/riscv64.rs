@@ -19,7 +19,7 @@ use crate::metal::{
 
 use super::{
     super::terminal::{Terminal, riscv64::trap as terminal},
-    InstallError,
+    Capture, Entry, InstallError,
 };
 
 const STACK_BYTES: usize = 16 * 1024;
@@ -33,20 +33,15 @@ const TIMER_CAUSE: usize = INTERRUPT | 5;
 pub struct RuntimeTrap {
     stack: crate::metal::processor::treaty::Stack<STACK_BYTES>,
     occupied: AtomicBool,
-    software: Option<for<'frame> fn(SoftwareInterrupt<'frame>)>,
-    timer: Option<for<'frame> fn(TimerInterrupt<'frame>)>,
+    entry: Entry,
 }
 
 impl RuntimeTrap {
-    pub const fn new(
-        software: Option<for<'frame> fn(SoftwareInterrupt<'frame>)>,
-        timer: Option<for<'frame> fn(TimerInterrupt<'frame>)>,
-    ) -> Self {
+    pub const fn new(entry: Entry) -> Self {
         Self {
             stack: crate::metal::processor::treaty::Stack::new(),
             occupied: AtomicBool::new(false),
-            software,
-            timer,
+            entry,
         }
     }
 
@@ -69,7 +64,7 @@ impl RuntimeTrap {
         if !status.masked()
             || !status.extensions_off()
             || !supervisor::all_masked()
-            || self.software.is_none() && self.timer.is_none()
+            || !self.entry.software && !self.entry.timer
         {
             return Err(InstallError::Context);
         }
@@ -178,21 +173,14 @@ extern "C" fn dispatch(frame: &mut Frame, cause: usize) -> bool {
     let Some((processor, runtime)) = local::interrupt_local() else {
         return false;
     };
-    match cause {
-        SOFTWARE_CAUSE => {
-            let Some(software) = runtime.software else {
-                return false;
-            };
-            software(SoftwareInterrupt::new(frame, processor));
+    let capture = match cause {
+        SOFTWARE_CAUSE if runtime.entry.software => {
+            Capture::Software(SoftwareInterrupt::new(frame, processor))
         }
-        TIMER_CAUSE => {
-            let Some(timer) = runtime.timer else {
-                return false;
-            };
-            timer(TimerInterrupt::new(frame, processor));
-        }
+        TIMER_CAUSE if runtime.entry.timer => Capture::Timer(TimerInterrupt::new(frame, processor)),
         _ => return false,
-    }
+    };
+    runtime.entry.handle(capture);
     true
 }
 

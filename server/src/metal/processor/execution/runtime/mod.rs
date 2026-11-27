@@ -1,5 +1,9 @@
 //! Installed same-level runtime entries, with an ISA-owned save shape.
 
+mod capture;
+pub use capture::Entry;
+pub(crate) use capture::{Capture, Handler};
+
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 #[cfg(target_arch = "riscv64")]

@@ -7,7 +7,7 @@ use core::{
 };
 use kernel::{
     basis::execution::Error,
-    entry::boot::Boot,
+    entry::{boot::Boot, hook::Binding},
     metal::{
         chrono::riscv64::description::RiscvTimebase,
         interrupt::riscv64::internal::ipi::Receiver,
@@ -15,16 +15,25 @@ use kernel::{
     },
 };
 
-struct Local(UnsafeCell<Option<Receiver>>);
+struct Local {
+    receiver: UnsafeCell<Option<Receiver>>,
+    captures: AtomicUsize,
+}
 
 // This fixture publishes one original receiver to the current processor's
 // handler. The ordinary side only borrows it with IRQ dispatch masked.
 unsafe impl Sync for Local {}
 
-static RECEPTION: Local = Local(UnsafeCell::new(None));
-static VECTORS: RuntimeTrap = RuntimeTrap::new(Some(interrupt), None);
+static RECEPTION: Binding<Local> = Binding::new(
+    Local {
+        receiver: UnsafeCell::new(None),
+        captures: AtomicUsize::new(0),
+    },
+    Some(interrupt),
+    None,
+);
+static VECTORS: RuntimeTrap = RuntimeTrap::new(RECEPTION.entry());
 static FREQUENCY: AtomicU32 = AtomicU32::new(0);
-static CAPTURES: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) fn install(boot: &Boot<'_>) {
     let timebase = RiscvTimebase::describe(boot.riscv_cpus()).unwrap().unwrap();
@@ -32,18 +41,19 @@ pub(super) fn install(boot: &Boot<'_>) {
     unsafe { VECTORS.install() }.unwrap();
 }
 
-fn interrupt(capture: SoftwareInterrupt<'_>) {
+fn interrupt(owner: &Local, capture: SoftwareInterrupt<'_>) {
     assert_eq!(super::execution().pending_leave(), Err(Error::Protection));
-    let receiver = unsafe { (&mut *RECEPTION.0.get()).as_mut().unwrap() };
+    let receiver = unsafe { (&mut *owner.receiver.get()).as_mut().unwrap() };
     receiver.acknowledge_interrupt(&capture).unwrap();
-    CAPTURES.fetch_add(1, Relaxed);
+    owner.captures.fetch_add(1, Relaxed);
 }
 
 pub(super) fn receive(processor: usize) {
-    assert_eq!(CAPTURES.load(Relaxed), 0);
+    let owner = RECEPTION.owner();
+    assert_eq!(owner.captures.load(Relaxed), 0);
     let mut receiver = unsafe { Receiver::admit(processor) }.unwrap();
     receiver.open().unwrap();
-    unsafe { RECEPTION.0.get().write(Some(receiver)) };
+    unsafe { owner.receiver.get().write(Some(receiver)) };
     let status: usize;
     let original: usize;
     let restored: usize;
@@ -74,9 +84,9 @@ pub(super) fn receive(processor: usize) {
     }
     assert_ne!(status & 2, 0);
     assert_eq!(original, restored);
-    assert_eq!(CAPTURES.load(Relaxed), 1);
+    assert_eq!(owner.captures.load(Relaxed), 1);
     assert_eq!(super::execution().pending_leave(), Ok(None));
-    let mut receiver = unsafe { (&mut *RECEPTION.0.get()).take().unwrap() };
+    let mut receiver = unsafe { (&mut *owner.receiver.get()).take().unwrap() };
     assert_eq!(receiver.pending(), Ok(false));
     unsafe { receiver.shut() }.unwrap();
 }

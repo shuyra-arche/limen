@@ -53,6 +53,23 @@ Ended result becomes visible. Its Unit identity and result persist until
 `reap` releases the identity slot. A replacement can reuse an available
 stack while a prior result remains observable.
 
+## Same-level IRQ entry
+
+The trusted image builds an `entry::hook::Binding` with the resident receiver
+owner and typed handling functions. `Binding::entry` requires a static
+binding and supplies the Processor Treaty entry associated with that owner.
+The RISC-V binding declares supervisor software and timer support
+independently. The x86_64 runtime installation selects its actual vector.
+The AArch64 runtime delivers a same-level IRQ and the admitted controller
+distinguishes the source through its actual claim.
+
+Execution preserves the native frame and borrows only the current capture
+for the receiver. The receiver settles the actual source or retains its
+obligation under the original owner. It runs with ordinary IRQs masked and
+cannot acquire Turn. The end of the Hook callback returns control to Metal,
+which owns the native same-level return. Cooperative Unit handoff still
+uses the regular Execution and Room path.
+
 ## Cancellation
 
 A trusted platform can stop a dormant Unit before its first submission.

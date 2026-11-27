@@ -3,6 +3,7 @@ use kernel::metal::{
     sync::treaty::Supply,
 };
 
+use kernel::entry::hook::Binding;
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::metal::processor::treaty::{
     InstallError, Minor, RuntimeTrap, SoftwareInterrupt, Startup,
@@ -37,7 +38,7 @@ static MAILBOX: ipi::Mailbox = ipi::Mailbox::new();
 static FINAL_CHECK: AtomicUsize = AtomicUsize::new(0);
 static CAPTURES: AtomicUsize = AtomicUsize::new(0);
 static ORDINARY: TurnLock<usize> = TurnLock::new(0);
-static TRAP: RuntimeTrap = RuntimeTrap::new(Some(interrupt), None);
+static TRAP: RuntimeTrap = RuntimeTrap::new(RECEPTION.entry());
 
 struct ReceiverSlot(UnsafeCell<Option<Receiver>>);
 
@@ -45,11 +46,12 @@ struct ReceiverSlot(UnsafeCell<Option<Receiver>>);
 // receiver only while native interrupts are masked.
 unsafe impl Sync for ReceiverSlot {}
 
-static RECEPTION: ReceiverSlot = ReceiverSlot(UnsafeCell::new(None));
+static RECEPTION: Binding<ReceiverSlot> =
+    Binding::new(ReceiverSlot(UnsafeCell::new(None)), Some(interrupt), None);
 
-fn interrupt(capture: SoftwareInterrupt<'_>) {
+fn interrupt(owner: &ReceiverSlot, capture: SoftwareInterrupt<'_>) {
     assert_eq!(ORDINARY.acquire(|_| ()), Err(TurnAcquireError::Context));
-    let receiver = unsafe { (&mut *RECEPTION.0.get()).as_mut().unwrap() };
+    let receiver = unsafe { (&mut *owner.0.get()).as_mut().unwrap() };
     receiver.acknowledge_interrupt(&capture).unwrap();
     CAPTURES.fetch_add(1, Relaxed);
 }
@@ -122,11 +124,11 @@ fn minor(hart: usize, hertz: usize) -> ! {
         ORDINARY.acquire(|_| unsafe { receiver.wait(|| panic!("occupied protection")) }),
         Ok(Err(Error::Busy)),
     );
-    unsafe { *RECEPTION.0.get() = Some(receiver) };
+    unsafe { *RECEPTION.owner().0.get() = Some(receiver) };
     READY.store(1, Release);
     for round in 1..=2 {
         {
-            let receiver = unsafe { (&*RECEPTION.0.get()).as_ref().unwrap() };
+            let receiver = unsafe { (&*RECEPTION.owner().0.get()).as_ref().unwrap() };
             if round == 1 {
                 MAILBOX
                     .wait_for_issues(round, |state, expected| wait(state, expected, hertz as u64));
@@ -168,7 +170,7 @@ fn minor(hart: usize, hertz: usize) -> ! {
             Ok(round),
         );
         MAILBOX.recheck(round, || {
-            let receiver = unsafe { (&mut *RECEPTION.0.get()).as_mut().unwrap() };
+            let receiver = unsafe { (&mut *RECEPTION.owner().0.get()).as_mut().unwrap() };
             assert_eq!(receiver.pending(), Ok(false));
             assert_eq!(receiver.acknowledge(), Err(Error::Busy));
             if round == 2 {

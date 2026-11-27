@@ -18,7 +18,7 @@ use super::{
         profile::aarch64::base_simd,
         terminal::{Terminal, aarch64 as terminal},
     },
-    InstallError,
+    Capture, Entry, InstallError,
 };
 
 const STACK_BYTES: usize = 16 * 1024;
@@ -35,15 +35,15 @@ compile_error!("AArch64 runtime IRQ currently requires base FP/SIMD");
 pub struct RuntimeTrap {
     stack: Stack<STACK_BYTES>,
     occupied: AtomicBool,
-    irq: for<'frame> fn(Irq<'frame>),
+    entry: Entry,
 }
 
 impl RuntimeTrap {
-    pub const fn new(irq: for<'frame> fn(Irq<'frame>)) -> Self {
+    pub const fn new(entry: Entry) -> Self {
         Self {
             stack: Stack::new(),
             occupied: AtomicBool::new(false),
-            irq,
+            entry,
         }
     }
 
@@ -180,7 +180,9 @@ extern "C" fn dispatch(frame: &mut Frame) -> bool {
     let Some((processor, runtime)) = local::interrupt_local() else {
         return false;
     };
-    (runtime.irq)(Irq::new(frame, processor));
+    runtime
+        .entry
+        .handle(Capture::Interrupt(Irq::new(frame, processor)));
     true
 }
 

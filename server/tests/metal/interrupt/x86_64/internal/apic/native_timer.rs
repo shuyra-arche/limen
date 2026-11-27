@@ -1,11 +1,12 @@
 use core::{
     arch::{asm, x86_64::__cpuid},
+    cell::RefCell,
     num::NonZeroU32,
     sync::atomic::{AtomicUsize, Ordering},
 };
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::{
-    entry::boot,
+    entry::{boot, hook::Binding},
     metal::{
         chrono::x86_64::tsc::{Failure as TscFailure, Tsc},
         interrupt::{
@@ -23,24 +24,34 @@ use uefi_fixture::q35;
 mod hardware;
 
 const VECTOR: u8 = 0xf2;
-static TRAP: RuntimeTrap = RuntimeTrap::new(VECTOR, interrupt);
-static CAPTURED: AtomicUsize = AtomicUsize::new(0);
-static mut CONTROLLER: Option<LocalApic<'static>> = None;
+static TRAP: RuntimeTrap = RuntimeTrap::new(VECTOR, RECEPTION.entry());
+static RECEPTION: Binding<TimerReception> = Binding::new(
+    TimerReception {
+        controller: RefCell::new(None),
+        captured: AtomicUsize::new(0),
+    },
+    interrupt,
+);
+
+struct TimerReception {
+    controller: RefCell<Option<LocalApic<'static>>>,
+    captured: AtomicUsize,
+}
 
 // The boot processor owns this controller. Ordinary IF stays clear until
 // each borrow has ended, and the runtime handler cannot nest.
-fn with_controller<T>(operation: impl FnOnce(&mut LocalApic<'static>) -> T) -> T {
-    let controller = unsafe {
-        (&mut *(&raw mut CONTROLLER))
-            .as_mut()
-            .expect("admitted timer")
-    };
-    operation(controller)
+unsafe impl Sync for TimerReception {}
+
+impl TimerReception {
+    fn with_controller<T>(&self, operation: impl FnOnce(&mut LocalApic<'static>) -> T) -> T {
+        let mut controller = self.controller.borrow_mut();
+        operation(controller.as_mut().expect("admitted timer"))
+    }
 }
 
-fn interrupt(mut irq: Irq<'_>) {
+fn interrupt(owner: &TimerReception, mut irq: Irq<'_>) {
     assert_eq!(irq.vector(), VECTOR);
-    with_controller(|controller| {
+    owner.with_controller(|controller| {
         // Timer programming still belongs to the ordinary masked owner.
         assert_eq!(controller.stop_timer(), Err(Failure::Scope));
         assert_eq!(controller.timer_state(), Some(TimerState::Stopped));
@@ -48,12 +59,12 @@ fn interrupt(mut irq: Irq<'_>) {
         assert_eq!(claim.vector(), VECTOR);
         assert_eq!(
             claim.identity().round(),
-            CAPTURED.load(Ordering::Relaxed) as u64 + 1
+            owner.captured.load(Ordering::Relaxed) as u64 + 1
         );
         unsafe { claim.complete() }.unwrap();
         assert_eq!(unsafe { claim.complete() }, Err(Failure::Busy));
     });
-    CAPTURED.fetch_add(1, Ordering::Release);
+    owner.captured.fetch_add(1, Ordering::Release);
 }
 
 fn permit_irq() {
@@ -63,11 +74,11 @@ fn permit_irq() {
 fn await_vector(expected: usize) {
     let start = q35::tsc();
     let timeout = q35::tsc_frequency();
-    while CAPTURED.load(Ordering::Acquire) < expected {
+    while RECEPTION.owner().captured.load(Ordering::Acquire) < expected {
         assert!(q35::tsc().wrapping_sub(start) < timeout);
         permit_irq();
     }
-    assert_eq!(CAPTURED.load(Ordering::Acquire), expected);
+    assert_eq!(RECEPTION.owner().captured.load(Ordering::Acquire), expected);
 }
 
 pub(super) fn check(boot: &boot::Boot<'_>) {
@@ -85,7 +96,8 @@ pub(super) fn check(boot: &boot::Boot<'_>) {
     assert_eq!(local.timer_state(), Some(TimerState::Reserved));
 
     let early = q35::Idtr::read();
-    unsafe { (&raw mut CONTROLLER).write(Some(local)) };
+    let reception = RECEPTION.owner();
+    assert!(reception.controller.replace(Some(local)).is_none());
     unsafe { TRAP.install() }.unwrap();
     let installed = q35::Idtr::read();
     assert_ne!({ installed.base }, { early.base });
@@ -98,7 +110,7 @@ pub(super) fn check(boot: &boot::Boot<'_>) {
             ticks: NonZeroU32::new(ticks).unwrap(),
             divider,
         };
-        with_controller(|local| {
+        reception.with_controller(|local| {
             unsafe { local.arm_timer(countdown) }.unwrap();
             assert_eq!(local.timer_state(), Some(TimerState::Armed(countdown)));
             assert_eq!(unsafe { local.arm_timer(countdown) }, Err(Failure::Busy));
@@ -106,8 +118,8 @@ pub(super) fn check(boot: &boot::Boot<'_>) {
         // IF stays clear while the real q35 countdown expires. The bounded
         // fixture delay is only an observation window for a relative timer.
         assert!(q35::delay(20_000));
-        assert_eq!(CAPTURED.load(Ordering::Acquire), index);
-        with_controller(|local| {
+        assert_eq!(RECEPTION.owner().captured.load(Ordering::Acquire), index);
+        reception.with_controller(|local| {
             local.stop_timer().unwrap();
             assert_eq!(local.timer_state(), Some(TimerState::Stopped));
             assert_eq!(local.reception(), Reception::Idle);
@@ -116,11 +128,11 @@ pub(super) fn check(boot: &boot::Boot<'_>) {
             assert_eq!(local.timer_state(), Some(TimerState::Stopped));
         });
         await_vector(index + 1);
-        with_controller(|local| assert_eq!(local.reception(), Reception::Idle));
+        reception.with_controller(|local| assert_eq!(local.reception(), Reception::Idle));
         assert_eq!({ q35::Idtr::read().base }, { installed.base });
     }
 
-    let mut local = unsafe { (&mut *(&raw mut CONTROLLER)).take().unwrap() };
+    let mut local = reception.controller.take().unwrap();
     let returned = local.release_timer().unwrap();
     assert_eq!(returned.vector(), VECTOR);
     local.release_vector(returned).unwrap();
@@ -128,7 +140,7 @@ pub(super) fn check(boot: &boot::Boot<'_>) {
     for _ in 0..4096 {
         permit_irq();
     }
-    assert_eq!(CAPTURED.load(Ordering::Acquire), 2);
+    assert_eq!(RECEPTION.owner().captured.load(Ordering::Acquire), 2);
     boot_diagnostic::write(
         "PASS local-apic-timer inherited=1 captured=2 eoi=2 drained=2 rearmed=1 released=1\n",
     );

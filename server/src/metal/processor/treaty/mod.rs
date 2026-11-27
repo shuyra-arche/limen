@@ -57,7 +57,9 @@ pub(crate) fn can_switch() -> bool {
 #[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "x86_64")))]
 pub use super::execution::runtime::Irq;
 #[cfg(limen_target)]
-pub use super::execution::runtime::{InstallError, RuntimeTrap};
+pub(crate) use super::execution::runtime::{Capture, Handler};
+#[cfg(limen_target)]
+pub use super::execution::runtime::{Entry, InstallError, RuntimeTrap};
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 pub use super::execution::runtime::{SoftwareInterrupt, TimerInterrupt};
 

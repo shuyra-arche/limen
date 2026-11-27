@@ -5,22 +5,34 @@ use core::{
     ptr,
     sync::atomic::{AtomicBool, AtomicPtr, Ordering},
 };
+use kernel::entry::hook::Binding;
 use kernel::metal::{
     interrupt::riscv64::internal::timer::Timer,
     processor::treaty::{RuntimeTrap, TimerInterrupt},
 };
 
-static VECTORS: RuntimeTrap = RuntimeTrap::new(None, Some(interrupt));
-static ACTIVE: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-static CAPTURED: AtomicBool = AtomicBool::new(false);
+struct TimerReception {
+    active: AtomicPtr<()>,
+    captured: AtomicBool,
+}
 
-fn interrupt(interrupt: TimerInterrupt<'_>) {
+static RECEPTION: Binding<TimerReception> = Binding::new(
+    TimerReception {
+        active: AtomicPtr::new(ptr::null_mut()),
+        captured: AtomicBool::new(false),
+    },
+    None,
+    Some(interrupt),
+);
+static VECTORS: RuntimeTrap = RuntimeTrap::new(RECEPTION.entry());
+
+fn interrupt(owner: &TimerReception, interrupt: TimerInterrupt<'_>) {
     // The guest exposes its original Timer only during `receive`; masked
     // ordinary code takes the pointer down before reborrowing it.
-    let pointer = ACTIVE.load(Ordering::Acquire).cast::<Timer<'_>>();
+    let pointer = owner.active.load(Ordering::Acquire).cast::<Timer<'_>>();
     let timer = unsafe { pointer.as_mut() }.expect("live local timer");
     if unsafe { timer.accept_interrupt(&interrupt) }.unwrap() {
-        CAPTURED.store(true, Ordering::Release);
+        owner.captured.store(true, Ordering::Release);
     }
 }
 
@@ -29,8 +41,10 @@ pub(crate) fn install() {
 }
 
 pub(crate) fn receive(timer: &mut Timer<'_>, until: u64) {
+    let owner = RECEPTION.owner();
     assert!(
-        ACTIVE
+        owner
+            .active
             .swap(ptr::from_mut(timer).cast(), Ordering::Release)
             .is_null()
     );
@@ -43,12 +57,12 @@ pub(crate) fn receive(timer: &mut Timer<'_>, until: u64) {
             "bltu t1, {until}, 2b",
             "3: csrci sstatus, 2",
             until = in(reg) until,
-            captured = in(reg) CAPTURED.as_ptr(),
+            captured = in(reg) owner.captured.as_ptr(),
             out("t0") _,
             out("t1") _,
             options(nostack),
         );
     }
-    ACTIVE.store(ptr::null_mut(), Ordering::Relaxed);
-    assert!(CAPTURED.swap(false, Ordering::Acquire));
+    owner.active.store(ptr::null_mut(), Ordering::Relaxed);
+    assert!(owner.captured.swap(false, Ordering::Acquire));
 }
