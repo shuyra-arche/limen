@@ -54,3 +54,13 @@ unsafe extern "C" {
 pub(super) unsafe fn switch(outgoing: *mut Saved, incoming: *const Saved, argument: *const ()) {
     unsafe { limen_switch_context(outgoing, incoming, argument) };
 }
+
+/// Enter the resident dispatcher with this target's existing kernel ABI.
+#[unsafe(naked)]
+pub(super) unsafe extern "C" fn start_stack(
+    stack: usize,
+    entry: extern "C" fn(*const ()) -> !,
+    argument: *const (),
+) -> ! {
+    core::arch::naked_asm!("mv sp, a0", "mv a0, a2", "li ra, 0", "jr a1");
+}

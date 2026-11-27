@@ -254,7 +254,10 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     }
     cooperative::run(boot, major, target, &mut startup, |startup| {
         board::inspect_started(startup, target);
-    });
+    })
+}
+
+fn finish(major: usize) -> ! {
     synchronization::check();
     boot::write("PASS synchronization\n");
     writeln!(

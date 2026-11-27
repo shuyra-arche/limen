@@ -18,8 +18,10 @@ startup failure and an unconfirmed wake remain Boot's responsibility. Room
 publishes each permanent participation and its associated machine record in
 one protected operation. Only the current Hart uses its scope-checked local
 locator, without a second Room acquisition. Duplicate and exhausted
-participation are rejected before publication. The 32 KiB minor dispatcher
-stack holds live startup frames, the platform entry and dispatcher-side callees.
+participation are rejected before publication. Each machine record owns a
+32 KiB dispatcher stack. After attachment the trusted platform calls
+`Execution::run` once to enter that stack. The original startup stack stays
+reserved while the running closure or firmware description borrows it.
 
 Trusted Unit entries must fit their stack and preserve the selected supervisor
 execution profile. `create` pins the Unit to its creating Hart.
@@ -40,9 +42,9 @@ resumes the Unit. Metal issues the leave receipt after the dispatcher resumes
 on its own stack. `pending_leave` reports the stopped occupancy to its owning
 dispatcher. Room matches the private Metal receipt to the exact current
 occupancy before making the Unit ready again or releasing the admission.
-One MCS Turn orders the shared changes to Room placement and Unit state
-at publication and settlement. Metal rejects a switch while the Hart has
-active synchronization participation. The Turn ends its
+Unit and Room each own a Turn. Admission and settlement acquire both
+in canonical order. Unit-only and Room-only operations acquire their own Turn. Metal rejects a switch while the Hart has
+active synchronization participation. The acquisition ends its
 borrows, settles all queue nodes and restores the original interrupt state
 before a continuation can be entered or handed off.
 A yielded continuation becomes available to another compatible Hart only

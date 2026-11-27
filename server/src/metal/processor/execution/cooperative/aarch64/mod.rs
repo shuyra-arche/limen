@@ -109,3 +109,13 @@ pub(super) unsafe extern "C" fn switch(
         vectors = const offset_of!(Saved, vectors),
     )
 }
+
+/// Enter the resident dispatcher with this target's existing kernel ABI.
+#[unsafe(naked)]
+pub(super) unsafe extern "C" fn start_stack(
+    stack: usize,
+    entry: extern "C" fn(*const ()) -> !,
+    argument: *const (),
+) -> ! {
+    core::arch::naked_asm!("mov sp, x0", "mov x0, x2", "mov x30, xzr", "br x1");
+}
