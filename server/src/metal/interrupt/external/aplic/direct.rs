@@ -215,10 +215,7 @@ impl<'a> Direct<'a> {
         // Actual ordering belongs to the APLIC, not the generic byte window.
         unsafe {
             asm!("fence iorw, iorw", options(nostack));
-            let value = self
-                .mapping
-                .read_u32(offset)
-                .expect("checked APLIC offset");
+            let value = self.mapping.read_u32(offset).expect("checked APLIC offset");
             asm!("fence iorw, iorw", options(nostack));
             value
         }
