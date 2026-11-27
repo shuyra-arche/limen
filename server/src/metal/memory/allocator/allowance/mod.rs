@@ -1,15 +1,16 @@
+mod budget;
 pub(super) mod permit;
 
-use limen_treaty::model::ByteLength;
+pub use budget::{Budget, BudgetObservation, BudgetProgress};
 
-use core::sync::atomic::Ordering::Acquire;
+use limen_treaty::model::ByteLength;
 
 use crate::metal::{
     identity::{Generation, Key, Slot},
     sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
 };
 
-use super::{Allocator, Error, REGION_LIMIT, RegionId, SourceId};
+use super::{Allocator, Error, RegionId, SourceId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AllowanceScope(SourceId);
@@ -207,7 +208,11 @@ impl Allowance {
             if amount != 0 {
                 let region = region.ok_or(Error::Balance)?;
                 let state = held.access(&region.state).expect("credit Region");
-                state.unassigned = state.unassigned.checked_add(amount).ok_or(Error::Balance)?;
+                let next = state
+                    .unassigned()
+                    .checked_add(amount)
+                    .ok_or(Error::Balance)?;
+                state.set_unassigned(next);
             }
             held.access(slot).expect("Allowance").state = SlotState::Shutting {
                 reserved: balance.reserved,
@@ -227,10 +232,6 @@ impl Allowance {
     }
 }
 
-/// Source assignment acquires the free index and the candidate allowance slot
-/// in addition to its selected Region locks.
-pub(super) const ASSIGNMENT_LOCKS: usize = 2;
-
 impl Allocator {
     pub(super) fn slot(&self, id: AllowanceId) -> Result<&TurnLock<AllowanceSlot>, Error> {
         self.allowance_slot(id.0.scope().0, id.0.slot())
@@ -245,37 +246,6 @@ impl Allocator {
             return Err(Error::Stale);
         }
         self.allowances.get(slot.index()).ok_or(Error::Stale)
-    }
-
-    /// Coherent managed RAM and unassigned budget. The trusted kernel's
-    /// observation of the exact source uses the complete Region set.
-    pub fn budget(&self, mode: TurnMode) -> Result<(ByteLength, ByteLength), Error> {
-        let count = self.directory.acquire(|_| self.published.load(Acquire))?;
-        let mut work = TurnWorkspace::<{ REGION_LIMIT + 1 }>::new();
-        let mut plan = work.plan();
-        plan.insert(&self.directory).expect("directory");
-        for region in &self.regions[..count] {
-            plan.insert(&region.state).expect("published Region");
-        }
-        plan.acquire(mode, |held| {
-            if count != self.published.load(Acquire) {
-                return Err(Error::Changed);
-            }
-            self.regions[..count].iter().try_fold(
-                (ByteLength::new(0), ByteLength::new(0)),
-                |(total, unassigned), region| {
-                    let state = held.access(&region.state).expect("published Region");
-                    Ok((
-                        total
-                            .checked_add(region.description().physical.length())
-                            .ok_or(Error::Balance)?,
-                        unassigned
-                            .checked_add(ByteLength::new(state.unassigned))
-                            .ok_or(Error::Balance)?,
-                    ))
-                },
-            )
-        })?
     }
 
     /// Observe the free-chain head before constructing the complete plan.
@@ -353,7 +323,7 @@ impl Allocator {
             let state = held
                 .access(&self.region(id)?.state)
                 .ok_or(Error::Protection)?;
-            if amount > state.unassigned {
+            if amount > state.unassigned() {
                 return Err(Error::Balance);
             }
             capacity = capacity.checked_add(amount).ok_or(Error::Balance)?;
@@ -362,7 +332,7 @@ impl Allocator {
             let state = held
                 .access(&self.regions[id.index()].state)
                 .expect("checked debit");
-            state.unassigned -= amount.get();
+            state.set_unassigned(state.unassigned() - amount.get());
         }
         held.access(&self.free).expect("free index").head = next;
         *held.access(slot).expect("Allowance") =

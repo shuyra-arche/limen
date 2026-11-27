@@ -1,26 +1,19 @@
 //! RV64 cooperative continuation transfer within the supervisor address space.
 
-use core::{
-    arch::{asm, global_asm},
-    mem::offset_of,
+use core::{arch::global_asm, mem::offset_of};
+
+use crate::metal::{
+    interrupt::internal::supervisor, memory::mmu::internal::riscv::context::Context,
+    processor::hart::riscv::native,
 };
 
 /// The native integer-only switch is valid in the verified Bare environment.
 pub(super) fn ready() -> bool {
-    let (status, enabled, translation): (usize, usize, usize);
-    unsafe {
-        asm!(
-            "csrr {status}, sstatus",
-            "csrr {enabled}, sie",
-            "csrr {translation}, satp",
-            status = out(reg) status,
-            enabled = out(reg) enabled,
-            translation = out(reg) translation,
-            options(nomem, nostack),
-        );
-    }
-    const EXTENSIONS: usize = (3 << 13) | (3 << 9);
-    status & (EXTENSIONS | 2) == 0 && enabled == 0 && translation == 0
+    let status = native::status();
+    status.masked()
+        && status.extensions_off()
+        && supervisor::all_masked()
+        && Context::current() == Some(Context::BARE)
 }
 
 #[repr(C)]

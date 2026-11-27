@@ -7,17 +7,21 @@ use kernel::{
             Config,
             Error,
             Initial,
+            LookupObservation,
             Pending,
             RamPurpose::Metadata,
             Request,
-            ReturnId,
+            ReturnReceipt,
             Search,
         },
         sync::TurnMode::{Fast, Slow},
     },
 };
 
-use super::memory::{extent, mapped, retirement};
+use super::{
+    foundation::inspect_budget,
+    memory::{extent, mapped, retirement},
+};
 
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
@@ -37,7 +41,7 @@ const CONFIG: Config = Config {
 
 static mut RECEIVER: Option<Allocation> = None;
 static mut ALLOWANCE: Option<Allowance> = None;
-static mut RECEIPT: Option<ReturnId> = None;
+static mut RECEIPT: Option<ReturnReceipt> = None;
 
 fn pages(first: u64, last: u64) -> PhysicalRange {
     extent(BASE + first * PAGE, BASE + last * PAGE)
@@ -84,12 +88,12 @@ pub(super) fn check(boot: &Boot<'_>) {
     assert_eq!(source.root(), pages(4, 4 + root_pages));
     let capacity = (13 - root_pages) * PAGE;
     assert_eq!(
-        source
-            .budget(Slow)
+        inspect_budget(source)
             .map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity - 10 * PAGE))
     );
 
+    let mut lookup_observations = [LookupObservation::EMPTY; 3];
     let mut lookup = source
         .lookup(
             Request::new(
@@ -101,6 +105,7 @@ pub(super) fn check(boot: &Boot<'_>) {
             )
             .unwrap(),
             None,
+            &mut lookup_observations,
         )
         .unwrap();
     loop {
@@ -112,6 +117,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     }
 
     let later = pages(16, 20);
+    let mut absent_observations = [LookupObservation::EMPTY; 3];
     let mut absent = source
         .lookup(
             Request::new(
@@ -123,6 +129,7 @@ pub(super) fn check(boot: &Boot<'_>) {
             )
             .unwrap(),
             None,
+            &mut absent_observations,
         )
         .unwrap();
     let evidence = retirement(boot, later);
@@ -151,7 +158,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         Metadata,
     )
     .unwrap();
-    let Search::Candidate(aligned) = source.lookup(request, Some(added)).unwrap().step().unwrap()
+    let Search::Candidate(aligned) = source.lookup(request, Some(added), &mut [LookupObservation::EMPTY; 3]).unwrap().step().unwrap()
     else {
         panic!("the new Region has an eligible aligned grain");
     };
@@ -161,25 +168,24 @@ pub(super) fn check(boot: &Boot<'_>) {
     let region = allocation.region();
     // This owner did not expose the allocation or issue any actual access.
     let receipt = unsafe { &mut *(&raw mut RECEIPT) };
-    let _lost = source.begin_return(unsafe { allocation.retire() }, receipt);
+    let _lost = unsafe { allocation.retire().begin_return(receipt) };
     let Pending::Found(pending) = source.pending(region, &mut 0, 64).unwrap() else {
         panic!("lost response made the return undiscoverable");
     };
     allowance.shut(Some(added), Fast).unwrap();
     let done = source.finish_return(pending, Slow).unwrap();
     let receipt = receipt.take().unwrap();
-    assert_eq!(receipt, pending);
+    assert_eq!(receipt.id(), pending);
     assert_eq!(done.physical, pages(0, 3));
     let capacity = capacity + 4 * PAGE;
     assert_eq!(
-        source
-            .budget(Fast)
+        inspect_budget(source)
             .map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity))
     );
     allowance.reclaim(Slow).ok().unwrap();
-    assert_eq!(source.finish_return(receipt, Fast), Ok(done));
-    source.acknowledge(receipt).unwrap();
-    assert_eq!(source.finish_return(receipt, Fast), Err(Error::Stale));
+    assert_eq!(receipt.finish(Fast), Ok(done));
+    receipt.acknowledge().unwrap();
+    assert_eq!(receipt.finish(Fast), Err(Error::Stale));
     boot::write("PASS allocator source=1 negative=1 delayed=1 return=1\n");
 }

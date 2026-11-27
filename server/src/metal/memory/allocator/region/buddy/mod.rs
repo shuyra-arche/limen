@@ -11,7 +11,9 @@ use core::{mem::MaybeUninit, ops::Range, slice};
 use limen_treaty::model::PhysicalRange;
 
 pub use geometry::{Geometry, Root};
-pub use scan::{Request, Revision, Scan, Search};
+pub use scan::{Request, Scan, Search};
+
+use super::Revision;
 
 use geometry::Block;
 

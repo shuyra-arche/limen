@@ -5,22 +5,18 @@ use core::{
     mem::offset_of,
 };
 
+use crate::metal::processor::{execution::description::aarch64::base_simd, hart::aarch64::native};
+
 #[cfg(target_feature = "sve")]
 compile_error!("cooperative AArch64 requires the base FP/SIMD execution profile");
 
 pub(super) fn ready() -> bool {
-    let (access, daif, spsel): (usize, usize, usize);
-    unsafe {
-        asm!("mrs {}, CPACR_EL1", "mrs {}, DAIF", "mrs {}, SPSel",
-            out(reg) access, out(reg) daif, out(reg) spsel,
-            options(nomem, nostack, preserves_flags));
+    if !native::masked_stack() {
+        return false;
     }
-    // EL1 must be permitted to execute FP/SIMD. Do not admit SVE/SME
-    // access with only the base save shape.
-    daif & 0x3c0 == 0x3c0
-        && spsel == 1
-        && access & (1 << 20) != 0
-        && access & ((3 << 16) | (3 << 24)) == 0
+    let access: usize;
+    unsafe { asm!("mrs {}, CPACR_EL1", out(reg) access, options(nomem, nostack, preserves_flags)) };
+    base_simd(access)
 }
 
 #[repr(C, align(16))]

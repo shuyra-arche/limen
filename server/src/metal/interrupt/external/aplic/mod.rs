@@ -10,6 +10,9 @@ const SOURCE_LIMIT: u32 = 1023;
 const IDC_BASE: usize = 0x4000;
 const IDC_BYTES: usize = 32;
 
+#[cfg(any(test, all(limen_target, target_arch = "riscv64")))]
+mod encoding;
+
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 mod direct;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
@@ -152,12 +155,11 @@ impl<'a> Description<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
 pub enum Mode {
-    EdgeRising = 4,
-    EdgeFalling = 5,
-    LevelHigh = 6,
-    LevelLow = 7,
+    EdgeRising,
+    EdgeFalling,
+    LevelHigh,
+    LevelLow,
 }
 
 /// A checked device route description; actual programming requires control.

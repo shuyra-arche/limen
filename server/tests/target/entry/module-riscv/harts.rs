@@ -68,7 +68,7 @@ pub fn check<'a>(boot: &Boot<'a>, modes: &[Mode]) -> [RiscvMmu<'a>; 2] {
         assert_eq!(mmu.hart(), hart as u64);
         mmu
     });
-    assert!(boot.sbi_services().hart_state_management().is_some());
+    assert!(boot.sbi_services().hart_state_management().unwrap().is_some());
     assert_eq!(status(major), STARTED);
     assert_eq!(status(minor), STOPPED);
     descriptions
@@ -118,7 +118,7 @@ pub unsafe fn exercise(
     // The launch argument retains the exact peer's checked description until
     // the HSM stop receipt; the peer admits its own local translation access.
     let argument = ptr::from_ref(&description).expose_provenance();
-    unsafe { minor.start(peer, run, argument, Startup::Sbi(service)) }.unwrap();
+    unsafe { minor.start(peer, run, argument, &mut Startup::Sbi(service)) }.unwrap();
     wait(Phase::FirstReturned);
     assert!(minor.ready());
     assert_eq!(status(peer), STARTED);

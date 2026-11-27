@@ -1,7 +1,8 @@
 use crate::metal::{
+    interrupt::internal::apic,
     platform::boot::handoff::{Descriptions, Facts, uefi},
     platform::boot::trap as diagnostic,
-    processor::hart::x86_64,
+    processor::hart::{local, x86_64},
 };
 mod major;
 pub(crate) use major::major as enter_major;
@@ -20,11 +21,7 @@ struct Gate {
     reserved: u32,
 }
 
-#[repr(C, packed)]
-struct Descriptor {
-    limit: u16,
-    base: usize,
-}
+use x86_64::Descriptor;
 
 #[unsafe(naked)]
 extern "sysv64" fn stop() -> ! {
@@ -49,7 +46,7 @@ pub(crate) unsafe fn admit<'a>(
 ) -> Option<Facts<'a>> {
     let facts = unsafe { uefi::admit(hart, x86_64::boot_identity(), input, descriptions) }?;
     if let Some(acpi) = descriptions.acpi.as_ref()
-        && !x86_64::matches_madt(hart, acpi.madt()?)
+        && !apic::matches_madt(hart, acpi.madt()?)
     {
         return None;
     }
@@ -61,18 +58,17 @@ pub(crate) fn established() -> bool {
     unsafe {
         asm!("pushfq", "pop {}", "mov {}, cr0", out(reg) flags, out(reg) cr0);
     }
-    cr0 & (1 << 31) != 0 && flags & (1 << 9) == 0 && entry_installed()
+    cr0 & (1 << 31) != 0 && flags & (1 << 9) == 0 && entry().is_some()
 }
 
-pub(crate) fn entry_installed() -> bool {
-    let cs: u16;
-    unsafe { asm!("mov {:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags)) };
-    if cs & 3 != 0 {
-        return false;
-    }
-    let mut idtr = Descriptor { limit: 0, base: 0 };
-    unsafe { asm!("sidt [{}]", in(reg) &mut idtr, options(nostack, preserves_flags)) };
-    idtr.limit as usize + 1 == size_of::<[Gate; 256]>() && idtr.base == (&raw const IDT).addr()
+pub(in crate::metal) fn entry() -> Option<local::Entry> {
+    local::Entry::admit(
+        x86_64::Entry {
+            base: (&raw const IDT).addr(),
+            limit: (size_of::<[Gate; 256]>() - 1) as u16,
+        },
+        diagnostic::stack_range(),
+    )
 }
 
 pub(crate) fn park() -> ! {

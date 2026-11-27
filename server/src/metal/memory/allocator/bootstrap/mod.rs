@@ -12,14 +12,14 @@ use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 use crate::metal::{
     identity::{Entry, Generation, Slot},
     memory::mmu::internal::access::MappedRange,
-    sync::{TURN_CAPACITY, TurnLock},
+    sync::TurnLock,
 };
 
 use super::{
-    Allocator, AllowanceId, Error, REGION_LIMIT, Region, RegionDescription, RegionId, RegionOrigin,
-    SourceId,
+    Allocator, AllowanceId, Error, Region, RegionDescription, RegionId, RegionOrigin, SourceId,
     allocation::{Allocation, AllocationId, AllocationRecord, Phase},
-    allowance::{ASSIGNMENT_LOCKS, Allowance, AllowanceSlot, Balance, Free},
+    allowance::{Allowance, AllowanceSlot, Balance, Free},
+    directory::{Directory, Link},
     region::{
         Backing,
         buddy::{Geometry, Root},
@@ -49,11 +49,9 @@ impl Config {
         if !alignment.is_aligned(self.maximum) {
             return Err(Error::Layout);
         }
-        // No authorization ancestors are traversed here. Opening an
-        // Allowance takes at most Q Region locks, the slot and the free
-        // index. Source inspection takes Q Region locks and the directory.
-        if !(1..=REGION_LIMIT).contains(&self.regions)
-            || self.regions + ASSIGNMENT_LOCKS > TURN_CAPACITY
+        // Directory capacity follows actual root storage and identity geometry.
+        if self.regions == 0
+            || Slot::new(self.regions - 1).is_none()
             || self.roots == 0
             || self.grains == 0
             || self.allocations == 0
@@ -82,6 +80,7 @@ impl Config {
         let mut root = Layout::new::<Allocator>();
         for element in [
             array::<Region>(self.regions)?,
+            array::<Link>(self.regions)?,
             array::<TurnLock<AllowanceSlot>>(self.allowances)?,
         ] {
             root = root.extend(element).map_err(|_| Error::Layout)?.0;
@@ -178,19 +177,21 @@ impl<'a> Initial<'a> {
 
 /// Exact root input and initial receiving positions checked before Entry
 /// consumes the permanent mapped storage.
-pub(crate) struct RootInitialization<'r, 'a> {
+pub(crate) struct RootInitialization<'r, 'a, Descriptions> {
     config: Config,
-    descriptions: [Option<RegionDescription>; REGION_LIMIT],
+    descriptions: Descriptions,
     capacity: u64,
     committed: u64,
     allowance_receiver: &'r mut Option<Allowance>,
     initial: &'r mut [Initial<'a>],
 }
 
-impl<'r, 'a> RootInitialization<'r, 'a> {
+impl<'r, 'a, Descriptions: Iterator<Item = RegionDescription> + Clone>
+    RootInitialization<'r, 'a, Descriptions>
+{
     pub(crate) fn prepare(
         config: Config,
-        descriptions: impl Iterator<Item = RegionDescription>,
+        descriptions: Descriptions,
         capacity: u64,
         allowance_receiver: &'r mut Option<Allowance>,
         initial: &'r mut [Initial<'a>],
@@ -205,14 +206,17 @@ impl<'r, 'a> RootInitialization<'r, 'a> {
         {
             return Err(Error::Capacity);
         }
-        let mut prepared = [None; REGION_LIMIT];
         let mut committed = 0u64;
         let mut total = ByteLength::new(0);
-        for (index, description) in descriptions.enumerate() {
+        let mut previous: Option<PhysicalRange> = None;
+        for (index, description) in descriptions.clone().enumerate() {
             if index >= config.regions {
                 return Err(Error::Capacity);
             }
-            prepared[index] = Some(description);
+            if previous.is_some_and(|prior| prior.end() > description.physical.start()) {
+                return Err(Error::Overlap);
+            }
+            previous = Some(description.physical);
             config.geometry(description)?;
             total = total
                 .checked_add(description.physical.length())
@@ -247,9 +251,8 @@ impl<'r, 'a> RootInitialization<'r, 'a> {
             return Err(Error::Balance);
         }
         if initial.iter().any(|item| {
-            !prepared
-                .iter()
-                .flatten()
+            !descriptions
+                .clone()
                 .any(|region| region.physical.covers(item.physical))
         }) {
             return Err(Error::Range);
@@ -257,7 +260,7 @@ impl<'r, 'a> RootInitialization<'r, 'a> {
 
         Ok(Self {
             config,
-            descriptions: prepared,
+            descriptions,
             capacity,
             committed,
             allowance_receiver,
@@ -270,11 +273,14 @@ impl<'r, 'a> RootInitialization<'r, 'a> {
     /// Entry must supply the exact root from its preflight, with this
     /// configuration's layout and exclusive permanent storage. It must
     /// have removed the entire reservation from the prepared regions.
+    /// The retained description iterator and every preflight clone must
+    /// enumerate the same immutable regions in the same order. Clone alone
+    /// does not guarantee this; entry retains the borrowed list and root plan.
     pub(crate) unsafe fn install(self, storage: RootStorage<'static>) -> &'static Allocator {
         initialize(
             storage,
             self.config,
-            self.descriptions.into_iter().flatten(),
+            self.descriptions,
             self.capacity,
             self.committed,
             self.allowance_receiver,
@@ -325,6 +331,9 @@ fn initialize(
     let place = &mut carve.take::<Allocator>(1)[0];
     let source_id = SourceId(ptr::from_mut(place).addr());
     let regions = carve.take::<Region>(config.regions);
+    let links = carve.take::<Link>(config.regions);
+    links.fill(MaybeUninit::new(Link::EMPTY));
+    let mut directory = Directory::new(filled(links));
     let allowances = carve.take::<TurnLock<AllowanceSlot>>(config.allowances);
     for (index, slot) in allowances.iter_mut().enumerate() {
         let entry = if index == 0 {
@@ -362,12 +371,15 @@ fn initialize(
     let mut charged = capacity;
     let mut published = 0;
     for (index, description) in descriptions.enumerate() {
+        let plan = directory
+            .prepare(&regions[..index], description.physical, config.maximum)
+            .expect("preflighted disjoint Region list");
         let region = &mut regions[index];
         let geometry = config.geometry(description).expect("preflighted Region");
         region.initialize(description, geometry, config.edits);
         let state = region.state.get_mut();
-        let amount = charged.min(state.unassigned);
-        state.unassigned -= amount;
+        let amount = charged.min(state.unassigned());
+        state.set_unassigned(state.unassigned() - amount);
         charged -= amount;
         for item in initial
             .iter_mut()
@@ -379,13 +391,14 @@ fn initialize(
                 .expect("initial ranges preflighted");
             item.staged = Some(state.record(item.physical, allowance, Phase::Issued));
         }
+        directory.insert(Slot::new(index).expect("checked Region slot"), plan);
         published += 1;
     }
 
     let source = place.write(Allocator {
         config,
         root: reserved,
-        directory: TurnLock::new(()),
+        directory: TurnLock::new(directory),
         published: AtomicUsize::new(0),
         regions,
         allowances: filled(allowances),
