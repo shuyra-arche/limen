@@ -1,4 +1,4 @@
-use kernel::metal::interrupt::treaty::{AbsoluteTimer, Completion, HardwareClaim};
+use kernel::metal::interrupt::treaty::{AbsoluteTimer, Completion, HardwareClaim, TimerEffect};
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 
 #[path = "../../claim.rs"]
@@ -33,6 +33,9 @@ const EXTERNAL: usize = INTERRUPT | 9;
 #[path = "../window.rs"]
 mod reception;
 use reception::receive;
+
+#[path = "../internal/timer/reception.rs"]
+mod timer_reception;
 
 fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     let tree = boot.device_tree_description().expect("trusted RV64 DTB");
@@ -127,7 +130,16 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     assert_eq!(timer.state(), State::Idle);
     assert!(timer.pending_effect().unwrap().is_none());
     assert!(timer.confirm_effect().is_err());
-    boot_diagnostic::write("PASS sbi-timer received=2 cleared=2 states=1 rejected=1\n");
+    timer_reception::install();
+    let now = timer.counter().unwrap();
+    let target = now + hertz / 20;
+    timer.arm_at(counter.deadline(target)).unwrap();
+    timer_reception::receive(&mut timer, now + hertz);
+    assert_eq!(timer.pending_effect(), Ok(Some(TimerEffect::Clearing)));
+    assert_eq!(unsafe { timer.stop_due() }, Ok(()));
+    assert_eq!(timer.state(), State::Idle);
+    assert!(!timer.pending().unwrap());
+    boot_diagnostic::write("PASS sbi-timer received=3 runtime=1 cleared=3 states=1 rejected=1\n");
 }
 
 fn uart_read(window: &mut DeviceWindow<'_>, register: usize) -> u8 {

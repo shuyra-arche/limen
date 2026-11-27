@@ -65,7 +65,7 @@ pub enum TimerState {
 
 impl TimerState {
     fn begin_arm(self, countdown: Countdown) -> Result<Self, Failure> {
-        if self != Self::Reserved {
+        if !matches!(self, Self::Reserved | Self::Stopped) {
             return Err(Failure::Busy);
         }
         Ok(Self::Arming(countdown))
@@ -187,7 +187,8 @@ impl LocalApic<'_> {
         Ok(())
     }
 
-    /// Start a one-shot countdown on the owning processor.
+    /// Start a one-shot countdown on the owning processor. A stopped timer
+    /// can reuse its original lease once the previous expiration has drained.
     ///
     /// # Safety
     /// The caller owns the original vector's handling path. Interrupts
@@ -195,9 +196,17 @@ impl LocalApic<'_> {
     /// any delivery that has not completed until the vector is released.
     pub unsafe fn arm_timer(&mut self, countdown: Countdown) -> Result<(), Failure> {
         self.reception_context()?;
-        let timer = self.timer.bound_mut()?;
-        timer.state = timer.state.begin_arm(countdown)?;
-        let configuration = u32::from(timer.vector.vector());
+        let timer = self.timer.bound()?;
+        let state = timer.state.begin_arm(countdown)?;
+        let vector = timer.vector.vector();
+        if !self.timer_quiet() || self.vector_pending(vector) || self.reception_involves(vector) {
+            return Err(Failure::Busy);
+        }
+        self.timer
+            .bound_mut()
+            .expect("timer remains reserved")
+            .state = state;
+        let configuration = u32::from(vector);
         self.timer_write(DIVIDE, countdown.divider.bits());
         self.timer_write(LVT, configuration);
         self.timer_write(INITIAL, countdown.ticks.get());

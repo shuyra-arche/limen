@@ -7,7 +7,7 @@ use crate::metal::{
 #[cfg(all(limen_target, target_arch = "riscv64", limen_firmware = "sbi"))]
 mod native;
 #[cfg(all(limen_target, target_arch = "riscv64", limen_firmware = "sbi"))]
-pub use native::{IpiIssue, IpiRoute, Receiver, Sender};
+pub use native::{IpiIssue, IpiRoute, Receiver, Sender, Wake};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Source<'tree> {

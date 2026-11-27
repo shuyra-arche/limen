@@ -173,20 +173,28 @@ semihosting is enabled to report completion.
 Host models and compiler contracts do not establish native hardware authority.
 The riscv64 IPI guest uses the permanent supervisor software trap vector on
 the receiving processor. It checks real peer delivery, coalescing, same-layer
-return and ordinary synchronization after the IRQ. The timer and external IRQ
-fixtures still exercise their individual controller contracts.
+return, and masked WFI with pre-wait and post-wait rechecks. The riscv64
+execution lifecycle guest receives an IRQ during an occupied Kernel Unit,
+resumes the same stack and only then obtains the original cooperative leave
+receipt. The Sstc and SBI TIME guests capture actual timer interrupts and
+settle the original comparison from the ordinary masked path.
 
 The AArch64 GIC guest installs the permanent EL1h IRQ vector on the receiving
 processor before enabling its original Group 1 SGI. It checks the exact
 claim and completion, refuses ordinary Turn with idle Sync, and observes
 the interrupted stack, IRQ mask, GPR and full-width SIMD continuation after
-hardware return. Other GIC scenarios retain their polling reception checks.
+hardware return. An explicitly paired Generic Timer PPI also uses the
+permanent vector, stops the original comparison and completes that GIC
+claim. Other GIC cases retain their polling reception checks.
 
 The x86_64 IPI guest installs the runtime table before launching the minor.
 Its physical ICR sends exercise the receiving vector's IST stack and exact
 xAPIC lease and EOI, including coalescing and a later accepted delivery.
 The guest observes restored RSP, RFLAGS, GPR and XMM state and verifies that
 Turn rejects the IRQ path while the local Sync supply is idle.
+The xAPIC one-shot timer uses that permanent entry and keeps its lease
+until the original pending and in-service receipts drain. The ordinary
+owner then rearms the same relative countdown.
 The x86_64 Host observer uses the same native guest for two separate terminal
 runs. It checks a remote xAPIC NMI with an unusable interrupted RSP, and a
 processor-generated #DF after the #GP delivery itself faults. Each run records

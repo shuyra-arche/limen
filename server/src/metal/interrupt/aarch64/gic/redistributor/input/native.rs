@@ -66,6 +66,14 @@ impl<'tree, 'map> Ppi<'tree, 'map> {
         self.affinity == processor && local(self.affinity)
     }
 
+    pub(in crate::metal::interrupt::aarch64::gic) fn matches(
+        &self,
+        frame: &Frame<'_>,
+        intid: u32,
+    ) -> bool {
+        frame.ppi_index(self).is_ok() && self.intid == intid
+    }
+
     pub(in crate::metal::interrupt::aarch64) fn permits_programming(
         &self,
         replacement: bool,
@@ -105,7 +113,7 @@ impl StoppedPpi<'_, '_, '_> {
         frame: &Frame<'_>,
         intid: u32,
     ) -> bool {
-        frame.ppi_index(self.0).is_ok() && self.0.intid == intid
+        self.0.matches(frame, intid)
     }
 
     pub(in crate::metal::interrupt::aarch64::gic) fn complete(self) {

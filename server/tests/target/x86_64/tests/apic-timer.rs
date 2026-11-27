@@ -11,6 +11,7 @@ mod timer;
 
 guest::entry! {
     platform: platform::Platform::native(4),
+    prepare: uefi_fixture::q35::calibrate,
     test: |boot| {
         uefi_fixture::check_handoff(&boot, None);
         timer::observe_tsc();

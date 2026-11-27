@@ -2,7 +2,11 @@
 
 use core::time::Duration;
 
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+use crate::metal::processor::treaty::Irq as Interrupt;
 use crate::metal::processor::treaty::ProcessorId;
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+use crate::metal::processor::treaty::TimerInterrupt as Interrupt;
 #[cfg(limen_target)]
 use crate::metal::processor::treaty::try_current_processor;
 
@@ -53,6 +57,13 @@ impl Clock {
     #[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
     pub(in crate::metal) fn read(&self) -> Option<u64> {
         self.sample().map(Sample::count)
+    }
+
+    /// Sample the original counter after the native entry has verified its
+    /// current processor. This does not grant ordinary protection or a Turn.
+    #[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
+    pub(in crate::metal) fn read_on_interrupt(&self, interrupt: &Interrupt<'_>) -> Option<u64> {
+        self.counter.observe(interrupt.processor())
     }
 
     /// Recover the comparison count for this exact native counter.

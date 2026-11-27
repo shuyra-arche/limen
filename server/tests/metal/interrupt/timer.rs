@@ -17,6 +17,7 @@ where
     assert!(!timer.due().unwrap());
 }
 
+#[cfg(target_arch = "aarch64")]
 pub fn confirm_due<T: AbsoluteTimer>(timer: &T)
 where
     T::Failure: Debug,

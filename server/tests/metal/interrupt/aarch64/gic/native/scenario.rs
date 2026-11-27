@@ -20,7 +20,8 @@ use core::{
     arch::asm,
     cell::UnsafeCell,
     fmt::Write,
-    sync::atomic::{AtomicBool, Ordering},
+    ptr,
+    sync::atomic::{AtomicBool, AtomicPtr, Ordering},
     time::Duration,
 };
 use kernel::metal::{
@@ -352,6 +353,62 @@ fn check_signal(frame: Frame<'static>) -> Frame<'static> {
         .unwrap_or_else(|_| panic!("major SGI interface busy"))
 }
 
+struct TimerRoute<'local, 'clock, 'tree> {
+    receiver: &'local mut CpuInterface<'static>,
+    timer: &'local mut VirtualTimer<'clock, 'tree, 'static>,
+}
+
+static TIMER_ROUTE: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static TIMER_RETURNED: AtomicBool = AtomicBool::new(false);
+static MAJOR_VECTORS: RuntimeTrap = RuntimeTrap::new(handle_timer);
+
+fn handle_timer(interrupt: Irq<'_>) {
+    assert_eq!(IRQ_TURN.acquire(|_| ()), Err(TurnAcquireError::Context));
+    let pointer = TIMER_ROUTE
+        .load(Ordering::Acquire)
+        .cast::<TimerRoute<'_, '_, '_>>();
+    // Only the major processor enters here, while receive_timer exclusively
+    // transfers the fixture's two original owners to this handler.
+    let route = unsafe { pointer.as_mut() }.expect("live timer route");
+    let mut claim = route.receiver.receive().unwrap().expect("real timer PPI");
+    route.timer.stop_in_interrupt(&interrupt, &claim).unwrap();
+    claim
+        .complete_ppi(route.timer.stopped_ppi().unwrap())
+        .unwrap();
+    TIMER_RETURNED.store(true, Ordering::Release);
+}
+
+fn receive_timer(mut route: TimerRoute<'_, '_, '_>, until: u64) {
+    assert!(
+        TIMER_ROUTE
+            .swap(ptr::from_mut(&mut route).cast(), Ordering::Release)
+            .is_null()
+    );
+    let restored: usize;
+    unsafe {
+        asm!(
+            "msr daifclr, #2",
+            "isb",
+            "2: ldarb w8, [{observed}]",
+            "cbnz w8, 3f",
+            "mrs x8, CNTVCT_EL0",
+            "cmp x8, {until}",
+            "b.lo 2b",
+            "3: mrs {restored}, DAIF",
+            "msr daifset, #2",
+            "isb",
+            observed = in(reg) TIMER_RETURNED.as_ptr(),
+            until = in(reg) until,
+            restored = out(reg) restored,
+            out("x8") _,
+            options(nostack),
+        );
+    }
+    TIMER_ROUTE.store(ptr::null_mut(), Ordering::Relaxed);
+    assert_eq!(restored & 0x80, 0);
+    assert!(TIMER_RETURNED.swap(false, Ordering::Acquire));
+}
+
 fn check_virtual_timer(
     tree: &DeviceTree<'_>,
     domain: GicV3<'_>,
@@ -368,6 +425,7 @@ fn check_virtual_timer(
     let distinct_counter = unsafe { counter.bind(major) }.unwrap();
     let counter = unsafe { counter.bind(major) }.unwrap();
     let clock = counter.clock();
+    let mut captured = false;
     for delay in [Duration::from_secs(5), Duration::from_millis(10)] {
         receiver.prepare_ppi(&mut ppi).unwrap();
         let mut timer = unsafe { VirtualTimer::admit(timer, &counter, &mut ppi) }.unwrap();
@@ -384,6 +442,22 @@ fn check_virtual_timer(
             timer_consumer::advance(clock, &mut timer, Duration::from_millis(10));
         }
         assert!(timer.stopped_ppi().is_none());
+        if delay == Duration::from_millis(10) {
+            unsafe { MAJOR_VECTORS.install() }.unwrap();
+            let now: u64;
+            unsafe { asm!("mrs {}, CNTVCT_EL0", out(reg) now, options(nostack, nomem)) };
+            receive_timer(
+                TimerRoute {
+                    receiver: &mut receiver,
+                    timer: &mut timer,
+                },
+                now + clock.frequency().get() * 3,
+            );
+            assert!(timer.stopped_ppi().is_none());
+            assert_eq!(receiver.state(), State::Empty);
+            captured = true;
+            continue;
+        }
         wait_for_claim(&mut receiver, role.intid as usize);
         timer_consumer::confirm_due(&timer);
         assert_eq!(timer.pending(), Ok(true));
@@ -407,6 +481,7 @@ fn check_virtual_timer(
         assert!(timer.stopped_ppi().is_none());
         assert_eq!(receiver.state(), State::Empty);
     }
+    assert!(captured);
     let mut frame = receiver
         .release()
         .unwrap_or_else(|_| panic!("timer receiver remains live"));
@@ -414,7 +489,7 @@ fn check_virtual_timer(
         match unsafe { frame.retire_ppi(ppi) } {
             Ok(()) => {
                 boot_diagnostic::write(
-                    "PASS arm-virtual-timer programmed=1 ppi=1 eoi=1 retired=1 common=1\n",
+                    "PASS arm-virtual-timer programmed=2 ppi=2 eoi=2 runtime=1 restored=1 retired=1\n",
                 );
                 return frame;
             }

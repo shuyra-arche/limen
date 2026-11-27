@@ -34,6 +34,16 @@ pub(in crate::metal::processor::executor) unsafe fn restore_interrupts(previous:
     }
 }
 
+/// Wait once in the admitted supervisor profile. The caller retains the
+/// individually enabled wake sources and tests the original work afterward.
+///
+/// # Safety
+/// WFI is permitted here and the processor's global IRQ dispatch is masked.
+#[cfg(limen_firmware = "sbi")]
+pub(in crate::metal) unsafe fn wait_for_interrupt() {
+    unsafe { asm!("wfi", options(nostack)) };
+}
+
 pub(crate) fn stack_pointer() -> usize {
     let sp: usize;
     unsafe { asm!("mv {}, sp", out(reg) sp, options(nomem, nostack)) };

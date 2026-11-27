@@ -189,6 +189,10 @@ impl Claim<'_, '_> {
         self.id
     }
 
+    pub(in crate::metal::interrupt::aarch64) fn matches_ppi(&self, ppi: &Ppi<'_, '_>) -> bool {
+        ppi.matches(&self.owner.frame, self.id)
+    }
+
     /// Settle this native receipt after its exact PPI producer has stopped.
     /// An unrelated claim leaves the stopped input available for retry.
     pub fn complete_ppi(&mut self, stopped: StoppedPpi<'_, '_, '_>) -> Result<(), Failure> {

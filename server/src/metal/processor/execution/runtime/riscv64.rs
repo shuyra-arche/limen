@@ -24,22 +24,29 @@ use super::{
 
 const STACK_BYTES: usize = 16 * 1024;
 const SUPERVISOR_PREVIOUS: usize = 1 << 8;
-const SOFTWARE_CAUSE: usize = (1 << (usize::BITS - 1)) | 1;
+const INTERRUPT: usize = 1 << (usize::BITS - 1);
+const SOFTWARE_CAUSE: usize = INTERRUPT | 1;
+const TIMER_CAUSE: usize = INTERRUPT | 5;
 
-/// One permanent, non-nesting supervisor trap stack and its software IRQ entry.
+/// One permanent, non-nesting supervisor trap stack and its fixed IRQ entry.
 /// The entry may run only bounded processing without taking ordinary locks.
 pub struct RuntimeTrap {
     stack: crate::metal::processor::treaty::Stack<STACK_BYTES>,
     occupied: AtomicBool,
-    software: for<'frame> fn(SoftwareInterrupt<'frame>),
+    software: Option<for<'frame> fn(SoftwareInterrupt<'frame>)>,
+    timer: Option<for<'frame> fn(TimerInterrupt<'frame>)>,
 }
 
 impl RuntimeTrap {
-    pub const fn new(software: for<'frame> fn(SoftwareInterrupt<'frame>)) -> Self {
+    pub const fn new(
+        software: Option<for<'frame> fn(SoftwareInterrupt<'frame>)>,
+        timer: Option<for<'frame> fn(TimerInterrupt<'frame>)>,
+    ) -> Self {
         Self {
             stack: crate::metal::processor::treaty::Stack::new(),
             occupied: AtomicBool::new(false),
             software,
+            timer,
         }
     }
 
@@ -50,15 +57,20 @@ impl RuntimeTrap {
     /// This static's code and stack must remain mapped and reserved for the
     /// executor's lifetime. The profile must permit `sret`, retain the trusted
     /// supervisor `tp`, leave extension state Off, and never enter User mode.
-    /// Enable only the supervisor software line, after its handler and receiver
-    /// are live. The handler must keep interrupts masked and settle the actual
-    /// source or preserve its bounded recheck obligation before returning.
+    /// Enable only supervisor software and timer lines with live receivers.
+    /// The handler must keep interrupts masked and settle the actual source
+    /// or preserve its recheck obligation. A source without a configured
+    /// handler takes the terminal path.
     pub unsafe fn install(&'static self) -> Result<(), InstallError> {
         let Some(local) = local::ordinary_local() else {
             return Err(InstallError::Context);
         };
         let status = native::status();
-        if !status.masked() || !status.extensions_off() || !supervisor::all_masked() {
+        if !status.masked()
+            || !status.extensions_off()
+            || !supervisor::all_masked()
+            || self.software.is_none() && self.timer.is_none()
+        {
             return Err(InstallError::Context);
         }
         let protection = unsafe { local.acquire_protection() };
@@ -110,6 +122,25 @@ impl RuntimeTrap {
     }
 }
 
+/// This layer of an actual local supervisor timer interrupt.
+pub struct TimerInterrupt<'frame> {
+    processor: ProcessorId,
+    frame: PhantomData<&'frame mut *mut ()>,
+}
+
+impl<'frame> TimerInterrupt<'frame> {
+    fn new(_frame: &'frame mut Frame, processor: ProcessorId) -> Self {
+        Self {
+            processor,
+            frame: PhantomData,
+        }
+    }
+
+    pub fn processor(&self) -> ProcessorId {
+        self.processor
+    }
+}
+
 /// This layer of an actual local supervisor software interrupt.
 pub struct SoftwareInterrupt<'frame> {
     processor: ProcessorId,
@@ -139,7 +170,7 @@ struct Frame {
 
 const _: () = assert!(size_of::<Frame>().is_multiple_of(16));
 
-extern "C" fn dispatch(frame: &mut Frame) -> bool {
+extern "C" fn dispatch(frame: &mut Frame, cause: usize) -> bool {
     if frame.status & SUPERVISOR_PREVIOUS == 0 || !Status::from_bits(frame.status).extensions_off()
     {
         return false;
@@ -147,7 +178,21 @@ extern "C" fn dispatch(frame: &mut Frame) -> bool {
     let Some((processor, runtime)) = local::interrupt_local() else {
         return false;
     };
-    (runtime.software)(SoftwareInterrupt::new(frame, processor));
+    match cause {
+        SOFTWARE_CAUSE => {
+            let Some(software) = runtime.software else {
+                return false;
+            };
+            software(SoftwareInterrupt::new(frame, processor));
+        }
+        TIMER_CAUSE => {
+            let Some(timer) = runtime.timer else {
+                return false;
+            };
+            timer(TimerInterrupt::new(frame, processor));
+        }
+        _ => return false,
+    }
     true
 }
 
@@ -201,9 +246,8 @@ unsafe extern "C" fn vector() -> ! {
         "beqz t0, 3f",
         "csrr t0, sepc",
         "sd t0, {pc}(sp)",
-        "csrr t0, scause",
-        "li t1, {software}",
-        "bne t0, t1, 3f",
+        "csrr a1, scause",
+        "bgez a1, 3f",
         "mv a0, sp",
         "call {dispatch}",
         "beqz a0, 3f",
@@ -252,7 +296,6 @@ unsafe extern "C" fn vector() -> ! {
         size = const size_of::<Frame>(),
         status = const offset_of!(Frame, status),
         pc = const offset_of!(Frame, pc),
-        software = const SOFTWARE_CAUSE,
         supervisor = const SUPERVISOR_PREVIOUS,
         dispatch = sym dispatch,
         terminal = sym terminal,

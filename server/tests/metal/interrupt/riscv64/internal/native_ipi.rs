@@ -21,7 +21,7 @@ use kernel::{
     entry::boot::Boot,
     metal::{
         chrono::riscv64::{description::RiscvTimebase, time::Counter},
-        interrupt::riscv64::internal::ipi::{Error, Receiver, SendState, Sender, Target},
+        interrupt::riscv64::internal::ipi::{Error, Receiver, SendState, Sender, Target, Wake},
         sync::treaty::{TurnAcquireError, TurnLock},
     },
 };
@@ -34,9 +34,10 @@ static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
 static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static READY: AtomicUsize = AtomicUsize::new(0);
 static MAILBOX: ipi::Mailbox = ipi::Mailbox::new();
+static FINAL_CHECK: AtomicUsize = AtomicUsize::new(0);
 static CAPTURES: AtomicUsize = AtomicUsize::new(0);
 static ORDINARY: TurnLock<usize> = TurnLock::new(0);
-static TRAP: RuntimeTrap = RuntimeTrap::new(interrupt);
+static TRAP: RuntimeTrap = RuntimeTrap::new(Some(interrupt), None);
 
 struct ReceiverSlot(UnsafeCell<Option<Receiver>>);
 
@@ -112,12 +113,51 @@ fn minor(hart: usize, hertz: usize) -> ! {
     let mut receiver = unsafe { Receiver::admit(hart) }.unwrap();
     assert_eq!(receiver.pending(), Ok(false));
     assert_eq!(receiver.acknowledge(), Err(Error::Busy));
+    assert_eq!(
+        unsafe { receiver.wait(|| panic!("closed source")) },
+        Err(Error::Busy)
+    );
     receiver.open().unwrap();
+    assert_eq!(
+        ORDINARY.acquire(|_| unsafe { receiver.wait(|| panic!("occupied protection")) }),
+        Ok(Err(Error::Busy)),
+    );
     unsafe { *RECEPTION.0.get() = Some(receiver) };
     READY.store(1, Release);
     for round in 1..=2 {
-        if round == 1 {
-            MAILBOX.wait_for_issues(round, |state, expected| wait(state, expected, hertz as u64));
+        {
+            let receiver = unsafe { (&*RECEPTION.0.get()).as_ref().unwrap() };
+            if round == 1 {
+                MAILBOX
+                    .wait_for_issues(round, |state, expected| wait(state, expected, hertz as u64));
+                assert_eq!(
+                    unsafe { receiver.wait(|| MAILBOX.ready(round)) },
+                    Ok(Wake::Ready)
+                );
+                assert_eq!(unsafe { receiver.wait(|| false) }, Ok(Wake::Pending));
+            } else {
+                let limit = now() + 5 * hertz as u64;
+                let mut announced = false;
+                loop {
+                    let wake = unsafe {
+                        receiver.wait(|| {
+                            if !announced {
+                                assert!(!MAILBOX.ready(round));
+                                FINAL_CHECK.store(round, Release);
+                                announced = true;
+                                return false;
+                            }
+                            MAILBOX.ready(round)
+                        })
+                    }
+                    .unwrap();
+                    if wake != Wake::Recheck {
+                        break;
+                    }
+                    assert!(now() < limit, "idle wake timed out");
+                }
+            }
+            assert_eq!(CAPTURES.load(Relaxed), round - 1);
         }
         receive(round, now() + 5 * hertz as u64);
         assert_eq!(
@@ -171,6 +211,13 @@ pub fn check(boot: Boot<'_>) {
     unsafe { MINOR.start(peer, minor, hertz, &mut Startup::Sbi(harts)) }.unwrap();
     wait(&READY, 1, hertz as u64);
     for round in 1..=2 {
+        if round == 2 {
+            wait(&FINAL_CHECK, round, hertz as u64);
+            let after_check = now() + hertz as u64 / 100;
+            while now() < after_check {
+                spin_loop();
+            }
+        }
         let mut sender =
             unsafe { Sender::bind(cpus, source, &mut send_state, harts, ipi) }.unwrap();
         let mut route = unsafe { sender.bind_ipi(&target) }.unwrap();
@@ -178,6 +225,6 @@ pub fn check(boot: Boot<'_>) {
         MAILBOX.wait_for_recheck(round, |state, expected| wait(state, expected, hertz as u64));
     }
     boot_diagnostic::write(
-        "PASS riscv64-ipi original-hart=1 issued=3 captured=2 resumed=2 rechecked=2 cleared=2 shut=1\n",
+        "PASS riscv64-ipi original-hart=1 issued=3 captured=2 resumed=2 rechecked=2 cleared=2 shut=1 idle=2\n",
     );
 }

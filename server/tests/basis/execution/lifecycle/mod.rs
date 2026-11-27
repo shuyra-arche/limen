@@ -5,6 +5,8 @@ mod admission;
 #[cfg(target_arch = "riscv64")]
 mod buddy;
 #[cfg(target_arch = "riscv64")]
+mod interrupt;
+#[cfg(target_arch = "riscv64")]
 #[path = "../../../entry/boot/material/memory.rs"]
 mod memory;
 #[cfg(target_arch = "riscv64")]
@@ -62,6 +64,8 @@ fn first(current: &mut Current) -> u64 {
     assert_eq!(execution().pending_leave(), Ok(None));
     assert_eq!(execution().enter(), Err(Error::Busy));
     assert_eq!(execution().finish_end(current.id()), Err(Error::Busy));
+    #[cfg(target_arch = "riscv64")]
+    interrupt::receive(current.processor());
     current.yield_now().expect("cooperative leave and reentry");
     assert_eq!(SEQUENCE.fetch_add(1, Relaxed), 2);
     assert_eq!(stack_address(&local), FIRST_STACK.load(Relaxed));
@@ -162,6 +166,8 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     execution.attach().expect("attach actual boot processor");
     assert_eq!(execution.attach(), Err(Error::Busy));
     assert_eq!(execution.enter(), Err(Error::Protection));
+    #[cfg(target_arch = "riscv64")]
+    interrupt::install(&boot);
     let mut schedule = || {
         let mark = core::hint::black_box(0u8);
         let address = core::hint::black_box(&mark) as *const u8 as usize;
@@ -250,7 +256,7 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         #[cfg(target_arch = "riscv64")]
         write(concat!(
             "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1",
-            " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1 binding_returned=1 admission=1\n",
+            " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1 binding_returned=1 admission=1 occupied_irq=1\n",
         ));
         complete()
     };

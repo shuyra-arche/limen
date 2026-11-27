@@ -74,6 +74,11 @@ impl Mailbox {
         original
     }
 
+    #[cfg(target_arch = "riscv64")]
+    pub fn ready(&self, round: usize) -> bool {
+        self.work.load(Acquire) == round
+    }
+
     pub fn wait_for_issues(&self, round: usize, wait: impl FnOnce(&AtomicUsize, usize)) {
         wait(&self.issued, round);
     }

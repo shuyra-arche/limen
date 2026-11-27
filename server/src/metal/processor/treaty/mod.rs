@@ -56,10 +56,13 @@ pub(crate) fn can_switch() -> bool {
 
 #[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "x86_64")))]
 pub use super::execution::runtime::Irq;
-#[cfg(all(limen_target, target_arch = "riscv64"))]
-pub use super::execution::runtime::SoftwareInterrupt;
 #[cfg(limen_target)]
 pub use super::execution::runtime::{InstallError, RuntimeTrap};
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+pub use super::execution::runtime::{SoftwareInterrupt, TimerInterrupt};
+
+#[cfg(all(limen_target, target_arch = "riscv64", limen_firmware = "sbi"))]
+pub(in crate::metal) use super::executor::riscv64::native::wait_for_interrupt;
 
 pub use super::execution::terminal::Console;
 #[cfg(limen_target)]
