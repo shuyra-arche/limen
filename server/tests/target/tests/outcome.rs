@@ -39,32 +39,32 @@ fn case() -> &'static str {
     option_env!("LIMEN_TEST_CASE").unwrap_or("pass")
 }
 
-fn minor(hart: usize, major: usize) -> ! {
-    assert_ne!(hart, major);
+fn minor(processor: usize, major: usize) -> ! {
+    assert_ne!(processor, major);
     assert!(MINOR.ready());
     #[cfg(target_os = "uefi")]
-    uefi_fixture::check_minor(&MINOR, hart);
+    uefi_fixture::check_minor(&MINOR, processor);
 
     if case() == "minor-panic" {
         panic!("T0 intentional minor assertion failure");
     }
-    COMPLETED.store(hart, Ordering::Release);
+    COMPLETED.store(processor, Ordering::Release);
     loop {
         core::hint::spin_loop();
     }
 }
 
 fn check_minor(boot: &Boot<'_>) {
-    let major = boot.hart();
+    let major = boot.processor();
     #[cfg(target_arch = "riscv64")]
     let (target, mut startup) = {
-        let target = (0..4).find(|hart| *hart != major).unwrap();
-        let harts = boot
+        let target = (0..4).find(|processor| *processor != major).unwrap();
+        let service = boot
             .sbi_services()
             .hart_state_management()
             .unwrap()
             .unwrap();
-        (target, Startup::Sbi(harts))
+        (target, Startup::Sbi(service))
     };
     #[cfg(target_os = "uefi")]
     let (target, mut startup) = {
@@ -127,8 +127,12 @@ fn reset(_boot: &Boot<'_>) -> ! {
 
 fn check(boot: Boot<'_>) {
     match case() {
-        "pass" => assert_ne!(boot.hart(), usize::MAX),
-        "panic" => assert_eq!(boot.hart(), usize::MAX, "T0 intentional assertion failure"),
+        "pass" => assert_ne!(boot.processor(), usize::MAX),
+        "panic" => assert_eq!(
+            boot.processor(),
+            usize::MAX,
+            "T0 intentional assertion failure"
+        ),
         "minor-pass" | "minor-panic" => check_minor(&boot),
         "reset" => reset(&boot),
         "shutdown" => diagnostic::shutdown(true),

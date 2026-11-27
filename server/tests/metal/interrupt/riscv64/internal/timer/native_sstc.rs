@@ -20,7 +20,7 @@ mod clock;
 mod consumer;
 
 pub(super) fn check(boot: &Boot<'_>, local: &mut Reception) {
-    let hart = boot.hart() as u64;
+    let hart = boot.processor() as u64;
     let cpus = boot.riscv_cpus();
     let cpu = cpus.cpu(hart).unwrap().unwrap();
     let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();

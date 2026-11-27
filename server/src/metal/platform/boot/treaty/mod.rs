@@ -1,5 +1,19 @@
 //! Trusted image entry and early diagnostics.
 
+pub(crate) use super::handoff::Descriptions;
+#[cfg(limen_target)]
+pub(crate) use super::major::Admission;
+
+#[cfg(limen_target)]
+pub(super) fn deliver(admission: Admission<'_>) -> ! {
+    unsafe { limen_major_admitted(admission) }
+}
+
+#[cfg(limen_target)]
+unsafe extern "Rust" {
+    fn limen_major_admitted(admission: Admission<'_>) -> !;
+}
+
 #[cfg(limen_firmware = "uefi")]
 use crate::metal::platform::firmware::uefi::Loader;
 #[cfg(limen_target)]
@@ -85,11 +99,11 @@ pub fn shutdown(success: bool) -> ! {
 /// reserved across delivery.
 #[cfg(limen_firmware = "uefi")]
 pub unsafe fn major(
-    hart: usize,
+    processor: usize,
     loader: &Loader<'_>,
     terminal: &'static Terminal,
     material: &'static MajorMaterial,
 ) -> ! {
     terminal.install_early();
-    unsafe { super::enter_major(hart, loader, material.stack.top(), material) }
+    unsafe { super::enter_major(processor, loader, material.stack.top(), material) }
 }

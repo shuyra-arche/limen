@@ -135,8 +135,11 @@ impl Artifact {
                 "image evidence does not match selection",
             )?;
             platform.as_object_mut().unwrap().remove("image_sha256");
-            let harts = platform["harts"].as_u64().ok_or("missing Hart count")?;
-            require(harts != 0, "invalid Hart count")?;
+            // Evidence retains the field spelling used by prior benchmark runs.
+            let processors = platform["harts"]
+                .as_u64()
+                .ok_or("missing processor count")?;
+            require(processors != 0, "invalid processor count")?;
             let mut firmware = read(&directory.join("firmware.json"))?;
             hash(field(&firmware, "code_sha256")?, 64)?;
             if let Some(variables) = firmware.get("initial_vars_sha256") {
@@ -155,14 +158,14 @@ impl Artifact {
                 "firmware": firmware,
                 "qemu": field(&tools, "qemu")?,
                 "environment": measurement.environment,
-                "hart": measurement.hart,
+                "hart": measurement.processor,
                 "frequency_hz": measurement.frequency_hz,
             });
 
             for series in measurement.series {
                 require(
-                    series.participants as u64 <= harts,
-                    "series exceeds admitted Hart count",
+                    series.participants as u64 <= processors,
+                    "series exceeds admitted processor count",
                 )?;
                 let name = series.name.clone();
                 let case = Case {

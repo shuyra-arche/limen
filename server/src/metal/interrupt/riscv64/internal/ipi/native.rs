@@ -1,9 +1,9 @@
 //! Native SBI notification issuance and supervisor software reception.
 
 use crate::metal::{
-    interrupt::treaty::{Issuance, NotifyHart, ipi::Sealed},
+    interrupt::treaty::{Issuance, NotifyProcessor, ipi::Sealed},
     platform::firmware::treaty::sbi::{HartService, IpiService},
-    processor::{description::riscv64::cpu::RiscvCpus, treaty::try_current_hart},
+    processor::{description::riscv64::cpu::RiscvCpus, treaty::try_current_processor},
 };
 
 use super::super::supervisor::Reception;
@@ -44,7 +44,7 @@ impl<'tree> IpiIssue<'tree> {
 
 impl Sealed for IpiRoute<'_, '_, '_> {}
 
-impl<'tree> NotifyHart for IpiRoute<'_, '_, 'tree> {
+impl<'tree> NotifyProcessor for IpiRoute<'_, '_, 'tree> {
     type Error = Error;
     type Issue = IpiIssue<'tree>;
 
@@ -94,7 +94,7 @@ impl<'state, 'tree> Sender<'state, 'tree> {
         harts: HartService,
         interrupts: IpiService,
     ) -> Result<Self, Error> {
-        if try_current_hart().is_none_or(|current| current.get() != hart) {
+        if try_current_processor().is_none_or(|current| current.get() != hart) {
             return Err(Error::Scope);
         }
         if !cpus
@@ -137,7 +137,7 @@ impl<'state, 'tree> Sender<'state, 'tree> {
     }
 
     fn check_source(&self) -> Result<(), Error> {
-        if try_current_hart().is_some_and(|hart| hart.get() == self.source.hart) {
+        if try_current_processor().is_some_and(|hart| hart.get() == self.source.hart) {
             Ok(())
         } else {
             Err(Error::Scope)

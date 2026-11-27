@@ -11,17 +11,17 @@ use pages::{DATA, LAST, MIDDLE, NEXT, TOP, physical};
 #[path = "../internal/installation.rs"]
 mod installation;
 
-pub(crate) fn check(hart: usize) {
+pub(crate) fn check(processor: usize) {
     let original = unsafe { Controls::current() };
     // AAVMF runs the fixture entirely through TTBR0. The unattached upper
     // root can be lent to this scenario before any other PE starts.
     assert!(original.tcr & (1 << 23) != 0 && original.ttbr1 == 0);
     unsafe {
         assert!(matches!(
-            admit_inactive_upper(hart.wrapping_add(1)),
+            admit_inactive_upper(processor.wrapping_add(1)),
             Err(SwitchError::Context)
         ));
-        let (mut control, format) = admit_inactive_upper(hart).unwrap();
+        let (mut control, format) = admit_inactive_upper(processor).unwrap();
         assert_eq!(control.current().unwrap().root(), None);
         assert_eq!(Controls::current(), original);
         TOP.0[0] = format.branch(physical(&raw const NEXT)).unwrap();
@@ -44,14 +44,14 @@ pub(crate) fn check(hart: usize) {
             control.prepare_root(PhysicalAddress::new(root.get() + 1)),
             Err(SwitchError::Scope)
         ));
-        installation::roundtrip(&mut control, hart, candidate, |_| {
+        installation::roundtrip(&mut control, processor, candidate, |_| {
             let installed = Controls::current();
             assert_eq!(installed.ttbr0, original.ttbr0);
             assert_eq!(installed.tcr & 0xffff, original.tcr & 0xffff);
             assert_eq!(installed.mair, original.mair);
             assert_eq!(installed.sctlr, original.sctlr);
             assert!(matches!(
-                admit_inactive_upper(hart),
+                admit_inactive_upper(processor),
                 Err(SwitchError::Scope)
             ));
             let data: u64;

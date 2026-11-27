@@ -5,7 +5,7 @@ use super::description::GenericCounter;
 use crate::metal::{
     chrono::treaty::Clock,
     platform::description::devicetree::{Error, NodeId},
-    processor::treaty::try_current_hart,
+    processor::treaty::try_current_processor,
 };
 
 /// Original virtual counter and its firmware scope for the native comparator.
@@ -32,12 +32,13 @@ impl<'tree> GenericCounter<'tree> {
     /// The caller establishes EL1 access to CNTVCT_EL0 and CNTFRQ_EL0 and
     /// retains the admitted virtual time domain while the clock is used.
     /// A changed virtual offset requires a new admission.
-    pub unsafe fn bind(self, hart: usize) -> Result<VirtualCounter<'tree>, Error> {
-        let hart = try_current_hart()
-            .filter(|current| current.get() == hart)
+    pub unsafe fn bind(self, processor: usize) -> Result<VirtualCounter<'tree>, Error> {
+        let processor = try_current_processor()
+            .filter(|current| current.get() == processor)
             .ok_or(Error::Conflict)?;
         let frequency = unsafe { self.counter_frequency() }?;
-        let clock = Clock::bind(hart, frequency.into(), read_virtual).ok_or(Error::Conflict)?;
+        let clock =
+            Clock::bind(processor, frequency.into(), read_virtual).ok_or(Error::Conflict)?;
         Ok(VirtualCounter {
             source: self.source,
             clock,

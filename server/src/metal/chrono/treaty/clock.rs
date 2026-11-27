@@ -2,9 +2,9 @@
 
 use core::time::Duration;
 
-use crate::metal::processor::treaty::HartId;
+use crate::metal::processor::treaty::ProcessorId;
 #[cfg(limen_target)]
-use crate::metal::processor::treaty::try_current_hart;
+use crate::metal::processor::treaty::try_current_processor;
 
 use super::super::counter::{
     Counter,
@@ -18,9 +18,9 @@ pub struct Clock {
 }
 
 impl Clock {
-    /// The Hart on which this counter was admitted.
-    pub fn hart(&self) -> usize {
-        self.counter.hart().get()
+    /// The processor on which this counter was admitted.
+    pub fn processor(&self) -> usize {
+        self.counter.processor().get()
     }
 
     pub fn frequency(&self) -> core::num::NonZeroU64 {
@@ -31,18 +31,18 @@ impl Clock {
 #[cfg(limen_target)]
 impl Clock {
     pub(in crate::metal::chrono) fn bind(
-        hart: HartId,
+        processor: ProcessorId,
         frequency: core::num::NonZeroU64,
         read: fn() -> u64,
     ) -> Option<Self> {
-        (try_current_hart() == Some(hart)).then_some(Self {
-            counter: Counter::new(hart, frequency, read),
+        (try_current_processor() == Some(processor)).then_some(Self {
+            counter: Counter::new(processor, frequency, read),
         })
     }
 
     /// Read a local count with the original counter and its admitted rate.
     pub fn sample(&self) -> Option<Sample<'_>> {
-        Sample::reported(&self.counter, try_current_hart()?)
+        Sample::reported(&self.counter, try_current_processor()?)
     }
 
     #[cfg(target_arch = "riscv64")]
@@ -77,7 +77,7 @@ impl<'clock> Sample<'clock> {
             reason = "only a native or controlled source provides a count"
         )
     )]
-    fn reported(counter: &'clock Counter, current: HartId) -> Option<Self> {
+    fn reported(counter: &'clock Counter, current: ProcessorId) -> Option<Self> {
         Some(Self {
             counter,
             count: counter.observe(current)?,

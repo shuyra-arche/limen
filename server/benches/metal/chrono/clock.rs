@@ -8,9 +8,9 @@ const SAMPLES: usize = 9;
 
 pub fn check(boot: Boot<'_>) {
     let timebase = RiscvTimebase::describe(boot.riscv_cpus()).unwrap().unwrap();
-    let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
+    let counter = unsafe { Counter::admit(timebase, boot.processor() as u64) }.unwrap();
     let clock = counter.clock();
-    assert_eq!(clock.hart(), boot.hart());
+    assert_eq!(clock.processor(), boot.processor());
 
     for _ in 0..WARMUP {
         let _ = black_box(clock.sample().unwrap());

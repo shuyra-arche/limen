@@ -17,7 +17,7 @@ fn command(machine: &Machine, image: &Path, directory: &Path, observe: bool) -> 
         "x86_64" => variable("QEMU_X86_64", "qemu-system-x86_64"),
         _ => return Err("unsupported architecture".into()),
     });
-    let count = machine.platform.harts.to_string();
+    let count = machine.platform.processors.to_string();
     let accel = if architecture == "riscv64" {
         "tcg,thread=multi"
     } else {
@@ -91,7 +91,7 @@ pub fn prepare(image: &Path, purpose: Purpose, directory: &Path, observe: bool) 
             "purpose": purpose.name(),
             "firmware": format!("{:?}", machine.platform.firmware),
             "interrupt": format!("{:?}", machine.platform.interrupt),
-            "harts": machine.platform.harts,
+            "harts": machine.platform.processors,
             "machine": machine.board,
             "cpu": machine.cpu,
             "iommu": format!("{:?}", machine.platform.iommu),

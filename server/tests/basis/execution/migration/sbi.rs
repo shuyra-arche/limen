@@ -13,7 +13,7 @@ fn observe(minor: &Minor, _: usize) {
 
 pub fn check(boot: Boot<'_>, complete: fn() -> !) -> ! {
     let target = (0..4)
-        .filter(|hart| *hart != boot.hart())
+        .filter(|hart| *hart != boot.processor())
         .find(|hart| {
             boot.riscv_cpus()
                 .cpu(*hart as u64)

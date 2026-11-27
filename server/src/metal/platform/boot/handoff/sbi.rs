@@ -1,6 +1,8 @@
 //! Trusted SBI boot input and service installation.
 
 #[cfg(limen_firmware = "sbi")]
+use super::identity_extent;
+#[cfg(limen_firmware = "sbi")]
 use super::{Descriptions, Facts};
 use crate::metal::platform::description::devicetree::{
     ALIGNMENT, HEADER_SIZE, MAX_BLOCK_BYTES, header_layout,
@@ -20,8 +22,6 @@ use crate::metal::{
     processor::description::riscv64::cpu::RiscvCpus,
 };
 use core::{ops::Range, slice};
-#[cfg(limen_firmware = "sbi")]
-use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 #[cfg(limen_firmware = "sbi")]
 static TERMINAL: Terminal = Terminal::new(Some(write_byte), Some(reset));
@@ -87,13 +87,14 @@ pub(crate) unsafe fn admit<'a>(
     descriptions.cpus = Some(cpus);
     descriptions.sbi = Some(sbi);
     descriptions.device_tree = Some(tree);
-    let image = PhysicalRange::new(
-        PhysicalAddress::new(image.start as u64),
-        PhysicalAddress::new(image.end as u64),
-    )?;
+    let bytes = tree.bytes().as_ptr_range();
+    descriptions.device_tree_physical =
+        Some(unsafe { identity_extent(bytes.start.addr()..bytes.end.addr()) }?);
+    let image = unsafe { identity_extent(image) }?;
     Some(Facts {
         image,
         firmware_map: None,
+        map_storage: None,
     })
 }
 

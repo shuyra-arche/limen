@@ -82,7 +82,7 @@ fn scan_has_a_finite_bound_when_firmware_omits_the_last_frame() {
 }
 
 #[test]
-fn the_exact_frame_handoff_can_cross_a_hart_without_a_virtual_address() {
+fn the_exact_frame_handoff_can_cross_a_processor_without_a_virtual_address() {
     fn send<T: Send>() {}
     send::<FrameHandoff<'static>>();
 }

@@ -248,7 +248,7 @@ pub fn load() -> Status {
         device_tree,
         acpi: None,
     };
-    unsafe { boot_diagnostic::major(board::hart(), &input, &TERMINAL, &MAJOR) }
+    unsafe { boot_diagnostic::major(board::processor(), &input, &TERMINAL, &MAJOR) }
 }
 
 pub fn check(boot: boot::Boot<'_>) {
@@ -272,7 +272,7 @@ pub fn check(boot: boot::Boot<'_>) {
         #[cfg(target_arch = "aarch64")]
         mapping::synchronize(physical);
         // The initial root keeps the exact executable pages visible on the
-        // only Hart. The image declares the target's scalar geometry ABI.
+        // only processor. The image declares the target's scalar geometry ABI.
         let module = unsafe { slots.publish(layout, storage, []) }.ok().unwrap();
         let caller = module.acquire(GEOMETRY).unwrap();
         let sibling = module.acquire(GEOMETRY).unwrap();

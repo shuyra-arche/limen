@@ -60,7 +60,7 @@ unsafe extern "C" fn first() -> ! {
 
 /// The ordinary call ABI preserves X19-X29, SP, LR and the required
 /// portions of V8-V15. Save full Q8-Q15 and FP controls. X18 and TPIDR_EL1
-/// remain part of the actual platform/Hart environment.
+/// remain part of the actual platform/processor environment.
 #[unsafe(naked)]
 pub(in crate::metal::processor) unsafe extern "C" fn switch(
     outgoing: *mut Saved,

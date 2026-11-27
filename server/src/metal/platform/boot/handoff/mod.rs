@@ -5,13 +5,7 @@
     expect(dead_code, reason = "the SBI handoff supplies the original DTB window")
 )]
 pub(crate) mod sbi;
-#[cfg_attr(
-    not(any(limen_firmware = "uefi", test)),
-    expect(
-        dead_code,
-        reason = "the UEFI handoff supplies the original loader data"
-    )
-)]
+#[cfg(any(limen_firmware = "uefi", test))]
 pub(crate) mod uefi;
 
 use crate::metal::platform::{
@@ -30,15 +24,18 @@ use limen_treaty::model::PhysicalRange;
 pub(crate) struct Facts<'a> {
     pub(crate) image: PhysicalRange,
     pub(crate) firmware_map: Option<FirmwareMap<'a>>,
+    #[cfg(limen_target)]
+    pub(crate) map_storage: Option<PhysicalRange>,
 }
 
 /// Retained firmware descriptions prepared in the startup caller's frame.
 pub(crate) struct Descriptions<'a> {
     #[cfg(limen_firmware = "sbi")]
-    pub(crate) cpus: Option<crate::metal::processor::description::riscv64::cpu::RiscvCpus<'a>>,
+    pub(crate) cpus: Option<crate::metal::processor::treaty::RiscvCpus<'a>>,
     #[cfg(limen_firmware = "sbi")]
     pub(crate) sbi: Option<crate::metal::platform::firmware::treaty::sbi::SbiServices>,
     pub(crate) device_tree: Option<devicetree::DeviceTree<'a>>,
+    pub(crate) device_tree_physical: Option<PhysicalRange>,
     pub(crate) memory: Option<DtbMemory>,
     // The parser bounds its retained table directory; a missing description
     // is a runtime fact, not a property of the selected ISA.
@@ -60,8 +57,21 @@ impl Descriptions<'_> {
             #[cfg(limen_firmware = "sbi")]
             sbi: None,
             device_tree: None,
+            device_tree_physical: None,
             memory: None,
             acpi: None,
         }
     }
+}
+
+// The boot protocol's trusted entry mapping establishes the physical
+// correspondence. Callers must use the original identity-mapped extent.
+#[cfg(any(limen_target, test))]
+pub(super) unsafe fn identity_extent(range: core::ops::Range<usize>) -> Option<PhysicalRange> {
+    use limen_treaty::model::PhysicalAddress;
+
+    PhysicalRange::new(
+        PhysicalAddress::new(range.start as u64),
+        PhysicalAddress::new(range.end as u64),
+    )
 }

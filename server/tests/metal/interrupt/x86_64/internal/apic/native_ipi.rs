@@ -13,7 +13,7 @@ use kernel::{
     entry::boot,
     metal::{
         interrupt::{
-            treaty::{Issuance, NotifyHart},
+            treaty::{Issuance, NotifyProcessor},
             x86_64::internal::apic::{Failure, IpiTarget, LocalApic, Probe, Reception},
         },
         memory::access::treaty::device::DeviceWindow,
@@ -67,10 +67,10 @@ fn finish_claim(local: &mut LocalApic<'_>) {
     assert_eq!(local.reception(), Reception::Idle);
 }
 
-fn minor(hart: usize, argument: usize) -> ! {
-    fixture::check_minor(&MINOR, hart);
+fn minor(processor: usize, argument: usize) -> ! {
+    fixture::check_minor(&MINOR, processor);
     // The nonreturning major retains the immutable, ACPI-backed launch
-    // descriptor until this Hart has fully retired its receive lease.
+    // descriptor until this processor has fully retired its receive lease.
     let madt = unsafe { core::ptr::with_exposed_provenance::<Madt<'_>>(argument).read() };
     let address = madt.local_controller_address().unwrap();
     let physical = address.range(ByteLength::new(4096)).unwrap();
@@ -79,7 +79,7 @@ fn minor(hart: usize, argument: usize) -> ! {
     let mut window =
         unsafe { DeviceWindow::admit(physical, InternalAddress::new(address.get())) }.unwrap();
     unsafe { window::prepare(&mut window) };
-    let mut local = unsafe { LocalApic::admit(hart, madt, window, Probe::native()) }
+    let mut local = unsafe { LocalApic::admit(processor, madt, window, Probe::native()) }
         .ok()
         .unwrap();
     let vector = local.reserve_vector(VECTOR).unwrap();
@@ -124,7 +124,7 @@ pub fn check(boot: boot::Boot<'_>) {
     assert_eq!(madt.processors().filter(|cpu| cpu.enabled()).count(), 2);
     let destination = fixture::target();
     let target = IpiTarget::describe(madt, destination, VECTOR).unwrap();
-    let original = IpiTarget::describe(madt, boot.hart(), VECTOR).unwrap();
+    let original = IpiTarget::describe(madt, boot.processor(), VECTOR).unwrap();
     let launch = core::ptr::from_ref(&madt).expose_provenance();
     unsafe { MINOR.start(destination, minor, launch, &mut startup) }.unwrap();
     await_phase(&ICR_PROBE, 1);
@@ -144,7 +144,7 @@ pub fn check(boot: boot::Boot<'_>) {
         assert_eq!(issued.target(), target);
         issued
     };
-    // The Harts may already have observed the physical effect. Only the
+    // The processors may already have observed the physical effect. Only the
     // original send observation can settle the sender's ICR obligation.
     assert!(matches!(
         controller.prepare(destination, page),

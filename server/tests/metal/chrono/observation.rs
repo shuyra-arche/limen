@@ -18,5 +18,5 @@ pub fn observe(clock: &Clock) {
         }
         spin_loop();
     }
-    panic!("counter did not advance on the admitted Hart");
+    panic!("counter did not advance on the admitted processor");
 }

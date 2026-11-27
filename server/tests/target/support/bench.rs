@@ -35,7 +35,7 @@ pub fn report(clock: &Clock, series: &[Series<'_>]) {
     writeln!(
         console,
         "LIMEN_BENCH_V2 {} {} {}",
-        clock.hart(),
+        clock.processor(),
         clock.frequency(),
         series.len()
     )

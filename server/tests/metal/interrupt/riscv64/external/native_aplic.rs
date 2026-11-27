@@ -38,18 +38,18 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     let tree = boot.device_tree_description().expect("trusted RV64 DTB");
     let cpus = boot.riscv_cpus();
     let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();
-    let description = aclint::Description::read(&tree, cpus, boot.hart() as u64)
+    let description = aclint::Description::read(&tree, cpus, boot.processor() as u64)
         .unwrap()
         .expect("ACLINT machine timer");
     assert_eq!(description.clock_scope(), timebase.source());
     assert_eq!(description.counter().length().get(), 8);
     assert_eq!(description.comparator().length().get(), 8);
-    assert_eq!(description.hart(), boot.hart() as u64);
+    assert_eq!(description.hart(), boot.processor() as u64);
     // The runner's exact machine configuration has ACLINT and disables Sstc.
     // OpenSBI owns the machine comparator; the guest never maps or writes it.
     let service = boot.sbi_services().timer().unwrap().expect("SBI TIME");
     assert!(unsafe { Counter::admit(timebase, u64::MAX) }.is_none());
-    let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
+    let counter = unsafe { Counter::admit(timebase, boot.processor() as u64) }.unwrap();
     assert!(matches!(
         unsafe { Timer::admit_sbi(&counter, service, wrong) },
         Err(timer::Failure::Scope)
@@ -68,7 +68,7 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     assert!(!timer.pending().unwrap());
     let hertz = u64::from(timebase.hertz());
     let now = timer.counter().unwrap();
-    let separate = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
+    let separate = unsafe { Counter::admit(timebase, boot.processor() as u64) }.unwrap();
     assert_eq!(
         timer.arm_at(separate.deadline(now + hertz)),
         Err(timer::Failure::Scope)
@@ -146,7 +146,7 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
     let tree = boot.device_tree_description().unwrap();
     let cpus = boot.riscv_cpus();
     let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();
-    let description = aplic::Description::read(&tree, cpus, boot.hart() as u64)
+    let description = aplic::Description::read(&tree, cpus, boot.processor() as u64)
         .unwrap()
         .expect("supervisor direct APLIC");
     let domain_description = description.domain();
@@ -175,7 +175,7 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
     let base = InternalAddress::new(domain_description.registers().start().get());
     // The single-Hart QEMU board, initial bare mapping, quiet device and
     // supervisor domain delegated by OpenSBI establish this test's ownership.
-    let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
+    let counter = unsafe { Counter::admit(timebase, boot.processor() as u64) }.unwrap();
     let mut mapping = unsafe { DeviceWindow::admit(domain_description.registers(), base) }.unwrap();
     assert_eq!(mapping.physical(), domain_description.registers());
     assert!(mapping.supports_u32(0));
@@ -339,7 +339,7 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
 }
 
 pub fn check(mut boot: Boot<'_>) {
-    assert_eq!(boot.hart(), 0);
+    assert_eq!(boot.processor(), 0);
     let mut reception = boot.take_reception().expect("major reception handoff");
     assert!(boot.take_reception().is_none());
     timer_test(&boot, &mut reception.timer, &mut reception.external);

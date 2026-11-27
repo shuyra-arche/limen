@@ -15,7 +15,7 @@ static mut GATES: [[u8; 16]; 256] = [[0; 16]; 256];
 /// Prepare the exclusive local APIC window for an IRQ in priority class 15.
 ///
 /// # Safety
-/// The guest owns both legacy PICs and its original Hart's UC xAPIC mapping.
+/// The guest owns both legacy PICs and its original processor's UC xAPIC mapping.
 pub unsafe fn prepare(window: &mut DeviceWindow<'_>) {
     unsafe {
         io::write8(0x21, 0xff);
@@ -39,12 +39,12 @@ unsafe extern "C" fn receive() -> ! {
 /// Restores the original table when the test leaves the reception window.
 pub struct Window {
     original: Idtr,
-    hart_local: PhantomData<*mut ()>,
+    processor_local: PhantomData<*mut ()>,
 }
 
 impl Window {
     /// # Safety
-    /// The current Hart owns the diagnostic table and the single static
+    /// The current processor owns the diagnostic table and the single static
     /// fixture table. Leave interrupts masked outside this window. Set up
     /// the test's actual IRQ source with this exact vector.
     pub unsafe fn install(vector: u8) -> Self {
@@ -66,7 +66,7 @@ impl Window {
         unsafe { asm!("lidt [{}]", in(reg) &temporary, options(nostack, preserves_flags)) };
         Self {
             original,
-            hart_local: PhantomData,
+            processor_local: PhantomData,
         }
     }
 

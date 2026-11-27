@@ -5,16 +5,16 @@
 The trusted image transfers the admitted Major and Terminal from Boot to
 `basis::execution::Execution::new`. It supplies resident Unit records and
 two 16 KiB Unit stacks. Room holds participation in independent
-`room::Harts<N>` storage. Processor holds the machine continuations and
+`room::Participants<N>` storage. Processor holds the machine continuations and
 dispatcher stacks in separately supplied `processor::treaty::Dispatchers`.
 Unit owns each exclusive stack lease until its continuation has retired.
 RV64 uses Bare translation and integer continuations. The UEFI profiles
 validate their respective native save shapes before entry.
 
 On rejection, `EstablishFailure` returns the original Major, Terminal and
-storage for retry. Each actual Hart uses `Execution::attach` after its
+storage for retry. Each Executor uses `Execution::attach` after its
 trusted entry. The image uses `processor::treaty::Minor` to start secondary
-Harts. Processor retains a launch with uncertain delivery. Room's protected
+processors. Processor retains a launch with uncertain delivery. Room's protected
 admission and Processor's reserved machine record are published together.
 The current Executor locates its own machine record in the original scope.
 A duplicate or exhausted attempt fails before publication. Each machine
@@ -23,16 +23,16 @@ record owns a 32 KiB dispatcher stack. After attachment the trusted platform cal
 reserved while the running closure or firmware description borrows it.
 
 Trusted Unit entries must fit their stack and preserve the selected supervisor
-execution profile. `create` pins the Unit to its creating Hart.
+execution profile. `create` pins the Unit to its creating processor.
 `create_migratable` requires a trusted entry that can resume on any attached
-compatible Hart and yields without retaining Hart-local resources.
+compatible processor and yields without retaining processor-local resources.
 
 ## Dispatch and settlement
 
 Room's `submit` establishes one admission and returns its `AdmissionId`.
-Ready and Hart indices locate that admission's authoritative placement. Each
+Ready and participation indices locate that admission's authoritative placement. Each
 dispatch establishes a fresh occupancy for the same admission, identifying
-the Unit, Hart and original participation. Metal enters through the Unit's
+the Unit, processor and original participation. Metal enters through the Unit's
 stack and saves its integer continuation at the call boundary on Yield.
 A normal return from the Unit's entry records its sole end value. The terminal
 handoff returns to the dispatcher and the Unit's continuation is no longer
@@ -42,11 +42,11 @@ on its own stack. `pending_leave` reports the stopped occupancy to its owning
 dispatcher. Room matches the private Metal receipt to the exact current
 occupancy before making the Unit ready again or releasing the admission.
 Unit and Room each own a Turn. Admission and settlement acquire both
-in canonical order. Unit-only and Room-only operations acquire their own Turn. Metal rejects a switch while the Hart has
+in canonical order. Unit-only and Room-only operations acquire their own Turn. Metal rejects a switch while the processor has
 active synchronization participation. The acquisition ends its
 borrows, settles all queue nodes and restores the original interrupt state
 before a continuation can be entered or handed off.
-A yielded continuation becomes available to another compatible Hart only
+A yielded continuation becomes available to another compatible processor only
 after settlement. An Ending Unit keeps its binding until the
 admission is released. `finish_end` clears and returns the stack before the
 Ended result becomes visible. Its Unit identity and result persist until
@@ -61,11 +61,11 @@ Room admission and the cancellation decision share one protected scope.
 cancellation outcome and releases the slot.
 
 This execution path covers cooperative supervisor Units on an independently
-provisioned, finite set of resident Harts. Participants do not detach or reuse
+provisioned, finite set of Executors. Participants do not detach or reuse
 slots in this prefix. The [verification guide](../server/tests/README.md) describes
-the RV64 target scenarios. Hart detachment, preemption, hardware translation,
+the target scenarios. Detachment, preemption, hardware translation,
 user traps and calls require separate implementation and verification.
 
 See [Room](https://github.com/shuyra-arche/document-limen/blob/d1d729b65f438e95dba525f0dfc59e8a816dcefc/server/basis/room/README.md)
 and [cooperative switching](https://github.com/shuyra-arche/document-limen/blob/d1d729b65f438e95dba525f0dfc59e8a816dcefc/server/metal/execution/cooperative.md)
-for the candidate Hart participation and broader contracts.
+for the participation and broader execution contracts.

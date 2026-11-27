@@ -52,7 +52,7 @@ fn admits_only_the_reserved_dtb_extent_from_a_strided_final_map() {
         };
         let mut descriptions = Descriptions::new();
         admit_loader(&loader, &mut descriptions).map(|b| {
-            assert_eq!(b.hart(), 7);
+            assert_eq!(b.processor(), 7);
             assert_eq!(b.firmware_map().unwrap().stride(), stride);
             assert!(b.dtb_memory().is_none());
             assert_eq!(b.device_tree_description().map(|view| view.bytes()), tree);
@@ -195,6 +195,6 @@ fn admit_loader<'a>(
     loader: &Loader<'a>,
     descriptions: &'a mut Descriptions<'a>,
 ) -> Option<Boot<'a>> {
-    let facts = describe_loader(loader, descriptions)?;
+    let facts = unsafe { describe_loader(loader, descriptions) }?;
     Some(Boot::new(7, facts.image, facts.firmware_map, descriptions))
 }

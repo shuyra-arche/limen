@@ -79,7 +79,7 @@ pub(super) struct Group<'storage, T> {
 
 // The directory's Turn protects all state and free links. The pool hands out
 // each value solely via its linear slot token. A newly acquired object can
-// cross Harts only when T can be transferred.
+// cross processors only when T can be transferred.
 unsafe impl<T: Send> Send for Group<'_, T> {}
 
 impl<'storage, T> Group<'storage, T> {

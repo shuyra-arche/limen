@@ -5,7 +5,7 @@ use super::{
     format::{Format, Root},
 };
 use crate::metal::memory::mmu::treaty::{LocalContext, SwitchError};
-use crate::metal::processor::treaty::try_current_hart;
+use crate::metal::processor::treaty::try_current_processor;
 use core::arch::asm;
 use limen_treaty::model::PhysicalAddress;
 
@@ -54,10 +54,10 @@ impl Controls {
 /// independently owned opposite root, and all affected table storage
 /// live through actual retirement.
 pub unsafe fn admit_root(
-    hart: usize,
+    processor: usize,
     selected: Root,
 ) -> Result<(LocalContext<'static>, Format), SwitchError> {
-    NativeRoot::check(hart)?;
+    NativeRoot::check(processor)?;
     let initial = unsafe { Controls::current() };
     let format = unsafe { initial.local_format(selected) }.ok_or(SwitchError::Scope)?;
     let native = NativeRoot {
@@ -68,7 +68,7 @@ pub unsafe fn admit_root(
     if initial.ttbr0 >> 48 != 0 || native.with_root(initial, root).is_none() {
         return Err(SwitchError::Scope);
     }
-    Ok((LocalContext::bind(hart, native, initial), format))
+    Ok((LocalContext::bind(processor, native, initial), format))
 }
 
 /// Admit the original disabled and empty upper walk without changing it.
@@ -81,9 +81,9 @@ pub unsafe fn admit_root(
 /// old cached translations. Keep this scope and the lower walk live
 /// through installation and original hardware settlement.
 pub unsafe fn admit_inactive_upper(
-    hart: usize,
+    processor: usize,
 ) -> Result<(LocalContext<'static>, Format), SwitchError> {
-    NativeRoot::check(hart)?;
+    NativeRoot::check(processor)?;
     let original = unsafe { Controls::current() };
     if original.ttbr1 != 0
         || original.tcr & UPPER_WALK_DISABLED == 0
@@ -102,7 +102,7 @@ pub unsafe fn admit_inactive_upper(
         format,
         upper: Some(InactiveUpper { original, enabled }),
     };
-    Ok((LocalContext::bind(hart, native, original), format))
+    Ok((LocalContext::bind(processor, native, original), format))
 }
 
 struct InactiveUpper {
@@ -116,9 +116,9 @@ pub(in crate::metal::memory::mmu) struct NativeRoot {
 }
 
 impl NativeRoot {
-    pub(in crate::metal::memory::mmu) fn check(hart: usize) -> Result<(), SwitchError> {
+    pub(in crate::metal::memory::mmu) fn check(processor: usize) -> Result<(), SwitchError> {
         if !crate::metal::processor::executor::aarch64::native::masked_stack()
-            || try_current_hart().is_none_or(|here| here.get() != hart)
+            || try_current_processor().is_none_or(|here| here.get() != processor)
         {
             return Err(SwitchError::Context);
         }

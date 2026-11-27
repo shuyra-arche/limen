@@ -1,4 +1,4 @@
-//! Non-nested fixed-vector reception on the owning xAPIC Hart.
+//! Non-nested fixed-vector reception on the owning xAPIC processor.
 
 use super::{Failure, LocalApic};
 use crate::metal::interrupt::treaty::{ClaimConfirmation, ClaimId, Completion, HardwareClaim};
@@ -20,7 +20,7 @@ pub enum Reception {
 }
 
 impl Reception {
-    /// Record a vector already accepted by this Hart's hardware.
+    /// Record a vector already accepted by this processor's hardware.
     fn record(&mut self, round: &mut u64, vector: u8) -> Result<(), Failure> {
         let Some(next) = round.checked_add(1) else {
             *self = Self::Exhausted(vector);
@@ -40,7 +40,7 @@ impl Reception {
 #[derive(Debug)]
 #[must_use]
 pub struct VectorLease {
-    hart: u8,
+    processor: u8,
     vector: u8,
 }
 
@@ -49,8 +49,8 @@ impl VectorLease {
         self.vector
     }
 
-    pub(crate) fn matches(&self, hart: u8, vector: u8) -> bool {
-        self.hart == hart && self.vector == vector
+    pub(crate) fn matches(&self, processor: u8, vector: u8) -> bool {
+        self.processor == processor && self.vector == vector
     }
 }
 
@@ -69,7 +69,7 @@ impl Claim<'_, '_> {
 
     /// # Safety
     /// The original software delivery is settled or durably retained. The
-    /// device has been cleared or masked and the receiving Hart remains
+    /// device has been cleared or masked and the receiving processor remains
     /// exclusive with ordinary interrupts masked.
     pub unsafe fn complete(&mut self) -> Result<(), Failure> {
         self.owner.complete(self.vector)
@@ -89,7 +89,7 @@ impl<'map> LocalApic<'map> {
     /// Reserve the destination vector before publishing a physical source route.
     pub fn reserve_vector(&mut self, vector: u8) -> Result<VectorLease, Failure> {
         self.reception_context()?;
-        let hart = u8::try_from(self.hart).map_err(|_| Failure::Scope)?;
+        let processor = u8::try_from(self.processor).map_err(|_| Failure::Scope)?;
         let svr = unsafe { self.window.read_u32(SPURIOUS) }.expect("xAPIC SVR");
         if vector < 32 || vector == svr as u8 {
             return Err(Failure::Scope);
@@ -99,12 +99,12 @@ impl<'map> LocalApic<'map> {
             return Err(Failure::Busy);
         }
         self.vectors[bank] |= bit;
-        Ok(VectorLease { hart, vector })
+        Ok(VectorLease { processor, vector })
     }
 
     /// Return a lease after the original source route has retired.
     pub fn release_vector(&mut self, lease: VectorLease) -> Result<(), (VectorLease, Failure)> {
-        if usize::from(lease.hart) != self.hart || self.reception_context().is_err() {
+        if usize::from(lease.processor) != self.processor || self.reception_context().is_err() {
             return Err((lease, Failure::Scope));
         }
         let (bank, bit) = Self::vector_bit(lease.vector);
@@ -131,14 +131,14 @@ impl<'map> LocalApic<'map> {
     }
 
     pub(super) fn reception_context(&self) -> Result<(), Failure> {
-        if self.probe.base_for(self.hart) != Some(self.base) {
+        if self.probe.base_for(self.processor) != Some(self.base) {
             return Err(Failure::Scope);
         }
         Ok(())
     }
 
     fn top(&mut self) -> Option<u8> {
-        // The caller retains this Hart with ordinary interrupts masked.
+        // The caller retains this processor with ordinary interrupts masked.
         for bank in (0..8).rev() {
             let word = unsafe { self.window.read_u32(ISR + 16 * bank) }.expect("xAPIC ISR bank");
             if word != 0 {
@@ -224,7 +224,7 @@ impl HardwareClaim for Claim<'_, '_> {
     fn identity(&self) -> ClaimId {
         ClaimId::new(
             self.owner.base.physical.start(),
-            self.owner.hart as u64,
+            self.owner.processor as u64,
             self.owner.reception_round,
             u32::from(self.vector()),
         )

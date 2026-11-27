@@ -34,9 +34,9 @@ impl Base {
         })
     }
 
-    pub(super) fn matches(self, hart: usize, madt: Madt<'_>) -> bool {
+    pub(super) fn matches(self, processor: usize, madt: Madt<'_>) -> bool {
         madt.local_controller_address() == Some(self.physical.start())
-            && Destination::new(hart).is_some_and(|id| madt.enabled_local_apic(id.0))
+            && Destination::new(processor).is_some_and(|id| madt.enabled_local_apic(id.0))
     }
 }
 
@@ -48,8 +48,8 @@ pub(super) const LEVEL_ASSERT: u32 = 1 << 14;
 pub(super) struct Destination(pub(super) u8);
 
 impl Destination {
-    pub(super) fn new(hart: usize) -> Option<Self> {
-        let id = u8::try_from(hart).ok()?;
+    pub(super) fn new(processor: usize) -> Option<Self> {
+        let id = u8::try_from(processor).ok()?;
         (id != u8::MAX).then_some(Self(id))
     }
 

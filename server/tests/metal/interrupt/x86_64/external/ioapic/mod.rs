@@ -24,7 +24,7 @@ fn fixed_routes_never_echo_remote_irr_or_delivery_status() {
     let route = Route {
         gsi: 16,
         vector: 0x51,
-        hart: 3,
+        processor: 3,
         active_low: true,
         level: true,
     };

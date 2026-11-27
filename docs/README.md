@@ -9,7 +9,7 @@
 | [Verification](../server/tests/README.md) | Host checks, QEMU guests and their expected observations |
 | [Source history](history.md) | Upstream checkpoints and notices |
 
-Metal separates Boot, Firmware, Hart, Sync and Execution by mechanism. The boot
+Metal separates Boot, Firmware, Processor, Sync and Execution by mechanism. The boot
 handoff can establish an Allocator from admitted RAM and an exclusive mapped
 root. Allocator owns exact physical allocation and return, while Internal MMU
 validates mapped storage and its Host tests exercise the RV64 page-table entry
@@ -29,9 +29,9 @@ reclaim returns the original backing. Internal MMU defines MmuGeometry v1
 and binds an exact RV64 Sv39, Sv48 or Sv57 root contract to the geometry
 provider retained by its module. The shared RV64 mechanism checks canonical
 addresses, level geometry, physical alignment and the encoder's branch,
-leaf and SATP results. The mapping owner supplies the tables. Each Hart
+leaf and SATP results. The mapping owner supplies the tables. Each hart
 checks the installed ASID-zero context and synchronizes its own translations.
-The firmware's per-Hart maximum limits candidate modes. See the [formal Module contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/module/README.md).
+The firmware's per-hart maximum limits candidate modes. See the [formal Module contract](https://github.com/shuyra-arche/document-limen/blob/c6911e2f09384c9473467472edec2a7e6bfc3692/server/metal/module/README.md).
 
 Common physical, Internal, External and relative byte coordinates and their
 checked geometry are defined directly in Treaty Model. A byte coordinate's

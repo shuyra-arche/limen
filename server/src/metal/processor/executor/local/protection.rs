@@ -31,7 +31,7 @@ impl LocalProtection {
 #[must_use]
 pub(in crate::metal) struct Protection {
     local: &'static Executor,
-    same_hart: PhantomData<*mut ()>,
+    same_processor: PhantomData<*mut ()>,
 }
 
 impl Protection {
@@ -66,7 +66,7 @@ impl Executor {
         self.protection.active.set(Some(active));
         Protection {
             local: self,
-            same_hart: PhantomData,
+            same_processor: PhantomData,
         }
     }
 }

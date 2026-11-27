@@ -6,7 +6,7 @@ use limen_treaty::model::PhysicalAddress;
 fn uncertain_readback_retains_the_original_operation() {
     let mut installation = Installation::new(3, 10);
 
-    assert_eq!(installation.hart(), 3);
+    assert_eq!(installation.processor(), 3);
     assert_eq!(installation.retry(10), Err(SwitchError::Current));
     assert_eq!(installation.issue(9, 10, 20), Err(SwitchError::Current));
     assert_eq!(installation.issue(10, 9, 20), Err(SwitchError::Current));

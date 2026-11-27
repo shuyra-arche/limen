@@ -66,5 +66,5 @@ pub fn migrations() -> usize {
 
 #[unsafe(no_mangle)]
 extern "C" fn limen_register_probe_mismatch(register: usize) -> ! {
-    panic!("kernel-execution-harts: register s{register} changed");
+    panic!("kernel-execution-participants: register s{register} changed");
 }

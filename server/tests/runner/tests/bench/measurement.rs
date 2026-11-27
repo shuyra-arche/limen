@@ -10,7 +10,7 @@ fn complete_measurements_preserve_raw_samples() {
     let log = format!("boot diagnostics\n{HEADER}{SERIES}{FIRST}{SECOND}other diagnostics\n");
     let result = decode(&log).unwrap();
     assert_eq!(result.environment, "qemu");
-    assert_eq!(result.hart, 0);
+    assert_eq!(result.processor, 0);
     assert_eq!(result.frequency_hz, 10_000_000);
     assert_eq!(result.series.len(), 1);
     let series = &result.series[0];

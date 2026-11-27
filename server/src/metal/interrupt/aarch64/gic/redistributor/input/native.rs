@@ -62,8 +62,8 @@ impl<'tree, 'map> Ppi<'tree, 'map> {
         self.intid
     }
 
-    pub(in crate::metal::interrupt::aarch64) fn local_to(&self, hart: usize) -> bool {
-        self.affinity == hart && local(self.affinity)
+    pub(in crate::metal::interrupt::aarch64) fn local_to(&self, processor: usize) -> bool {
+        self.affinity == processor && local(self.affinity)
     }
 
     pub(in crate::metal::interrupt::aarch64) fn permits_programming(

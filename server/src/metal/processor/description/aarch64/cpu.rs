@@ -5,7 +5,7 @@ use crate::metal::platform::description::devicetree::{DeviceTree, Error, Node, N
 pub(in crate::metal) const AFFINITY_MASK: u64 = 0xff00ffffff;
 const CPU_LIMIT: usize = 64;
 
-/// A processor described in the original tree. Its Hart must still enter
+/// A processor described in the original tree. Its processor must still enter
 /// and confirm its own affinity before Limen treats it as ready.
 #[derive(Clone, Copy, Debug)]
 pub struct CpuCandidate<'a> {

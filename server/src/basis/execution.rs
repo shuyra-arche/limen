@@ -4,12 +4,13 @@ use core::marker::PhantomData;
 
 use crate::{
     basis::{
-        room::{self, AdmissionId, Harts, LeaveDestination, Occupancy, Room},
+        room::{self, AdmissionId, LeaveDestination, Occupancy, Participants, Room},
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, UnitRecord, Units},
     },
     metal::{
         processor::treaty::{
-            self, Dispatcher, Dispatchers, HartId, LeaveReceipt, LocalExecution, Major, Terminal,
+            self, Dispatcher, Dispatchers, LeaveReceipt, LocalExecution, Major, ProcessorId,
+            Terminal,
         },
         sync::treaty::{TurnAcquireError, TurnLock, TurnMode, TurnWorkspace, turn_capacity},
     },
@@ -68,29 +69,29 @@ impl From<TurnAcquireError> for Error {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EstablishError {
-    WrongHart,
+    WrongProcessor,
     Unsupported,
     Storage,
 }
 
 /// The original handoff and independent supplies, returned before ownership.
-pub struct EstablishFailure<const HARTS: usize> {
+pub struct EstablishFailure<const PARTICIPANTS: usize> {
     pub major: Major,
     pub terminal: Terminal,
     pub stacks: &'static mut Stacks,
     pub records: &'static mut [UnitRecord<KernelBinding>],
-    pub harts: &'static mut Harts<HARTS>,
-    pub dispatchers: &'static mut Dispatchers<Occupancy, HARTS>,
+    pub participants: &'static mut Participants<PARTICIPANTS>,
+    pub dispatchers: &'static mut Dispatchers<Occupancy, PARTICIPANTS>,
     pub reason: EstablishError,
 }
 
 /// The trusted cooperative Unit entry and its actual placement constraint.
 pub struct KernelBinding {
     entry: Entry,
-    affinity: Option<HartId>,
+    affinity: Option<ProcessorId>,
 }
 
-/// Cooperative coordination of Unit and Room on independently attached Harts.
+/// Cooperative coordination of Unit and Room across participating Executors.
 pub struct Execution {
     terminal: Terminal,
     units: TurnLock<Units<KernelBinding>>,
@@ -99,21 +100,21 @@ pub struct Execution {
 }
 
 impl Execution {
-    /// Consume the original native major relation. No Hart participates
-    /// until its own Attach; all supplies remain independent and resident.
-    pub fn new<const HARTS: usize>(
+    /// Consume the original native major relation. Each Executor participates
+    /// after its own Attach. The supplies remain independent and resident.
+    pub fn new<const PARTICIPANTS: usize>(
         major: Major,
         terminal: Terminal,
         stacks: &'static mut Stacks,
         records: &'static mut [UnitRecord<KernelBinding>],
-        harts: &'static mut Harts<HARTS>,
-        dispatchers: &'static mut Dispatchers<Occupancy, HARTS>,
-    ) -> Result<Self, EstablishFailure<HARTS>> {
+        participants: &'static mut Participants<PARTICIPANTS>,
+        dispatchers: &'static mut Dispatchers<Occupancy, PARTICIPANTS>,
+    ) -> Result<Self, EstablishFailure<PARTICIPANTS>> {
         let reason = if !major.is_current() {
-            Some(EstablishError::WrongHart)
+            Some(EstablishError::WrongProcessor)
         } else if !treaty::cooperative_ready() {
             Some(EstablishError::Unsupported)
-        } else if !Units::accepts(records) || !harts.accepts() {
+        } else if !Units::accepts(records) || !participants.accepts() {
             Some(EstablishError::Storage)
         } else {
             None
@@ -124,7 +125,7 @@ impl Execution {
                 terminal,
                 stacks,
                 records,
-                harts,
+                participants,
                 dispatchers,
                 reason,
             });
@@ -132,7 +133,7 @@ impl Execution {
         Ok(Self {
             terminal,
             units: TurnLock::new(Units::new(stacks, records)),
-            room: TurnLock::new(harts.room()),
+            room: TurnLock::new(participants.room()),
             dispatchers: dispatchers.records(),
         })
     }
@@ -155,15 +156,15 @@ impl Execution {
         })?
     }
 
-    fn local(&self) -> Result<(HartId, LocalExecution<'_, Occupancy>), Error> {
-        treaty::try_current_hart().ok_or(Error::Protection)?;
+    fn local(&self) -> Result<(ProcessorId, LocalExecution<'_, Occupancy>), Error> {
+        treaty::try_current_processor().ok_or(Error::Protection)?;
         treaty::current(self.dispatchers).ok_or(Error::Unsupported)
     }
 
-    /// Attach this actual Hart after its trusted entry. This is independent
+    /// Attach the current Executor after its trusted entry. This is independent
     /// of firmware launch; every participant takes the same path.
     pub fn attach(&self) -> Result<(), Error> {
-        let id = treaty::try_current_hart().ok_or(Error::Protection)?;
+        let id = treaty::try_current_processor().ok_or(Error::Protection)?;
         if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
         }
@@ -180,7 +181,7 @@ impl Execution {
             let record = treaty::reserve(self.dispatchers).ok_or(Error::Capacity)?;
             room.attach(id)?;
             // The reserved machine record and Room admission now belong to
-            // this Hart. Local publication cannot interleave with reentry.
+            // this processor. Local publication cannot interleave with reentry.
             unsafe { record.bind() };
             Ok(())
         })?
@@ -192,28 +193,28 @@ impl Execution {
     ///
     /// The caller supplies a trusted supervisor entry whose compiler and
     /// callees fit the 16 KiB stack, preserve the established translation and trap
-    /// configuration, Hart-local registers, and the selected backend's
+    /// configuration, processor-local registers, and the selected backend's
     /// interrupt and extension restrictions. Any local borrow must allow suspension at
-    /// `yield_now`. The Unit stays on the constructing Hart.
+    /// `yield_now`. The Unit stays on the constructing processor.
     pub unsafe fn create(&self, entry: Entry) -> Result<UnitId, Error> {
-        let (hart, _) = self.local()?;
-        self.create_unit(entry, Some(hart))
+        let (processor, _) = self.local()?;
+        self.create_unit(entry, Some(processor))
     }
 
-    /// Construct a Unit eligible to resume on any attached compatible Hart.
+    /// Construct a Unit eligible to resume on any attached compatible processor.
     ///
     /// # Safety
     ///
     /// The entry must satisfy `create` except for affinity. Every live value
-    /// at Yield must allow transfer to another Hart. The entry must release
-    /// Hart-local borrows and protection before Yield and reacquire local state
-    /// on the destination Hart.
+    /// at Yield must allow transfer to another processor. The entry must release
+    /// processor-local borrows and protection before Yield and reacquire local state
+    /// on the destination processor.
     pub unsafe fn create_migratable(&self, entry: Entry) -> Result<UnitId, Error> {
         self.local()?;
         self.create_unit(entry, None)
     }
 
-    fn create_unit(&self, entry: Entry, affinity: Option<HartId>) -> Result<UnitId, Error> {
+    fn create_unit(&self, entry: Entry, affinity: Option<ProcessorId>) -> Result<UnitId, Error> {
         self.units.acquire(|units| {
             let unit = units.vacant()?;
             units.publish(unit, KernelBinding { entry, affinity }, start)?;
@@ -242,7 +243,7 @@ impl Execution {
         })
     }
 
-    /// Transfer once to this attached Hart's resident 32 KiB dispatcher stack.
+    /// Transfer once to this participating Executor's resident 32 KiB dispatcher stack.
     /// The input and all older frames remain live; success never returns.
     ///
     /// # Safety
@@ -250,31 +251,31 @@ impl Execution {
     /// and preserve the native profile and local entry. Keep every borrowed
     /// input and the previous stack reserved for the entire handoff.
     pub unsafe fn run<F: FnMut() -> !>(&'static self, dispatch: &mut F) -> Result<!, Error> {
-        let (_, hart) = self.local()?;
+        let (_, local) = self.local()?;
         if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
         }
         if !treaty::can_switch() {
             return Err(Error::Protection);
         }
-        if hart.started() {
+        if local.started() {
             return Err(Error::Busy);
         }
-        unsafe { hart.start(dispatch) }
+        unsafe { local.start(dispatch) }
     }
 
     /// Run one ready Unit until it yields or returns on its own stack.
     /// The original admission remains occupied until `vacate`.
     pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
-        let (id, hart) = self.local()?;
+        let (id, local) = self.local()?;
         if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
         }
         if !treaty::can_switch() {
             return Err(Error::Protection);
         }
-        if !hart.on_dispatcher_stack() {
-            return Err(if hart.running().is_some() {
+        if !local.on_dispatcher_stack() {
+            return Err(if local.running().is_some() {
                 Error::Busy
             } else {
                 Error::Protection
@@ -295,9 +296,9 @@ impl Execution {
             execution: self,
             entry,
         };
-        // Room retains this exact occupancy until this Hart completes the
+        // Room retains this exact occupancy until this processor completes the
         // leave. The initial continuation copies Start before it can suspend.
-        unsafe { hart.enter(occupancy, context, (&raw const start).cast()) };
+        unsafe { local.enter(occupancy, context, (&raw const start).cast()) };
         Ok(Some(occupancy))
     }
 
@@ -306,15 +307,15 @@ impl Execution {
     }
 
     pub fn vacate(&self, occupancy: Occupancy) -> Result<(), Error> {
-        let (_, hart) = self.local()?;
+        let (_, local) = self.local()?;
         self.room.acquire(|room| {
-            room.on_hart(occupancy)?;
-            let receipt = hart
+            room.check_occupied(occupancy)?;
+            let receipt = local
                 .stopped()
                 .filter(|receipt| receipt.occupancy() == occupancy)
                 .ok_or(Error::Busy)?;
             room.vacate(receipt)?;
-            hart.settle(receipt);
+            local.settle(receipt);
             Ok(())
         })?
     }
@@ -348,14 +349,14 @@ impl Execution {
     }
 
     fn leave(&self, unit: UnitId, end: Option<u64>) -> Result<(), Error> {
-        let (_, hart) = self.local()?;
+        let (_, local) = self.local()?;
         if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
         }
         if !treaty::can_switch() {
             return Err(Error::Protection);
         }
-        let occupancy = hart
+        let occupancy = local
             .running()
             .filter(|active| active.unit() == unit)
             .ok_or(Error::Gone)?;
@@ -375,8 +376,8 @@ impl Execution {
             Ok(context)
         })?;
         // Local protection is settled before transfer. On migration the returning call
-        // finishes without accessing the original Hart's local state.
-        unsafe { hart.leave(occupancy, context) };
+        // finishes without accessing the original processor's local state.
+        unsafe { local.leave(occupancy, context) };
         Ok(())
     }
 
@@ -400,14 +401,14 @@ impl Current {
         self.unit
     }
 
-    /// The physical Hart executing this continuation when called.
-    pub fn hart(&self) -> usize {
-        treaty::try_current_hart()
-            .expect("ordinary Hart entry")
+    /// The hardware identity of the processor executing this continuation.
+    pub fn processor(&self) -> usize {
+        treaty::try_current_processor()
+            .expect("ordinary processor entry")
             .get()
     }
 
-    /// Yield the Hart. Success is returned after a new dispatch resumes this
+    /// Yield the processor. Success is returned after a new dispatch resumes this
     /// continuation.
     pub fn yield_now(&mut self) -> Result<(), Error> {
         self.execution.leave(self.unit, None)
@@ -422,8 +423,8 @@ struct Start {
 extern "C" fn start(argument: *const ()) -> ! {
     // On first entry this points to the suspended dispatcher's live Start.
     let Start { execution, entry } = unsafe { argument.cast::<Start>().read() };
-    let (_, hart) = execution.local().expect("attached Hart");
-    let unit = hart.running().expect("authorized Kernel Unit").unit();
+    let (_, local) = execution.local().expect("attached processor");
+    let unit = local.running().expect("authorized Kernel Unit").unit();
     let value = entry(&mut Current {
         execution,
         unit,

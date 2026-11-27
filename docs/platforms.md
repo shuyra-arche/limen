@@ -158,7 +158,7 @@ of those bytes. Image-owned minor stacks remain covered by the image.
 
 `Exclusions::retains` keeps ranges reserved unless retirement evidence covers
 the whole query. The permanent stack must be active, the relevant readers
-and Harts must have left the old storage, and the owners must confirm old
+and processors must have left the old storage, and the owners must confirm old
 CPU translations and page-table walks have retired and old device access
 is isolated. The current boot backends provide no such combined evidence.
 The image, kernel boot stacks, retained handoff bytes and non-reclaimable

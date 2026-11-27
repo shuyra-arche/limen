@@ -9,7 +9,7 @@ use super::{
 };
 use crate::metal::{
     memory::mmu::treaty::{LocalContext, SwitchError},
-    processor::{executor::riscv64::native, treaty::try_current_hart},
+    processor::{executor::riscv64::native, treaty::try_current_processor},
 };
 
 impl Context {
@@ -41,7 +41,7 @@ pub(in crate::metal::memory::mmu) struct NativeRoot<'a> {
 
 impl NativeRoot<'_> {
     pub(in crate::metal::memory::mmu) fn check(hart: usize) -> Result<(), SwitchError> {
-        if try_current_hart().is_none_or(|binding| binding.get() != hart)
+        if try_current_processor().is_none_or(|binding| binding.get() != hart)
             || !native::status().masked()
         {
             return Err(SwitchError::Context);

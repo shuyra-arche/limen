@@ -84,7 +84,7 @@ pub fn check(boot: Boot<'_>) {
     assert!(cpus.cpu(0).unwrap().unwrap().enabled());
     assert!(cpus.cpu(1).unwrap().unwrap().enabled());
     assert!(cpus.cpu(2).unwrap().is_none());
-    let source = boot.hart();
+    let source = boot.processor();
     let peer = (0..2).find(|hart| *hart != source).unwrap();
     let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();
     let counter = unsafe { Counter::admit(timebase, source as u64) }.unwrap();

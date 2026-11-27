@@ -26,6 +26,6 @@ pub(in crate::metal) fn admit(stack: Range<usize>) -> Option<Entry> {
 
 /// Confirm the current CPU identity on machines with a native identity register.
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-pub(in crate::metal) fn matches_identity(hart: usize) -> bool {
-    hart == native::identity()
+pub(in crate::metal) fn matches_identity(processor: usize) -> bool {
+    processor == native::identity()
 }

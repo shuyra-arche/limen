@@ -112,7 +112,7 @@ pub struct Platform {
     pub board: Board,
     pub firmware: Firmware,
     pub interrupt: Interrupt,
-    pub harts: u8,
+    pub processors: u8,
     pub aclint: bool,
     pub sstc: Setting,
     pub iommu: Iommu,
@@ -122,7 +122,7 @@ pub struct Platform {
 
 impl Platform {
     #[cfg(any(target_os = "none", target_os = "uefi"))]
-    pub const fn native(harts: u8) -> Self {
+    pub const fn native(processors: u8) -> Self {
         #[cfg(target_arch = "riscv64")]
         let (board, firmware, interrupt) = (Board::Virt, Firmware::OpenSbi, Interrupt::Plic);
         #[cfg(target_arch = "aarch64")]
@@ -133,7 +133,7 @@ impl Platform {
             board,
             firmware,
             interrupt,
-            harts,
+            processors,
             aclint: false,
             sstc: Setting::Default,
             iommu: Iommu::None,
@@ -198,7 +198,7 @@ impl Declaration {
             platform.board as u8,
             platform.firmware as u8,
             platform.interrupt as u8,
-            platform.harts,
+            platform.processors,
             platform.aclint as u8,
             platform.sstc as u8,
             platform.iommu as u8,
@@ -276,7 +276,7 @@ impl Declaration {
                 4 => Interrupt::Apic,
                 _ => return None,
             },
-            harts: bytes[12],
+            processors: bytes[12],
             aclint: match bytes[13] {
                 0 => false,
                 1 => true,

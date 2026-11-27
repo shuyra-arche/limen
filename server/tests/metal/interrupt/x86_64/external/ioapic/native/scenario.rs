@@ -29,14 +29,14 @@ unsafe fn input(port: u16) -> u8 {
     value
 }
 
-pub(super) fn check(madt: Madt<'_>, hart: usize, local: &mut LocalApic<'_>) {
+pub(super) fn check(madt: Madt<'_>, processor: usize, local: &mut LocalApic<'_>) {
     let io = madt.io_apics().next().unwrap();
     let range = io.address.range(ByteLength::new(4096)).unwrap();
     let mut window =
         unsafe { DeviceWindow::admit(range, InternalAddress::new(io.address.get())) }.unwrap();
     let mut controller = unsafe { Controller::admit(madt, &mut window) }.unwrap();
     let route = controller
-        .isa_route(4, u8::try_from(hart).unwrap(), VECTOR)
+        .isa_route(4, u8::try_from(processor).unwrap(), VECTOR)
         .unwrap();
     let lease = local.reserve_vector(VECTOR).unwrap();
     assert!(matches!(local.reserve_vector(VECTOR), Err(Failure::Busy)));
