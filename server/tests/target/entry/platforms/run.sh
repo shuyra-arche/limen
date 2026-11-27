@@ -72,6 +72,9 @@ printf '%s\n' "$status" >"$out/exit.status"
 [[ "$status" == "$expected_exit" ]]
 grep -Fxq "$marker" "$out/guest.log"
 grep -Fxq "$firmware_marker" "$out/guest.log"
+if [[ "$platform" == q35 ]]; then
+    grep -Fxq 'PASS local-apic startup=1 scope-rejected=1 target-rejected=1' "$out/guest.log"
+fi
 grep -Fxq 'PASS early physical exclusions regions=0 roots=0' "$out/guest.log"
 grep -Fxq 'PASS allocator retained without retirement or mapping' "$out/guest.log"
 grep -Fxq 'PASS bootstrap-foundation pend=1 pool=1 retained=1 refund=1 generation=1 stale=1 revoked=1' "$out/guest.log"

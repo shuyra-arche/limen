@@ -53,6 +53,7 @@
       "q35": [
         "server/src/metal/platform/boot/x86_64/**",
         "server/src/metal/interrupt/internal/apic/**",
+        "server/src/metal/interrupt/mod.rs",
         "server/src/metal/interrupt/internal/mod.rs",
         "server/src/metal/memory/mmu/internal/device.rs",
         "server/tests/target/entry/platforms/q35.rs",
