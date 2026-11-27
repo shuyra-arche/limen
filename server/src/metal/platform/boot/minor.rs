@@ -8,7 +8,8 @@ use core::{
 
 use crate::metal::{
     platform::boot,
-    processor::hart::local::{self, HartLocal, stack::Stack},
+    processor::hart::local::{self, Storage, stack::Stack},
+    sync::TURN_CAPACITY,
 };
 use core::ops::Range;
 
@@ -48,7 +49,7 @@ pub struct Minor {
     launch: UnsafeCell<MaybeUninit<Launch>>,
     stack: Stack<STACK_BYTES>,
     pub(crate) context: boot::MinorContext,
-    local: HartLocal,
+    local: Storage<TURN_CAPACITY>,
 }
 
 // The state word grants exactly one writer and releases the descriptor to
@@ -69,7 +70,7 @@ impl Minor {
             launch: UnsafeCell::new(MaybeUninit::uninit()),
             stack: Stack::new(),
             context: boot::minor_context(),
-            local: HartLocal::new(),
+            local: Storage::new(),
         }
     }
 
@@ -148,7 +149,7 @@ pub(crate) extern "C" fn arrive(hart: usize, minor: &'static Minor) -> ! {
     // `Entered` identifies this CPU as the sole initializer of this resident
     // local record. The terminal vectors cannot observe its partial setup.
     let entry = boot::entry().expect("verified minor entry");
-    unsafe { minor.local.install(hart, entry) };
+    unsafe { minor.local.bind().install(hart, entry) };
     assert!(local::can_switch(), "minor Hart protection is not idle");
     minor.state.store(State::Ready as u32, Ordering::Release);
     (launch.entry)(hart, launch.argument)

@@ -11,6 +11,6 @@ impl GicV3<'_> {
     pub unsafe fn cpu_interface_available() -> bool {
         let features: u64;
         unsafe { asm!("mrs {}, ID_AA64PFR0_EL1", out(reg) features, options(nomem, nostack)) };
-        matches!((features >> 24) & 0xf, 1 | 3)
+        super::system_register_interface(features)
     }
 }

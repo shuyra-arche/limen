@@ -14,14 +14,13 @@ use super::aarch64::native as backend;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 use super::riscv::native as backend;
 #[cfg(all(limen_target, target_arch = "x86_64"))]
-use super::x86_64 as backend;
+use super::x86_64::native as backend;
 
 #[cfg(limen_target)]
 pub(in crate::metal) use backend::stack_pointer;
 pub(crate) use node::QueueNode;
-pub(crate) use protection::{
-    Error, TURN_CAPACITY, TurnParticipation, begin_leaf, begin_turn, can_switch,
-};
+pub use protection::turn_capacity;
+pub(crate) use protection::{Error, TurnParticipation, begin_leaf, begin_turn, can_switch};
 
 #[cfg(all(test, not(limen_target)))]
 #[path = "../../../../../tests/metal/processor/hart/mod.rs"]
@@ -59,12 +58,43 @@ impl Entry {
     }
 }
 
+#[cfg(limen_cooperative)]
+#[derive(Clone, Copy)]
+struct CooperativeBinding {
+    scope: usize,
+    slot: usize,
+}
+
+/// Resident storage supplied by one actual CPU's construction path.
+pub(in crate::metal) struct Storage<const N: usize> {
+    local: HartLocal,
+    nodes: [QueueNode; N],
+}
+
+impl<const N: usize> Storage<N> {
+    pub(in crate::metal) const fn new() -> Self {
+        Self {
+            local: HartLocal::new(),
+            nodes: [const { QueueNode::new() }; N],
+        }
+    }
+
+    /// The sole entering CPU binds its own resident nodes once, before
+    /// installing any local register or admitting an ordinary operation.
+    pub(in crate::metal) unsafe fn bind(&'static self) -> &'static HartLocal {
+        self.local.protection.bind(&self.nodes);
+        &self.local
+    }
+}
+
 /// Fixed storage belonging to the verified physical CPU that took this entry.
 pub(in crate::metal) struct HartLocal {
     #[cfg(limen_target)]
     identity: Cell<usize>,
     #[cfg(limen_target)]
     entry: Cell<Option<Entry>>,
+    #[cfg(limen_cooperative)]
+    cooperative: Cell<Option<CooperativeBinding>>,
     protection: protection::LocalProtection,
 }
 
@@ -79,6 +109,8 @@ impl HartLocal {
             identity: Cell::new(0),
             #[cfg(limen_target)]
             entry: Cell::new(None),
+            #[cfg(limen_cooperative)]
+            cooperative: Cell::new(None),
             protection: protection::LocalProtection::new(),
         }
     }
@@ -126,6 +158,31 @@ pub(crate) fn current_hart() -> HartId {
 #[cfg(limen_target)]
 pub(crate) fn try_current_hart() -> Option<HartId> {
     Some(HartId::new(ordinary_local()?.identity.get()))
+}
+
+#[cfg(limen_cooperative)]
+pub(in crate::metal) fn cooperative_attached() -> bool {
+    ordinary_local().is_some_and(|local| local.cooperative.get().is_some())
+}
+
+/// Same-Hart discovery of the permanently associated machine record.
+#[cfg(limen_cooperative)]
+pub(in crate::metal) fn cooperative_slot(scope: usize) -> Option<(HartId, usize)> {
+    let local = ordinary_local()?;
+    let binding = local.cooperative.get()?;
+    (binding.scope == scope).then_some((HartId::new(local.identity.get()), binding.slot))
+}
+
+/// The caller has committed the current Hart's unique Room participation
+/// under protection. The supplied machine record remains stable, is not
+/// reused, and no ordinary entry may interleave this publication.
+#[cfg(limen_cooperative)]
+pub(in crate::metal) unsafe fn bind_cooperative(scope: usize, slot: usize) {
+    let local = ordinary_local().expect("verified ordinary Hart");
+    assert!(local.cooperative.get().is_none());
+    local
+        .cooperative
+        .set(Some(CooperativeBinding { scope, slot }));
 }
 
 #[cfg(limen_target)]

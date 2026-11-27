@@ -1,12 +1,13 @@
 //! Ordinary execution protection owned by the initialized physical CPU.
 
-use core::{cell::Cell, marker::PhantomData, mem::DropGuard, sync::atomic::AtomicBool};
+use core::{
+    cell::{Cell, OnceCell},
+    marker::PhantomData,
+    mem::DropGuard,
+    sync::atomic::AtomicBool,
+};
 
 use super::{HartLocal, QueueNode, backend, ordinary_local};
-
-/// The fixed queue-node storage supplied by the current boot image per Hart.
-/// Owners check their maximum joint acquisition against this supply.
-pub(crate) const TURN_CAPACITY: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Error {
@@ -38,7 +39,7 @@ enum Participation {
 pub(super) struct LocalProtection {
     current: Cell<Participation>,
     interrupt: Cell<Option<usize>>,
-    nodes: [QueueNode; TURN_CAPACITY],
+    nodes: OnceCell<&'static [QueueNode]>,
 }
 
 impl LocalProtection {
@@ -46,8 +47,12 @@ impl LocalProtection {
         Self {
             current: Cell::new(Participation::Idle),
             interrupt: Cell::new(None),
-            nodes: [const { QueueNode::new() }; TURN_CAPACITY],
+            nodes: OnceCell::new(),
         }
+    }
+
+    pub(super) fn bind(&self, nodes: &'static [QueueNode]) {
+        assert!(self.nodes.set(nodes).is_ok(), "Hart nodes already supplied");
     }
 
     fn save(&self, interrupt: usize) {
@@ -81,18 +86,28 @@ pub(crate) fn can_switch() -> bool {
         && local.protection.interrupt.get().is_none()
 }
 
+/// Available queue storage of the current ordinary Hart.
+pub fn turn_capacity() -> Option<usize> {
+    Some(ordinary_local()?.protection.nodes.get()?.len())
+}
+
 pub(crate) struct TurnParticipation {
     local: &'static LocalProtection,
+    nodes: &'static [QueueNode],
     count: usize,
     same_hart: PhantomData<*mut ()>,
 }
 
 pub(crate) fn begin_turn(count: usize) -> Result<TurnParticipation, Error> {
-    if count == 0 || count > TURN_CAPACITY {
+    if count == 0 {
         return Err(Error::Capacity);
     }
     let (local, interrupt) = protect()?;
     let local = &local.protection;
+    let nodes = local.nodes.get().ok_or(Error::Context)?;
+    if count > nodes.len() {
+        return Err(Error::Capacity);
+    }
     if local.current.get() != Participation::Idle {
         return Err(Error::Context);
     }
@@ -103,6 +118,7 @@ pub(crate) fn begin_turn(count: usize) -> Result<TurnParticipation, Error> {
     });
     Ok(TurnParticipation {
         local,
+        nodes,
         count,
         same_hart: PhantomData,
     })
@@ -110,7 +126,7 @@ pub(crate) fn begin_turn(count: usize) -> Result<TurnParticipation, Error> {
 
 impl TurnParticipation {
     pub(crate) fn node(&self, index: usize) -> &QueueNode {
-        &self.local.nodes[..self.count][index]
+        &self.nodes[..self.count][index]
     }
 
     pub(crate) fn held(&self) {

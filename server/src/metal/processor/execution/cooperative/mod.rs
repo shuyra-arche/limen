@@ -5,7 +5,7 @@ use core::{
     marker::PhantomData,
 };
 
-use crate::metal::processor::hart::local;
+use crate::metal::processor::hart::local::{self, HartId, stack::Stack};
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
@@ -23,6 +23,29 @@ use x86_64 as native;
 
 pub(crate) fn cooperative_ready() -> bool {
     native::ready()
+}
+
+/// Whether the current physical Hart has already joined the cooperative prefix.
+pub(crate) fn attached() -> bool {
+    local::cooperative_attached()
+}
+
+/// # Safety
+/// Room has committed this actual Hart's unique, permanent participation
+/// in the supplied slot. The stable supply cannot detach or be reused.
+/// The caller excludes ordinary reentry through publication.
+pub(crate) unsafe fn bind<Occupancy: 'static>(harts: &'static [Hart<Occupancy>], slot: usize) {
+    assert!(slot < harts.len());
+    unsafe { local::bind_cooperative(harts.as_ptr().addr(), slot) };
+}
+
+/// Discover only the actual current Hart's bound machine record. The local
+/// locator grants no Unit admission or Occupancy.
+pub(crate) fn current<Occupancy: 'static>(
+    harts: &'static [Hart<Occupancy>],
+) -> Option<(HartId, LocalHart<'static, Occupancy>)> {
+    let (id, slot) = local::cooperative_slot(harts.as_ptr().addr())?;
+    Some((id, unsafe { harts.get(slot)?.local() }))
 }
 
 /// One continuation in the actual linked machine's native save shape.
@@ -66,7 +89,11 @@ enum State<Occupancy> {
     Stopped(LeaveReceipt<Occupancy>),
 }
 
+const DISPATCH_BYTES: usize = 32 * 1024;
+
 pub(crate) struct Hart<Occupancy> {
+    stack: Stack<DISPATCH_BYTES>,
+    started: Cell<bool>,
     dispatcher: Context,
     state: Cell<State<Occupancy>>,
 }
@@ -83,13 +110,15 @@ pub(crate) struct LocalHart<'a, Occupancy> {
 impl<Occupancy> Hart<Occupancy> {
     pub(crate) const fn new() -> Self {
         Self {
+            stack: Stack::new(),
+            started: Cell::new(false),
             dispatcher: Context::new(),
             state: Cell::new(State::Idle),
         }
     }
 
     /// The caller has established that this is the current physical Hart.
-    pub(crate) unsafe fn local(&self) -> LocalHart<'_, Occupancy> {
+    unsafe fn local(&self) -> LocalHart<'_, Occupancy> {
         LocalHart {
             hart: self,
             local: PhantomData,
@@ -98,6 +127,34 @@ impl<Occupancy> Hart<Occupancy> {
 }
 
 impl<Occupancy: Copy + Eq> LocalHart<'_, Occupancy> {
+    pub(crate) fn started(&self) -> bool {
+        self.hart.started.get()
+    }
+
+    pub(crate) fn on_dispatcher_stack(&self) -> bool {
+        let top = self.hart.stack.top();
+        self.started() && (top - DISPATCH_BYTES..top).contains(&local::stack_pointer())
+    }
+
+    /// The caller has excluded every previous entry and checked this Hart's
+    /// ordinary profile. The previous frame stays resident with the borrowed
+    /// dispatch input; this path never makes that stack reclaimable.
+    pub(crate) unsafe fn start<F: FnMut() -> !>(&self, dispatch: &mut F) -> ! {
+        extern "C" fn enter<F: FnMut() -> !>(argument: *const ()) -> ! {
+            let dispatch = unsafe { &mut *argument.cast_mut().cast::<F>() };
+            dispatch()
+        }
+
+        assert!(!self.hart.started.replace(true));
+        unsafe {
+            native::start_stack(
+                self.hart.stack.top(),
+                enter::<F>,
+                core::ptr::from_mut(dispatch).cast(),
+            )
+        }
+    }
+
     pub(crate) fn running(&self) -> Option<Occupancy> {
         match self.hart.state.get() {
             State::Running(occupancy) => Some(occupancy),

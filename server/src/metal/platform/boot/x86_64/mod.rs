@@ -2,7 +2,10 @@ use crate::metal::{
     interrupt::internal::apic,
     platform::boot::handoff::{Descriptions, Facts, uefi},
     platform::boot::trap as diagnostic,
-    processor::hart::{local, x86_64},
+    processor::hart::{
+        local,
+        x86_64::{native, status},
+    },
 };
 mod major;
 pub(crate) use major::major as enter_major;
@@ -21,7 +24,7 @@ struct Gate {
     reserved: u32,
 }
 
-use x86_64::Descriptor;
+use native::Descriptor;
 
 #[unsafe(naked)]
 extern "sysv64" fn stop() -> ! {
@@ -44,7 +47,7 @@ pub(crate) unsafe fn admit<'a>(
     input: *const (),
     descriptions: &mut Descriptions<'a>,
 ) -> Option<Facts<'a>> {
-    let facts = unsafe { uefi::admit(hart, x86_64::boot_identity(), input, descriptions) }?;
+    let facts = unsafe { uefi::admit(hart, native::boot_identity(), input, descriptions) }?;
     if let Some(acpi) = descriptions.acpi.as_ref()
         && !apic::native::matches_madt(hart, acpi.madt()?)
     {
@@ -58,12 +61,12 @@ pub(crate) fn established() -> bool {
     unsafe {
         asm!("pushfq", "pop {}", "mov {}, cr0", out(reg) flags, out(reg) cr0);
     }
-    cr0 & (1 << 31) != 0 && flags & (1 << 9) == 0 && entry().is_some()
+    status::paging(cr0) && status::interrupts_masked(flags) && entry().is_some()
 }
 
 pub(in crate::metal) fn entry() -> Option<local::Entry> {
     local::Entry::admit(
-        x86_64::Entry {
+        native::Entry {
             base: (&raw const IDT).addr(),
             limit: (size_of::<[Gate; 256]>() - 1) as u16,
         },

@@ -177,7 +177,7 @@ unsafe extern "sysv64" fn minor() -> ! {
     )
 }
 unsafe extern "sysv64" fn finish(hart: usize, slot: &'static Minor) -> ! {
-    unsafe { crate::metal::processor::hart::x86_64::clear_local() };
+    unsafe { crate::metal::processor::hart::x86_64::native::clear_local() };
     // The major CPU has already published the complete, immutable diagnostic IDT.
     super::load_idt();
     minor::arrive(hart, slot)
@@ -185,6 +185,7 @@ unsafe extern "sysv64" fn finish(hart: usize, slot: &'static Minor) -> ! {
 
 impl Minor {
     pub(in crate::metal) fn established(&self, hart: usize) -> bool {
-        hart == crate::metal::processor::hart::x86_64::boot_identity() && super::established()
+        hart == crate::metal::processor::hart::x86_64::native::boot_identity()
+            && super::established()
     }
 }

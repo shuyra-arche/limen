@@ -1,28 +1,22 @@
 //! Coordinates the existing cooperative Unit, Room and machine handoff.
 
-use core::{
-    fmt::Write,
-    marker::PhantomData,
-    ptr,
-    sync::atomic::{
-        AtomicUsize,
-        Ordering::{Acquire, Release},
-    },
-};
+use core::{fmt::Write, marker::PhantomData};
 
 use crate::{
     basis::{
-        room::{self, AdmissionId, LeaveDestination, Occupancy, Room},
+        room::{self, AdmissionId, Harts, LeaveDestination, Occupancy, Room},
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, UnitRecord, Units},
     },
     metal::{
-        processor::execution::cooperative::{Hart, LeaveReceipt, LocalHart, cooperative_ready},
+        processor::execution::cooperative::{
+            self, Hart, LeaveReceipt, LocalHart, cooperative_ready,
+        },
         processor::hart::local::{self, HartId},
-        sync::{TurnAcquireError, TurnLock},
+        sync::{TurnAcquireError, TurnLock, TurnMode, TurnWorkspace, turn_capacity},
     },
 };
 
-use crate::entry::boot::{self, Boot, Minor};
+use crate::entry::boot::{self, Boot};
 
 type Entry = fn(&mut Current) -> u64;
 
@@ -38,9 +32,6 @@ pub enum Error {
     Protection,
     State,
     Unsupported,
-    Firmware(isize),
-    /// Startup may have reached hardware; the original launch stays reserved.
-    StartUnconfirmed,
 }
 
 impl From<unit::Error> for Error {
@@ -85,11 +76,12 @@ pub enum EstablishError {
     Storage,
 }
 
-/// The original handoff and both supplies, returned before execution takes ownership.
-pub struct EstablishFailure<'a> {
+/// The original handoff and independent supplies, returned before ownership.
+pub struct EstablishFailure<'a, const HARTS: usize> {
     pub boot: Boot<'a>,
     pub stacks: &'static mut Stacks,
     pub records: &'static mut [UnitRecord<KernelBinding>],
+    pub harts: &'static mut Harts<HARTS>,
     pub reason: EstablishError,
 }
 
@@ -99,158 +91,94 @@ pub struct KernelBinding {
     affinity: Option<HartId>,
 }
 
-struct Dispatch {
-    units: Units<KernelBinding>,
-    room: Room<STACK_CAPACITY>,
-}
-
-#[derive(Clone, Copy)]
-struct MinorLaunch {
-    hart: HartId,
-    entry: fn(&'static Execution) -> !,
-}
-
-/// Cooperative execution on the Boot Hart and one optional minor Hart.
+/// Cooperative coordination of Unit and Room on independently attached Harts.
 pub struct Execution {
-    dispatch: TurnLock<Dispatch>,
-    launch: TurnLock<Option<MinorLaunch>>,
-    major: Hart<Occupancy>,
-    major_id: HartId,
-    minor: Hart<Occupancy>,
-    minor_id: AtomicUsize,
-    minor_boot: Option<&'static Minor>,
+    units: TurnLock<Units<KernelBinding>>,
+    room: TurnLock<Room<STACK_CAPACITY>>,
+    harts: &'static [Hart<Occupancy>],
 }
 
 impl Execution {
-    /// Consume the trusted handoff and provision the resident stack supply.
-    pub fn new<'a>(
+    /// Consume the unique trusted construction handoff. No Hart participates
+    /// until its own Attach; all supplies remain independent and resident.
+    pub fn new<'a, const HARTS: usize>(
         boot: Boot<'a>,
         stacks: &'static mut Stacks,
         records: &'static mut [UnitRecord<KernelBinding>],
-    ) -> Result<Self, EstablishFailure<'a>> {
-        Self::establish(boot, stacks, records, None)
-    }
-
-    /// Provision cooperative execution with an optional firmware-started Hart.
-    pub fn with_minor<'a>(
-        boot: Boot<'a>,
-        stacks: &'static mut Stacks,
-        records: &'static mut [UnitRecord<KernelBinding>],
-        minor: &'static Minor,
-    ) -> Result<Self, EstablishFailure<'a>> {
-        Self::establish(boot, stacks, records, Some(minor))
-    }
-
-    fn establish<'a>(
-        boot: Boot<'a>,
-        stacks: &'static mut Stacks,
-        records: &'static mut [UnitRecord<KernelBinding>],
-        minor: Option<&'static Minor>,
-    ) -> Result<Self, EstablishFailure<'a>> {
-        if local::current_hart() != HartId::new(boot.hart()) {
+        harts: &'static mut Harts<HARTS>,
+    ) -> Result<Self, EstablishFailure<'a, HARTS>> {
+        let reason = if local::try_current_hart() != Some(HartId::new(boot.hart())) {
+            Some(EstablishError::WrongHart)
+        } else if !cooperative_ready() {
+            Some(EstablishError::Unsupported)
+        } else if !Units::accepts(records) || !harts.accepts() {
+            Some(EstablishError::Storage)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
             return Err(EstablishFailure {
                 boot,
                 stacks,
                 records,
-                reason: EstablishError::WrongHart,
+                harts,
+                reason,
             });
         }
-        if !cooperative_ready() {
-            return Err(EstablishFailure {
-                boot,
-                stacks,
-                records,
-                reason: EstablishError::Unsupported,
-            });
-        }
-        if !Units::accepts(records) {
-            return Err(EstablishFailure {
-                boot,
-                stacks,
-                records,
-                reason: EstablishError::Storage,
-            });
-        }
+        let (room, harts) = harts.split();
         Ok(Self {
-            dispatch: TurnLock::new(Dispatch {
-                units: Units::new(stacks, records),
-                room: Room::new(HartId::new(boot.hart())),
-            }),
-            launch: TurnLock::new(None),
-            major: Hart::new(),
-            major_id: HartId::new(boot.hart()),
-            minor: Hart::new(),
-            minor_id: AtomicUsize::new(0),
-            minor_boot: minor,
+            units: TurnLock::new(Units::new(stacks, records)),
+            room: TurnLock::new(room),
+            harts,
         })
     }
 
-    fn dispatch<R>(
+    fn with_unit_room<R>(
         &self,
-        operation: impl FnOnce(&mut Dispatch) -> Result<R, Error>,
+        operation: impl FnOnce(&mut Units<KernelBinding>, &mut Room<STACK_CAPACITY>) -> Result<R, Error>,
     ) -> Result<R, Error> {
-        self.dispatch.acquire(operation)?
+        let mut workspace = TurnWorkspace::<2>::new();
+        let mut plan = workspace.plan();
+        plan.insert(&self.units).expect("Unit owner");
+        plan.insert(&self.room).expect("Room owner");
+        // Returning from a Unit must be able to commit its terminal leave
+        // under contention. Queue in canonical order before changing either owner.
+        plan.acquire(TurnMode::Slow, |held| {
+            let (units, room) = held
+                .access_pair(&self.units, &self.room)
+                .expect("complete Unit and Room plan");
+            operation(units, room)
+        })?
     }
 
     fn local(&self) -> Result<(HartId, LocalHart<'_, Occupancy>), Error> {
-        let id = local::current_hart();
-        if id == self.major_id {
-            return Ok((id, unsafe { self.major.local() }));
-        }
-        let minor = self.minor_id.load(Acquire);
-        if minor != 0 && id.get() == minor - 1 {
-            return Ok((id, unsafe { self.minor.local() }));
-        }
-        Err(Error::Unsupported)
+        local::try_current_hart().ok_or(Error::Protection)?;
+        cooperative::current(self.harts).ok_or(Error::Unsupported)
     }
 
-    /// Start the minor Hart using the supplied platform startup method.
-    /// It attaches on its dispatcher
-    /// stack with the early trap vector installed before the platform entry.
-    ///
-    /// # Safety
-    ///
-    /// The entry must be trusted supervisor code built for the established kernel mappings.
-    /// It must preserve the selected machine calling convention and verified
-    /// execution environment. The 32 KiB dispatcher stack is shared by the
-    /// live Limen startup frames, the entry and all dispatcher-side callees.
-    /// The caller must include those startup frames in the total stack
-    /// budget when bounding the entry and its callees.
-    pub unsafe fn start_minor(
-        &'static self,
-        hart: usize,
-        entry: fn(&'static Execution) -> !,
-        method: &mut boot::Startup,
-    ) -> Result<(), Error> {
-        let minor = self.minor_boot.ok_or(Error::Unsupported)?;
-        if local::current_hart() != self.major_id || !cooperative_ready() {
+    /// Attach this actual Hart after its trusted entry. This is independent
+    /// of firmware launch; every participant takes the same path.
+    pub fn attach(&self) -> Result<(), Error> {
+        let id = local::try_current_hart().ok_or(Error::Protection)?;
+        if !cooperative_ready() {
             return Err(Error::Unsupported);
         }
-        if HartId::new(hart) == self.major_id {
-            return Err(Error::Busy);
+        if !local::can_switch() {
+            return Err(Error::Protection);
         }
-        hart.checked_add(1).ok_or(Error::Unsupported)?;
-        self.launch.acquire(|launch| {
-            if launch.is_some() || self.minor_id.load(Acquire) != 0 {
+        if turn_capacity().ok_or(Error::Protection)? < 2 {
+            return Err(Error::Capacity);
+        }
+        self.room.acquire(|room| {
+            if cooperative::attached() {
                 return Err(Error::Busy);
             }
-            *launch = Some(MinorLaunch {
-                hart: HartId::new(hart),
-                entry,
-            });
+            let participation = room.attach(id)?;
+            // All fallible admission is complete. Only this Hart uses its
+            // local binding, and Room retains this slot for the entire prefix.
+            unsafe { cooperative::bind(self.harts, participation.index()) };
             Ok(())
-        })??;
-        let argument = ptr::from_ref(self).expose_provenance();
-        if let Err(error) = unsafe { minor.start(hart, admit_minor, argument, method) } {
-            let rejected = match error {
-                boot::StartError::Unconfirmed(_) => return Err(Error::StartUnconfirmed),
-                boot::StartError::Busy => Error::Busy,
-                boot::StartError::Rejected(code) => Error::Firmware(code),
-            };
-            self.launch.acquire(|launch| *launch = None)?;
-            return Err(rejected);
-        }
-        Ok(())
+        })?
     }
 
     /// Construct a dormant Kernel Unit. Its entry's return value is its End.
@@ -267,7 +195,7 @@ impl Execution {
         self.create_unit(entry, Some(hart))
     }
 
-    /// Construct a Unit eligible to resume on either attached Hart.
+    /// Construct a Unit eligible to resume on any attached compatible Hart.
     ///
     /// # Safety
     ///
@@ -281,20 +209,18 @@ impl Execution {
     }
 
     fn create_unit(&self, entry: Entry, affinity: Option<HartId>) -> Result<UnitId, Error> {
-        self.dispatch(|dispatch| {
-            let unit = dispatch.units.vacant()?;
-            dispatch
-                .units
-                .publish(unit, KernelBinding { entry, affinity }, start)?;
+        self.units.acquire(|units| {
+            let unit = units.vacant()?;
+            units.publish(unit, KernelBinding { entry, affinity }, start)?;
             Ok(unit)
-        })
+        })?
     }
 
     pub fn submit(&self, unit: UnitId) -> Result<AdmissionId, Error> {
         self.local()?;
-        self.dispatch(|dispatch| {
-            let affinity = dispatch.units.live(unit)?.0.affinity;
-            dispatch.room.submit(unit, affinity).map_err(Error::from)
+        self.with_unit_room(|units, room| {
+            let affinity = units.live(unit)?.0.affinity;
+            room.submit(unit, affinity).map_err(Error::from)
         })
     }
 
@@ -303,15 +229,33 @@ impl Execution {
     /// cancellation, use `finish_end` and `reap` to release the slot.
     pub fn stop_dormant(&self, unit: UnitId) -> Result<(), Error> {
         self.local()?;
-        self.dispatch(|dispatch| {
-            if dispatch.room.admitted(unit) {
+        self.with_unit_room(|units, room| {
+            if room.admitted(unit) {
                 return Err(Error::Busy);
             }
-            dispatch
-                .units
-                .begin_end(unit, End::Cancelled)
-                .map_err(Error::from)
+            units.begin_end(unit, End::Cancelled).map_err(Error::from)
         })
+    }
+
+    /// Transfer once to this attached Hart's resident 32 KiB dispatcher stack.
+    /// The input and all older frames remain live; success never returns.
+    ///
+    /// # Safety
+    /// The trusted dispatch loop and its callees must fit the supplied stack
+    /// and preserve the native profile and local entry. Keep every borrowed
+    /// input and the previous stack reserved for the entire handoff.
+    pub unsafe fn run<F: FnMut() -> !>(&'static self, dispatch: &mut F) -> Result<!, Error> {
+        let (_, hart) = self.local()?;
+        if !cooperative_ready() {
+            return Err(Error::Unsupported);
+        }
+        if !local::can_switch() {
+            return Err(Error::Protection);
+        }
+        if hart.started() {
+            return Err(Error::Busy);
+        }
+        unsafe { hart.start(dispatch) }
     }
 
     /// Run one ready Unit until it yields or returns on its own stack.
@@ -324,13 +268,20 @@ impl Execution {
         if !local::can_switch() {
             return Err(Error::Protection);
         }
-        let Some((occupancy, context, entry)) = self.dispatch(|dispatch| {
-            let Some(unit) = dispatch.room.candidate(id)? else {
+        if !hart.on_dispatcher_stack() {
+            return Err(if hart.running().is_some() {
+                Error::Busy
+            } else {
+                Error::Protection
+            });
+        }
+        let Some((occupancy, context, entry)) = self.with_unit_room(|units, room| {
+            let Some(unit) = room.candidate(id)? else {
                 return Ok(None);
             };
-            let (binding, context) = dispatch.units.live(unit)?;
+            let (binding, context) = units.live(unit)?;
             let entry = binding.entry;
-            Ok(Some((dispatch.room.occupy(id, unit)?, context, entry)))
+            Ok(Some((room.occupy(id, unit)?, context, entry)))
         })?
         else {
             return Ok(None);
@@ -351,40 +302,44 @@ impl Execution {
 
     pub fn vacate(&self, occupancy: Occupancy) -> Result<(), Error> {
         let (_, hart) = self.local()?;
-        self.dispatch(|dispatch| {
-            dispatch.room.on_hart(occupancy)?;
+        self.room.acquire(|room| {
+            room.on_hart(occupancy)?;
             let receipt = hart
                 .stopped()
                 .filter(|receipt| receipt.occupancy() == occupancy)
                 .ok_or(Error::Busy)?;
-            dispatch.room.vacate(receipt)?;
+            room.vacate(receipt)?;
             hart.settle(receipt);
             Ok(())
-        })
+        })?
     }
 
     pub fn lifecycle(&self, unit: UnitId) -> Result<Lifecycle, Error> {
         self.local()?;
-        self.dispatch(|dispatch| dispatch.units.lifecycle(unit).map_err(Error::from))
+        self.units
+            .acquire(|units| units.lifecycle(unit))?
+            .map_err(Error::from)
     }
 
     pub fn finish_end(&self, unit: UnitId) -> Result<(), Error> {
         self.local()?;
-        self.dispatch(|dispatch| {
-            dispatch.units.lifecycle(unit)?;
-            if dispatch.room.admitted(unit) {
+        self.with_unit_room(|units, room| {
+            units.lifecycle(unit)?;
+            if room.admitted(unit) {
                 return Err(Error::Busy);
             }
             // Released admission proves either no entry occurred or the exact
             // machine leave receipt was settled by Room.
-            unsafe { dispatch.units.finish_end(unit) }?;
+            unsafe { units.finish_end(unit) }?;
             Ok(())
         })
     }
 
     pub fn reap(&self, unit: UnitId) -> Result<End, Error> {
         self.local()?;
-        self.dispatch(|dispatch| dispatch.units.reap(unit).map_err(Error::from))
+        self.units
+            .acquire(|units| units.reap(unit))?
+            .map_err(Error::from)
     }
 
     fn leave(&self, unit: UnitId, end: Option<u64>) -> Result<(), Error> {
@@ -399,17 +354,16 @@ impl Execution {
             .running()
             .filter(|active| active.unit() == unit)
             .ok_or(Error::Gone)?;
-        let context = self.dispatch(|dispatch| {
-            let (_, context) = dispatch.units.live(unit)?;
+        let context = self.with_unit_room(|units, room| {
+            let (_, context) = units.live(unit)?;
             let destination = if end.is_some() {
                 LeaveDestination::Release
             } else {
                 LeaveDestination::Ready
             };
-            dispatch.room.request_leave(occupancy, destination)?;
+            room.request_leave(occupancy, destination)?;
             if let Some(value) = end {
-                dispatch
-                    .units
+                units
                     .begin_end(unit, End::Returned { value })
                     .expect("validated live Unit");
             }
@@ -472,25 +426,4 @@ extern "C" fn start(argument: *const ()) -> ! {
         let _ = writeln!(console, "FAIL Limen execution: terminal leave {error:?}");
     }
     boot::shutdown(false)
-}
-
-fn admit_minor(hart: usize, argument: usize) -> ! {
-    // The firmware launch holds a resident Execution for this callback.
-    let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
-    let id = local::current_hart();
-    assert_eq!(id.get(), hart);
-    assert!(cooperative_ready());
-    execution
-        .dispatch(|dispatch| dispatch.room.attach(id).map_err(Error::from))
-        .expect("reserved Room participation");
-    let entry = execution
-        .launch
-        .acquire(|launch| {
-            let launch = launch.take().expect("reserved minor launch");
-            assert_eq!(launch.hart, id);
-            execution.minor_id.store(hart + 1, Release);
-            launch.entry
-        })
-        .expect("reserved minor launch protection");
-    entry(execution)
 }
