@@ -131,7 +131,7 @@ struct Directory<'storage, T> {
 pub struct Capacity {
     /// Groups open to new slot claims.
     pub groups: usize,
-    /// Exact physical charge still carried by this Pool's records.
+    /// Physical bytes of published groups still awaiting their source refund.
     pub bytes: usize,
     pub slots: usize,
     pub free: usize,
