@@ -134,7 +134,9 @@ bash server/tests/target/entry/boot/fault.sh "$runner" "$evidence"
 ```
 
 The Target workflow runs affected owner-local `suite.json` scenarios on four virtual CPUs and uploads their evidence. Ordinary boots enter on the
-firmware-selected CPU. The RV64 cross-Hart scenario and both UEFI board fixtures start a second participant.
+firmware-selected CPU. The RV64 cross-Hart scenario provisions three
+participation slots and checks rejection of a fourth actual Hart; both UEFI
+board fixtures exercise two participants.
 
 Target discovery compares the PR against its merge base and selects each board and
 profile from the owner manifests. Changes to a board backend or its fixture select
@@ -170,7 +172,8 @@ cancelled Unit releases its slot under a new generation
 without executing its entry.
 
 Run [target/entry/execution-harts/](target/entry/execution-harts/) to exercise
-two participating Harts on a four-Hart QEMU machine.
+two-Hart migration and a three-participant capacity boundary on a four-Hart
+QEMU machine.
 
 ```sh
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
@@ -178,8 +181,10 @@ server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
   --output /tmp/limen-execution-harts --profile debug
 ```
 
-The guest starts the minor through OpenSBI and coordinates the two Harts
-through real Turn contention and handoff. It forces Busy after each allowed
+The guest starts another Hart through OpenSBI and coordinates the two Harts
+through real Turn contention and handoff. After migration, a third Hart attaches
+and runs a Unit using the existing stack supply; a fourth reaches its trusted
+entry but cannot attach or dispatch through the exhausted Room. It forces Busy after each allowed
 nonempty Fast prefix, checks that unused callback captures can reacquire a
 released lock, and checks Slow acquisition across opposite insertion orders.
 It also verifies rejection of Yield while the Hart participates in a Turn.

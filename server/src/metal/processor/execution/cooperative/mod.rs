@@ -5,7 +5,7 @@ use core::{
     marker::PhantomData,
 };
 
-use crate::metal::processor::hart::local;
+use crate::metal::processor::hart::local::{self, HartId};
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
@@ -23,6 +23,29 @@ use x86_64 as native;
 
 pub(crate) fn cooperative_ready() -> bool {
     native::ready()
+}
+
+/// Whether the current physical Hart has already joined the cooperative prefix.
+pub(crate) fn attached() -> bool {
+    local::cooperative_attached()
+}
+
+/// # Safety
+/// Room has committed this actual Hart's unique, permanent participation
+/// in the supplied slot. The stable supply cannot detach or be reused.
+/// The caller excludes ordinary reentry through publication.
+pub(crate) unsafe fn bind<Occupancy: 'static>(harts: &'static [Hart<Occupancy>], slot: usize) {
+    assert!(slot < harts.len());
+    unsafe { local::bind_cooperative(harts.as_ptr().addr(), slot) };
+}
+
+/// Discover only the actual current Hart's bound machine record. The local
+/// locator grants no Unit admission or Occupancy.
+pub(crate) fn current<Occupancy: 'static>(
+    harts: &'static [Hart<Occupancy>],
+) -> Option<(HartId, LocalHart<'static, Occupancy>)> {
+    let (id, slot) = local::cooperative_slot(harts.as_ptr().addr())?;
+    Some((id, unsafe { harts.get(slot)?.local() }))
 }
 
 /// One continuation in the actual linked machine's native save shape.
@@ -89,7 +112,7 @@ impl<Occupancy> Hart<Occupancy> {
     }
 
     /// The caller has established that this is the current physical Hart.
-    pub(crate) unsafe fn local(&self) -> LocalHart<'_, Occupancy> {
+    unsafe fn local(&self) -> LocalHart<'_, Occupancy> {
         LocalHart {
             hart: self,
             local: PhantomData,

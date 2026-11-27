@@ -4,10 +4,9 @@ use core::num::NonZeroU64;
 
 use super::unit::UnitId;
 use crate::metal::{
-    processor::execution::cooperative::LeaveReceipt, processor::hart::local::HartId,
+    processor::execution::cooperative::{Hart, LeaveReceipt},
+    processor::hart::local::HartId,
 };
-
-const HART_CAPACITY: usize = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Error {
@@ -23,7 +22,13 @@ pub struct AdmissionId(NonZeroU64);
 
 // Participants do not detach or reuse slots in the cooperative Room.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ParticipationId(usize);
+pub(super) struct ParticipationId(usize);
+
+impl ParticipationId {
+    pub(super) const fn index(self) -> usize {
+        self.0
+    }
+}
 
 // This sequence is scoped by the admission in Occupancy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,9 +100,42 @@ impl HartEntry {
     }
 }
 
+/// Independently provisioned, stable participation and machine records.
+/// The two fields have distinct owners and are borrowed disjointly once.
+pub struct Harts<const CAPACITY: usize> {
+    entries: [Option<HartEntry>; CAPACITY],
+    machine: [Hart<Occupancy>; CAPACITY],
+}
+
+impl<const CAPACITY: usize> Harts<CAPACITY> {
+    pub const fn new() -> Self {
+        Self {
+            entries: [const { None }; CAPACITY],
+            machine: [const { Hart::new() }; CAPACITY],
+        }
+    }
+
+    pub(super) fn accepts(&self) -> bool {
+        CAPACITY != 0 && self.entries.iter().all(Option::is_none)
+    }
+
+    pub(super) fn split<const UNITS: usize>(
+        &'static mut self,
+    ) -> (Room<UNITS>, &'static [Hart<Occupancy>]) {
+        assert!(self.accepts());
+        (Room::new(&mut self.entries), &self.machine)
+    }
+}
+
+impl<const CAPACITY: usize> Default for Harts<CAPACITY> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub(crate) struct Room<const CAPACITY: usize> {
     units: [Option<UnitEntry>; CAPACITY],
-    harts: [Option<HartEntry>; HART_CAPACITY],
+    harts: &'static mut [Option<HartEntry>],
     // Both discovery indices point to the UnitEntry that owns the placement.
     ready: [usize; CAPACITY],
     ready_len: usize,
@@ -105,10 +143,10 @@ pub(crate) struct Room<const CAPACITY: usize> {
 }
 
 impl<const CAPACITY: usize> Room<CAPACITY> {
-    pub(crate) const fn new(hart: HartId) -> Self {
+    fn new(harts: &'static mut [Option<HartEntry>]) -> Self {
         Self {
             units: [const { None }; CAPACITY],
-            harts: [Some(HartEntry::new(hart)), None],
+            harts,
             ready: [0; CAPACITY],
             ready_len: 0,
             next_admission: Some(AdmissionId(NonZeroU64::MIN)),
@@ -116,17 +154,17 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
     }
 
     /// Called after the trusted entry has established the Hart's local state.
-    pub(crate) fn attach(&mut self, hart: HartId) -> Result<(), Error> {
+    pub(super) fn attach(&mut self, hart: HartId) -> Result<ParticipationId, Error> {
         if self.participation(hart).is_some() {
             return Err(Error::Busy);
         }
-        let slot = self
+        let index = self
             .harts
-            .iter_mut()
-            .find(|slot| slot.is_none())
+            .iter()
+            .position(Option::is_none)
             .ok_or(Error::Capacity)?;
-        *slot = Some(HartEntry::new(hart));
-        Ok(())
+        self.harts[index] = Some(HartEntry::new(hart));
+        Ok(ParticipationId(index))
     }
 
     pub(crate) fn submit(
@@ -236,8 +274,10 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
     }
 
     fn active(&self, occupancy: Occupancy) -> Result<usize, Error> {
-        let slot = self.harts[occupancy.participation.0]
-            .as_ref()
+        let slot = self
+            .harts
+            .get(occupancy.participation.0)
+            .and_then(Option::as_ref)
             .and_then(|hart| hart.occupied)
             .ok_or(Error::Gone)?;
         let entry = self.units[slot].as_ref().expect("occupied Unit");

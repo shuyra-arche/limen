@@ -12,10 +12,10 @@ use core::{
 use kernel::{
     basis::{
         execution::{Current, Error, Execution, KernelBinding},
-        room::Occupancy,
+        room::{Harts, Occupancy},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
-    entry::boot::{self, Boot, Startup},
+    entry::boot::{self, Boot, StartError, Startup},
 };
 
 #[cfg(target_arch = "aarch64")]
@@ -28,6 +28,7 @@ mod x86_64;
 use x86_64 as registers;
 
 static mut STACKS: Stacks = Stacks::new();
+static mut HARTS: Harts<2> = Harts::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static MAJOR: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -94,7 +95,12 @@ fn dispatch(execution: &'static Execution) -> Occupancy {
     }
 }
 
-fn minor(execution: &'static Execution) -> ! {
+fn minor(_: usize, argument: usize) -> ! {
+    // The actual Boot launch publishes the resident runtime before entry.
+    let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
+    assert_eq!(execution.enter(), Err(Error::Unsupported));
+    execution.attach().expect("attach actual minor Hart");
+    assert_eq!(execution.attach(), Err(Error::Busy));
     super::observe_minor(super::board::hart());
     wait(1);
     // The original Hart has not returned its occupation yet.
@@ -132,29 +138,32 @@ pub(super) fn run(
     started: impl FnOnce(&Startup),
 ) {
     MAJOR.store(major, Relaxed);
-    let runtime = Execution::with_minor(
+    let runtime = Execution::new(
         boot,
         unsafe { &mut *(&raw mut STACKS) },
         unsafe { &mut *(&raw mut RECORDS) },
-        &super::MINOR,
+        unsafe { &mut *(&raw mut HARTS) },
     )
     .map_err(|failure| failure.reason)
     .expect("native cooperative profile");
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
+    execution.attach().expect("attach actual boot Hart");
+    assert_eq!(execution.attach(), Err(Error::Busy));
+    let argument = ptr::from_ref(execution).expose_provenance();
 
     assert_eq!(
-        unsafe { execution.start_minor(major, minor, startup) },
-        Err(Error::Busy)
+        unsafe { super::MINOR.start(major, minor, argument, startup) },
+        Err(StartError::Busy)
     );
-    unsafe { execution.start_minor(target, minor, startup) }.expect("minor admission");
+    unsafe { super::MINOR.start(target, minor, argument, startup) }.expect("minor startup");
     while super::OBSERVED.load(Acquire) != target {
         spin_loop();
     }
     assert!(super::MINOR.ready());
     started(startup);
     assert_eq!(
-        unsafe { execution.start_minor(target, minor, startup) },
-        Err(Error::Busy)
+        unsafe { super::MINOR.start(target, minor, argument, startup) },
+        Err(StartError::Busy)
     );
 
     let unit = unsafe { execution.create_migratable(migratable) }.expect("migratable Unit");
