@@ -16,36 +16,7 @@ pub struct Shutdown {
     pub reason: String,
 }
 
-pub fn run(
-    mut command: Command,
-    directory: &Path,
-    timeout: Duration,
-) -> Result<(process::Outcome, io::Result<Shutdown>)> {
-    let serial = directory.join("serial.log");
-    File::create(&serial)?;
-    let transcript = File::create(directory.join("qmp.jsonl"))?;
-    command
-        .args(["-display", "none", "-serial"])
-        .arg(format!("file:{}", serial.display()))
-        .args(["-S", "-qmp", "stdio"]);
-    let (stdin, commands) = io::pipe()?;
-    let (messages, stdout) = io::pipe()?;
-    let monitor = thread::spawn(move || capture(BufReader::new(messages), commands, transcript));
-    let outcome = process::run_with_stdio(
-        &mut command,
-        directory,
-        timeout,
-        stdin.into(),
-        stdout.into(),
-    );
-    // Command also owns pipe ends after spawning, including when spawn fails.
-    drop(command);
-    let shutdown = monitor.join().map_err(|_| "QMP reader panicked")?;
-    Ok((outcome?, shutdown))
-}
-
 // A private control socket keeps QMP independent of guest and firmware stdout.
-// Keep the legacy stdio path unchanged during the T0 experiment.
 #[cfg(unix)]
 pub fn run_isolated(
     mut command: Command,

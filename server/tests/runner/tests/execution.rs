@@ -1,6 +1,6 @@
-use crate::{composition, qmp, verify};
+use crate::qmp;
 use kernel_verification::process;
-use std::{fs, path::Path, process::Command, thread, time::Duration};
+use std::{fs, process::Command, thread, time::Duration};
 fn scratch(name: &str) -> std::path::PathBuf {
     let root = std::env::temp_dir().join(format!("kernel-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
@@ -45,16 +45,12 @@ fn qmp_records_one_shutdown_after_negotiating_and_starting_the_guest() {
     }
 }
 #[test]
-fn process_requires_exit_and_full_acceptance() {
+fn process_reports_exit_and_failure_without_interpreting_stdout() {
     let root = scratch("exit");
-    for (name, script, expected) in [
-        ("good", "echo PASS", "pass"),
-        ("incomplete", "echo START", "inconclusive"),
-        ("partial-line", "echo PASS.EXTRA", "inconclusive"),
-        ("unclosed-line", "printf PASS", "inconclusive"),
-        ("failed", "echo PASS; exit 3", "fail"),
-        ("fatal", "echo PASS; echo FAIL", "fail"),
-        ("signal", "echo PASS; kill -TERM $$", "inconclusive"),
+    for (name, script, status, code) in [
+        ("good", "echo PASS", "exited", Some(0)),
+        ("failed", "echo PASS; exit 3", "exited", Some(3)),
+        ("signal", "echo PASS; kill -TERM $$", "signal", None),
     ] {
         let result = process::run(
             Command::new("sh").args(["-c", script]),
@@ -62,30 +58,13 @@ fn process_requires_exit_and_full_acceptance() {
             Duration::from_secs(2),
         )
         .unwrap();
-        let serial = fs::read_to_string(root.join(name).join("serial.log")).unwrap();
-        let details = verify::check(&serial, &["PASS".into()], None).unwrap();
-        let guest = qmp::Shutdown {
-            guest: true,
-            reason: "guest-shutdown".into(),
-        };
-        assert_eq!(verify::verdict(&result, &details, Some(&guest)), expected);
-        if expected == "pass" {
-            for (guest, reason) in [
-                (false, "host-signal"),
-                (true, "guest-panic"),
-                (false, "guest-shutdown"),
-            ] {
-                let other = qmp::Shutdown {
-                    guest,
-                    reason: reason.into(),
-                };
-                assert_eq!(
-                    verify::verdict(&result, &details, Some(&other)),
-                    "inconclusive"
-                );
-            }
-            assert_eq!(verify::verdict(&result, &details, None), "inconclusive");
-        }
+        assert_eq!(result.status, status);
+        assert_eq!(result.code, code);
+        assert_eq!(result.success(), code == Some(0));
+        assert_eq!(
+            fs::read_to_string(root.join(name).join("serial.log")).unwrap(),
+            "PASS\n"
+        );
     }
     fs::remove_dir_all(root).unwrap();
 }
@@ -99,75 +78,11 @@ fn deadline_kills_even_after_success_marker() {
     )
     .unwrap();
     assert_eq!(result.status, "timeout");
-    assert_eq!(
-        verify::verdict(&result, &serde_json::Value::Null, None),
-        "timeout"
-    );
     assert!(!result.success());
     assert!(result.elapsed_seconds < 5.0);
     let cleanup: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("cleanup.json")).unwrap()).unwrap();
     assert_eq!(cleanup["settled"], true);
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn board_launch_requires_a_receipt_consistent_with_the_process() {
-    let root = scratch("board-receipt");
-    let mut outcome = process::Outcome {
-        command: "launcher".into(),
-        status: "exited".into(),
-        code: Some(0),
-        elapsed_seconds: 0.0,
-        passed: false,
-    };
-    let receipt = root.join("verdict.json");
-    let declared = Some(("io", "q35"));
-    assert_eq!(
-        verify::board_verdict(&outcome, &root, declared),
-        "inconclusive"
-    );
-    fs::write(
-        &receipt,
-        r#"{"verdict":"pass","scenario":"io","board":"q35"}"#,
-    )
-    .unwrap();
-    assert_eq!(verify::board_verdict(&outcome, &root, declared), "pass");
-    assert_eq!(
-        verify::board_verdict(&outcome, &root, Some(("io", "virt"))),
-        "inconclusive"
-    );
-    outcome.code = Some(1);
-    assert_eq!(
-        verify::board_verdict(&outcome, &root, declared),
-        "inconclusive"
-    );
-    for verdict in ["fail", "timeout", "inconclusive"] {
-        fs::write(
-            &receipt,
-            format!(r#"{{"verdict":"{verdict}","scenario":"io","board":"q35"}}"#),
-        )
-        .unwrap();
-        assert_eq!(verify::board_verdict(&outcome, &root, declared), verdict);
-    }
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn a_file_import_copies_only_the_declared_fixture() {
-    let root = scratch("fixture-import");
-    let fixture = Path::new("target/entry/memory.rs");
-    let destination = root.join(fixture);
-    let hashes = composition::import(fixture, &destination).unwrap();
-    assert_eq!(hashes.len(), 1);
-    assert_eq!(
-        hashes["memory.rs"],
-        kernel_verification::digest(&destination).unwrap()
-    );
-    assert_eq!(
-        fs::read_dir(destination.parent().unwrap()).unwrap().count(),
-        1
-    );
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -1,4 +1,4 @@
-//! Experimental Cargo runner. Only the dedicated machine exit code is success.
+//! Cargo runner. Only the dedicated machine exit code is success.
 use crate::platform::{self, Firmware, Machine};
 use kernel_verification::{Result, output, process, require};
 use std::{
@@ -54,12 +54,20 @@ fn command(machine: &Machine, image: &Path, directory: &Path, observe: bool) -> 
         "enable=on,target=native,userspace=off"
     };
     if machine.platform.firmware == Firmware::OpenSbi {
+        let firmware = PathBuf::from(variable(
+            "QEMU_OPENSBI",
+            "/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin",
+        ));
+        kernel_verification::json(
+            &directory.join("firmware.json"),
+            &serde_json::json!({
+                "code": firmware,
+                "code_sha256": kernel_verification::digest(&firmware)?,
+            }),
+        )?;
         command
             .args(["-m", "128M", "-bios"])
-            .arg(variable(
-                "QEMU_OPENSBI",
-                "/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin",
-            ))
+            .arg(firmware)
             .arg("-kernel")
             .arg(image)
             .args(["-semihosting-config", semihost]);
@@ -106,6 +114,14 @@ fn command(machine: &Machine, image: &Path, directory: &Path, observe: bool) -> 
     )?;
     let private_vars = directory.join("vars.fd");
     fs::copy(firmware.join(variables), &private_vars)?;
+    kernel_verification::json(
+        &directory.join("firmware.json"),
+        &serde_json::json!({
+            "code": code,
+            "code_sha256": kernel_verification::digest(&code)?,
+            "initial_vars_sha256": kernel_verification::digest(&private_vars)?,
+        }),
+    )?;
     command
         .args(["-nodefaults", "-drive"])
         .arg(format!(
@@ -162,7 +178,7 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
     let image = image.canonicalize()?;
     let evidence = match evidence_root {
         Some(root) => root.join(image.file_name().ok_or("missing executable name")?),
-        None => PathBuf::from(env::var_os("LIMEN_T0_EVIDENCE").ok_or("missing evidence path")?),
+        None => PathBuf::from(env::var_os("LIMEN_TEST_EVIDENCE").ok_or("missing evidence path")?),
     };
     kernel_verification::fresh(&evidence)?;
     let directory = evidence.canonicalize()?;
@@ -191,6 +207,13 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
             .and_then(|line| line.split_whitespace().nth(3))
             == Some(include_str!("../qemu.version").trim()),
         "unexpected QEMU version",
+    )?;
+    kernel_verification::json(
+        &directory.join("tools.json"),
+        &serde_json::json!({
+            "qemu": version,
+            "runner_sha256": kernel_verification::digest(&env::current_exe()?)?,
+        }),
     )?;
     let timeout = Duration::from_secs(45);
     let mut outcome = if observe {

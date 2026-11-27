@@ -8,7 +8,12 @@ use std::{env, path::PathBuf};
 fn module_images(architecture: &str) {
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal/module");
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    for name in ["fixture.rs", "probe.rs", "riscv_fixture.rs", "riscv_root.rs"] {
+    for name in [
+        "fixture.rs",
+        "probe.rs",
+        "riscv_fixture.rs",
+        "riscv_root.rs",
+    ] {
         println!("cargo::rerun-if-changed={}", source.join(name).display());
     }
     let target = match architecture {

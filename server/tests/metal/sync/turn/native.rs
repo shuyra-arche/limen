@@ -99,7 +99,8 @@ fn check_capacity<const N: usize, const EXCESS: usize>() {
     let mut plan = work.plan();
     for lock in &locks[..N] {
         plan.insert(lock).unwrap();
-        plan.insert(lock).expect("duplicate roles share the original node");
+        plan.insert(lock)
+            .expect("duplicate roles share the original node");
     }
     plan.acquire(TurnMode::Slow, |_| ())
         .expect("capacity failure left the admitted node supply available");

@@ -1,6 +1,6 @@
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::{
-    entry::boot::{Boot},
+    entry::boot::Boot,
     metal::{
         memory::allocator::treaty::{
             Allocation, Allowance, Config, Error, Initial, LookupObservation, Pending,

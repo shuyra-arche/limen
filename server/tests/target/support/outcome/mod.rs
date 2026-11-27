@@ -1,4 +1,4 @@
-//! T0 only: completion transport. Never linked into the production kernel.
+//! Native test completion transport. Never linked into the production kernel.
 use core::arch::asm;
 
 pub(super) fn finish(passed: bool) -> ! {

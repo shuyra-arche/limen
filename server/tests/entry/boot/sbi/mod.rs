@@ -235,8 +235,7 @@ pub fn check(boot: Boot<'_>) {
 
     allocator::check(&boot);
     pool::check(&boot);
-    let foundation =
-        memory::extent(0x8430_0000, 0x8430_0000 + 4096 * foundation::PAGES as u64);
+    let foundation = memory::extent(0x8430_0000, 0x8430_0000 + 4096 * foundation::PAGES as u64);
     let evidence = memory::retirement(&boot, foundation);
     unsafe { foundation::check(&boot, foundation.start().get(), &evidence) };
     synchronization::check();

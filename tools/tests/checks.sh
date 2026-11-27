@@ -21,7 +21,7 @@ for path in "${changed[@]}"; do
             host=true; rv64=true ;;
         server/tests/metal/sync/contracts.*|server/tests/entry/boot/contracts.*)
             rv64=true ;;
-        server/tests/runner/*|server/tests/qemu.version|server/tests/target/*/suite.json)
+        server/tests/runner/*|server/tests/qemu.version|server/tests/entry/boot/fault.rs|server/tests/target/support/platform.rs)
             runner=true ;;
         server/tests/target/*)
             ;;

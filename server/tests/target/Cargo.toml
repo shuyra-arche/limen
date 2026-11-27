@@ -15,21 +15,7 @@ uefi-fixture.workspace = true
 
 [workspace]
 resolver = "3"
-members = [
-    "basis/execution/platforms",
-    "entry/platforms",
-    "metal/interrupt/aarch64/gic",
-    "metal/interrupt/x86_64/apic-failure",
-    "metal/interrupt/x86_64/apic-ipi",
-    "metal/interrupt/x86_64/apic-timer",
-    "metal/interrupt/x86_64/ioapic",
-    "metal/memory/mmu/aarch64/paging",
-    "metal/memory/mmu/aarch64/smmu",
-    "metal/memory/mmu/x86_64/amdvi",
-    "metal/memory/mmu/x86_64/paging",
-    "metal/memory/mmu/x86_64/vtd",
-    "support/uefi",
-]
+members = ["support/uefi"]
 
 [workspace.dependencies]
 kernel = { path = "../.." }

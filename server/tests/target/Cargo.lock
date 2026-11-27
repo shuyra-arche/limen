@@ -3,36 +3,6 @@
 version = 4
 
 [[package]]
-name = "aarch64-gic"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "limen-treaty",
- "uefi",
- "uefi-fixture",
-]
-
-[[package]]
-name = "aarch64-paging"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "limen-treaty",
- "uefi",
- "uefi-fixture",
-]
-
-[[package]]
-name = "aarch64-smmu"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "limen-treaty",
- "uefi",
- "uefi-fixture",
-]
-
-[[package]]
 name = "bit_field"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -76,25 +46,6 @@ name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
-
-[[package]]
-name = "platform-boot"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "limen-treaty",
- "uefi",
- "uefi-fixture",
-]
-
-[[package]]
-name = "platform-execution"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "uefi",
- "uefi-fixture",
-]
 
 [[package]]
 name = "proc-macro2"
@@ -211,72 +162,3 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
-
-[[package]]
-name = "x86-64-amdvi"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "limen-treaty",
- "uefi",
- "uefi-fixture",
-]
-
-[[package]]
-name = "x86-64-ioapic"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "limen-treaty",
- "uefi",
- "uefi-fixture",
-]
-
-[[package]]
-name = "x86-64-local-apic-failure"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "limen-treaty",
- "uefi",
- "uefi-fixture",
-]
-
-[[package]]
-name = "x86-64-local-apic-ipi"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "limen-treaty",
- "uefi",
- "uefi-fixture",
-]
-
-[[package]]
-name = "x86-64-local-apic-timer"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "uefi",
- "uefi-fixture",
-]
-
-[[package]]
-name = "x86-64-paging"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "limen-treaty",
- "uefi",
- "uefi-fixture",
-]
-
-[[package]]
-name = "x86-64-vtd"
-version = "0.0.0"
-dependencies = [
- "kernel",
- "limen-treaty",
- "uefi",
- "uefi-fixture",
-]

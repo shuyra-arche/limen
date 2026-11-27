@@ -17,7 +17,9 @@ mod mapping;
 mod mapping;
 
 use core::fmt::{self, Write};
-use kernel::metal::{platform::firmware::treaty::map::FirmwareMap, platform::firmware::uefi::Loader};
+use kernel::metal::{
+    platform::firmware::treaty::map::FirmwareMap, platform::firmware::uefi::Loader,
+};
 use kernel::{
     entry::boot,
     metal::{
@@ -74,15 +76,6 @@ pub fn report(info: &core::panic::PanicInfo<'_>) {
     let _ = writeln!(Output, "FAIL module-execution {info}");
 }
 
-#[cfg(not(test))]
-pub fn fail(info: &core::panic::PanicInfo<'_>) -> ! {
-    report(info);
-    board::reset(false);
-    loop {
-        core::hint::spin_loop();
-    }
-}
-
 fn physical_range(start: u64, bytes: u64) -> PhysicalRange {
     PhysicalAddress::new(start)
         .range(ByteLength::new(bytes))
@@ -130,11 +123,18 @@ fn prepare() -> Placement {
     let root = mapping::Root::current().unwrap();
     let before = uefi::boot::memory_map(MemoryType::LOADER_DATA).unwrap();
     let layout = mapping::without_interrupts(|| {
-        unsafe { root.check(checked_map(&before), physical, |_| SegmentPermissions::ReadWrite) }.unwrap();
+        unsafe {
+            root.check(checked_map(&before), physical, |_| {
+                SegmentPermissions::ReadWrite
+            })
+        }
+        .unwrap();
         // AllocatePages owns this fresh RAM. The actual mapping now permits
         // one writable NX view, with no device or second CPU using these pages.
         let mut view = unsafe { MappedRange::from_identity(physical, storage.cast()) }.unwrap();
-        image.prepare(&mut view, InternalAddress::new(start)).unwrap()
+        image
+            .prepare(&mut view, InternalAddress::new(start))
+            .unwrap()
     });
 
     #[cfg(target_arch = "aarch64")]
@@ -194,7 +194,9 @@ fn prepare() -> Placement {
                 .unwrap();
         }
         let expected = match permission {
-            SegmentPermissions::ReadOnly => MemoryAttribute::READ_ONLY | MemoryAttribute::EXECUTE_PROTECT,
+            SegmentPermissions::ReadOnly => {
+                MemoryAttribute::READ_ONLY | MemoryAttribute::EXECUTE_PROTECT
+            }
             SegmentPermissions::ReadWrite => MemoryAttribute::EXECUTE_PROTECT,
             SegmentPermissions::ReadExecute => MemoryAttribute::READ_ONLY,
         };

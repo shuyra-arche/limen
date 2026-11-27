@@ -1,4 +1,4 @@
-//! T0 experiment: use native libtest to check the cross-process test contract.
+//! Native libtest checks the cross-process completion contract.
 //! These are infrastructure tests, not the kernel's ordinary hardware tests.
 
 use serde_json::Value;
@@ -20,8 +20,8 @@ fn cargo_logs(output: &Output, directory: &Path, name: &str) {
 }
 
 fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
-    let architecture = env::var("LIMEN_T0_ARCH").expect("select T0 architecture");
-    let profile = env::var("LIMEN_T0_PROFILE").expect("select T0 profile");
+    let architecture = env::var("LIMEN_TEST_ARCH").expect("select T0 architecture");
+    let profile = env::var("LIMEN_TEST_PROFILE").expect("select T0 profile");
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .canonicalize()
@@ -37,8 +37,8 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
     } else {
         "common-outcome"
     };
-    let evidence = root.join(".integration/t0").join(case);
-    let logs = root.join(".integration/t0/cargo").join(case);
+    let evidence = root.join(".integration/transport").join(case);
+    let logs = root.join(".integration/transport/cargo").join(case);
     fs::create_dir_all(&logs).unwrap();
     assert!(!evidence.exists(), "T0 requires fresh evidence");
     let mut runner = vec![env!("CARGO_BIN_EXE_verify"), "native"];
@@ -57,8 +57,8 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
             .args(["test", "--locked", "--manifest-path"])
             .arg(root.join("server/tests/target/Cargo.toml"))
             .args(["-p", "kernel-guest", "--test", test, "--target", target])
-            .env("LIMEN_T0_CASE", case)
-            .env("LIMEN_T0_EVIDENCE", &evidence);
+            .env("LIMEN_TEST_CASE", case)
+            .env("LIMEN_TEST_EVIDENCE", &evidence);
         match profile.as_str() {
             "debug" => {}
             "release" => {

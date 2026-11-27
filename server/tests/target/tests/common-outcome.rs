@@ -54,7 +54,7 @@ static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static COMPLETED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 fn case() -> &'static str {
-    option_env!("LIMEN_T0_CASE").unwrap_or("pass")
+    option_env!("LIMEN_TEST_CASE").unwrap_or("pass")
 }
 
 fn minor(hart: usize, major: usize) -> ! {

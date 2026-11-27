@@ -329,13 +329,3 @@ fn cleanup_group(process_group: u32) -> Cleanup {
         error: Some("process-group settlement is only verified on Linux".into()),
     }
 }
-
-pub fn build(command: &mut Command, directory: &Path) -> Result<()> {
-    let mut result = run(command, directory, Duration::from_secs(900))?;
-    result.passed = result.success();
-    json(&directory.join("result.json"), &result)?;
-    require(
-        result.success(),
-        format!("build failed: {} ({})", directory.display(), result.status),
-    )
-}

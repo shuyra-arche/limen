@@ -2,8 +2,7 @@
 
 use core::arch::{asm, x86_64::__cpuid};
 use kernel::metal::{
-    module::treaty::SegmentPermissions,
-    platform::firmware::treaty::map::FirmwareMap,
+    module::treaty::SegmentPermissions, platform::firmware::treaty::map::FirmwareMap,
 };
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 

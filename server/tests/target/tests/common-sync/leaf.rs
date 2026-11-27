@@ -18,7 +18,7 @@ fn leaf_rejects_reentrant_access_and_releases() {
 // infrastructure test. No test list or runner change identifies this function.
 #[test_case]
 fn collection_reaches_nested_modules() {
-    if option_env!("LIMEN_T0_CASE") == Some("discovery-panic") {
+    if option_env!("LIMEN_TEST_CASE") == Some("discovery-panic") {
         panic!("T1 intentional collected test failure");
     }
 }

@@ -28,10 +28,10 @@ use kernel::{
     entry::boot::Boot,
 };
 
-#[path = "../../metal/sync/native_snapshot.rs"]
-mod snapshot;
 #[path = "../../metal/processor/execution/registers/riscv64/switch.rs"]
 mod registers;
+#[path = "../../metal/sync/native_snapshot.rs"]
+mod snapshot;
 #[path = "../../metal/sync/turn/native.rs"]
 mod turn;
 
@@ -245,8 +245,8 @@ fn run_third(hart: usize, argument: usize) -> ! {
         let mark = core::hint::black_box(0u8);
         let address = core::hint::black_box(&mark) as *const u8 as usize;
         assert!(!THIRD.stack_range().contains(&address));
-        let unit =
-            unsafe { execution.create(|current| current.hart() as u64) }.expect("create on third Hart");
+        let unit = unsafe { execution.create(|current| current.hart() as u64) }
+            .expect("create on third Hart");
         execution.submit(unit).expect("admit on third Hart");
         finish(execution, dispatch(execution, unit, hart), hart as u64);
         EXTRA.store(1, Release);

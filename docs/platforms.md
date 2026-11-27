@@ -2,7 +2,7 @@
 
 Limen builds one kernel library per architecture. The trusted image supplies
 board resources and retains the storage needed for the common handoff.
-[CPU boot](boot.md) · [UEFI test images](../server/tests/target/entry/platforms/)
+[CPU boot](boot.md) · [UEFI test images](../server/tests/target/tests/uefi-boot.rs)
 
 ## RV64 virt with OpenSBI
 

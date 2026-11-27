@@ -1,40 +1,28 @@
-# Target runner
+# Native target runner
 
-`verify run --suite <project-directory> --kernel <repository> --output <fresh-directory>`
-executes a project discovered from `suite.json`. Target projects own the
-platform image, input and observable assertions. The runner manages source
-capture, builds, QEMU or Cargo test execution, timeouts, process cleanup and
-evidence. QEMU boots use four virtual CPUs. Each suite checks the number of
-CPUs that participate in its scenario through the guest's observations.
+Cargo invokes `verify native --evidence-root <fresh-root> <image>` for each
+selected executable. The Runner reads the image's bounded `.testenv`
+description and the ELF/PE architecture. It constructs QEMU from those
+inputs, without recognizing the test name or compiling the guest.
 
-A QEMU suite declares its platform binary and the complete literal serial
-lines required after its assertions. It can also declare imported test
-helpers, Cargo features, environment, distinct capture evidence and hardware.
-`run.hardware` accepts optional `machine`, `cpu` and `devices` entries.
-Each component has a `name` and optional string `options` map. A suite with
-no hardware settings boots RV64 `virt` with the `rv64` CPU and no extra devices.
-The runner records the exact QEMU component arguments. It builds the locked
-dependency graph, negotiates QMP before starting the guest, and saves `qmp.jsonl`
-alongside the serial log. Success requires complete serial assertions, one
-guest-originated `guest-shutdown` receipt and a clean process exit.
+The exact QEMU version is checked. Ordinary success requires the dedicated
+exit status 97 and settled child processes. The guest communicates assertion
+failure through a distinct exit status. Ordinary firmware shutdown, panic,
+timeout and reset are not success. Stdout is retained only as diagnostics.
 
-A `board-boot` suite can declare a shared `run.launcher` script relative to
-`server/tests/target/`. Its `run.launch` entries name the machine options,
-devices, features and expected assertions for each selected board. The
-launcher receives the board, profile, evidence directory, Hart count, suite
-ID and archived suite manifest. It records `verdict.json` only after checking
-the board's guest assertions and completion evidence. The runner requires a
-clean launcher exit and a matching `pass` receipt for success.
+Each image has its own fresh evidence directory with the platform and image
+hash, firmware hashes, tool identity, process output, cleanup and result
+receipts. UEFI variable files are copied before use. CI records the checked-out
+source revision and compiler. No test changes the checked-out source.
+Use a fresh evidence root for a repeated run.
 
-Each run records `result.json` with its verdict and the results of individual
-attempts. The batch preserves `pass`, `fail`, `timeout` and `inconclusive`.
-A Cargo test suite names its package or own manifest and test target.
-Adding a new project does not change Runner code.
+`--observe` additionally records QMP over an isolated Unix socket. This does
+not turn an unexpected exit into success; a Host test may explicitly inspect
+the terminal receipts for a negative test. `verify symbolize <elf> <serial>`
+resolves observed terminal PCs without changing a verdict.
 
-`composition/` contains only the shared patch application mechanism. Source
-patches are stored inside the test projects and protected by exact preimage
-SHA-256 contracts. The disposable provider is never the working source tree.
+Linux execution uses isolated process groups and a deadline. Unexpected
+descendants invalidate success. Semihosting is enabled for trusted guest
+completion; never run an untrusted test image with this runner.
 
-On Linux, child processes run in isolated process groups. Leftover descendants
-invalidate success; process output, build failures and cleanup receipts are
-retained for diagnosis. See `../README.md` for invocation.
+See [tests](../README.md) for Cargo commands and test ownership.

@@ -1,8 +1,8 @@
-use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use core::{mem::MaybeUninit, ptr};
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 
 use kernel::{
-    entry::boot::{Boot},
+    entry::boot::Boot,
     metal::{
         memory::allocator::treaty::{
             Allocation, Allowance, Error as SourceError,
