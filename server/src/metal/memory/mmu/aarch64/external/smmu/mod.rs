@@ -617,6 +617,10 @@ impl crate::metal::memory::mmu::Unbind for Controller<'_> {
         Ok(Unbinding { command, binding })
     }
 
+    fn pending_retirement(&self, binding: Binding) -> Option<Unbinding> {
+        Controller::pending_retirement(self, binding)
+    }
+
     fn observe_retirement(
         &mut self,
         ticket: &Unbinding,

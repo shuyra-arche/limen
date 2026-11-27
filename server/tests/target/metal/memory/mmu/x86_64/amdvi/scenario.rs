@@ -1,9 +1,14 @@
 //! One stopped EDU function, one IVHD and a resident single-level table.
+
+#[path = "../../../../../support/paging/retirement.rs"]
+mod retirement;
+
 use super::edu::{self, Endpoint, REQUESTER};
 use core::arch::x86_64::_mm_mfence;
 use kernel::entry::boot;
 use kernel::metal::{
     memory::mmu::{
+        Unbind,
         access::device::DeviceWindow,
         x86_64::external::amdvi::{
             Admissions, Binding, Completion, Context, Controller, Error, Queue, Storage, Table,
@@ -111,8 +116,11 @@ pub(super) fn check(unit: Ivhd<'_>) {
         endpoint.write_to_ram(IOVA);
         assert_eq!(data.read_volatile(), PATTERN);
     }
-    let result = unsafe { controller.unbind(binding) };
-    settle(&mut controller, result);
+    let ticket = unsafe {
+        retirement::retire(&mut controller, binding, |controller| {
+            assert_eq!(controller.binding(REQUESTER), None);
+        })
+    };
     assert_eq!(controller.binding(REQUESTER), None);
     unsafe {
         data.write_volatile(!PATTERN);
@@ -124,14 +132,20 @@ pub(super) fn check(unit: Ivhd<'_>) {
     settle(&mut controller, result);
     let rebound = controller.binding(REQUESTER).unwrap();
     assert_ne!(binding, rebound);
-    assert_eq!(unsafe { controller.unbind(binding) }, Err(Error::Stale));
+    assert!(matches!(
+        unsafe { controller.retire(binding) },
+        Err(Error::Stale)
+    ));
     assert_eq!(controller.binding(REQUESTER), Some(rebound));
     unsafe {
         endpoint.write_to_ram(IOVA);
         assert_eq!(data.read_volatile(), PATTERN);
     }
-    let result = unsafe { controller.unbind(rebound) };
-    settle(&mut controller, result);
+    unsafe {
+        retirement::retire(&mut controller, rebound, |controller| {
+            assert_eq!(controller.observe_retirement(&ticket), Err(Error::Stale));
+        });
+    }
     boot::write(
         "PASS amdvi-dma requester=00:06.0 denied=1 translated=1 unbound=1 stale-rejected=1\n",
     );

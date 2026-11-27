@@ -150,7 +150,7 @@ pub(super) fn check(tree: &DeviceTree<'_>) {
     );
     check_destinations(&mut endpoints, 1, true);
     for binding in [bindings[0], replacement] {
-        unsafe { retirement::retire(&mut controller, binding) };
+        unsafe { retirement::retire(&mut controller, binding, |_| {}) };
     }
     let (returned, original) = retry(|| controller.shut_queue());
     assert_eq!(original, physical);

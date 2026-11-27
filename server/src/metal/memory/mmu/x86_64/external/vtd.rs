@@ -1,7 +1,8 @@
 //! Legacy VT-d root, requester binding and register invalidation ownership.
 
 use crate::metal::{
-    memory::mmu::access::device::DeviceWindow, platform::description::acpi::RemappingUnit,
+    memory::mmu::{Retirement, Unbind, access::device::DeviceWindow, retirement::Sealed},
+    platform::description::acpi::RemappingUnit,
 };
 use limen_treaty::model::PhysicalAddress;
 
@@ -199,6 +200,12 @@ pub enum Change {
 pub struct CommandId {
     unit: PhysicalAddress,
     number: u64,
+}
+
+/// Observation of one register command sequence retiring its original binding.
+pub struct Unbinding {
+    command: CommandId,
+    binding: Binding,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -690,6 +697,36 @@ impl<'a> Controller<'a> {
             }
         }
         Err(Error::Pending)
+    }
+}
+
+impl Sealed for Controller<'_> {}
+
+impl Unbind for Controller<'_> {
+    type Binding = Binding;
+    type Ticket = Unbinding;
+    type Error = Error;
+
+    unsafe fn retire(&mut self, binding: Binding) -> Result<Unbinding, Error> {
+        let command = unsafe { self.begin_unbind(binding) }?;
+        Ok(Unbinding { command, binding })
+    }
+
+    fn pending_retirement(&self, binding: Binding) -> Option<Unbinding> {
+        let (command, change) = self.pending()?;
+        (change == Change::Unbound(binding)).then_some(Unbinding { command, binding })
+    }
+
+    fn observe_retirement(&mut self, ticket: &Unbinding) -> Result<Retirement, Error> {
+        if self.pending() != Some((ticket.command, Change::Unbound(ticket.binding))) {
+            return Err(Error::Stale);
+        }
+        match self.observe(ticket.command) {
+            Ok(Change::Unbound(binding)) if binding == ticket.binding => Ok(Retirement::Settled),
+            Ok(_) => Err(Error::Unconfirmed),
+            Err(Error::Pending) => Ok(Retirement::Pending),
+            Err(error) => Err(error),
+        }
     }
 }
 

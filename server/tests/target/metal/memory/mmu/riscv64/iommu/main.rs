@@ -291,7 +291,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
         Err(iommu::Error::Stale)
     );
     for binding in [replacement, other, diagnostic] {
-        unsafe { retirement::retire(&mut controller, binding) };
+        unsafe { retirement::retire(&mut controller, binding, |_| {}) };
     }
     let (returned, original) = retry(|| controller.shut_queue());
     assert_eq!(original, address);

@@ -1,10 +1,14 @@
 //! Two q35 endpoints share one VT-d controller and retire exact bindings.
 
+#[path = "../../../../../support/paging/retirement.rs"]
+mod retirement;
+
 use super::edu::{Endpoint, REQUESTER};
 use core::arch::x86_64::{__cpuid, _mm_clflush, _mm_mfence};
 use kernel::entry::boot;
 use kernel::metal::{
     memory::mmu::{
+        Unbind,
         access::device::DeviceWindow,
         x86_64::external::vtd::{
             Change, CommandId, Context, Controller, Error, Format, Sequence, Storage, Table,
@@ -226,17 +230,14 @@ pub(super) fn check(unit: RemappingUnit<'_>, registers: &mut DeviceWindow<'_>) {
     prove_fault(&mut controller, REQUESTER, 5);
     dma_result(&mut secondary, second_word, OTHER_PATTERN);
 
-    let command = unsafe { controller.begin_unbind(second) }.unwrap();
-    assert_eq!(
-        controller.pending(),
-        Some((command, Change::Unbound(second)))
-    );
-    assert_eq!(controller.binding(SECOND), None);
-    assert_eq!(controller.binding(REQUESTER), Some(first));
-    assert_eq!(
-        await_change(&mut controller, command),
-        Change::Unbound(second)
-    );
+    let ticket = unsafe {
+        retirement::retire(&mut controller, second, |controller| {
+            let (_, change) = controller.pending().expect("original VT-d retirement");
+            assert_eq!(change, Change::Unbound(second));
+            assert_eq!(controller.binding(SECOND), None);
+            assert_eq!(controller.binding(REQUESTER), Some(first));
+        })
+    };
     dma_result(&mut secondary, second_word, SENTINEL);
     prove_fault(&mut controller, SECOND, 2);
 
@@ -245,25 +246,21 @@ pub(super) fn check(unit: RemappingUnit<'_>, registers: &mut DeviceWindow<'_>) {
         panic!("rebind not completed")
     };
     assert_ne!(replacement, second);
-    assert_eq!(
-        unsafe { controller.begin_unbind(second) },
+    assert!(matches!(
+        unsafe { controller.retire(second) },
         Err(Error::Stale)
-    );
+    ));
     assert_eq!(
         unsafe { controller.begin_invalidate(second) },
         Err(Error::Stale)
     );
     dma_result(&mut secondary, second_word, OTHER_PATTERN);
-    let command = unsafe { controller.begin_unbind(replacement) }.unwrap();
-    assert_eq!(
-        await_change(&mut controller, command),
-        Change::Unbound(replacement)
-    );
-    let command = unsafe { controller.begin_unbind(first) }.unwrap();
-    assert_eq!(
-        await_change(&mut controller, command),
-        Change::Unbound(first)
-    );
+    unsafe {
+        retirement::retire(&mut controller, replacement, |controller| {
+            assert_eq!(controller.observe_retirement(&ticket), Err(Error::Stale));
+        });
+        retirement::retire(&mut controller, first, |_| {});
+    }
 
     boot::write("PASS vtd-dma requesters=2 translated=2 downgraded=1 unbound=1 stale=1 faults=2\n");
 }

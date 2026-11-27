@@ -23,6 +23,10 @@ pub trait Unbind: Sealed {
     /// translation caches and retain the original backing through retirement.
     unsafe fn retire(&mut self, binding: Self::Binding) -> Result<Self::Ticket, Self::Error>;
 
+    /// Recover observation of the unsettled retirement for this exact binding.
+    /// This does not retry a failed command or release the original tables.
+    fn pending_retirement(&self, binding: Self::Binding) -> Option<Self::Ticket>;
+
     /// Poll precisely this retirement. The ticket grants observation only.
     fn observe_retirement(&mut self, ticket: &Self::Ticket) -> Result<Retirement, Self::Error>;
 }

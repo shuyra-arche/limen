@@ -1,7 +1,7 @@
 //! AMD-Vi unsegmented device table and command queue on a coherent x86 host.
 
 use crate::metal::{
-    memory::mmu::access::device::DeviceWindow,
+    memory::mmu::{Retirement, Unbind, access::device::DeviceWindow, retirement::Sealed},
     platform::description::acpi::{DeviceSelections, Ivhd},
 };
 use core::{
@@ -141,6 +141,11 @@ impl Binding {
     pub fn context(self) -> Context {
         self.context
     }
+}
+
+/// Observation of the completion store reserved by this original binding.
+pub struct Unbinding {
+    binding: Binding,
 }
 
 #[derive(Clone, Copy)]
@@ -343,17 +348,22 @@ impl<'a> Controller<'a> {
     }
 
     fn invalidate(&mut self, number: u64, operation: Operation) {
+        self.progress = Progress::Waiting(Batch { number, operation });
         // At most three slots are used, and the previous completion store
         // has already settled. No independent producer advances this tail.
         let commands = &mut self.storage.queue.0.0;
         let requester = match operation {
             Operation::InstallRequester(requester) => Some(requester),
-            Operation::Bind(index) | Operation::Unbind(index) => Some(
-                self.bindings[index]
+            Operation::Bind(index) | Operation::Unbind(index) => {
+                let requester = self.bindings[index]
                     .expect("reserved binding")
                     .context
-                    .requester,
-            ),
+                    .requester;
+                if matches!(operation, Operation::Unbind(_)) {
+                    self.storage.table.0.0[usize::from(requester)] = DENY;
+                }
+                Some(requester)
+            }
             Operation::InstallAll => None,
         };
         if let Some(requester) = requester {
@@ -368,11 +378,11 @@ impl<'a> Controller<'a> {
         commands[self.tail] = [(1 << 60) | self.storage.completion.1.get() | 5, number];
         self.tail = (self.tail + 1) % commands.len();
         unsafe { self.storage.completion.0.0.get().write_volatile(0) };
-        self.progress = Progress::Waiting(Batch { number, operation });
         fence(Ordering::SeqCst);
         self.write(TAIL, (self.tail * 16) as u64);
     }
 
+    /// Continue an original table installation or binding publication.
     pub fn poll(&mut self) -> Result<(), Error> {
         for _ in 0..256 {
             match self.progress {
@@ -385,22 +395,20 @@ impl<'a> Controller<'a> {
                     }
                 }
                 Progress::Waiting(batch) => {
-                    let completion = unsafe { self.storage.completion.0.0.get().read_volatile() };
-                    if self.read(STATUS) & RUNNING == 0 {
-                        return Err(self.uncertain());
+                    if matches!(batch.operation, Operation::Unbind(_)) {
+                        return Err(Error::Occupied);
                     }
-                    if completion == batch.number {
-                        fence(Ordering::Acquire);
-                        match batch.operation {
-                            Operation::InstallRequester(_) => {
-                                self.next_install_batch()?;
-                                continue;
-                            }
-                            Operation::Unbind(index) => self.bindings[index] = None,
-                            Operation::Bind(_) | Operation::InstallAll => {}
+                    match self.observe_batch(batch) {
+                        Ok(()) if matches!(batch.operation, Operation::InstallRequester(_)) => {
+                            self.next_install_batch()?;
+                            continue;
                         }
-                        self.progress = Progress::Ready;
-                        return Ok(());
+                        Ok(()) => {
+                            self.progress = Progress::Ready;
+                            return Ok(());
+                        }
+                        Err(Error::Pending) => {}
+                        Err(error) => return Err(error),
                     }
                 }
                 Progress::Ready => return Ok(()),
@@ -410,6 +418,18 @@ impl<'a> Controller<'a> {
             core::hint::spin_loop();
         }
         Err(Error::Pending)
+    }
+
+    fn observe_batch(&mut self, batch: Batch) -> Result<(), Error> {
+        let completion = unsafe { self.storage.completion.0.0.get().read_volatile() };
+        if self.read(STATUS) & RUNNING == 0 {
+            return Err(self.uncertain());
+        }
+        if completion != batch.number {
+            return Err(Error::Pending);
+        }
+        fence(Ordering::Acquire);
+        Ok(())
     }
 
     /// # Safety
@@ -448,18 +468,54 @@ impl<'a> Controller<'a> {
         self.poll()
     }
 
-    /// # Safety
-    /// Stop the original requester and drain all old device and fabric
-    /// requests before unbinding. Retain its tables until the command and
-    /// matching completion store settle. Endpoint ATS is outside this profile.
-    pub unsafe fn unbind(&mut self, expected: Binding) -> Result<(), Error> {
+    fn retirement_batch(&self, binding: Binding) -> Option<(Batch, usize)> {
+        let batch = match self.progress {
+            Progress::Waiting(batch) | Progress::Unconfirmed(Some(batch)) => batch,
+            _ => return None,
+        };
+        let Operation::Unbind(index) = batch.operation else {
+            return None;
+        };
+        (batch.number == binding.retirement && self.bindings[index] == Some(binding))
+            .then_some((batch, index))
+    }
+}
+
+impl Sealed for Controller<'_> {}
+
+impl Unbind for Controller<'_> {
+    type Binding = Binding;
+    type Ticket = Unbinding;
+    type Error = Error;
+
+    unsafe fn retire(&mut self, binding: Binding) -> Result<Unbinding, Error> {
         if !matches!(self.progress, Progress::Ready) {
             return Err(Error::Occupied);
         }
-        let index = binding_slot(self.bindings, expected)?;
-        self.storage.table.0.0[usize::from(expected.context.requester)] = DENY;
-        self.invalidate(expected.retirement, Operation::Unbind(index));
-        self.poll()
+        let index = binding_slot(self.bindings, binding)?;
+        self.invalidate(binding.retirement, Operation::Unbind(index));
+        Ok(Unbinding { binding })
+    }
+
+    fn pending_retirement(&self, binding: Binding) -> Option<Unbinding> {
+        self.retirement_batch(binding)
+            .map(|_| Unbinding { binding })
+    }
+
+    fn observe_retirement(&mut self, ticket: &Unbinding) -> Result<Retirement, Error> {
+        let (batch, index) = self.retirement_batch(ticket.binding).ok_or(Error::Stale)?;
+        if matches!(self.progress, Progress::Unconfirmed(_)) {
+            return Err(Error::Unconfirmed);
+        }
+        match self.observe_batch(batch) {
+            Ok(()) => {
+                self.bindings[index] = None;
+                self.progress = Progress::Ready;
+                Ok(Retirement::Settled)
+            }
+            Err(Error::Pending) => Ok(Retirement::Pending),
+            Err(error) => Err(error),
+        }
     }
 }
 
