@@ -5,5 +5,4 @@ pub mod apic;
 pub mod architected;
 pub mod gic;
 
-#[cfg(all(limen_target, target_arch = "riscv64"))]
 pub mod supervisor;

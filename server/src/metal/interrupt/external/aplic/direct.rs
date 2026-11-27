@@ -8,7 +8,6 @@ use crate::metal::{
     interrupt::internal::supervisor::{Cause, Reception as LocalReception},
     memory::mmu::internal::device::DeviceWindow,
 };
-use core::arch::asm;
 use limen_treaty::model::Alignment;
 
 const DOMAIN: usize = 0;
@@ -115,6 +114,25 @@ enum Reception {
     Uncertain(u64, u32),
 }
 
+/// Actual I/O ordering for the mapped APLIC on the executing platform.
+/// Only a real platform implementation can construct this capability.
+#[derive(Clone, Copy)]
+pub struct Barrier {
+    synchronize: fn(),
+}
+
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+impl Barrier {
+    pub const fn native() -> Self {
+        Self { synchronize: fence }
+    }
+}
+
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+fn fence() {
+    unsafe { core::arch::asm!("fence iorw, iorw", options(nostack)) };
+}
+
 /// One handed-over physical APLIC domain, with only its actual target IDC.
 /// The caller retains the mapping, exclusive control and device obligations.
 /// Dropping the software owner does not close or retire the hardware.
@@ -123,6 +141,7 @@ pub struct Direct<'a> {
     description: Description<'a>,
     mapping: &'a mut DeviceWindow,
     local: &'a mut LocalReception,
+    barrier: Barrier,
     sources: [Source; SOURCE_LIMIT as usize + 1],
     reception: Reception,
     next: u64,
@@ -137,13 +156,16 @@ impl<'a> Direct<'a> {
     /// hardware effects, including failure. Old delivery, programming and
     /// device obligations are settled; no independent agent writes this
     /// domain. Preserve the original owner through shutdown and retirement.
-    /// No old source may remain configured, enabled or pending.
+    /// The supplied barrier implements the actual platform's required I/O
+    /// ordering for this window. No old source may remain configured,
+    /// enabled or pending.
     /// This first profile admits a single destination context and never
     /// accesses the machine-level parent domain.
     pub unsafe fn admit(
         description: Description<'a>,
         mapping: &'a mut DeviceWindow,
         local: &'a mut LocalReception,
+        barrier: Barrier,
     ) -> Result<Self, Failure> {
         if description.contexts() != 1
             || mapping.physical() != description.registers()
@@ -157,6 +179,7 @@ impl<'a> Direct<'a> {
             description,
             mapping,
             local,
+            barrier,
             sources: [Source::Vacant; SOURCE_LIMIT as usize + 1],
             reception: Reception::Empty,
             next: 1,
@@ -213,12 +236,10 @@ impl<'a> Direct<'a> {
 
     fn read_register(&mut self, offset: usize) -> u32 {
         // Actual ordering belongs to the APLIC, not the generic byte window.
-        unsafe {
-            asm!("fence iorw, iorw", options(nostack));
-            let value = self.mapping.read_u32(offset).expect("checked APLIC offset");
-            asm!("fence iorw, iorw", options(nostack));
-            value
-        }
+        (self.barrier.synchronize)();
+        let value = unsafe { self.mapping.read_u32(offset) }.expect("checked APLIC offset");
+        (self.barrier.synchronize)();
+        value
     }
 
     fn observe(&mut self, offset: usize) -> u32 {
@@ -227,12 +248,8 @@ impl<'a> Direct<'a> {
     }
 
     fn write(&mut self, offset: usize, value: u32) {
-        unsafe {
-            self.mapping
-                .write_u32(offset, value)
-                .expect("checked APLIC offset");
-            asm!("fence iorw, iorw", options(nostack));
-        }
+        unsafe { self.mapping.write_u32(offset, value) }.expect("checked APLIC offset");
+        (self.barrier.synchronize)();
     }
 
     fn bit(&mut self, register: usize, source: u32) -> bool {

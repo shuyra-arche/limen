@@ -183,10 +183,11 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
     assert_eq!(unsafe { serial.read_u8(serial_end) }, Err(DeviceError::Range));
     assert_eq!(unsafe { serial.write_u8(usize::MAX, 0) }, Err(DeviceError::Range));
     assert!(matches!(
-        unsafe { Direct::admit(description, &mut mapping, wrong) },
+        unsafe { Direct::admit(description, &mut mapping, wrong, aplic::Barrier::native()) },
         Err(aplic::Failure::Scope)
     ));
-    let mut direct = unsafe { Direct::admit(description, &mut mapping, local) }.unwrap();
+    let mut direct =
+        unsafe { Direct::admit(description, &mut mapping, local, aplic::Barrier::native()) }.unwrap();
     assert_eq!(core::mem::size_of::<aplic::Source>(), 2);
     assert_eq!(direct.state(), aplic::State::Prepared);
     assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Vacant);
