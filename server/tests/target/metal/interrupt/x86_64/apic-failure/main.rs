@@ -1,24 +1,12 @@
 #![no_std]
 #![no_main]
 
-use kernel::metal::platform::boot::treaty as boot_diagnostic;
-use kernel::metal::processor::treaty::Minor;
-use kernel::metal::{
-    processor::treaty::{LocalStorage, Stack},
-    sync::treaty::Supply,
-};
-
-use kernel::entry::boot;
+use kernel::{entry::boot::Boot, metal::platform::boot::treaty as diagnostic};
 use uefi::prelude::*;
 use uefi_fixture as fixture;
 
-use fixture::q35::delay;
-
-mod scenario;
-
-static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
-static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
-static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
+#[path = "../../../../../metal/interrupt/x86_64/internal/apic/native_failure.rs"]
+mod native;
 
 #[entry]
 fn main() -> Status {
@@ -26,12 +14,9 @@ fn main() -> Status {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
-    let view = fixture::check_handoff(&boot, Some(&MINOR));
-    let mut startup = fixture::inspect(&boot, &view);
-    scenario::check_failure(&mut startup, fixture::target());
-    // Keep the original uncertain launch resident through shutdown.
-    boot_diagnostic::shutdown(true)
+extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
+    native::check(boot);
+    diagnostic::shutdown(true)
 }
 
 #[panic_handler]

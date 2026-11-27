@@ -14,9 +14,9 @@ use kernel::{
     },
 };
 
-#[path = "../../../../support/clock.rs"]
+#[path = "../../../../../target/support/clock.rs"]
 mod clock;
-#[path = "../../../../support/timer.rs"]
+#[path = "../../../../../target/support/timer.rs"]
 mod consumer;
 
 pub(super) fn check(boot: &Boot<'_>, local: &mut Reception) {

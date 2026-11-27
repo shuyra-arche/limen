@@ -5,11 +5,11 @@ use kernel::metal::interrupt::treaty::{
 };
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 
-#[path = "../../../../support/claim.rs"]
+#[path = "../../../../target/support/claim.rs"]
 mod claim_consumer;
-#[path = "../../../../support/interrupt.rs"]
+#[path = "../../../../target/support/interrupt.rs"]
 mod consumer;
-#[path = "../../../../support/route.rs"]
+#[path = "../../../../target/support/route.rs"]
 mod route_consumer;
 
 use kernel::{

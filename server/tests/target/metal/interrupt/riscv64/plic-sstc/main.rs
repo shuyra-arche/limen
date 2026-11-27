@@ -7,9 +7,11 @@ use core::fmt::Write;
 use kernel::entry::boot::Boot;
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 
+#[path = "../../../../../metal/interrupt/riscv64/external/native_plic.rs"]
 mod plic;
 #[path = "../../../../support/riscv64/reception.rs"]
 mod reception;
+#[path = "../../../../../metal/interrupt/riscv64/internal/timer/native_sstc.rs"]
 mod sstc;
 
 #[unsafe(no_mangle)]

@@ -1,4 +1,6 @@
-use super::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
+#[path = "../../../../target/support/paging/mod.rs"]
+mod pages;
+use pages::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 use core::{arch::asm, ptr};
 use kernel::metal::memory::access::treaty::device::DeviceMapping;
 use kernel::metal::memory::mmu::{
@@ -7,7 +9,7 @@ use kernel::metal::memory::mmu::{
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress, PhysicalRange};
 
-#[path = "../../../../../support/paging/installation.rs"]
+#[path = "../../../../target/support/paging/installation.rs"]
 mod installation;
 
 static mut ALTERNATE_TOP: Page = Page([0; 512]);
@@ -16,7 +18,7 @@ static mut ALTERNATE_MIDDLE: Page = Page([0; 512]);
 static mut ALTERNATE_LAST: Page = Page([0; 512]);
 static ALTERNATE_DATA: Page = Page([0x7654_3210_abcd_dcba; 512]);
 
-pub(crate) fn check(hart: usize, apic: PhysicalRange, version: u32) {
+fn roundtrip(hart: usize, apic: PhysicalRange, version: u32) {
     assert!(matches!(
         unsafe { admit_root(hart.wrapping_add(1)) },
         Err(SwitchError::Context)
@@ -139,4 +141,13 @@ pub(crate) fn check(hart: usize, apic: PhysicalRange, version: u32) {
     kernel::metal::platform::boot::treaty::write(
         "PASS device mapping fixed=1 dynamic=1 split=1 restored=1\n",
     );
+}
+
+pub fn check(boot: kernel::entry::boot::Boot<'_>) {
+    uefi_fixture::check_handoff(&boot, None);
+    let (apic, version) = {
+        let mut fixed = uefi_fixture::q35::local_window(&boot);
+        (fixed.physical(), unsafe { fixed.read_u32(0x30) }.unwrap())
+    };
+    roundtrip(boot.hart(), apic, version);
 }

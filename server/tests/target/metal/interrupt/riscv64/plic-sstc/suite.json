@@ -5,6 +5,8 @@
     "release"
   ],
   "sources": [
+    "server/tests/metal/interrupt/riscv64/external/native_plic.rs",
+    "server/tests/metal/interrupt/riscv64/internal/timer/native_sstc.rs",
     "server/src/metal/interrupt/treaty/mod.rs",
     "server/src/metal/interrupt/treaty/absolute.rs",
     "server/src/metal/interrupt/treaty/route.rs",
@@ -89,6 +91,8 @@
       "PASS sstc expired=2 replaced=1 shut=1 common=1"
     ],
     "imports": [
+      "metal/interrupt/riscv64/external/native_plic.rs",
+      "metal/interrupt/riscv64/internal/timer/native_sstc.rs",
       "target/support/riscv64"
     ]
   }

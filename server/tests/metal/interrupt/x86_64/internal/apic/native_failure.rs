@@ -8,7 +8,12 @@ use kernel::metal::{
 };
 use limen_treaty::model::PhysicalAddress;
 
-use super::delay;
+use kernel::entry::boot::Boot;
+use uefi_fixture::{self as fixture, q35::delay};
+
+static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 
 static FAILURE_DELAY_CALLS: AtomicUsize = AtomicUsize::new(0);
 static OTHER_MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
@@ -37,7 +42,7 @@ fn forbidden(_: usize, _: usize) -> ! {
     panic!("failure fixture must never enter the target")
 }
 
-pub(crate) fn check_failure(startup: &mut Startup, target: usize) {
+fn check_failure(startup: &mut Startup, target: usize) {
     let Startup::Xapic {
         trampoline, delay, ..
     } = startup;
@@ -46,18 +51,18 @@ pub(crate) fn check_failure(startup: &mut Startup, target: usize) {
     // MP Services identified this inactive target. No SIPI will be sent
     // in either attempt, and the original reserved low page remains live.
     assert_eq!(
-        unsafe { crate::MINOR.start(target, forbidden, 0, startup) },
+        unsafe { MINOR.start(target, forbidden, 0, startup) },
         Err(StartError::Rejected(-1))
     );
     let Startup::Xapic {
         controller, delay, ..
     } = startup;
     assert_eq!(controller.launch_state(), apic::launch::State::Idle);
-    assert!(!crate::MINOR.ready());
+    assert!(!MINOR.ready());
     *delay = reject_after_init;
 
     assert_eq!(
-        unsafe { crate::MINOR.start(target, forbidden, 0, startup) },
+        unsafe { MINOR.start(target, forbidden, 0, startup) },
         Err(StartError::Unconfirmed(-1))
     );
     assert_eq!(FAILURE_DELAY_CALLS.load(Ordering::Relaxed), 2);
@@ -68,12 +73,12 @@ pub(crate) fn check_failure(startup: &mut Startup, target: usize) {
     });
     let Startup::Xapic { controller, .. } = startup;
     assert_eq!(controller.launch_state(), expected);
-    assert!(!crate::MINOR.ready());
+    assert!(!MINOR.ready());
 
     // The original launch is retained. A second unused launch record also
     // cannot use the uncertain ICR or rewrite the original trampoline.
     assert_eq!(
-        unsafe { crate::MINOR.start(target, forbidden, 1, startup) },
+        unsafe { MINOR.start(target, forbidden, 1, startup) },
         Err(StartError::Busy)
     );
     assert_eq!(
@@ -85,4 +90,12 @@ pub(crate) fn check_failure(startup: &mut Startup, target: usize) {
     assert_eq!(FAILURE_DELAY_CALLS.load(Ordering::Relaxed), 2);
     assert!(!OTHER_MINOR.ready());
     boot_diagnostic::write("PASS local-apic-failure before=1 after-init=1 retained=1 blocked=2\n");
+}
+
+pub fn check(boot: Boot<'_>) {
+    let view = fixture::check_handoff(&boot, Some(&MINOR));
+    let mut startup = fixture::inspect(&boot, &view);
+    check_failure(&mut startup, fixture::target());
+    // Keep the original uncertain launch resident through shutdown.
+    assert!(!MINOR.ready());
 }

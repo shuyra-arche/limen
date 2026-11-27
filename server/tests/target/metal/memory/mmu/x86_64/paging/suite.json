@@ -5,6 +5,7 @@
     "release"
   ],
   "sources": [
+    "server/tests/metal/memory/mmu/x86_64/paging.rs",
     "server/src/entry/boot/**",
     "server/src/entry/mod.rs",
     "server/src/lib.rs",
