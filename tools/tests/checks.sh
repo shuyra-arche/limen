@@ -23,7 +23,7 @@ for path in "${changed[@]}"; do
             riscv64=true ;;
         server/tests/runner/*|server/tests/qemu.version|server/tests/entry/boot/fault/*|server/tests/target/support/platform.rs)
             runner=true ;;
-        server/tests/target/*)
+        server/tests/target/*|server/tests/metal/sync/bench/*)
             ;;
         server/tests/*)
             host=true ;;

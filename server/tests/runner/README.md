@@ -34,8 +34,9 @@ Use a fresh evidence root for a repeated run.
 - `qmp` owns the control connection and its shutdown receipt or observation error.
 - `native` interprets the ordinary guest completion contract. Host observers
   interpret their own contracts, not a generic exit status.
-- `bench` reuses native completion and checks the bounded measurement series;
-  it stores measurements separately from the execution verdict.
+- `bench` reuses native completion and checks a bounded set of distinct,
+  complete measurement series; it stores measurements separately from the
+  execution verdict.
 - `evidence` supplies shared storage operations without deciding receipt meaning.
 
 `--observe` additionally records QMP over an isolated Unix socket. This does

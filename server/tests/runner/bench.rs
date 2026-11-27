@@ -3,17 +3,33 @@ use crate::{Result, evidence, native, require};
 use serde::Serialize;
 use std::{fs, path::Path, str::SplitWhitespace};
 
+const SERIES_LIMIT: usize = 16;
 const SAMPLE_LIMIT: usize = 64;
+const PARTICIPANT_LIMIT: usize = 64;
 
 #[derive(Debug, Serialize)]
 struct Measurement {
     environment: &'static str,
-    name: String,
     hart: u64,
     frequency_hz: u64,
+    series_count: usize,
+    series: Vec<Series>,
+}
+
+#[derive(Debug, Serialize)]
+struct Series {
+    name: String,
+    participants: usize,
+    warmup_iterations: u64,
     iterations: u64,
     sample_count: usize,
     elapsed_ns: Vec<u64>,
+}
+
+impl Series {
+    fn complete(&self) -> bool {
+        self.elapsed_ns.len() == self.sample_count
+    }
 }
 
 fn number(fields: &mut SplitWhitespace<'_>) -> Result<u64> {
@@ -29,8 +45,31 @@ fn decode(log: &str) -> Result<Measurement> {
         require(raw.ends_with('\n'), "truncated benchmark record")?;
         let mut fields = raw.split_whitespace();
         match fields.next() {
-            Some("LIMEN_BENCH_V1") => {
+            Some("LIMEN_BENCH_V2") => {
                 require(measurement.is_none(), "duplicate benchmark header")?;
+                let hart = number(&mut fields)?;
+                let frequency_hz = number(&mut fields)?;
+                let series_count = usize::try_from(number(&mut fields)?)?;
+                require(frequency_hz != 0, "invalid counter frequency")?;
+                require(
+                    (1..=SERIES_LIMIT).contains(&series_count),
+                    "invalid series count",
+                )?;
+                measurement = Some(Measurement {
+                    environment: "qemu",
+                    hart,
+                    frequency_hz,
+                    series_count,
+                    series: Vec::with_capacity(series_count),
+                });
+            }
+            Some("LIMEN_BENCH_SERIES") => {
+                let report = measurement.as_mut().ok_or("series before header")?;
+                require(
+                    report.series.len() < report.series_count
+                        && report.series.last().is_none_or(Series::complete),
+                    "unexpected or incomplete series",
+                )?;
                 let name = fields.next().ok_or("missing benchmark name")?;
                 require(
                     !name.is_empty()
@@ -40,28 +79,37 @@ fn decode(log: &str) -> Result<Measurement> {
                         }),
                     "invalid benchmark name",
                 )?;
-                let hart = number(&mut fields)?;
-                let frequency_hz = number(&mut fields)?;
+                require(
+                    !report.series.iter().any(|series| series.name == name),
+                    "duplicate series name",
+                )?;
+                let participants = usize::try_from(number(&mut fields)?)?;
+                let warmup_iterations = number(&mut fields)?;
                 let iterations = number(&mut fields)?;
                 let sample_count = usize::try_from(number(&mut fields)?)?;
-                let valid_scale = frequency_hz != 0 && iterations != 0;
-                require(valid_scale, "invalid measurement scale")?;
+                require(
+                    (1..=PARTICIPANT_LIMIT).contains(&participants),
+                    "invalid participant count",
+                )?;
+                require(iterations != 0, "invalid measurement scale")?;
                 require(
                     (1..=SAMPLE_LIMIT).contains(&sample_count),
                     "invalid sample count",
                 )?;
-                measurement = Some(Measurement {
-                    environment: "qemu",
+                report.series.push(Series {
                     name: name.into(),
-                    hart,
-                    frequency_hz,
+                    participants,
+                    warmup_iterations,
                     iterations,
                     sample_count,
                     elapsed_ns: Vec::with_capacity(sample_count),
                 });
             }
             Some("LIMEN_BENCH_SAMPLE") => {
-                let series = measurement.as_mut().ok_or("sample before header")?;
+                let series = measurement
+                    .as_mut()
+                    .and_then(|report| report.series.last_mut())
+                    .ok_or("sample before series")?;
                 let index = usize::try_from(number(&mut fields)?)?;
                 let elapsed = number(&mut fields)?;
                 require(
@@ -77,7 +125,8 @@ fn decode(log: &str) -> Result<Measurement> {
     }
     let measurement = measurement.ok_or("missing benchmark header")?;
     require(
-        measurement.elapsed_ns.len() == measurement.sample_count,
+        measurement.series.len() == measurement.series_count
+            && measurement.series.iter().all(Series::complete),
         "incomplete benchmark measurements",
     )?;
     Ok(measurement)

@@ -23,6 +23,7 @@ on:
       - 'server/tests/target/riscv64/Cargo.toml'
       - 'server/tests/target/riscv64/build.rs'
       - 'server/tests/target/riscv64/benches/**'
+      - 'server/tests/metal/sync/bench/**'
       - '!**/*.md'
       - '!**/*.mdx'
   push:
@@ -48,6 +49,7 @@ on:
       - 'server/tests/target/riscv64/Cargo.toml'
       - 'server/tests/target/riscv64/build.rs'
       - 'server/tests/target/riscv64/benches/**'
+      - 'server/tests/metal/sync/bench/**'
       - '!**/*.md'
       - '!**/*.mdx'
   workflow_dispatch:

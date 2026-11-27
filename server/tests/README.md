@@ -200,7 +200,24 @@ outcome prevents in-guest completion.
 Benchmarks use Cargo benchmark targets under the owning test package. They
 share the normal guest entry, linker, machine preparation, process settlement
 and completion contract. The first target, `riscv64-guest:clock`, establishes
-a measurement transport over the admitted RISC-V timebase.
+a measurement transport over the admitted RISC-V timebase. The Sync owner
+also provides two independent images, selected by their machine topology:
+
+| Image | Active Harts | Measurement series |
+| --- | --- | --- |
+| `sync-local` | 1 | `leaf-local`, `turn-local` |
+| `sync-shared` | 4 | `leaf-shared`, `turn-shared` |
+| `sync-shared` | 2 of 4 | `atomic-alternating`, `leaf-alternating`, `turn-alternating` |
+
+The local workload increments a protected word on a one-Hart machine.
+The shared workload starts three actual minor Harts, then measures batches
+of equal work on all four Harts. Every batch must retire all participating
+operations and match the exact aggregate count. The alternating workload
+passes an explicit atomic baton between two Harts; the other two Harts
+remain inactive in the fixture. These durations include the baton and
+synchronization costs, not an isolated measurement of MCS queue handoff.
+The atomic alternating series provides a comparison, not a value to
+subtract mechanically.
 
 ```sh
 target=riscv64gc-unknown-none-elf
@@ -210,12 +227,23 @@ cargo -Z panic-abort-tests --config "$config" bench --locked \
     --target "$target" --bench clock
 ```
 
-Use a fresh evidence root. The benchmark runs 1,024 warmup iterations and
-nine batches of 16,384 clock observations. It retains the admitted counter
-frequency, Hart, iteration count and raw batch durations in nanoseconds.
-Reporting occurs after measurement. The durations include loop and boundary
-observation overhead; this is a transport smoke benchmark, not a calibrated
-estimate of one instruction's cost.
+Use a fresh evidence root. Replace `--bench clock` with `--bench sync-local`,
+`--bench sync-shared`, or `--benches` to select other targets.
+
+The clock and local Sync benchmarks use 1,024 warmup iterations and nine
+batches of 16,384 operations. Each shared Sync series uses 512 warmup
+iterations and nine batches of 4,096 operations per participant.
+The measurement record includes the observing Hart, admitted frequency,
+number of series, active participant count, aggregate warmup and measured
+operation counts, and raw batch durations in nanoseconds. All series must
+be present, distinct and complete. Reporting occurs after measurement.
+
+Duration includes loop and boundary ordering overhead. Shared durations
+also include the start gate and completion wait. Divide the aggregate
+operations by elapsed time for batch throughput; do not interpret that
+quotient as individual acquisition latency or a physical hardware cycle
+count. The clock smoke benchmark is not a calibrated estimate of one
+instruction's cost.
 
 The bench runner first requires native completion and clean process
 retirement, then checks that the declared measurement series is complete.

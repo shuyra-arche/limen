@@ -9,6 +9,7 @@ pub use kernel::limen_riscv_major as major;
 #[cfg(target_os = "uefi")]
 pub use uefi_fixture::load;
 
+pub mod bench;
 mod outcome;
 pub mod platform;
 
