@@ -59,8 +59,9 @@
         "server/src/metal/memory/mmu/internal/device.rs",
         "server/tests/target/entry/platforms/q35.rs",
         "server/tests/target/entry/platforms/io.rs",
-        "server/src/metal/processor/hart/x86_64.rs",
+        "server/src/metal/processor/hart/x86_64/**",
         "server/src/metal/processor/execution/cooperative/x86_64/**",
+        "server/src/metal/processor/execution/description/x86_64.rs",
         "server/tests/target/entry/platforms/cooperative/x86_64.rs"
       ],
       "virt": [

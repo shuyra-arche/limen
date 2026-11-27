@@ -24,7 +24,7 @@ pub(in crate::metal::processor::hart) unsafe fn install_local(address: usize) {
 pub(in crate::metal::processor::hart) unsafe fn mask_interrupts() -> usize {
     let previous: usize;
     unsafe { asm!("pushfq", "cli", "pop {}", out(reg) previous) };
-    previous & (1 << 9)
+    usize::from(!super::status::interrupts_masked(previous))
 }
 
 pub(in crate::metal::processor::hart) unsafe fn restore_interrupts(previous: usize) {
@@ -61,8 +61,7 @@ pub(in crate::metal) struct Descriptor {
 pub(in crate::metal) fn entry() -> Option<Entry> {
     let cs: u16;
     unsafe { asm!("mov {:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags)) };
-    const PRIVILEGE: u16 = 3;
-    if cs & PRIVILEGE != 0 {
+    if !super::status::kernel_selector(cs) {
         return None;
     }
     let mut idtr = Descriptor { limit: 0, base: 0 };

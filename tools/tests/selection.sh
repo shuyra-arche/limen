@@ -34,7 +34,7 @@ change server/src/metal/platform/boot/x86_64/mod.rs
 bash "$discover" . "$base" | jq -e 'map(select(.id == "platform-boot").profile) | sort == ["debug","release"]' >/dev/null
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 
-change server/src/metal/processor/hart/x86_64.rs
+change server/src/metal/processor/hart/x86_64/native.rs
 [[ $(boards) == q35 ]]
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 change server/src/metal/processor/hart/aarch64/native.rs
