@@ -9,10 +9,12 @@ use kernel::metal::{
 #[path = "../../../../chrono/observation.rs"]
 mod clock;
 
+mod occupied;
 mod scenario;
 
-pub fn check(boot: boot::Boot<'_>) {
+pub fn check(mut boot: boot::Boot<'_>) {
     fixture::check_handoff(&boot, None);
+    occupied::admit(&mut boot);
     let tree = boot.device_tree_description().unwrap();
     let description = GenericCounter::read(&tree).unwrap().unwrap();
     assert!(unsafe { description.bind(boot.processor() ^ 1) }.is_err());
