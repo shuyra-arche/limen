@@ -14,7 +14,7 @@ use super::aarch64::native as backend;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 use super::riscv::native as backend;
 #[cfg(all(limen_target, target_arch = "x86_64"))]
-use super::x86_64 as backend;
+use super::x86_64::native as backend;
 
 #[cfg(limen_target)]
 pub(in crate::metal) use backend::stack_pointer;

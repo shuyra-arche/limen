@@ -4,7 +4,7 @@ use core::arch::{asm, x86_64::__cpuid};
 
 use crate::metal::{
     platform::description::acpi::Madt,
-    processor::hart::{local, x86_64},
+    processor::hart::{local, x86_64::{native, status}},
 };
 
 use super::{Base, Observation, Probe};
@@ -12,12 +12,11 @@ use super::{Base, Observation, Probe};
 const APIC_BASE: u32 = 0x1b;
 const FEATURE_MSR: u32 = 1 << 5;
 const FEATURE_APIC: u32 = 1 << 9;
-const INTERRUPT_ENABLE: usize = 1 << 9;
 
 fn base_bits() -> Option<u64> {
     let cs: u16;
     unsafe { asm!("mov {:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags)) };
-    if cs & 3 != 0 {
+    if !status::kernel_selector(cs) {
         return None;
     }
     let features = __cpuid(1);
@@ -35,19 +34,19 @@ fn base_bits() -> Option<u64> {
 fn masked() -> bool {
     let flags: usize;
     unsafe { asm!("pushfq", "pop {}", out(reg) flags, options(preserves_flags)) };
-    flags & INTERRUPT_ENABLE == 0
+    status::interrupts_masked(flags)
 }
 
 /// Early discovery precedes installation of the ordinary Hart-local record.
 pub(crate) fn matches_madt(hart: usize, madt: Madt<'_>) -> bool {
     base_bits()
         .and_then(Base::decode)
-        .is_some_and(|base| x86_64::boot_identity() == hart && base.matches(hart, madt))
+        .is_some_and(|base| native::boot_identity() == hart && base.matches(hart, madt))
 }
 
 fn observe() -> Option<Observation> {
     let bits = base_bits()?;
-    let hart = x86_64::boot_identity();
+    let hart = native::boot_identity();
     if !masked() || local::try_current_hart().is_none_or(|current| current.get() != hart) {
         return None;
     }
