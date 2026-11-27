@@ -53,6 +53,9 @@
         "server/src/metal/memory/mmu/access/**",
         "server/src/metal/memory/mmu/mod.rs",
         "server/src/metal/interrupt/x86_64/internal/apic/**",
+        "server/src/metal/chrono/clock.rs",
+        "server/src/metal/chrono/mod.rs",
+        "server/src/metal/chrono/x86_64.rs",
         "server/src/metal/platform/description/acpi/madt.rs",
         "server/tests/target/support/uefi/interrupt.rs"
       ]
@@ -60,6 +63,7 @@
     "launch": {
       "q35": {
         "expects": [
+          "PASS q35-tsc counter=1 invariant=0 crystal=0 deadline=0 admitted=0",
           "PASS local-apic-timer inherited=1 one-shot=1 received=1 eoi=1 stopped=1 released=1"
         ]
       }

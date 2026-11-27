@@ -1,11 +1,12 @@
 #![no_std]
 #![no_main]
 
-use core::num::NonZeroU32;
+use core::{arch::x86_64::__cpuid, num::NonZeroU32};
 use kernel::{
     entry::boot,
-    metal::interrupt::x86_64::internal::apic::{
-        Countdown, Divider, Failure, Reception, TimerState,
+    metal::{
+        chrono::x86_64::{Failure as TscFailure, Tsc},
+        interrupt::x86_64::internal::apic::{Countdown, Divider, Failure, Reception, TimerState},
     },
 };
 use uefi::prelude::*;
@@ -25,6 +26,7 @@ fn main() -> Status {
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     fixture::check_handoff(&boot, None);
+    observe_tsc();
     let mut window = q35::local_window(&boot);
     unsafe { interrupt::prepare(&mut window) };
     let mut local = q35::local_controller(&boot, window);
@@ -84,6 +86,22 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         "PASS local-apic-timer inherited=1 one-shot=1 received=1 eoi=1 stopped=1 released=1\n",
     );
     boot::shutdown(true)
+}
+
+fn observe_tsc() {
+    let basic = __cpuid(0).eax;
+    let extended = __cpuid(0x8000_0000).eax;
+    let features = __cpuid(1);
+    let invariant = extended >= 0x8000_0007 && __cpuid(0x8000_0007).edx & (1 << 8) != 0;
+    let crystal = basic >= 0x15 && __cpuid(0x15).ecx != 0;
+    assert_ne!(features.edx & (1 << 4), 0);
+    assert_eq!(features.ecx & (1 << 24), 0);
+    assert!(!invariant && !crystal);
+    assert!(matches!(
+        unsafe { Tsc::admit() },
+        Err(TscFailure::VariableRate)
+    ));
+    boot::write("PASS q35-tsc counter=1 invariant=0 crystal=0 deadline=0 admitted=0\n");
 }
 
 #[panic_handler]
