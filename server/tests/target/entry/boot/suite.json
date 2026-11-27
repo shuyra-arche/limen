@@ -5,6 +5,10 @@
     "release"
   ],
   "sources": [
+    "server/tests/entry/boot/sbi/mod.rs",
+    "server/tests/entry/boot/sbi/allocator.rs",
+    "server/tests/entry/boot/sbi/pool.rs",
+    "server/tests/target/support/sbi/linker.ld",
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
     "server/src/metal/mod.rs",
@@ -79,7 +83,11 @@
   "run": {
     "kind": "qemu",
     "kernel": "boot-handoff",
-    "imports": ["metal/sync/native.rs"],
+    "imports": [
+      "entry/boot/sbi",
+      "metal/sync/native.rs",
+      "target/support/sbi/linker.ld"
+    ],
     "expects": [
       "PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1",
       "PASS synchronization",

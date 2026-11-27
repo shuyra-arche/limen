@@ -5,6 +5,10 @@
     "release"
   ],
   "sources": [
+    "server/tests/metal/module/retirement/mod.rs",
+    "server/tests/metal/module/retirement/harts.rs",
+    "server/tests/metal/module/retirement/mapping.rs",
+    "server/tests/target/support/sbi/linker.ld",
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
     "server/src/entry/boot/**",
@@ -76,6 +80,7 @@
   "run": {
     "kind": "qemu",
     "kernel": "module-riscv",
+    "imports": ["metal/module/retirement", "target/support/sbi/linker.ld"],
     "harts": 2,
     "expects": [
       "PASS riscv-module-execution virt modes=sv39,sv48,sv57 high-leaves=12 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2",

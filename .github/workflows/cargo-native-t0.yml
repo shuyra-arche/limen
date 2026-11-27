@@ -6,9 +6,10 @@ on:
       - "server/tests/metal/**"
       - "server/tests/basis/**"
       - "server/tests/entry/**"
-      - "server/tests/target/support/outcome/**"
-      - "server/tests/target/support/discovery/**"
-      - "server/tests/target/support/platform.rs"
+      - "server/tests/target/support/**"
+      - "server/src/**"
+      - "treaty/**"
+      - "rust-toolchain.toml"
       - "server/tests/target/tests/**"
       - "server/tests/target/Cargo.toml"
       - "server/tests/target/Cargo.lock"
@@ -59,7 +60,11 @@ jobs:
             aarch64) target=aarch64-unknown-uefi ;;
             x86_64) target=x86_64-unknown-uefi ;;
           esac
-          rustup target add "$target"
+          if [[ "$target" == *-uefi ]]; then
+            rustup target add "$target" "${LIMEN_T0_ARCH}-unknown-none"
+          else
+            rustup target add "$target"
+          fi
           echo "LIMEN_TEST_TARGET=$target" >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Test Cargo completion transport

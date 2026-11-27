@@ -24,6 +24,8 @@ pub enum Firmware {
     OpenSbi = 1,
     Aavmf = 2,
     Ovmf = 3,
+    AavmfStrictNx = 4,
+    OvmfStrictNx = 5,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -228,6 +230,8 @@ impl Platform {
                 1 => Firmware::OpenSbi,
                 2 => Firmware::Aavmf,
                 3 => Firmware::Ovmf,
+                4 => Firmware::AavmfStrictNx,
+                5 => Firmware::OvmfStrictNx,
                 _ => return None,
             },
             interrupt: match bytes[11] {

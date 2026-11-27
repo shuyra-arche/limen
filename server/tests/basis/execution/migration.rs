@@ -140,6 +140,8 @@ fn minor(hart: usize, argument: usize) -> ! {
     assert_eq!(hart, PEER.load(Relaxed));
     (launch.observe)(&MINOR, hart);
     synchronization::check();
+    #[cfg(target_arch = "riscv64")]
+    synchronization::check_enabled();
     OBSERVED.store(hart, Release);
     assert_eq!(execution.enter(), Err(Error::Protection));
     let mut schedule = || {

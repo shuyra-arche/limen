@@ -80,6 +80,18 @@ fn command(machine: &Machine, image: &Path, directory: &Path, observe: bool) -> 
             "AAVMF_VARS.fd",
             "BOOTAA64.EFI",
         ),
+        Firmware::OvmfStrictNx => (
+            variable("OVMF_DIR", "/usr/share/OVMF"),
+            "OVMF_CODE_4M.secboot.strictnx.fd",
+            "OVMF_VARS_4M.fd",
+            "BOOTX64.EFI",
+        ),
+        Firmware::AavmfStrictNx => (
+            variable("AAVMF_DIR", "/usr/share/AAVMF"),
+            "AAVMF_CODE.secboot.strictnx.fd",
+            "AAVMF_VARS.fd",
+            "BOOTAA64.EFI",
+        ),
         Firmware::OpenSbi => unreachable!(),
     };
     let firmware = Path::new(&firmware);
@@ -87,13 +99,18 @@ fn command(machine: &Machine, image: &Path, directory: &Path, observe: bool) -> 
     let boot_dir = esp.join("EFI/BOOT");
     fs::create_dir_all(&boot_dir)?;
     fs::copy(image, boot_dir.join(boot))?;
+    let code = firmware.join(code);
+    require(
+        code.is_file(),
+        format!("missing firmware image: {}", code.display()),
+    )?;
     let private_vars = directory.join("vars.fd");
     fs::copy(firmware.join(variables), &private_vars)?;
     command
         .args(["-nodefaults", "-drive"])
         .arg(format!(
             "if=pflash,format=raw,readonly=on,file={}",
-            firmware.join(code).display()
+            code.display()
         ))
         .arg("-drive")
         .arg(format!(

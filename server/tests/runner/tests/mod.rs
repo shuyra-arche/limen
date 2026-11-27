@@ -360,3 +360,34 @@ fn platform_device_topology_is_composed_without_test_identity() {
         ]
     );
 }
+
+#[test]
+fn strict_nx_firmware_is_selected_by_the_guest() {
+    use object::{Architecture, BinaryFormat};
+    use platform::{Board, Firmware, Interrupt, Iommu, Machine, Platform, Serial, Setting};
+
+    let arm = Platform {
+        board: Board::Virt,
+        firmware: Firmware::AavmfStrictNx,
+        interrupt: Interrupt::GicV3,
+        harts: 1,
+        aclint: false,
+        sstc: Setting::Default,
+        iommu: Iommu::None,
+        serial: Serial::Default,
+        devices: [None; 4],
+    };
+    assert_eq!(Platform::decode(&arm.encode()), Some(arm));
+    assert!(Machine::admit(Architecture::Aarch64, BinaryFormat::Pe, arm).is_ok());
+    assert!(Machine::admit(Architecture::Riscv64, BinaryFormat::Elf, arm).is_err());
+    let x86 = Platform {
+        board: Board::Q35,
+        firmware: Firmware::OvmfStrictNx,
+        interrupt: Interrupt::Apic,
+        ..arm
+    };
+    assert_eq!(Platform::decode(&x86.encode()), Some(x86));
+    let machine = Machine::admit(Architecture::X86_64, BinaryFormat::Pe, x86).unwrap();
+    assert_eq!(machine.board, "q35,smm=on");
+    assert!(Machine::admit(Architecture::Aarch64, BinaryFormat::Pe, x86).is_err());
+}

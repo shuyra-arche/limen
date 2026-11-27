@@ -5,6 +5,7 @@
     "release"
   ],
   "sources": [
+    "server/tests/metal/module/retention/mod.rs",
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
     "server/src/entry/boot/**",
@@ -65,8 +66,8 @@
         "server/src/metal/processor/executor/x86_64/**",
         "server/src/metal/processor/description/x86_64/mod.rs",
         "server/src/metal/processor/description/x86_64/status.rs",
-        "server/tests/target/entry/module/board/x86_64.rs",
-        "server/tests/target/entry/module/x86_mapping.rs"
+        "server/tests/metal/module/retention/board/x86_64.rs",
+        "server/tests/metal/module/retention/x86_mapping.rs"
       ],
       "virt": [
         "server/src/metal/processor/executor/entry/aarch64.rs",
@@ -79,8 +80,8 @@
         "server/src/metal/processor/description/aarch64/cpu.rs",
         "server/src/metal/processor/description/aarch64/mod.rs",
         "server/src/metal/processor/description/aarch64/status.rs",
-        "server/tests/target/entry/module/arm_mapping.rs",
-        "server/tests/target/entry/module/board/aarch64.rs",
+        "server/tests/metal/module/retention/arm_mapping.rs",
+        "server/tests/metal/module/retention/board/aarch64.rs",
         "server/tests/target/support/uefi/devicetree.rs",
         "server/tests/target/support/uefi/pl011.rs"
       ]

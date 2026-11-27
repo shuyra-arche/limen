@@ -390,7 +390,7 @@ for source in server/src/metal/module/image/elf.rs server/src/metal/module/treat
          ["riscv-module-execution", "rv64", "debug"], ["riscv-module-execution", "rv64", "release"]]' >/dev/null
     bash "$checks" . "$base" | jq -e '.host' >/dev/null
 done
-change server/tests/target/entry/module/arm_mapping.rs
+change server/tests/metal/module/retention/arm_mapping.rs
 bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
     [["module-execution", "virt", "debug"], ["module-execution", "virt", "release"]]' >/dev/null
 for source in server/src/metal/memory/mmu/riscv64/internal/encoder/mod.rs \

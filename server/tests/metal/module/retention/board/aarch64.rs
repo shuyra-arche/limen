@@ -1,16 +1,17 @@
 use core::arch::asm;
 use kernel::metal::module::treaty::Machine;
 use kernel::metal::{
-    platform::description::treaty::devicetree::DeviceTree, platform::firmware::treaty::psci::Conduit, platform::firmware::treaty::psci::PsciDescription,
+    platform::description::treaty::devicetree::DeviceTree,
+    platform::firmware::treaty::psci::{Conduit, PsciDescription},
     platform::firmware::uefi::DeviceTree as LoaderTree,
     processor::description::aarch64::cpu::Aarch64Cpus,
 };
 use uefi::Status;
 
-#[path = "../../../support/uefi/devicetree.rs"]
+#[path = "../../../../target/support/uefi/devicetree.rs"]
 mod devicetree;
 
-#[path = "../../../support/uefi/pl011.rs"]
+#[path = "../../../../target/support/uefi/pl011.rs"]
 mod pl011;
 
 pub const MACHINE: Machine = Machine::Aarch64;

@@ -64,7 +64,7 @@ impl Machine {
                 Architecture::Aarch64,
                 BinaryFormat::Pe,
                 Board::Virt,
-                Firmware::Aavmf,
+                Firmware::Aavmf | Firmware::AavmfStrictNx,
                 Interrupt::GicV3,
             ) if !platform.aclint && platform.sstc == Setting::Default => (
                 "aarch64",
@@ -75,10 +75,14 @@ impl Machine {
                 Architecture::X86_64,
                 BinaryFormat::Pe,
                 Board::Q35,
-                Firmware::Ovmf,
+                Firmware::Ovmf | Firmware::OvmfStrictNx,
                 Interrupt::Apic,
             ) if !platform.aclint && platform.sstc == Setting::Default => {
-                ("x86_64", "q35".into(), None)
+                let board = match platform.firmware {
+                    Firmware::OvmfStrictNx => "q35,smm=on",
+                    _ => "q35",
+                };
+                ("x86_64", board.into(), None)
             }
             _ => {
                 return Err(format!("unsupported image/platform combination: {platform:?}").into());
