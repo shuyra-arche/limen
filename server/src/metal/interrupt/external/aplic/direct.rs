@@ -1,6 +1,9 @@
 //! Exclusive direct-delivery domain. A single preallocated reception slot.
 
-use super::{Description, IDC_BASE, IDC_BYTES, Mode, Route, SOURCE_LIMIT};
+use super::{
+    Description, IDC_BASE, IDC_BYTES, Mode, Route, SOURCE_LIMIT,
+    encoding::{DomainConfiguration, Interrupt, SourceConfiguration, Target},
+};
 use crate::metal::{
     interrupt::internal::supervisor::{Cause, Reception as LocalReception},
     memory::mmu::internal::device::DeviceWindow,
@@ -8,8 +11,6 @@ use crate::metal::{
 use core::{arch::asm, ptr};
 
 const DOMAIN: usize = 0;
-const DIRECT: u32 = 0x8000_0000;
-const ENABLED: u32 = 1 << 8;
 const PENDING: usize = 0x1c00;
 const INPUT: usize = 0x1d00;
 const ENABLE: usize = 0x1e00;
@@ -73,6 +74,7 @@ struct Record {
     round: u64,
     source: u32,
     priority: u8,
+    raw: u32,
 }
 
 /// A borrow of this exact domain and reception round, not a reusable token.
@@ -160,7 +162,7 @@ impl<'a> Direct<'a> {
             state: State::Prepared,
         };
         instance.context()?;
-        if instance.read(DOMAIN) != DIRECT
+        if !DomainConfiguration::shut().confirms(instance.read(DOMAIN))
             || instance.read(instance.idc(DELIVERY)) != 0
             || instance.read(instance.idc(FORCE)) != 0
             || instance.local.enabled()
@@ -168,7 +170,7 @@ impl<'a> Direct<'a> {
             return Err(Failure::Busy);
         }
         for source in 1..=description.sources() {
-            if instance.read(source as usize * 4) != 0
+            if !SourceConfiguration::Inactive.confirms(instance.read(source as usize * 4))
                 || instance.bit(ENABLE, source)
                 || instance.bit(PENDING, source)
             {
@@ -265,11 +267,14 @@ impl<'a> Direct<'a> {
             return Err(Failure::Busy);
         }
         let mode = route.mode();
-        let target = ((self.description.index() as u32) << 18) | 1;
+        let target = Target::new(self.description.index()).ok_or(Failure::Range)?;
+        let configuration = SourceConfiguration::Active(mode);
         self.sources[index] = Source::Configuring(mode);
-        self.write(index * 4, mode as u32);
-        self.write(TARGET + index * 4, target);
-        if self.read(index * 4) != mode as u32 || self.read(TARGET + index * 4) != target {
+        self.write(index * 4, configuration.bits());
+        self.write(TARGET + index * 4, target.bits());
+        if !configuration.confirms(self.read(index * 4))
+            || !target.confirms(self.read(TARGET + index * 4))
+        {
             return Err(self.unconfirmed(Effect::Configure(source)));
         }
         self.sources[index] = Source::Masked(mode);
@@ -317,8 +322,9 @@ impl<'a> Direct<'a> {
         self.state = State::Opening;
         self.write(self.idc(THRESHOLD), 0);
         self.write(self.idc(DELIVERY), 1);
-        self.write(DOMAIN, ENABLED);
-        if self.read(DOMAIN) != (DIRECT | ENABLED)
+        let configuration = DomainConfiguration::open();
+        self.write(DOMAIN, configuration.write_bits());
+        if !configuration.confirms(self.read(DOMAIN))
             || self.read(self.idc(DELIVERY)) != 1
             || self.read(self.idc(THRESHOLD)) != 0
         {
@@ -344,14 +350,19 @@ impl<'a> Direct<'a> {
         self.next = round.checked_add(1).ok_or(Failure::Exhausted)?;
         self.reception = Reception::Receiving(round);
         let raw = self.read(self.idc(CLAIM));
-        if raw == 0 {
-            self.reception = Reception::Empty;
-            return Ok(None);
-        }
-        let source = (raw >> 16) & 0x3ff;
-        let priority = raw as u8;
+        let (source, priority) = match Interrupt::read(raw) {
+            Some(Interrupt::Empty) => {
+                self.reception = Reception::Empty;
+                return Ok(None);
+            }
+            Some(Interrupt::Claimed { source, priority }) => (source, priority),
+            None => {
+                self.reception = Reception::Uncertain(round, raw);
+                return Err(self.unconfirmed(Effect::Receive));
+            }
+        };
         let mode = match self.source(source) {
-            Ok(Source::Enabled(mode)) if raw & !0x03ff_00ff == 0 && priority == 1 => mode,
+            Ok(Source::Enabled(mode)) if priority == Target::PRIORITY => mode,
             _ => {
                 self.reception = Reception::Uncertain(round, raw);
                 return Err(self.unconfirmed(Effect::Receive));
@@ -361,6 +372,7 @@ impl<'a> Direct<'a> {
             round,
             source,
             priority,
+            raw,
         };
         // Keep the original result before the next hardware effect (mask).
         self.reception = Reception::Received(record);
@@ -388,14 +400,13 @@ impl<'a> Direct<'a> {
     }
 
     /// Retain raw evidence if a received identity could not be interpreted.
-    pub fn uncertain_claim(&self) -> Option<(u64, u32)> {
+    pub fn uncertain_claim(&self) -> Option<(u64, Option<u32>)> {
         match self.reception {
-            Reception::Uncertain(round, raw) => Some((round, raw)),
-            Reception::Receiving(round) => Some((round, 0)),
-            Reception::Received(record) if matches!(self.state, State::Uncertain(_)) => Some((
-                record.round,
-                (record.source << 16) | u32::from(record.priority),
-            )),
+            Reception::Uncertain(round, raw) => Some((round, Some(raw))),
+            Reception::Receiving(round) => Some((round, None)),
+            Reception::Received(record) if matches!(self.state, State::Uncertain(_)) => {
+                Some((record.round, Some(record.raw)))
+            }
             _ => None,
         }
     }
@@ -436,10 +447,11 @@ impl<'a> Direct<'a> {
             State::Prepared | State::Open => {
                 self.state = State::Shutting;
                 self.local.set(false);
-                self.write(DOMAIN, 0);
+                let configuration = DomainConfiguration::shut();
+                self.write(DOMAIN, configuration.write_bits());
                 self.write(self.idc(DELIVERY), 0);
                 if self.local.enabled()
-                    || self.read(DOMAIN) != DIRECT
+                    || !configuration.confirms(self.read(DOMAIN))
                     || self.read(self.idc(DELIVERY)) != 0
                 {
                     return Err(self.unconfirmed(Effect::ShutDelivery));
@@ -477,8 +489,9 @@ impl<'a> Direct<'a> {
             if let Source::Masked(mode) = self.source(source)? {
                 let index = source as usize;
                 self.sources[index] = Source::Retiring(mode);
-                self.write(index * 4, 0);
-                if self.read(index * 4) != 0 {
+                let configuration = SourceConfiguration::Inactive;
+                self.write(index * 4, configuration.bits());
+                if !configuration.confirms(self.read(index * 4)) {
                     return Err(self.unconfirmed(Effect::Retire(source)));
                 }
                 self.sources[index] = Source::Vacant;
