@@ -26,8 +26,14 @@ where
             BindingProgress::Confirmed(effect) => {
                 assert_eq!(effect, change.effect());
                 assert_eq!(controller.pending_change(binding), None);
-                assert_eq!(controller.observe_change(recovered), BindingProgress::Stale);
-                assert_eq!(controller.observe_change(change), BindingProgress::Stale);
+                assert!(matches!(
+                    controller.observe_change(recovered),
+                    BindingProgress::Stale
+                ));
+                assert!(matches!(
+                    controller.observe_change(change),
+                    BindingProgress::Stale
+                ));
                 return effect;
             }
             BindingProgress::Pending => core::hint::spin_loop(),
