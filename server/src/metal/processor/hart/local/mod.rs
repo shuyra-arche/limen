@@ -19,8 +19,9 @@ use super::x86_64 as backend;
 #[cfg(limen_target)]
 pub(in crate::metal) use backend::stack_pointer;
 pub(crate) use node::QueueNode;
+pub use protection::turn_capacity;
 pub(crate) use protection::{
-    Error, TURN_CAPACITY, TurnParticipation, begin_leaf, begin_turn, can_switch,
+    Error, TurnParticipation, begin_leaf, begin_turn, can_switch,
 };
 
 #[cfg(all(test, not(limen_target)))]
@@ -64,6 +65,28 @@ impl Entry {
 struct CooperativeBinding {
     scope: usize,
     slot: usize,
+}
+
+/// Resident storage supplied by one actual CPU's construction path.
+pub(in crate::metal) struct Storage<const N: usize> {
+    local: HartLocal,
+    nodes: [QueueNode; N],
+}
+
+impl<const N: usize> Storage<N> {
+    pub(in crate::metal) const fn new() -> Self {
+        Self {
+            local: HartLocal::new(),
+            nodes: [const { QueueNode::new() }; N],
+        }
+    }
+
+    /// The sole entering CPU binds its own resident nodes once, before
+    /// installing any local register or admitting an ordinary operation.
+    pub(in crate::metal) unsafe fn bind(&'static self) -> &'static HartLocal {
+        self.local.protection.bind(&self.nodes);
+        &self.local
+    }
 }
 
 /// Fixed storage belonging to the verified physical CPU that took this entry.
