@@ -25,7 +25,8 @@
     "server/src/metal/platform/boot/trap.rs",
     "server/src/metal/platform/boot/riscv/**",
     "server/src/metal/processor/execution/mod.rs",
-    "server/src/metal/processor/execution/description/**",
+    "server/src/metal/processor/execution/description/mod.rs",
+    "server/src/metal/processor/execution/description/riscv.rs",
     "server/src/metal/processor/execution/cooperative/mod.rs",
     "server/src/metal/processor/execution/cooperative/riscv/**",
     "server/src/metal/platform/description/mod.rs",
@@ -48,7 +49,11 @@
     "server/tests/metal/module/riscv_fixture.rs",
     "server/tests/metal/module/riscv_root.rs",
     "server/src/metal/platform/firmware/uefi/mod.rs",
-    "server/src/metal/platform/boot/handoff/sbi.rs"
+    "server/src/metal/platform/boot/handoff/sbi.rs",
+    "server/src/metal/processor/hart/riscv/status.rs",
+    "server/src/metal/interrupt/mod.rs",
+    "server/src/metal/interrupt/internal/mod.rs",
+    "server/src/metal/interrupt/internal/supervisor.rs"
   ],
   "run": {
     "kind": "qemu",

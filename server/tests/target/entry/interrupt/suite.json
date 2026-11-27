@@ -46,7 +46,11 @@
     "server/src/metal/interrupt/internal/supervisor.rs",
     "server/src/metal/memory/mmu/internal/device.rs",
     "server/src/metal/memory/mmu/internal/mod.rs",
-    "server/src/entry/boot/handoff.rs"
+    "server/src/entry/boot/handoff.rs",
+    "server/src/metal/processor/hart/riscv/status.rs",
+    "server/src/metal/memory/mmu/internal/riscv/mod.rs",
+    "server/src/metal/memory/mmu/internal/riscv/context/**",
+    "server/src/metal/memory/mmu/internal/riscv/mode.rs"
   ],
   "run": {
     "kind": "qemu",

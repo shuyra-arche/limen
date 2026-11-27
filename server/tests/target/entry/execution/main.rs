@@ -170,6 +170,42 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert_eq!(rejected, Err(Error::Unsupported));
     assert_eq!(execution.pending_leave(), Ok(None));
 
+    // Change only the actual FS field: the integer-only kernel target
+    // executes no FP instructions, so no extended state is consumed.
+    let observed: usize;
+    unsafe {
+        asm!(
+            "csrs sstatus, {initial}",
+            "csrr {observed}, sstatus",
+            initial = in(reg) 1usize << 13,
+            observed = out(reg) observed,
+            options(nostack),
+        );
+    }
+    let rejected = execution.enter();
+    unsafe { asm!("csrc sstatus, {}", in(reg) 3usize << 13, options(nostack)) };
+    assert_ne!(observed & (3 << 13), 0, "QEMU exposes the actual FS field");
+    assert_eq!(rejected, Err(Error::Unsupported));
+    assert_eq!(execution.pending_leave(), Ok(None));
+
+    // Global SIE is still off. A single locally enabled source is a
+    // different admission failure and must not be mistaken for global SIE.
+    unsafe {
+        asm!(
+            "csrs sie, {timer}",
+            "csrr {observed}, sie",
+            timer = in(reg) 1usize << 5,
+            observed = out(reg) observed,
+            options(nostack),
+        );
+    }
+    let rejected = execution.enter();
+    unsafe { asm!("csrc sie, {}", in(reg) 1usize << 5, options(nostack)) };
+    assert_ne!(observed & (1 << 5), 0);
+    assert_eq!(rejected, Err(Error::Unsupported));
+    assert_eq!(execution.pending_leave(), Ok(None));
+    write("PASS native-control fs=1 source-mask=1 restored=1\n");
+
     let initial = dispatch(a);
     assert_eq!(initial.admission(), a_admission);
     assert_eq!(execution.lifecycle(a), Ok(Lifecycle::Live));
