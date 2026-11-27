@@ -12,6 +12,8 @@ mod pool;
 #[cfg(target_arch = "riscv64")]
 #[path = "../../../entry/boot/material/pool.rs"]
 mod pool_material;
+#[cfg(target_arch = "riscv64")]
+mod retirement;
 
 use core::{
     hint::black_box,
@@ -119,6 +121,8 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
 pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     #[cfg(target_arch = "riscv64")]
     pool::prepare(&boot);
+    #[cfg(target_arch = "riscv64")]
+    let scratch = retirement::prepare(&boot);
     let major_stack = boot.stack_range();
     // Each executable owns its resident supplies for exactly one admission.
     let stacks = unsafe { &mut *(&raw mut STACKS) };
@@ -197,6 +201,8 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     assert_eq!(execution.stop_dormant(a), Err(Error::Busy));
 
     let initial = Initial {
+        #[cfg(target_arch = "riscv64")]
+        scratch,
         major_stack,
         a,
         a_admission,
@@ -211,6 +217,8 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
 }
 
 struct Initial {
+    #[cfg(target_arch = "riscv64")]
+    scratch: &'static retirement::Scratch,
     major_stack: Range<usize>,
     a: UnitId,
     a_admission: AdmissionId,
@@ -224,6 +232,8 @@ fn schedule(initial: &'static Initial) -> ! {
     let mark = black_box(0u8);
     let address = core::ptr::from_ref(black_box(&mark)).addr();
     assert!(!initial.major_stack.contains(&address));
+    #[cfg(target_arch = "riscv64")]
+    initial.scratch.settle();
     assert_eq!(execution.pending_leave(), Ok(None));
     assert_eq!(execution.enter(), Err(Error::Unsupported));
 
