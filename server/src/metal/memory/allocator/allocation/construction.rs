@@ -64,15 +64,25 @@ impl AllocationConstruction {
     }
 
     pub(in crate::metal::memory::allocator) const fn within(physical: PhysicalRange) -> Self {
-        Self { physical: Some(physical), ..Self::new() }
+        Self {
+            physical: Some(physical),
+            ..Self::new()
+        }
     }
 
-    pub(in crate::metal::memory::allocator) fn delivered(&self, id: AllocationId) -> Result<bool, Error> {
-        Ok(self.state.acquire(|state| matches!(state, Preparation::Issued(original, None) if *original == id))?)
+    pub(in crate::metal::memory::allocator) fn delivered(
+        &self,
+        id: AllocationId,
+    ) -> Result<bool, Error> {
+        Ok(self.state.acquire(
+            |state| matches!(state, Preparation::Issued(original, None) if *original == id),
+        )?)
     }
 
     pub(in crate::metal::memory::allocator) fn closed_empty(&self) -> Result<bool, Error> {
-        Ok(self.state.acquire(|state| matches!(state, Preparation::Shut(None)))?)
+        Ok(self
+            .state
+            .acquire(|state| matches!(state, Preparation::Shut(None)))?)
     }
 
     pub(crate) fn reservation(&self) -> Result<(RegionId, AllowanceId), Error> {
@@ -242,7 +252,10 @@ impl Allocator {
         permit: AllocationPermit,
         construction: &'static AllocationConstruction,
     ) -> Result<AllocationId, Error> {
-        if construction.physical.is_some_and(|physical| physical != candidate.physical) {
+        if construction
+            .physical
+            .is_some_and(|physical| physical != candidate.physical)
+        {
             return Err(Error::Range);
         }
         let region = self.region(candidate.region)?;
@@ -320,8 +333,10 @@ impl Allocator {
         let amount = physical.length().get();
         balance.issue(amount);
         held.access(slot).expect("Allowance").state = SlotState::Open(balance);
-        *held.access(&construction.state).expect("receiver") =
-            Preparation::Issued(reservation.id, Some(Allocation::issued(self, reservation.id, physical)));
+        *held.access(&construction.state).expect("receiver") = Preparation::Issued(
+            reservation.id,
+            Some(Allocation::issued(self, reservation.id, physical)),
+        );
         Ok(reservation.id)
     }
 

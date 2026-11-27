@@ -353,7 +353,9 @@ impl<T> Pool<'_, T> {
                         unsafe { group.slot(index).as_ref().state.get() }
                     {
                         let position = SlotPosition {
-                            group: state.groups[cursor.group].id(cursor.group).expect("open group"),
+                            group: state.groups[cursor.group]
+                                .id(cursor.group)
+                                .expect("open group"),
                             index,
                         };
                         state

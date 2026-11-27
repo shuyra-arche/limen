@@ -13,7 +13,10 @@ pub struct Growth {
 
 impl Growth {
     pub const fn new(physical: PhysicalRange) -> Self {
-        Self { physical, receiver: AllocationConstruction::within(physical) }
+        Self {
+            physical,
+            receiver: AllocationConstruction::within(physical),
+        }
     }
 
     fn bytes(&self) -> Result<usize, Error> {
@@ -23,8 +26,12 @@ impl Growth {
 
 impl<T> Directory<'_, T> {
     fn available(&self, bytes: usize) -> Result<(), Error> {
-        self.limit.checked_sub(self.bytes).and_then(|left| left.checked_sub(self.preparing))
-            .filter(|left| *left >= bytes).map(|_| ()).ok_or(Error::Directory)
+        self.limit
+            .checked_sub(self.bytes)
+            .and_then(|left| left.checked_sub(self.preparing))
+            .filter(|left| *left >= bytes)
+            .map(|_| ())
+            .ok_or(Error::Directory)
     }
 
     fn growth(&self, id: GroupId) -> Result<&'static Growth, Error> {
@@ -35,7 +42,11 @@ impl<T> Directory<'_, T> {
         slot.growth.ok_or(Error::Stale)
     }
 
-    pub(super) fn admission(&self, prepared: Option<GroupId>, bytes: usize) -> Result<Option<&'static Growth>, Error> {
+    pub(super) fn admission(
+        &self,
+        prepared: Option<GroupId>,
+        bytes: usize,
+    ) -> Result<Option<&'static Growth>, Error> {
         if let Some(id) = prepared {
             let growth = self.growth(id)?;
             if growth.bytes()? != bytes {
@@ -60,7 +71,12 @@ impl<'storage, T> Pool<'storage, T> {
         let proposed = input.as_deref().ok_or(Error::Receiver)?;
         let bytes = proposed.bytes()?;
         let geometry = Geometry::of::<T>(bytes)?;
-        if !proposed.physical.start().get().is_multiple_of(geometry.alignment as u64) {
+        if !proposed
+            .physical
+            .start()
+            .get()
+            .is_multiple_of(geometry.alignment as u64)
+        {
             return Err(Error::Layout);
         }
         self.state.acquire(|state| {

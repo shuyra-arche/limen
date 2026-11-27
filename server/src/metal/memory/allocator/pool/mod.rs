@@ -144,11 +144,14 @@ impl<'storage, T> Pool<'storage, T> {
     }
 
     /// Bound open, retiring, and preparing material by one shared byte ceiling.
-    pub fn bounded(groups: &'storage mut [GroupSlot<'storage, T>], limit: usize) -> Result<Self, Error> {
+    pub fn bounded(
+        groups: &'storage mut [GroupSlot<'storage, T>],
+        limit: usize,
+    ) -> Result<Self, Error> {
         if groups.is_empty()
-            || groups
-                .iter()
-                .any(|entry| entry.record.is_some() || entry.growth.is_some() || entry.next.is_some())
+            || groups.iter().any(|entry| {
+                entry.record.is_some() || entry.growth.is_some() || entry.next.is_some()
+            })
         {
             return Err(Error::Directory);
         }
@@ -214,9 +217,12 @@ impl<'storage, T> Pool<'storage, T> {
             return Err(Error::Layout);
         }
         let retirement = supplied.allocation().return_position()?;
-        let growth = self.state.acquire(|state| state.admission(prepared, geometry.bytes))??;
+        let growth = self
+            .state
+            .acquire(|state| state.admission(prepared, geometry.bytes))??;
         if let Some(growth) = growth
-            && (growth.physical != supplied.physical() || !growth.receiver.delivered(supplied.id())?)
+            && (growth.physical != supplied.physical()
+                || !growth.receiver.delivered(supplied.id())?)
         {
             return Err(Error::Material);
         }
@@ -232,7 +238,10 @@ impl<'storage, T> Pool<'storage, T> {
         );
         self.state.acquire(|state| {
             state.admission(prepared, geometry.bytes)?;
-            let index = prepared.map(|id| id.0).or(state.free_group).ok_or(Error::Directory)?;
+            let index = prepared
+                .map(|id| id.0)
+                .or(state.free_group)
+                .ok_or(Error::Directory)?;
             let capacity = state
                 .capacity
                 .checked_add(geometry.slots)
