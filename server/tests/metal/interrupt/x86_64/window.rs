@@ -7,7 +7,7 @@ use core::{
 };
 use kernel::metal::memory::access::treaty::device::DeviceWindow;
 
-use crate::q35::{Idtr, io};
+use uefi_fixture::q35::{Idtr, io};
 
 static RECEIVED: AtomicU32 = AtomicU32::new(0);
 static mut GATES: [[u8; 16]; 256] = [[0; 16]; 256];

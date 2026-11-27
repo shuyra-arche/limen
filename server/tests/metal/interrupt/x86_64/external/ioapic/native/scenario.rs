@@ -17,7 +17,9 @@ use kernel::metal::{
     platform::description::treaty::acpi::Madt,
 };
 use limen_treaty::model::{ByteLength, InternalAddress};
-use uefi_fixture::{interrupt::Window, q35::io};
+use uefi_fixture::q35::io;
+
+use super::window::Window;
 
 const VECTOR: u8 = 0xf1;
 const UART: u16 = 0x3f8;

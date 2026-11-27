@@ -7,16 +7,17 @@ use kernel::{
         interrupt::x86_64::internal::apic::{Countdown, Divider, Failure, Reception, TimerState},
     },
 };
-use uefi_fixture::{
-    interrupt::{self, Window},
-    q35,
-};
+use uefi_fixture::q35;
+
+#[path = "../../window.rs"]
+mod window;
+use window::Window;
 
 const VECTOR: u8 = 0xf2;
 
 pub(super) fn check(boot: &boot::Boot<'_>) {
     let mut window = q35::local_window(boot);
-    unsafe { interrupt::prepare(&mut window) };
+    unsafe { window::prepare(&mut window) };
     let mut local = q35::local_controller(boot, window);
 
     let vector = local.reserve_vector(VECTOR).unwrap();

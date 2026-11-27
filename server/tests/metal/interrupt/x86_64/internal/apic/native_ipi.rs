@@ -21,11 +21,11 @@ use kernel::{
     },
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress};
-use uefi_fixture::{
-    self as fixture,
-    interrupt::{self, Window},
-    q35,
-};
+use uefi_fixture::{self as fixture, q35};
+
+#[path = "../../window.rs"]
+mod window;
+use window::Window;
 
 const VECTOR: u8 = 0xf3;
 static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
@@ -78,7 +78,7 @@ fn minor(hart: usize, argument: usize) -> ! {
     // that address addresses this CPU's independent register bank.
     let mut window =
         unsafe { DeviceWindow::admit(physical, InternalAddress::new(address.get())) }.unwrap();
-    unsafe { interrupt::prepare(&mut window) };
+    unsafe { window::prepare(&mut window) };
     let mut local = unsafe { LocalApic::admit(hart, madt, window, Probe::native()) }
         .ok()
         .unwrap();

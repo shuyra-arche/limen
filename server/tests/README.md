@@ -82,8 +82,8 @@ contract and its SBI/UEFI admission adapters live together under
 consumer contracts belong to Chrono and Interrupt respectively.
 Native MMU installation and binding contracts live under
 `metal/memory/mmu/internal/` and `metal/memory/mmu/external/`;
-the former also owns the shared paging material. The temporary RISC-V
-reception window belongs to its interrupt scenarios. The Boot handoff
+the former also owns the shared paging material. Temporary riscv64 and
+x86_64 reception windows belong to their interrupt scenarios. The Boot handoff
 test owns the pre-admission synchronization rejection check rather than
 running it in every UEFI image.
 The target workspace retains compilation entries, the guest declaration,

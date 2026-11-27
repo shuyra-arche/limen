@@ -1,12 +1,12 @@
 #[path = "../internal/pages.rs"]
 mod pages;
-use pages::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 use core::arch::asm;
 use kernel::metal::memory::mmu::{
     aarch64::internal::{context::Controls, format::Root, installation::admit_root},
     treaty::{LeafAccess, Memory, Privilege, SwitchError},
 };
 use limen_treaty::model::PhysicalAddress;
+use pages::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 
 #[path = "../internal/installation.rs"]
 mod installation;

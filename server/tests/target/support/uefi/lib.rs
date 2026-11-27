@@ -32,8 +32,6 @@ pub mod q35;
 mod virt;
 #[cfg(target_arch = "x86_64")]
 use q35 as board;
-#[cfg(target_arch = "x86_64")]
-pub mod interrupt;
 #[cfg(target_arch = "aarch64")]
 use virt as board;
 
