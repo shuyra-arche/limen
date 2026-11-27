@@ -17,12 +17,16 @@ pub const fn selection(affinity: u64, intid: u8) -> Option<u64> {
     )
 }
 
-#[cfg(all(limen_target, target_arch = "aarch64"))]
 use core::marker::PhantomData;
-#[cfg(all(limen_target, target_arch = "aarch64"))]
 use limen_treaty::model::PhysicalRange;
 
-#[cfg(all(limen_target, target_arch = "aarch64"))]
+#[cfg_attr(
+    not(all(limen_target, target_arch = "aarch64")),
+    expect(
+        dead_code,
+        reason = "only a native SGI operation can produce these phases"
+    )
+)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Phase {
     Prepared,
@@ -33,7 +37,13 @@ pub(super) enum Phase {
 
 /// Linear qualification carried between source and destination. Its type
 /// retains the target's original backing and gives no access by address.
-#[cfg(all(limen_target, target_arch = "aarch64"))]
+#[cfg_attr(
+    not(all(limen_target, target_arch = "aarch64")),
+    expect(
+        dead_code,
+        reason = "native delivery and retirement use the reserved register selection and original scope"
+    )
+)]
 #[derive(Debug)]
 #[must_use]
 pub struct Sgi<'map> {
@@ -45,7 +55,6 @@ pub struct Sgi<'map> {
     pub(super) mapping: PhantomData<&'map mut ()>,
 }
 
-#[cfg(all(limen_target, target_arch = "aarch64"))]
 impl Sgi<'_> {
     pub fn intid(&self) -> u8 {
         self.id

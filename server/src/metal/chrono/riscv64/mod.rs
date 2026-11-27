@@ -41,7 +41,7 @@ impl<'a> RiscvTimebase<'a> {
 #[must_use]
 pub struct Counter<'a> {
     timebase: RiscvTimebase<'a>,
-    clock: super::Clock,
+    clock: super::LocalClock,
 }
 
 #[cfg(all(limen_target, target_arch = "riscv64"))]
@@ -55,11 +55,11 @@ impl<'a> Counter<'a> {
             .filter(|local| local.get() as u64 == hart)?;
         Some(Self {
             timebase,
-            clock: super::Clock::bind(hart, timebase.hertz.into(), read_native)?,
+            clock: super::LocalClock::bind(hart, timebase.hertz.into(), read_native)?,
         })
     }
 
-    pub fn clock(&self) -> &super::Clock {
+    pub fn clock(&self) -> &super::LocalClock {
         &self.clock
     }
 

@@ -7,7 +7,9 @@ use core::{
     sync::atomic::AtomicBool,
 };
 
-use super::{HartLocal, QueueNode, backend, ordinary_local};
+#[cfg(any(limen_target, test))]
+use super::backend;
+use super::{HartLocal, QueueNode, ordinary_local};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Error {
@@ -43,6 +45,7 @@ pub(super) struct LocalProtection {
 }
 
 impl LocalProtection {
+    #[cfg(any(limen_target, test))]
     pub(super) const fn new() -> Self {
         Self {
             current: Cell::new(Participation::Idle),
@@ -51,6 +54,7 @@ impl LocalProtection {
         }
     }
 
+    #[cfg(any(limen_target, test))]
     pub(super) fn bind(&self, nodes: &'static [QueueNode]) {
         assert!(self.nodes.set(nodes).is_ok(), "Hart nodes already supplied");
     }
@@ -63,21 +67,39 @@ impl LocalProtection {
         // Clear all ordinary state before restored IRQ can dispatch again.
         self.current.set(Participation::Idle);
         let interrupt = self.interrupt.take().expect("outer local protection");
-        unsafe { backend::restore_interrupts(interrupt) };
+        restore_interrupts(interrupt);
     }
 }
 
 type InterruptGuard = DropGuard<usize, fn(usize)>;
 
+#[cfg(any(limen_target, test))]
+fn restore_interrupts(saved: usize) {
+    // The native mask operation supplies the saved value.
+    unsafe { backend::restore_interrupts(saved) };
+}
+
+#[cfg(not(any(limen_target, test)))]
+fn restore_interrupts(_: usize) {
+    unreachable!("interrupt restore requires a successful native mask");
+}
+
+#[cfg(any(limen_target, test))]
 fn protect() -> Result<(&'static HartLocal, InterruptGuard), Error> {
     let local = ordinary_local().ok_or(Error::Context)?;
-    let interrupt: InterruptGuard =
-        DropGuard::new(unsafe { backend::mask_interrupts() }, |saved| unsafe {
-            backend::restore_interrupts(saved)
-        });
+    let interrupt = DropGuard::new(
+        unsafe { backend::mask_interrupts() },
+        restore_interrupts as fn(_),
+    );
     Ok((local, interrupt))
 }
 
+#[cfg(not(any(limen_target, test)))]
+fn protect() -> Result<(&'static HartLocal, InterruptGuard), Error> {
+    Err(Error::Context)
+}
+
+#[cfg(any(limen_target, test))]
 pub(crate) fn can_switch() -> bool {
     let Ok((local, _interrupt)) = protect() else {
         return false;

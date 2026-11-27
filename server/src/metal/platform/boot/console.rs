@@ -6,6 +6,12 @@ pub struct Console {
     pub(crate) write_byte: fn(u8) -> bool,
 }
 
+impl Console {
+    pub const fn new(write_byte: fn(u8) -> bool) -> Self {
+        Self { write_byte }
+    }
+}
+
 impl Write for Console {
     fn write_str(&mut self, message: &str) -> fmt::Result {
         for byte in message.bytes() {

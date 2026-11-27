@@ -35,6 +35,10 @@ impl<'a> Boot<'a> {
         self.major.take()
     }
 
+    #[cfg_attr(
+        not(any(limen_target, test)),
+        expect(dead_code, reason = "native entry supplies the original stack ranges")
+    )]
     pub(crate) fn exclusions_for(
         &self,
         major: PhysicalRange,
@@ -126,6 +130,10 @@ impl<'a> Boot<'a> {
         )
     }
 
+    #[cfg_attr(
+        not(any(limen_target, test)),
+        expect(dead_code, reason = "native entry delivers admitted boot data")
+    )]
     pub(crate) fn new(
         hart: usize,
         image: PhysicalRange,

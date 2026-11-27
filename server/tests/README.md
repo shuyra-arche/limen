@@ -38,6 +38,27 @@ cargo test --locked -p kernel --test contracts -- metal::firmware::devicetree
 Keep independent build fixtures, compiler contracts and target guests separate
 only when they require their own compilation or execution boundary.
 
+## Metal profile boundaries
+
+Host and target compile the same Clock identity, observations and deadline
+rules, GIC private-input state, MMU installation record, synchronization
+state, identity slots, allocator geometry and boot descriptions. A supplied
+Clock observation cannot produce a deadline for an admitted native counter.
+An ordinary Host lacks installed Hart protection and returns a context error
+on lock acquisition. The owner-local Sync tests supply controlled observations
+at the local-address and interrupt-mask edges.
+
+| Remaining profile selection | Native dependency |
+| --- | --- |
+| `chrono/native` and the Arm, RV64 and x86 counter bindings | Trusted current-Hart observation, CNTVCT/CNTFRQ, `rdtime`, or CPUID/RDTSC. |
+| Arm GIC CPU interface, distributor barrier, redistributor wake and private-input operations, and virtual timer | ICC and comparator registers, the current PE, ordered GIC register writes, and readback. |
+| RV64 external barrier, supervisor reception, timer and SBI software delivery | I/O fence, supervisor CSRs, comparator access and the selected SBI call. |
+| x86 local APIC native operations | Live local APIC mode, registers and current CPU observation. |
+| CPU MMU native context bindings and RV64 encoder binding | Live translation controls and maintenance, or the resident module's native call ABI. Format, installation transitions and offer checks are shared. |
+| SMMUv3, RV64 IOMMU and VT-d ordering constructors and operations | Native memory ordering, cache-line publication and register synchronization. The controller records and descriptor encoders are shared. |
+| Platform boot major, minor, trap, services and ISA entry modules, and PSCI invocation | Installed machine entry, native stacks and vector ABI, terminal service delivery, or an actual PSCI conduit. SBI and UEFI handoff selection follows the firmware profile. |
+| Hart ISA backends and local entry, stack access, resident storage installation and protection | Actual entry registers, trusted stack range, CPU-local address and interrupt masking/restoration. Resident construction requires native entry or the owner-local Host observation fixture. |
+
 The Metal Sync Host suite executes the production MCS queue with the same
 spin hint and atomic operations as the target. Tests arrange a real tail
 exchange before linking, inspect the private departure decision, then finish

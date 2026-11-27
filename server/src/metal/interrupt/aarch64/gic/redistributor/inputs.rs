@@ -2,7 +2,10 @@
 
 use core::{arch::asm, marker::PhantomData};
 
-use super::{Failure, Frame, PrivateInterrupt, PrivateInterrupts};
+use super::{
+    Failure, Frame, PrivateInterrupt, PrivateInterrupts,
+    state::{PrivateState, Setup},
+};
 use crate::metal::{
     interrupt::aarch64::gic::{
         Trigger,
@@ -21,24 +24,6 @@ const PENDING: usize = SGI + 0x200;
 const ACTIVE: usize = SGI + 0x300;
 const PRIORITY: usize = SGI + 0x400;
 const PPI_CONFIG: usize = SGI + 0xc04;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct Setup {
-    priority: u8,
-    inherited_priority: u8,
-    group: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PrivateState {
-    Vacant,
-    Configuring(Setup),
-    Masked(Setup),
-    Enabling(Setup),
-    Enabled(Setup),
-    Masking(Setup),
-    Restoring(Setup),
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PpiState {

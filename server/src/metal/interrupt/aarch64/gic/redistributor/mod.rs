@@ -5,11 +5,11 @@ use core::marker::PhantomData;
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 mod private;
+mod state;
 pub use private::{PrivateInterrupt, PrivateInterrupts};
+use state::PrivateState;
 #[cfg(all(limen_target, target_arch = "aarch64"))]
 mod inputs;
-#[cfg(all(limen_target, target_arch = "aarch64"))]
-use inputs::PrivateState;
 #[cfg(all(limen_target, target_arch = "aarch64"))]
 pub use inputs::{Ppi, StoppedPpi};
 
@@ -184,7 +184,7 @@ impl<'map> Iterator for Redistributor<'map, '_> {
             geometry,
             domain: self.domain,
             mapping,
-            #[cfg(all(limen_target, target_arch = "aarch64"))]
+
             private: [PrivateState::Vacant; 32],
         })
     }
@@ -196,7 +196,7 @@ pub struct Frame<'map> {
     geometry: Geometry,
     domain: PhysicalRange,
     mapping: DeviceWindow<'map>,
-    #[cfg(all(limen_target, target_arch = "aarch64"))]
+
     private: [PrivateState; 32],
 }
 
@@ -220,13 +220,13 @@ impl<'map> Frame<'map> {
             geometry: self.geometry,
             domain: self.domain,
             mapping: PhantomData,
-            #[cfg(all(limen_target, target_arch = "aarch64"))]
+
             private: self.private,
         }
     }
 
     pub fn awake(&mut self) -> bool {
-        self.wake_bits() & (PROCESSOR_SLEEP | CHILDREN_ASLEEP) == 0
+        awake(self.wake_bits())
     }
 
     fn wake_bits(&mut self) -> u32 {
@@ -241,7 +241,7 @@ impl<'map> Frame<'map> {
             return Err(Failure::Scope);
         }
         let bits = self.wake_bits();
-        if self.awake_bits(bits) {
+        if awake(bits) {
             return Ok(());
         }
         if bits & (PROCESSOR_SLEEP | CHILDREN_ASLEEP) == (PROCESSOR_SLEEP | CHILDREN_ASLEEP) {
@@ -254,11 +254,10 @@ impl<'map> Frame<'map> {
         }
         Err(Failure::Busy)
     }
+}
 
-    #[cfg(all(limen_target, target_arch = "aarch64"))]
-    fn awake_bits(&self, bits: u32) -> bool {
-        bits & (PROCESSOR_SLEEP | CHILDREN_ASLEEP) == 0
-    }
+fn awake(bits: u32) -> bool {
+    bits & (PROCESSOR_SLEEP | CHILDREN_ASLEEP) == 0
 }
 
 /// Portable ownership of an already partitioned frame. The source mapping
@@ -268,7 +267,7 @@ pub struct FrameHandoff<'origin> {
     geometry: Geometry,
     domain: PhysicalRange,
     mapping: PhantomData<&'origin mut ()>,
-    #[cfg(all(limen_target, target_arch = "aarch64"))]
+
     private: [PrivateState; 32],
 }
 
@@ -303,7 +302,7 @@ impl<'origin> FrameHandoff<'origin> {
             geometry,
             domain: self.domain,
             mapping,
-            #[cfg(all(limen_target, target_arch = "aarch64"))]
+
             private: self.private,
         })
     }

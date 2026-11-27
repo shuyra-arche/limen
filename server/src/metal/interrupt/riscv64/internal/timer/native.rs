@@ -151,8 +151,10 @@ impl<'a> Timer<'a> {
     /// A later target requires independent evidence that earlier obligations
     /// have settled or another source still covers them.
     pub unsafe fn rearm(&mut self, deadline: Deadline<'_>) -> Result<(), Failure> {
-        let target = deadline
-            .count_for(self.counter.clock())
+        let target = self
+            .counter
+            .clock()
+            .count_for(deadline)
             .ok_or(Failure::Scope)?;
         let now = self.counter()?;
         self.state.advance(Event::Rearm { now, target })?;
@@ -219,8 +221,10 @@ impl AbsoluteTimer for Timer<'_> {
     type Failure = Failure;
 
     fn arm_at(&mut self, deadline: Deadline<'_>) -> Result<(), Failure> {
-        let target = deadline
-            .count_for(self.counter.clock())
+        let target = self
+            .counter
+            .clock()
+            .count_for(deadline)
             .ok_or(Failure::Scope)?;
         let now = self.counter()?;
         self.state.advance(Event::Arm { now, target })?;
@@ -228,8 +232,10 @@ impl AbsoluteTimer for Timer<'_> {
     }
 
     fn advance_deadline(&mut self, deadline: Deadline<'_>) -> Result<(), Failure> {
-        let target = deadline
-            .count_for(self.counter.clock())
+        let target = self
+            .counter
+            .clock()
+            .count_for(deadline)
             .ok_or(Failure::Scope)?;
         let previous = self.state.deadline().ok_or(Failure::Busy)?;
         let now = self.counter()?;

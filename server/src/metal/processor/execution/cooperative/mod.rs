@@ -5,7 +5,10 @@ use core::{
     marker::PhantomData,
 };
 
-use crate::metal::processor::hart::local::{self, HartId, stack::Stack};
+use crate::metal::processor::hart::{
+    HartId,
+    local::{self, stack::Stack},
+};
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64;

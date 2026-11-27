@@ -3,7 +3,7 @@ use core::{arch::asm, num::NonZeroU32};
 
 use super::GenericCounter;
 use crate::metal::{
-    chrono::Clock,
+    chrono::LocalClock,
     platform::description::devicetree::{Error, NodeId},
     processor::hart::local::try_current_hart,
 };
@@ -12,7 +12,7 @@ use crate::metal::{
 #[must_use]
 pub struct VirtualCounter<'tree> {
     source: NodeId<'tree>,
-    clock: Clock,
+    clock: LocalClock,
 }
 
 impl<'tree> VirtualCounter<'tree> {
@@ -20,7 +20,7 @@ impl<'tree> VirtualCounter<'tree> {
         self.source
     }
 
-    pub fn clock(&self) -> &Clock {
+    pub fn clock(&self) -> &LocalClock {
         &self.clock
     }
 }
@@ -37,7 +37,8 @@ impl<'tree> GenericCounter<'tree> {
             .filter(|current| current.get() == hart)
             .ok_or(Error::Conflict)?;
         let frequency = unsafe { self.counter_frequency() }?;
-        let clock = Clock::bind(hart, frequency.into(), read_virtual).ok_or(Error::Conflict)?;
+        let clock =
+            LocalClock::bind(hart, frequency.into(), read_virtual).ok_or(Error::Conflict)?;
         Ok(VirtualCounter {
             source: self.source,
             clock,

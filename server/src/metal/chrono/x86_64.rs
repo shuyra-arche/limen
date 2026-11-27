@@ -2,7 +2,8 @@
 
 use core::num::NonZeroU64;
 
-fn frequency(denominator: u32, numerator: u32, crystal_hertz: u32) -> Option<NonZeroU64> {
+/// Interpret CPUID.15H’s crystal and ratio as exact whole Hertz.
+pub fn frequency(denominator: u32, numerator: u32, crystal_hertz: u32) -> Option<NonZeroU64> {
     let denominator = NonZeroU64::new(u64::from(denominator))?;
     let scaled = u64::from(numerator) * u64::from(crystal_hertz);
     // The common Clock represents whole Hertz. Reject a fractional result.
@@ -13,26 +14,27 @@ fn frequency(denominator: u32, numerator: u32, crystal_hertz: u32) -> Option<Non
 }
 
 #[cfg(all(limen_target, target_arch = "x86_64"))]
-pub use native::{Failure, Tsc};
+pub use native::Tsc;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Failure {
+    Context,
+    Absent,
+    VariableRate,
+    Frequency,
+}
 
 #[cfg(all(limen_target, target_arch = "x86_64"))]
 mod native {
     use core::arch::{asm, x86_64::__cpuid};
 
-    use crate::metal::{chrono::Clock, processor::hart::local::try_current_hart};
-
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub enum Failure {
-        Context,
-        Absent,
-        VariableRate,
-        Frequency,
-    }
+    use super::Failure;
+    use crate::metal::{chrono::LocalClock, processor::hart::local::try_current_hart};
 
     /// The original invariant TSC on the bound local Hart.
     #[must_use]
     pub struct Tsc {
-        clock: Clock,
+        clock: LocalClock,
     }
 
     impl Tsc {
@@ -57,11 +59,11 @@ mod native {
             }
             let rate = __cpuid(0x15);
             let hertz = super::frequency(rate.eax, rate.ebx, rate.ecx).ok_or(Failure::Frequency)?;
-            let clock = Clock::bind(hart, hertz, read).ok_or(Failure::Context)?;
+            let clock = LocalClock::bind(hart, hertz, read).ok_or(Failure::Context)?;
             Ok(Self { clock })
         }
 
-        pub fn clock(&self) -> &Clock {
+        pub fn clock(&self) -> &LocalClock {
             &self.clock
         }
     }

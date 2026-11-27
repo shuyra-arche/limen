@@ -1,5 +1,5 @@
-use super::{Clock, Sample, duration, later_count};
-use core::{marker::PhantomData, num::NonZeroU64, time::Duration};
+use super::{Clock, HartId, duration, later_count};
+use core::{num::NonZeroU64, time::Duration};
 
 #[test]
 fn conversion_floors_subnanosecond_samples_and_preserves_long_intervals() {
@@ -30,33 +30,29 @@ fn deadline_conversion_rounds_up_and_refuses_empty_or_wrapping_targets() {
     assert_eq!(later_count(0, hz, Duration::from_secs(u64::MAX)), None);
 }
 
-#[cfg(not(limen_target))]
 #[test]
 fn samples_and_deadlines_keep_their_exact_clock_domain() {
+    let hart = HartId::new(1);
     let hertz = NonZeroU64::new(1_000).unwrap();
-    let clock = Clock {
-        hertz,
-        local: PhantomData,
-    };
-    let other = Clock {
-        hertz,
-        local: PhantomData,
-    };
-    let earlier = Sample {
-        clock: &clock,
-        count: 10,
-    };
-    let later = Sample {
-        clock: &clock,
-        count: 12,
-    };
-    let other_sample = Sample {
-        clock: &other,
-        count: 9,
-    };
+    let clock = Clock::new(hart, hertz);
+    let other = Clock::new(hart, hertz);
+    assert_eq!(clock.hart(), hart);
+    assert_eq!(clock.frequency(), hertz);
+    assert!(
+        clock
+            .observe(HartId::new(2), || panic!(
+                "foreign Hart must not be sampled"
+            ))
+            .is_none()
+    );
+    let earlier = clock.observe(hart, || 10).unwrap();
+    let later = clock.observe(hart, || 12).unwrap();
+    let other_sample = other.observe(hart, || 9).unwrap();
     assert_eq!(later.elapsed_since(earlier), Some(Duration::from_millis(2)));
     assert_eq!(earlier.elapsed_since(later), None);
     assert_eq!(later.elapsed_since(other_sample), None);
+    let wrapped = clock.observe(hart, || 0).unwrap();
+    assert_eq!(wrapped.elapsed_since(later), None);
     let deadline = earlier.after(Duration::from_millis(2)).unwrap();
     assert_eq!(deadline.count_for(&clock), Some(12));
     assert_eq!(deadline.count_for(&other), None);

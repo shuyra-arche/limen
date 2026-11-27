@@ -79,6 +79,10 @@ impl RootPlan {
 }
 
 impl<'a> Regions<'a> {
+    #[cfg_attr(
+        not(any(limen_target, test)),
+        expect(dead_code, reason = "native entry supplies the original exclusions")
+    )]
     pub(crate) fn organize(
         boot: &Boot<'_>,
         exclusions: &Exclusions<'_>,

@@ -223,32 +223,33 @@ enum State<C> {
     Issued { previous: C, requested: C },
 }
 
-/// One local authority records the operation before its native write.
-pub(super) struct Installation<C> {
+/// Tracks a local installation and the observations needed to confirm it.
+/// Constructing the record grants no access to native controls.
+pub struct Installation<C> {
     hart: usize,
     state: State<C>,
 }
 
 impl<C: Copy + Eq> Installation<C> {
-    pub(super) fn new(hart: usize, current: C) -> Self {
+    pub fn new(hart: usize, current: C) -> Self {
         Self {
             hart,
             state: State::Current(current),
         }
     }
 
-    pub(super) fn hart(&self) -> usize {
+    pub fn hart(&self) -> usize {
         self.hart
     }
 
-    pub(super) fn current(&self) -> Option<C> {
+    pub fn current(&self) -> Option<C> {
         match self.state {
             State::Current(current) => Some(current),
             State::Issued { .. } => None,
         }
     }
 
-    pub(super) fn pending(&self) -> Option<(C, C)> {
+    pub fn pending(&self) -> Option<(C, C)> {
         match self.state {
             State::Current(_) => None,
             State::Issued {
@@ -258,12 +259,7 @@ impl<C: Copy + Eq> Installation<C> {
         }
     }
 
-    pub(super) fn issue(
-        &mut self,
-        expected: C,
-        observed: C,
-        requested: C,
-    ) -> Result<(), SwitchError> {
+    pub fn issue(&mut self, expected: C, observed: C, requested: C) -> Result<(), SwitchError> {
         let previous = self.current().ok_or(SwitchError::Unconfirmed)?;
         if previous != expected || previous != observed {
             return Err(SwitchError::Current);
@@ -275,7 +271,7 @@ impl<C: Copy + Eq> Installation<C> {
         Ok(())
     }
 
-    pub(super) fn retry(&self, observed: C) -> Result<C, SwitchError> {
+    pub fn retry(&self, observed: C) -> Result<C, SwitchError> {
         let (previous, requested) = self.pending().ok_or(SwitchError::Current)?;
         if observed == previous || observed == requested {
             Ok(requested)
@@ -285,7 +281,7 @@ impl<C: Copy + Eq> Installation<C> {
     }
 
     /// Called after the original native write and maintenance have finished.
-    pub(super) fn complete(&mut self, observed: C) -> Result<(C, C), SwitchError> {
+    pub fn complete(&mut self, observed: C) -> Result<(C, C), SwitchError> {
         let (previous, requested) = self.pending().ok_or(SwitchError::Current)?;
         if observed != requested {
             return Err(SwitchError::Unconfirmed);

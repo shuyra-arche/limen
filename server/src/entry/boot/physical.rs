@@ -123,6 +123,13 @@ pub struct Exclusions<'a> {
 }
 
 impl<'a> Exclusions<'a> {
+    #[cfg_attr(
+        not(any(limen_target, test)),
+        expect(
+            dead_code,
+            reason = "native entry supplies the original occupied ranges"
+        )
+    )]
     pub(super) fn new(
         image: PhysicalRange,
         major: PhysicalRange,
@@ -153,6 +160,13 @@ impl<'a> Exclusions<'a> {
         }
     }
 
+    #[cfg_attr(
+        not(any(limen_target, test)),
+        expect(
+            dead_code,
+            reason = "native entry supplies the retained ACPI description"
+        )
+    )]
     pub(super) fn with_acpi(mut self, acpi: Option<&'a Acpi<'a>>) -> Self {
         self.acpi = acpi;
         self
@@ -207,6 +221,10 @@ impl<'a> Exclusions<'a> {
     }
 }
 
+#[cfg_attr(
+    not(any(limen_target, test)),
+    expect(dead_code, reason = "native entry supplies the original stack ranges")
+)]
 pub(super) fn extent(range: Range<usize>) -> PhysicalRange {
     PhysicalRange::new(
         PhysicalAddress::new(range.start as u64),

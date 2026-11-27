@@ -10,6 +10,13 @@ pub(crate) struct QueueNode {
 }
 
 impl QueueNode {
+    #[cfg_attr(
+        not(any(limen_target, test)),
+        expect(
+            dead_code,
+            reason = "CPU-local construction supplies the resident nodes"
+        )
+    )]
     pub(crate) const fn new() -> Self {
         Self {
             next: AtomicPtr::new(ptr::null_mut()),

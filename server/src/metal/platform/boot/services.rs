@@ -31,7 +31,7 @@ impl Services {
     }
 
     pub(crate) fn console(&self) -> Option<Console> {
-        self.output.map(|write_byte| Console { write_byte })
+        self.output.map(Console::new)
     }
 
     pub(crate) fn reject(&self, reason: fmt::Arguments<'_>) -> ! {

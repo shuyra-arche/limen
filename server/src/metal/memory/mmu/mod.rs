@@ -1,17 +1,7 @@
 pub mod aarch64;
 pub mod access;
-#[cfg(any(
-    test,
-    all(
-        limen_target,
-        any(
-            target_arch = "aarch64",
-            target_arch = "riscv64",
-            target_arch = "x86_64"
-        )
-    )
-))]
 mod installation;
+pub use installation::Installation;
 #[cfg(all(
     limen_target,
     any(

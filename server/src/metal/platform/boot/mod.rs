@@ -46,5 +46,8 @@ pub(crate) use backend::{
 };
 
 /// Major and minor CPUs use the same ordinary startup stack budget.
-#[cfg(limen_target)]
+#[cfg_attr(
+    not(limen_target),
+    expect(dead_code, reason = "only native boot allocates the startup stacks")
+)]
 pub(in crate::metal) const STACK_BYTES: usize = 32 * 1024;

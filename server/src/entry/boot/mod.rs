@@ -13,10 +13,11 @@ use core::fmt::Write;
 #[cfg(limen_target)]
 use limen_treaty::model::ByteLength;
 
+pub use crate::metal::platform::boot::console::Console;
 #[cfg(limen_target)]
 use crate::metal::platform::boot::handoff::Descriptions;
 #[cfg(limen_target)]
-pub use crate::metal::platform::boot::{Startup, console::Console, services::Services};
+pub use crate::metal::platform::boot::{Startup, services::Services};
 use crate::metal::platform::description::acpi;
 use crate::metal::platform::{
     description::devicetree::{

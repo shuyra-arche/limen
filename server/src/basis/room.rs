@@ -5,7 +5,7 @@ use core::num::NonZeroU64;
 use super::unit::UnitId;
 use crate::metal::{
     processor::execution::cooperative::{Hart, LeaveReceipt},
-    processor::hart::local::HartId,
+    processor::hart::HartId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

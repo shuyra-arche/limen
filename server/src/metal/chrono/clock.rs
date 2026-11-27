@@ -1,60 +1,50 @@
-//! An admitted hardware counter and samples from its one local time domain.
+//! Local counter domains and their observation and comparison rules.
 
 use core::{marker::PhantomData, num::NonZeroU64, time::Duration};
 
-#[cfg(limen_target)]
-use crate::metal::processor::hart::local::{HartId, try_current_hart};
+use crate::metal::processor::hart::HartId;
 
-/// One admitted counter and time domain, bound to its verified local Hart.
+/// One local counter domain with an exact whole-Hertz frequency.
+/// A native counter keeps its own domain private.
 #[must_use]
 pub struct Clock {
-    #[cfg(limen_target)]
     hart: HartId,
     hertz: NonZeroU64,
-    #[cfg(limen_target)]
-    read: fn() -> u64,
     local: PhantomData<*mut ()>,
 }
 
 impl Clock {
-    #[cfg(limen_target)]
-    pub(super) fn bind(hart: HartId, hertz: NonZeroU64, read: fn() -> u64) -> Option<Self> {
-        (try_current_hart() == Some(hart)).then_some(Self {
+    pub const fn new(hart: HartId, hertz: NonZeroU64) -> Self {
+        Self {
             hart,
             hertz,
-            read,
             local: PhantomData,
-        })
+        }
     }
 
-    #[cfg(limen_target)]
-    pub fn hart(&self) -> usize {
-        self.hart.get()
+    pub const fn hart(&self) -> HartId {
+        self.hart
     }
 
     pub fn frequency(&self) -> NonZeroU64 {
         self.hertz
     }
 
-    pub(crate) fn deadline(&self, count: u64) -> Deadline<'_> {
+    pub(super) fn deadline(&self, count: u64) -> Deadline<'_> {
         Deadline { clock: self, count }
     }
 
-    #[cfg(limen_target)]
-    pub(crate) fn read(&self) -> Option<u64> {
-        (try_current_hart() == Some(self.hart)).then(self.read)
-    }
-
-    #[cfg(limen_target)]
-    pub fn sample(&self) -> Option<Sample<'_>> {
-        Some(Sample {
+    /// Interpret a count reported for this Hart. Read the source only after
+    /// checking the supplied Hart identity.
+    pub fn observe(&self, hart: HartId, read: impl FnOnce() -> u64) -> Option<Sample<'_>> {
+        (hart == self.hart).then(|| Sample {
             clock: self,
-            count: self.read()?,
+            count: read(),
         })
     }
 }
 
-/// One observation. Comparison requires the same live admitted Clock.
+/// One observation. Comparison requires the same live clock domain.
 #[derive(Clone, Copy)]
 pub struct Sample<'clock> {
     clock: &'clock Clock,
@@ -62,6 +52,10 @@ pub struct Sample<'clock> {
 }
 
 impl<'clock> Sample<'clock> {
+    pub fn count(self) -> u64 {
+        self.count
+    }
+
     /// Elapsed time rounded down to a nanosecond. Stale ordering, another
     /// clock or a wrapped counter fails instead of implying calibration.
     pub fn elapsed_since(self, earlier: Self) -> Option<Duration> {
@@ -82,7 +76,7 @@ impl<'clock> Sample<'clock> {
     }
 }
 
-/// An exact comparison target issued by one admitted hardware counter.
+/// An exact comparison target in its original clock domain.
 #[derive(Clone, Copy)]
 pub struct Deadline<'clock> {
     clock: &'clock Clock,

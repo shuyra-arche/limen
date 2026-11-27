@@ -1,7 +1,10 @@
 //! Trusted local CPU facts and fixed storage.
 
+#[cfg(limen_target)]
+use super::HartId;
 #[cfg(limen_cooperative)]
 use core::marker::PhantomData;
+#[cfg(any(limen_target, test))]
 use core::ptr;
 #[cfg(limen_target)]
 use core::{cell::Cell, ops::Range};
@@ -21,8 +24,10 @@ use super::x86_64::native as backend;
 #[cfg(limen_target)]
 pub(in crate::metal) use backend::stack_pointer;
 pub(crate) use node::QueueNode;
+#[cfg(any(limen_target, test))]
+pub(crate) use protection::can_switch;
 pub use protection::turn_capacity;
-pub(crate) use protection::{Error, TurnParticipation, begin_leaf, begin_turn, can_switch};
+pub(crate) use protection::{Error, TurnParticipation, begin_leaf, begin_turn};
 
 #[cfg(all(test, not(limen_target)))]
 #[path = "../../../../../tests/metal/processor/hart/mod.rs"]
@@ -86,11 +91,13 @@ impl Major {
 }
 
 /// Resident storage supplied by one actual CPU's construction path.
+#[cfg(any(limen_target, test))]
 pub(in crate::metal) struct Storage<const N: usize> {
     local: HartLocal,
     nodes: [QueueNode; N],
 }
 
+#[cfg(any(limen_target, test))]
 impl<const N: usize> Storage<N> {
     pub(in crate::metal) const fn new() -> Self {
         Self {
@@ -123,6 +130,7 @@ pub(in crate::metal) struct HartLocal {
 unsafe impl Sync for HartLocal {}
 
 impl HartLocal {
+    #[cfg(any(limen_target, test))]
     pub(in crate::metal) const fn new() -> Self {
         Self {
             #[cfg(limen_target)]
@@ -160,6 +168,7 @@ impl HartLocal {
     }
 }
 
+#[cfg(any(limen_target, test))]
 fn installed() -> Option<&'static HartLocal> {
     // The trusted machine entry clears the local register before any ordinary
     // Rust call. Until another trusted entry takes over, it is either zero or
@@ -179,6 +188,11 @@ fn ordinary_local() -> Option<&'static HartLocal> {
 #[cfg(all(test, not(limen_target)))]
 fn ordinary_local() -> Option<&'static HartLocal> {
     installed()
+}
+
+#[cfg(not(any(limen_target, test)))]
+fn ordinary_local() -> Option<&'static HartLocal> {
+    None
 }
 
 #[cfg(limen_target)]
@@ -215,19 +229,4 @@ pub(in crate::metal) unsafe fn bind_cooperative(scope: usize, slot: usize) {
     local
         .cooperative
         .set(Some(CooperativeBinding { scope, slot }));
-}
-
-#[cfg(limen_target)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct HartId(usize);
-
-#[cfg(limen_target)]
-impl HartId {
-    pub(crate) const fn new(value: usize) -> Self {
-        Self(value)
-    }
-
-    pub(crate) const fn get(self) -> usize {
-        self.0
-    }
 }

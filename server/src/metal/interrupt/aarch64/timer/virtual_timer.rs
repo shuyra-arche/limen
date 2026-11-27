@@ -4,7 +4,7 @@ use core::arch::asm;
 
 use super::{Failure, GenericTimer, State};
 use crate::metal::{
-    chrono::{Clock, Deadline, aarch64::VirtualCounter},
+    chrono::{Deadline, LocalClock, aarch64::VirtualCounter},
     interrupt::{
         AbsoluteTimer,
         aarch64::gic::redistributor::{Ppi, StoppedPpi},
@@ -19,7 +19,7 @@ const PENDING: u64 = 4;
 /// Exclusive programming of one actual virtual comparator.
 #[must_use]
 pub struct VirtualTimer<'scope, 'tree, 'map> {
-    clock: &'scope Clock,
+    clock: &'scope LocalClock,
     ppi: &'scope mut Ppi<'tree, 'map>,
     state: State,
 }
@@ -76,7 +76,7 @@ impl<'scope, 'tree, 'map> VirtualTimer<'scope, 'tree, 'map> {
         if !self.ppi.permits_programming(previous.is_some()) {
             return Err(Failure::Busy);
         }
-        let target = deadline.count_for(self.clock).ok_or(Failure::Scope)?;
+        let target = self.clock.count_for(deadline).ok_or(Failure::Scope)?;
         let now = self.now()?;
         self.state.begin_program(previous, now, target)?;
         self.ppi.producing();

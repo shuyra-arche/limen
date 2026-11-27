@@ -12,10 +12,7 @@ use crate::{
         processor::execution::cooperative::{
             self, Hart, LeaveReceipt, LocalHart, cooperative_ready,
         },
-        processor::hart::{
-            Major,
-            local::{self, HartId},
-        },
+        processor::hart::{HartId, Major, local},
         sync::{TurnAcquireError, TurnLock, TurnMode, TurnWorkspace, turn_capacity},
     },
 };
