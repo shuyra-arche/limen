@@ -15,3 +15,9 @@ kernel.workspace = true
 limen-treaty.workspace = true
 uefi.workspace = true
 uefi-fixture.workspace = true
+
+[[test]]
+name = "outcome-probe"
+path = "../../support/outcome/probe.rs"
+harness = false
+test = false

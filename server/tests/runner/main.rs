@@ -3,6 +3,7 @@ use kernel_verification::Result;
 use std::path::PathBuf;
 
 mod composition;
+mod native;
 mod qmp;
 mod scenario;
 mod suite;
@@ -19,6 +20,10 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Run(scenario::Inputs),
+    Native {
+        architecture: String,
+        image: PathBuf,
+    },
     Observe {
         elf: PathBuf,
         output: PathBuf,
@@ -34,6 +39,7 @@ enum Commands {
 fn main() {
     let result: Result<()> = match Cli::parse().command {
         Commands::Run(inputs) => scenario::run(inputs),
+        Commands::Native { architecture, image } => native::run(&architecture, &image),
         Commands::Observe { elf, output } => scenario::observe(elf, output),
         Commands::Symbolize {
             elf,
