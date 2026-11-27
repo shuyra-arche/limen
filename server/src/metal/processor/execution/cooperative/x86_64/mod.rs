@@ -5,42 +5,37 @@ use core::{
     mem::offset_of,
 };
 
+use crate::metal::processor::{
+    execution::description::x86_64::{StateControl, base_xcr0},
+    hart::x86_64::status,
+};
+
 // The base save shape does not own AVX or other extended components.
 #[cfg(target_feature = "avx")]
 compile_error!("cooperative x86_64 requires the base x87/SSE execution profile");
 
 pub(super) fn ready() -> bool {
     let features = __cpuid(1);
-    const REQUIRED: u32 = (1 << 24) | (1 << 25) | (1 << 26);
-    if features.edx & REQUIRED != REQUIRED {
-        return false;
-    }
     let (cr0, cr4, flags): (usize, usize, usize);
     unsafe {
         asm!("mov {}, cr0", "mov {}, cr4", "pushfq", "pop {}",
             out(reg) cr0, out(reg) cr4, out(reg) flags);
     }
-    if cr0 & ((1 << 2) | (1 << 3)) != 0
-        || cr0 & (1 << 31) == 0
-        || cr4 & (1 << 9) == 0
-        || flags & (1 << 9) != 0
-    {
+    if !status::paging(cr0) || !status::interrupts_masked(flags) {
         return false;
     }
-    if cr4 & (1 << 18) != 0 {
-        if features.ecx & (1 << 26) == 0 {
-            return false;
-        }
-        let (low, high): (u32, u32);
-        unsafe {
-            asm!("xgetbv", in("ecx") 0u32, out("eax") low, out("edx") high,
-                options(nomem, nostack, preserves_flags));
-        }
-        if low != 3 || high != 0 {
-            return false;
+    match StateControl::from_registers(features.edx, features.ecx, cr0, cr4) {
+        None => false,
+        Some(StateControl::Legacy) => true,
+        Some(StateControl::Xcr0) => {
+            let (low, high): (u32, u32);
+            unsafe {
+                asm!("xgetbv", in("ecx") 0u32, out("eax") low, out("edx") high,
+                    options(nomem, nostack, preserves_flags));
+            }
+            base_xcr0(u64::from(high) << 32 | u64::from(low))
         }
     }
-    true
 }
 
 #[repr(C, align(16))]
