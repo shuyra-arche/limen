@@ -5,8 +5,9 @@ use kernel::{
     entry::boot::{self, Boot, Retirement as PhysicalRetirement},
     metal::{
         memory::allocator::{
-            Allocation, AllocationConstruction, AllocationId, Allocator, Allowance, Candidate,
-            Config, Error as SourceError, Initial, MappedStorage, Pending,
+            Allocation, AllocationConstruction, AllocationId, Allocator, Allowance,
+            BudgetObservation, BudgetProgress, Candidate, Config, Error as SourceError, Initial,
+            LookupObservation, MappedStorage, Pending,
             RamPurpose::Metadata,
             Request, ReturnId, ReturnReceipt, Returned, Search,
             pool::{
@@ -71,6 +72,17 @@ pub(super) fn reference<'pool, T: Sync>(owner: &StableOwner<'pool, '_, T>) -> Re
     panic!("retain stayed Busy for 16 attempts");
 }
 
+pub(super) fn inspect_budget(source: &Allocator) -> Result<(ByteLength, ByteLength), SourceError> {
+    let mut observations = [BudgetObservation::EMPTY; 3];
+    let mut budget = source.budget(&mut observations)?;
+    loop {
+        match budget.step()? {
+            BudgetProgress::Pending => {}
+            BudgetProgress::Complete(managed, unassigned) => return Ok((managed, unassigned)),
+        }
+    }
+}
+
 fn search(source: &'static Allocator, length: u64, physical: PhysicalRange) -> Option<Candidate> {
     let request = Request::new(
         ByteLength::new(length),
@@ -80,7 +92,10 @@ fn search(source: &'static Allocator, length: u64, physical: PhysicalRange) -> O
         Metadata,
     )
     .unwrap();
-    let mut lookup = source.lookup(request, None).unwrap();
+    let mut lookup_observations = [LookupObservation::EMPTY; 3];
+    let mut lookup = source
+        .lookup(request, None, &mut lookup_observations)
+        .unwrap();
     loop {
         match lookup.step().unwrap() {
             Search::Candidate(candidate) => return Some(candidate),
@@ -280,8 +295,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     .unwrap();
     let allowance = allowance.as_ref().unwrap();
     let original = allowance.balance().unwrap();
-    let (managed, unassigned) = source
-        .budget(Fast)
+    let (managed, unassigned) = inspect_budget(source)
         .map(|(total, unassigned)| (total.get(), unassigned.get()))
         .unwrap();
     let root = source.root();
@@ -405,9 +419,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     assert_eq!(remaining.occupied().get(), PAGE);
     assert_eq!(remaining.available().get(), 0);
     assert_eq!(
-        source
-            .budget(Fast)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((managed, managed - PAGE))
     );
     boot::write(

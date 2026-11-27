@@ -53,6 +53,29 @@ impl RootPlan {
             part(self.reserved.end(), physical.end()),
         ]
     }
+
+    fn take_storage<'m>(&self, mapping: &mut Option<MappedRange<'m>>) -> RootStorage<'m> {
+        let mut storage = mapping.take().expect("checked mapping");
+        let start = storage.physical().start();
+        if self.physical.start() != start {
+            let offset = self
+                .physical
+                .start()
+                .distance(start)
+                .expect("checked root offset");
+            let (_, suffix) = storage.split(offset).ok().expect("checked root start");
+            storage = suffix;
+        }
+        if self.physical.end() != storage.physical().end() {
+            let (prefix, _) = storage
+                .split(self.physical.length())
+                .ok()
+                .expect("checked root end");
+            storage = prefix;
+        }
+        assert_eq!(storage.physical(), self.physical);
+        RootStorage::new(storage, self.reserved, self.region.origin)
+    }
 }
 
 impl<'a> Regions<'a> {
@@ -238,9 +261,9 @@ impl<'a> Regions<'a> {
             allowance_receiver,
             initial,
         )?;
-        let storage = self.take_root(mapping, plan);
-        // The same root plan chose this mapping with config.layout() and
-        // removed its whole reservation from the prepared region list.
+        // Consume the mapped root without mutating the list borrowed by
+        // the exact prepared iterator. All fallible checks have completed.
+        let storage = plan.take_storage(mapping);
         let source = unsafe { prepared.install(storage) };
         self.clear();
         Ok(Some(source))
@@ -249,7 +272,7 @@ impl<'a> Regions<'a> {
     fn after_root<'r>(
         &'r self,
         plan: &'r RootPlan,
-    ) -> impl Iterator<Item = RegionDescription> + 'r {
+    ) -> impl Iterator<Item = RegionDescription> + Clone + 'r {
         self.entries[..plan.index]
             .iter()
             .flatten()
@@ -333,30 +356,8 @@ impl<'a> Regions<'a> {
         plan: RootPlan,
     ) -> RootStorage<'m> {
         let [left, right] = plan.remainder();
-        let RootPlan {
-            index,
-            region,
-            physical,
-            reserved,
-        } = plan;
-        let mut storage = mapping.take().expect("checked mapping");
-        let start = storage.physical().start();
-        if physical.start() != start {
-            let offset = physical
-                .start()
-                .distance(start)
-                .expect("checked root offset");
-            let (_, suffix) = storage.split(offset).ok().expect("checked root start");
-            storage = suffix;
-        }
-        if physical.end() != storage.physical().end() {
-            let (prefix, _) = storage
-                .split(physical.length())
-                .ok()
-                .expect("checked root end");
-            storage = prefix;
-        }
-        assert_eq!(storage.physical(), physical);
+        let index = plan.index;
+        let storage = plan.take_storage(mapping);
         match (left, right) {
             (Some(left), Some(right)) => {
                 self.entries.copy_within(index + 1..self.length, index + 2);
@@ -373,7 +374,7 @@ impl<'a> Regions<'a> {
                 self.entries[self.length] = None;
             }
         }
-        RootStorage::new(storage, reserved, region.origin)
+        storage
     }
 }
 

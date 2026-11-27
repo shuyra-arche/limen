@@ -186,12 +186,15 @@ impl Allocator {
             let amount = record.physical.length().get();
             let state = held.access(&region.state).expect("return Region");
             let credit = if open { 0 } else { amount };
-            let unassigned = state.unassigned.checked_add(credit).ok_or(Error::Balance)?;
+            let unassigned = state
+                .unassigned()
+                .checked_add(credit)
+                .ok_or(Error::Balance)?;
             state
                 .buddy()
                 .release(record.physical)
                 .expect("original occupied range");
-            state.unassigned = unassigned;
+            state.set_unassigned(unassigned);
             remove(&mut state.allocations, allocation.key);
             let done = Returned {
                 allocation,

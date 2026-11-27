@@ -1,8 +1,9 @@
 use core::{mem::MaybeUninit, ops::Range};
 use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
-use crate::metal::memory::allocator::region::buddy::{
-    Buddy, Error, Geometry, Request, Revision, Root, Scan, Search,
+use crate::metal::memory::allocator::region::{
+    Revision,
+    buddy::{Buddy, Error, Geometry, Request, Root, Scan, Search},
 };
 
 fn physical(range: Range<u64>) -> PhysicalRange {

@@ -7,6 +7,7 @@ use kernel::{
             Config,
             Error,
             Initial,
+            LookupObservation,
             Pending,
             RamPurpose::Metadata,
             Request,
@@ -17,7 +18,10 @@ use kernel::{
     },
 };
 
-use super::memory::{extent, mapped, retirement};
+use super::{
+    foundation::inspect_budget,
+    memory::{extent, mapped, retirement},
+};
 
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
@@ -84,12 +88,12 @@ pub(super) fn check(boot: &Boot<'_>) {
     assert_eq!(source.root(), pages(4, 4 + root_pages));
     let capacity = (13 - root_pages) * PAGE;
     assert_eq!(
-        source
-            .budget(Slow)
+        inspect_budget(source)
             .map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity - 10 * PAGE))
     );
 
+    let mut lookup_observations = [LookupObservation::EMPTY; 3];
     let mut lookup = source
         .lookup(
             Request::new(
@@ -101,6 +105,7 @@ pub(super) fn check(boot: &Boot<'_>) {
             )
             .unwrap(),
             None,
+            &mut lookup_observations,
         )
         .unwrap();
     loop {
@@ -112,6 +117,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     }
 
     let later = pages(16, 20);
+    let mut absent_observations = [LookupObservation::EMPTY; 3];
     let mut absent = source
         .lookup(
             Request::new(
@@ -123,6 +129,7 @@ pub(super) fn check(boot: &Boot<'_>) {
             )
             .unwrap(),
             None,
+            &mut absent_observations,
         )
         .unwrap();
     let evidence = retirement(boot, later);
@@ -151,7 +158,7 @@ pub(super) fn check(boot: &Boot<'_>) {
         Metadata,
     )
     .unwrap();
-    let Search::Candidate(aligned) = source.lookup(request, Some(added)).unwrap().step().unwrap()
+    let Search::Candidate(aligned) = source.lookup(request, Some(added), &mut [LookupObservation::EMPTY; 3]).unwrap().step().unwrap()
     else {
         panic!("the new Region has an eligible aligned grain");
     };
@@ -172,8 +179,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     assert_eq!(done.physical, pages(0, 3));
     let capacity = capacity + 4 * PAGE;
     assert_eq!(
-        source
-            .budget(Fast)
+        inspect_budget(source)
             .map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity))
     );
