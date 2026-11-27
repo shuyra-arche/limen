@@ -16,7 +16,16 @@ use uefi::{
 
 use super::{foundation, memory};
 
-const BYTES: usize = foundation::PAGES * PAGE_SIZE;
+#[cfg(target_arch = "aarch64")]
+#[path = "../../../metal/memory/mmu/aarch64/owned.rs"]
+mod upper;
+
+#[cfg(target_arch = "aarch64")]
+const UPPER_PAGES: usize = upper::PAGES;
+#[cfg(target_arch = "x86_64")]
+const UPPER_PAGES: usize = 0;
+const PAGES: usize = foundation::PAGES + UPPER_PAGES;
+const BYTES: usize = PAGES * PAGE_SIZE;
 static WINDOW: AtomicUsize = AtomicUsize::new(0);
 static ROOT: AtomicUsize = AtomicUsize::new(0);
 
@@ -41,20 +50,17 @@ pub(super) fn prepare() -> Result<(), Status> {
         .entries()
         .filter(|entry| entry.ty == MemoryType::CONVENTIONAL && entry.phys_start >= 0x10_0000)
         .max_by_key(|entry| entry.page_count)
-        .filter(|entry| entry.page_count >= foundation::PAGES as u64)
+        .filter(|entry| entry.page_count >= PAGES as u64)
         .ok_or(Status::NOT_FOUND)?
         .phys_start;
     drop(map);
-    let pages = firmware::allocate_pages(
-        AllocateType::Address(start),
-        MemoryType::LOADER_DATA,
-        foundation::PAGES,
-    )
-    .map_err(|error| error.status())?;
+    let pages =
+        firmware::allocate_pages(AllocateType::Address(start), MemoryType::LOADER_DATA, PAGES)
+            .map_err(|error| error.status())?;
     assert_eq!(pages.as_ptr().addr() as u64, start);
     // This is the fixture's unused private grant. The firmware may scrub it
     // on free. The final map must establish that it stayed conventional RAM.
-    unsafe { firmware::free_pages(pages, foundation::PAGES) }.map_err(|error| error.status())?;
+    unsafe { firmware::free_pages(pages, PAGES) }.map_err(|error| error.status())?;
     ROOT.store(translation_root(), Ordering::Relaxed);
     WINDOW.store(pages.as_ptr().addr(), Ordering::Release);
     Ok(())
@@ -64,17 +70,19 @@ pub(super) fn check(boot: &Boot<'_>) {
     let start = WINDOW.load(Ordering::Acquire);
     assert_ne!(start, 0);
     assert_eq!(translation_root(), ROOT.load(Ordering::Relaxed));
-    let scope = memory::extent(start as u64, (start + BYTES) as u64);
+    let window = memory::extent(start as u64, (start + BYTES) as u64);
     let map = boot.firmware_map().unwrap();
     assert!(map.regions().any(|region| {
-        region.kind == MemoryType::CONVENTIONAL.0 && region.physical.covers(scope)
+        region.kind == MemoryType::CONVENTIONAL.0 && region.physical.covers(window)
     }));
     assert!(
         boot.exclusions()
             .entries()
-            .all(|entry| !entry.physical.overlaps(scope))
+            .all(|entry| !entry.physical.overlaps(window))
     );
 
+    let foundation_end = start + foundation::PAGES * PAGE_SIZE;
+    let scope = memory::extent(start as u64, foundation_end as u64);
     let mut evidence = Retirement::new(scope);
     let mut descriptions = [None; 1];
     // The scope was granted to this guest as conventional RAM and stayed
@@ -110,4 +118,18 @@ pub(super) fn check(boot: &Boot<'_>) {
     ));
 
     unsafe { foundation::check(boot, scope.start().get(), &evidence) };
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        let range = memory::extent(foundation_end as u64, window.end().get());
+        let mut evidence = Retirement::new(range);
+        // This is the remaining independent extent of the same unexposed
+        // firmware window. The original allocator never admitted these pages.
+        unsafe {
+            evidence.record(Condition::NoEarlyBorrow);
+            evidence.record(Condition::TranslationRetired);
+            evidence.record(Condition::DevicesIsolated);
+            upper::check(boot, range, &evidence);
+        }
+    }
 }
