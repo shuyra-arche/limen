@@ -1,8 +1,9 @@
 #[path = "../../entry/boot/fault.rs"]
 mod boot_fault;
+#[path = "../native.rs"]
+mod native;
 #[path = "../platform.rs"]
 mod platform;
-#[allow(dead_code, reason = "the runner executable owns the live QMP connection")]
 #[path = "../qmp.rs"]
 mod qmp;
 #[path = "../utilities.rs"]

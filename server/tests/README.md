@@ -103,11 +103,17 @@ do not replace the future runtime Trap or driver Sign lifecycle.
 
 A terminal boot fault cannot execute a normal guest test assertion. The
 Boot-owned Host test compiles the ordinary RV64 boot guest via Cargo's JSON
-artifact messages, verifies the unmodified image succeeds, and injects an
-illegal instruction only into a copy at the reviewed BSS-clear instruction
-boundary. It checks the exact interrupted PC and original stack, a complete
-terminal diagnostic and a guest-originated QMP shutdown. The pinned OpenSBI
-syscon path does not independently expose the SBI reset reason.
+artifact messages and verifies that image succeeds. A second run starts
+paused, using GDB over a private Unix socket. GDB stops at the actual linked
+entry, writes initialization witnesses into the first and last BSS words,
+and watches the first word. Once it has been cleared while the last word
+still holds its witness, the test injects an illegal instruction at the
+current PC in guest memory. It observes the actual exception registers at the
+installed vector, then detaches so the original terminal handler runs.
+The Host test compares the complete terminal diagnostic with that independent
+machine observation and requires a guest-originated QMP shutdown. The pinned
+OpenSBI syscon path does not independently expose the SBI reset reason.
+Install `gdb-multiarch` (or set `GDB_MULTIARCH`) for this test.
 
 ```sh
 LIMEN_TEST_PROFILE=debug cargo test --locked \
@@ -116,8 +122,10 @@ LIMEN_TEST_PROFILE=debug cargo test --locked \
     -- --ignored --test-threads=1
 ```
 
-The original and changed ELF, hashes, injection location and run receipts
-are preserved. Unlike ordinary guests, this one test asserts external terminal
-evidence because its expected outcome prevents in-guest completion.
+The unchanged ELF's hash, machine observation, controller transcript and run
+receipts establish the fault test. It does not match instruction encodings,
+modify production startup code or produce a patched ELF. Unlike ordinary
+guests, this test asserts external terminal evidence because its expected
+outcome prevents in-guest completion.
 
 See [Runner](runner/README.md) for the execution and evidence boundary.

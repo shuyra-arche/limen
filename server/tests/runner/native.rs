@@ -174,15 +174,9 @@ fn peripherals(command: &mut Command, machine: &Machine, directory: &Path, obser
     }
 }
 
-pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<()> {
-    let image = image.canonicalize()?;
-    let evidence = match evidence_root {
-        Some(root) => root.join(image.file_name().ok_or("missing executable name")?),
-        None => PathBuf::from(env::var_os("LIMEN_TEST_EVIDENCE").ok_or("missing evidence path")?),
-    };
-    kernel_verification::fresh(&evidence)?;
-    let directory = evidence.canonicalize()?;
-    let machine = platform::read(&image)?;
+/// Construct and record the selected machine without starting it.
+pub fn prepare(image: &Path, directory: &Path, observe: bool) -> Result<Command> {
+    let machine = platform::read(image)?;
     kernel_verification::json(
         &directory.join("platform.json"),
         &serde_json::json!({
@@ -195,10 +189,10 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
             "iommu": format!("{:?}", machine.platform.iommu),
             "serial": format!("{:?}", machine.platform.serial),
             "devices": machine.devices,
-            "image_sha256": kernel_verification::digest(&image)?,
+            "image_sha256": kernel_verification::digest(image)?,
         }),
     )?;
-    let mut command = command(&machine, &image, &directory, observe)?;
+    let command = command(&machine, image, directory, observe)?;
     let version = output(Command::new(command.get_program()).arg("--version"))?;
     require(
         version
@@ -215,11 +209,23 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
             "runner_sha256": kernel_verification::digest(&env::current_exe()?)?,
         }),
     )?;
+    Ok(command)
+}
+
+pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<()> {
+    let image = image.canonicalize()?;
+    let evidence = match evidence_root {
+        Some(root) => root.join(image.file_name().ok_or("missing executable name")?),
+        None => PathBuf::from(env::var_os("LIMEN_TEST_EVIDENCE").ok_or("missing evidence path")?),
+    };
+    kernel_verification::fresh(&evidence)?;
+    let directory = evidence.canonicalize()?;
+    let mut command = prepare(&image, &directory, observe)?;
     let timeout = Duration::from_secs(45);
     let mut outcome = if observe {
         // External observation is optional; ordinary Cargo tests need only
         // the dedicated completion status.
-        let (outcome, shutdown) = crate::qmp::run_isolated(command, &directory, timeout)?;
+        let (outcome, shutdown) = crate::qmp::run_isolated(command, &directory, timeout, None)?;
         match shutdown {
             Ok(shutdown) => {
                 kernel_verification::json(&directory.join("shutdown.json"), &shutdown)?;

@@ -26,3 +26,7 @@ descendants invalidate success. Semihosting is enabled for trusted guest
 completion; never run an untrusted test image with this runner.
 
 See [tests](../README.md) for Cargo commands and test ownership.
+
+An externally controlled observation negotiates QMP without issuing its own
+continue command. The supplied controller alone starts the paused machine and
+is supervised by the same bounded process executor.

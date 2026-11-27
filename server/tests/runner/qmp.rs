@@ -22,6 +22,7 @@ pub fn run_isolated(
     mut command: Command,
     directory: &Path,
     timeout: Duration,
+    controller: Option<Command>,
 ) -> Result<(process::Outcome, io::Result<Shutdown>)> {
     use std::{
         fs,
@@ -41,7 +42,9 @@ pub fn run_isolated(
             .arg(format!("unix:{},server=off", socket.display()));
         let finished = AtomicBool::new(false);
         thread::scope(|scope| {
-            let monitor = scope.spawn(|| {
+            let finished = &finished;
+            let listener = &listener;
+            let monitor = scope.spawn(move || {
                 let (stream, _) = loop {
                     match listener.accept() {
                         Ok(connection) => break connection,
@@ -58,7 +61,23 @@ pub fn run_isolated(
                 stream.set_read_timeout(Some(timeout))?;
                 stream.set_write_timeout(Some(timeout))?;
                 let commands = stream.try_clone()?;
-                capture(BufReader::new(stream), commands, transcript)
+                let control = controller.map(|mut controller| {
+                    move || {
+                        let result = process::run(
+                            &mut controller,
+                            &directory.join("controller"),
+                            timeout,
+                        )
+                        .map_err(|error| io::Error::other(error.to_string()))?;
+                        if !result.success() {
+                            return Err(io::Error::other(format!(
+                                "external controller failed: {result:?}"
+                            )));
+                        }
+                        Ok(())
+                    }
+                });
+                capture(BufReader::new(stream), commands, transcript, control)
             });
             let outcome = process::run_with_stdio(
                 &mut command,
@@ -81,6 +100,7 @@ pub fn run_isolated(
     _command: Command,
     _directory: &Path,
     _timeout: Duration,
+    _controller: Option<Command>,
 ) -> Result<(process::Outcome, io::Result<Shutdown>)> {
     Err("isolated QMP observation requires a Unix host".into())
 }
@@ -89,6 +109,7 @@ pub(super) fn capture(
     mut input: impl BufRead,
     mut commands: impl Write,
     mut transcript: impl Write,
+    mut controller: Option<impl FnOnce() -> io::Result<()>>,
 ) -> io::Result<Shutdown> {
     let mut bytes = Vec::new();
     let mut next = || -> io::Result<Option<Value>> {
@@ -110,6 +131,7 @@ pub(super) fn capture(
         r#"{{"execute":"qmp_capabilities","id":"capabilities"}}"#
     )?;
     commands.flush()?;
+    let external = controller.is_some();
     let mut started = false;
     let mut acknowledged = false;
     let mut shutdown = None;
@@ -119,12 +141,22 @@ pub(super) fn capture(
         }
         match (message["id"].as_str(), message["event"].as_str()) {
             (Some("capabilities"), _) if !started && message["return"].is_object() => {
-                // The VM is paused until its event consumer has negotiated QMP.
-                writeln!(commands, r#"{{"execute":"cont","id":"start"}}"#)?;
-                commands.flush()?;
+                // Exactly one owner may resume the paused VM. Negotiate QMP
+                // before giving execution control to an external controller.
+                if let Some(control) = controller.take() {
+                    control()?;
+                } else {
+                    writeln!(commands, r#"{{"execute":"cont","id":"start"}}"#)?;
+                    commands.flush()?;
+                }
                 started = true;
             }
-            (Some("start"), _) if started && !acknowledged && message["return"].is_object() => {
+            (Some("start"), _)
+                if !external && started && !acknowledged && message["return"].is_object() =>
+            {
+                acknowledged = true;
+            }
+            (None, Some("RESUME")) if external && started => {
                 acknowledged = true;
             }
             (Some(_), _) => return Err(io::Error::other("unexpected QMP reply")),

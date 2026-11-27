@@ -37,15 +37,17 @@ jobs:
       LIMEN_TEST_PROFILE: ${{ matrix.profile }}
     steps:
       - name: Install tools
+        shell: bash
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential
           case "$LIMEN_TEST_ARCH" in
-            riscv64) qemu=qemu-system-riscv; firmware=opensbi ;;
+            riscv64) qemu=qemu-system-riscv; firmware="opensbi gdb-multiarch" ;;
             aarch64) qemu=qemu-system-arm; firmware=qemu-efi-aarch64 ;;
             x86_64) qemu=qemu-system-x86; firmware=ovmf ;;
           esac
-          apt-get install -y --no-install-recommends "$firmware"
+          read -r -a firmware_packages <<< "$firmware"
+          apt-get install -y --no-install-recommends "${firmware_packages[@]}"
           echo 'deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] https://snapshot.debian.org/archive/debian/20261124T000000Z/ trixie-backports main' > /etc/apt/sources.list.d/qemu.list
           apt-get -o Acquire::Retries=3 update
           apt-get install -y --no-install-recommends -t trixie-backports "$qemu"
@@ -74,7 +76,7 @@ jobs:
       - name: Record source
         run: |
           mkdir -p .integration
-          git rev-parse HEAD > .integration/source.txt
+          git -c safe.directory="$PWD" rev-parse HEAD > .integration/source.txt
           rustc -Vv > .integration/rustc.txt
           cargo -V > .integration/cargo.txt
       - name: Test Cargo completion transport
