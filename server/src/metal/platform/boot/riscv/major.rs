@@ -29,6 +29,8 @@ unsafe extern "C" fn major(hart: usize, dtb: usize) -> ! {
         "addi t0, t0, 8",
         "j 2b",
         "3: tail {loaded}",
+        interrupt_enable = const super::status::SIE,
+        extensions = const super::status::EXTENSIONS,
         stack = sym STACK,
         size = const STACK_BYTES,
         top = sym diagnostic::TOP,

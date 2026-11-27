@@ -3,7 +3,7 @@
 use core::{arch::asm, marker::PhantomData};
 
 use super::{super::description::RiscvMmu, Context};
-use crate::metal::processor::hart::local::try_current_hart;
+use crate::metal::processor::hart::{local::try_current_hart, riscv::native};
 
 impl Context {
     pub fn current() -> Option<Self> {
@@ -53,9 +53,7 @@ impl<'a> Translation<'a> {
         if !try_current_hart().is_some_and(|hart| hart.get() as u64 == self.description.hart()) {
             return Err(SwitchError::Context);
         }
-        let status: usize;
-        unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nomem, nostack)) };
-        if status & 2 != 0 {
+        if !native::status().masked() {
             return Err(SwitchError::Context);
         }
         Ok(())
