@@ -1,4 +1,4 @@
-//! The same actual cooperative Room and Unit contract on both UEFI boards.
+//! Cross-Hart Unit migration, independent of firmware admission.
 
 use core::{
     hint::{black_box, spin_loop},
@@ -6,11 +6,14 @@ use core::{
     ptr,
     sync::atomic::{
         AtomicUsize,
-        Ordering::{Acquire, Relaxed},
+        Ordering::{Acquire, Relaxed, Release},
     },
 };
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-use kernel::metal::processor::treaty::{StartError, Startup};
+use kernel::metal::{
+    processor::treaty::{LocalStorage, Minor, Stack, StartError, Startup},
+    sync::treaty::Supply,
+};
 use kernel::{
     basis::{
         execution::{Current, Error, Execution, KernelBinding},
@@ -21,12 +24,12 @@ use kernel::{
 };
 
 #[cfg(target_arch = "aarch64")]
-#[path = "aarch64.rs"]
+#[path = "../../metal/processor/execution/registers/aarch64.rs"]
 mod aarch64;
 #[cfg(target_arch = "aarch64")]
 use aarch64 as registers;
 #[cfg(target_arch = "x86_64")]
-#[path = "x86_64.rs"]
+#[path = "../../metal/processor/execution/registers/x86_64.rs"]
 mod x86_64;
 #[cfg(target_arch = "x86_64")]
 use x86_64 as registers;
@@ -38,6 +41,19 @@ static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy,
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static MAJOR: AtomicUsize = AtomicUsize::new(usize::MAX);
+static PEER: AtomicUsize = AtomicUsize::new(usize::MAX);
+static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+pub static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
+static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+#[path = "../../metal/sync/native.rs"]
+mod synchronization;
+
+struct Launch {
+    execution: &'static Execution,
+    observe: fn(&Minor, usize),
+}
 static PHASE: AtomicUsize = AtomicUsize::new(0);
 static STEP: AtomicUsize = AtomicUsize::new(0);
 static STACK: AtomicUsize = AtomicUsize::new(0);
@@ -67,7 +83,7 @@ fn migratable(current: &mut Current) -> u64 {
     assert_eq!(registers::control(), changed);
 
     registers::verify(current);
-    assert_eq!(current.hart(), uefi_fixture::target());
+    assert_eq!(current.hart(), PEER.load(Relaxed));
     assert_eq!(STEP.fetch_add(1, Relaxed), 1);
     assert_eq!(stack_address(&value), address);
     assert_eq!(registers::control(), changed);
@@ -101,18 +117,23 @@ fn dispatch(execution: &'static Execution) -> Occupancy {
     }
 }
 
-fn minor(_: usize, argument: usize) -> ! {
-    // The actual Boot launch publishes the resident runtime before entry.
-    let execution = unsafe { &*ptr::with_exposed_provenance::<Execution>(argument) };
+fn minor(hart: usize, argument: usize) -> ! {
+    // Minor::start publishes the borrowed, immutable launch record. The
+    // nonreturning major retains it for this entire machine execution.
+    let launch = unsafe { &*ptr::with_exposed_provenance::<Launch>(argument) };
+    let execution = launch.execution;
     assert_eq!(execution.enter(), Err(Error::Unsupported));
     execution.attach().expect("attach actual minor Hart");
     assert_eq!(execution.attach(), Err(Error::Busy));
-    super::observe_minor(uefi_fixture::hart());
+    assert_eq!(hart, PEER.load(Relaxed));
+    (launch.observe)(&MINOR, hart);
+    synchronization::check();
+    OBSERVED.store(hart, Release);
     assert_eq!(execution.enter(), Err(Error::Protection));
     let mut schedule = || {
         let mark = core::hint::black_box(0u8);
         let address = core::hint::black_box(&mark) as *const u8 as usize;
-        assert!(!super::MINOR.stack_range().contains(&address));
+        assert!(!MINOR.stack_range().contains(&address));
         wait(1);
         // The original Hart has not returned its occupation yet.
         assert_eq!(execution.enter(), Ok(None));
@@ -120,7 +141,7 @@ fn minor(_: usize, argument: usize) -> ! {
         wait(3);
         let control = registers::control();
         let receipt = dispatch(execution);
-        assert_eq!(receipt.hart(), uefi_fixture::target());
+        assert_eq!(receipt.hart(), PEER.load(Relaxed));
         assert_eq!(registers::control(), control);
         execution.vacate(receipt).expect("minor departure");
         PHASE.store(4, Relaxed);
@@ -143,15 +164,18 @@ fn finish(execution: &Execution, unit: UnitId, receipt: Occupancy, value: u64) {
     assert_eq!(execution.lifecycle(unit), Err(Error::Gone));
 }
 
-pub(super) fn run(
+pub fn run(
     mut boot: Boot<'_>,
-    major: usize,
     target: usize,
     startup: &mut Startup,
+    observe: fn(&Minor, usize),
     mut started: impl FnMut(&Startup),
     complete: fn() -> !,
 ) -> ! {
+    let major = boot.hart();
+    assert_ne!(target, major);
     MAJOR.store(major, Relaxed);
+    PEER.store(target, Relaxed);
     let major_stack = boot.stack_range();
     let runtime = Execution::new(
         boot.take_major().expect("original native major relation"),
@@ -164,6 +188,7 @@ pub(super) fn run(
     .map_err(|failure| failure.reason)
     .expect("native cooperative profile");
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
+    let launch = Launch { execution, observe };
     execution.attach().expect("attach actual boot Hart");
     assert_eq!(execution.attach(), Err(Error::Busy));
     assert_eq!(execution.enter(), Err(Error::Protection));
@@ -171,20 +196,20 @@ pub(super) fn run(
         let mark = core::hint::black_box(0u8);
         let address = core::hint::black_box(&mark) as *const u8 as usize;
         assert!(!major_stack.contains(&address));
-        let argument = ptr::from_ref(execution).expose_provenance();
+        let argument = ptr::from_ref(&launch).expose_provenance();
 
         assert_eq!(
-            unsafe { super::MINOR.start(major, minor, argument, startup) },
+            unsafe { MINOR.start(major, minor, argument, startup) },
             Err(StartError::Busy)
         );
-        unsafe { super::MINOR.start(target, minor, argument, startup) }.expect("minor startup");
-        while super::OBSERVED.load(Acquire) != target {
+        unsafe { MINOR.start(target, minor, argument, startup) }.expect("minor startup");
+        while OBSERVED.load(Acquire) != target {
             spin_loop();
         }
-        assert!(super::MINOR.ready());
+        assert!(MINOR.ready());
         started(startup);
         assert_eq!(
-            unsafe { super::MINOR.start(target, minor, argument, startup) },
+            unsafe { MINOR.start(target, minor, argument, startup) },
             Err(StartError::Busy)
         );
 

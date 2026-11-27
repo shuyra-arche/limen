@@ -12,7 +12,7 @@ use kernel::entry::boot::Boot;
 use uefi::prelude::*;
 use uefi_fixture as fixture;
 
-#[path = "../../basis/execution/uefi/mod.rs"]
+#[path = "../support/uefi/execution.rs"]
 mod native;
 #[path = "../support/discovery/harness.rs"]
 mod support;

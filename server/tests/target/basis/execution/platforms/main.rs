@@ -5,7 +5,7 @@ use kernel::{entry::boot::Boot, metal::platform::boot::treaty as diagnostic};
 use uefi::prelude::*;
 use uefi_fixture as fixture;
 
-#[path = "../../../../basis/execution/uefi/mod.rs"]
+#[path = "../../../support/uefi/execution.rs"]
 mod native;
 
 #[entry]

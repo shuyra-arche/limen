@@ -10,7 +10,7 @@ platform::declare!(platform::Platform::native(4));
 
 use kernel::entry::boot::Boot;
 
-#[path = "../../basis/execution/riscv64/mod.rs"]
+#[path = "../../basis/execution/lifecycle/mod.rs"]
 mod native;
 #[path = "../support/discovery/mod.rs"]
 mod support;

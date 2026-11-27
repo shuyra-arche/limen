@@ -125,13 +125,13 @@ expect_suites x86-64-local-apic-timer
 [[ $(boards) == q35 ]]
 change server/src/basis/execution.rs
 expect_suites kernel-execution kernel-execution-harts platform-execution
-change server/tests/target/basis/execution/platforms/scenario.rs
+change server/tests/basis/execution/migration.rs
 expect_suites platform-execution
 [[ $(boards) == 'q35 virt' ]]
-change server/tests/target/basis/execution/platforms/x86_64.rs
+change server/tests/metal/processor/execution/registers/x86_64.rs
 expect_suites platform-execution
 [[ $(boards) == q35 ]]
-change server/tests/target/basis/execution/platforms/aarch64.rs
+change server/tests/metal/processor/execution/registers/aarch64.rs
 expect_suites platform-execution
 [[ $(boards) == virt ]]
 change server/tests/metal/sync/contracts.rs
@@ -275,9 +275,9 @@ for source in server/src/metal/interrupt/x86_64/external/ioapic/{mod,pin,port,ro
 done
 change server/src/metal/interrupt/riscv64/external/plic/context.rs
 expect_suites rv64-plic-sstc
-change server/tests/target/metal/interrupt/x86_64/apic-failure/scenario.rs
+change server/tests/metal/interrupt/x86_64/internal/apic/native_failure.rs
 expect_suites x86-64-local-apic-failure
-change server/tests/target/metal/interrupt/riscv64/plic-sstc/plic.rs
+change server/tests/metal/interrupt/riscv64/external/native_plic.rs
 expect_suites rv64-plic-sstc
 change server/tests/target/support/riscv64/reception.rs
 expect_suites rv64-interrupt rv64-ipi rv64-plic-sstc

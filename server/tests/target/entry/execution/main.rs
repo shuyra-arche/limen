@@ -6,7 +6,7 @@ use kernel::{entry::boot::Boot, metal::platform::boot::treaty as diagnostic};
 
 kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
 
-#[path = "../../../basis/execution/riscv64/mod.rs"]
+#[path = "../../../basis/execution/lifecycle/mod.rs"]
 mod native;
 
 #[unsafe(no_mangle)]

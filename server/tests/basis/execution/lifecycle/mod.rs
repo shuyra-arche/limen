@@ -1,13 +1,19 @@
+#[cfg(target_arch = "riscv64")]
 use kernel::metal::platform::boot::treaty::write;
+#[cfg(target_arch = "riscv64")]
+mod admission;
+#[cfg(target_arch = "riscv64")]
 mod buddy;
+#[cfg(target_arch = "riscv64")]
 #[path = "../../../target/entry/memory.rs"]
 mod memory;
+#[cfg(target_arch = "riscv64")]
 mod pool;
+#[cfg(target_arch = "riscv64")]
 #[path = "../../../target/entry/pool.rs"]
 mod pool_material;
 
 use core::{
-    arch::asm,
     hint::black_box,
     mem::{MaybeUninit, size_of},
     sync::atomic::{AtomicUsize, Ordering::Relaxed},
@@ -15,7 +21,7 @@ use core::{
 
 use kernel::{
     basis::{
-        execution::{Current, Error, EstablishError, Execution, KernelBinding},
+        execution::{Current, Error, Execution, KernelBinding},
         room::{Harts, Occupancy},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
@@ -48,8 +54,11 @@ fn first(current: &mut Current) -> u64 {
     let local = black_box(0x1234_5678usize);
     assert_eq!(SEQUENCE.fetch_add(1, Relaxed), 0);
     FIRST_STACK.store(stack_address(&local), Relaxed);
-    buddy::check();
-    pool::check();
+    #[cfg(target_arch = "riscv64")]
+    {
+        buddy::check();
+        pool::check();
+    }
     assert_eq!(execution().pending_leave(), Ok(None));
     assert_eq!(execution().enter(), Err(Error::Busy));
     assert_eq!(execution().finish_end(current.id()), Err(Error::Busy));
@@ -106,56 +115,41 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
 }
 
 pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
+    #[cfg(target_arch = "riscv64")]
     pool::prepare(&boot);
-    let major = boot.hart();
-    let device_tree = boot.device_tree();
-    assert!(major < 4, "unexpected QEMU boot hart");
-    // The fixture owns these static objects and runs on the sole Boot Hart.
-    let stacks = &raw mut STACKS;
-    let records = (&raw mut RECORDS).cast::<UnitRecord<KernelBinding>>();
-    let harts = &raw mut HARTS;
-    let dispatchers = &raw mut DISPATCHERS;
-    let admitted = boot.take_major().expect("original native major relation");
-    assert!(boot.take_major().is_none());
-    // Individual interrupt sources remain masked. SIE makes the execution
-    // environment unsupported before the constructor binds the stack supply.
-    unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-    let rejected = Execution::new(
-        admitted,
-        boot.terminal(),
-        unsafe { &mut *stacks },
-        unsafe { &mut *(&raw mut RECORDS) },
-        unsafe { &mut *harts },
-        unsafe { &mut *dispatchers },
-    );
-    unsafe { asm!("csrci sstatus, 2", options(nostack)) };
-    let Err(failure) = rejected else {
-        panic!("execution admitted with interrupts enabled");
-    };
-    assert_eq!(failure.reason, EstablishError::Unsupported);
-    assert_eq!(boot.hart(), major);
-    assert_eq!(boot.device_tree(), device_tree);
-    assert!(core::ptr::eq(failure.stacks, stacks));
-    assert!(core::ptr::eq(failure.records.as_ptr(), records));
-    assert!(core::ptr::eq(failure.harts, harts));
-    assert!(core::ptr::eq(failure.dispatchers, dispatchers));
     let major_stack = boot.stack_range();
-    let runtime = Execution::new(
-        failure.major,
-        failure.terminal,
-        failure.stacks,
-        failure.records,
-        failure.harts,
-        failure.dispatchers,
-    )
-    .map_err(|failure| failure.reason)
-    .expect("original handoff and independent supplies can be retried");
+    // Each executable owns its resident supplies for exactly one admission.
+    let stacks = unsafe { &mut *(&raw mut STACKS) };
+    let records = unsafe { &mut *(&raw mut RECORDS) };
+    let harts = unsafe { &mut *(&raw mut HARTS) };
+    let dispatchers = unsafe { &mut *(&raw mut DISPATCHERS) };
+    #[cfg(target_arch = "riscv64")]
+    let runtime = {
+        assert!(boot.hart() < 4, "unexpected QEMU boot Hart");
+        let failure = admission::reject_constructor(&mut boot, stacks, records, harts, dispatchers);
+        Execution::new(
+            failure.major,
+            failure.terminal,
+            failure.stacks,
+            failure.records,
+            failure.harts,
+            failure.dispatchers,
+        )
+    };
+    #[cfg(not(target_arch = "riscv64"))]
+    let runtime = {
+        let major = boot.take_major().expect("original native major relation");
+        assert!(boot.take_major().is_none());
+        Execution::new(major, boot.terminal(), stacks, records, harts, dispatchers)
+    };
+    let runtime = runtime
+        .map_err(|failure| failure.reason)
+        .expect("original handoff and independent supplies");
     unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     let execution = execution();
     assert_eq!(execution.enter(), Err(Error::Unsupported));
-    unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-    assert_eq!(execution.attach(), Err(Error::Unsupported));
-    unsafe { asm!("csrci sstatus, 2", options(nostack)) };
+    #[cfg(target_arch = "riscv64")]
+    admission::reject_attach(execution);
     assert_eq!(execution.enter(), Err(Error::Unsupported));
     execution.attach().expect("attach actual boot Hart");
     assert_eq!(execution.attach(), Err(Error::Busy));
@@ -201,49 +195,8 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         assert_eq!(execution.submit(a), Err(Error::Busy));
         assert_eq!(execution.stop_dormant(a), Err(Error::Busy));
 
-        // The firmware handoff left every interrupt source masked. Change only
-        // SIE to make the trusted entry reject this attempt before Occupy.
-        unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-        let rejected = execution.enter();
-        unsafe { asm!("csrci sstatus, 2", options(nostack)) };
-        assert_eq!(rejected, Err(Error::Unsupported));
-        assert_eq!(execution.pending_leave(), Ok(None));
-
-        // Change only the actual FS field: the integer-only kernel target
-        // executes no FP instructions, so no extended state is consumed.
-        let mut observed: usize;
-        unsafe {
-            asm!(
-                "csrs sstatus, {initial}",
-                "csrr {observed}, sstatus",
-                initial = in(reg) 1usize << 13,
-                observed = out(reg) observed,
-                options(nostack),
-            );
-        }
-        let rejected = execution.enter();
-        unsafe { asm!("csrc sstatus, {}", in(reg) 3usize << 13, options(nostack)) };
-        assert_ne!(observed & (3 << 13), 0, "QEMU exposes the actual FS field");
-        assert_eq!(rejected, Err(Error::Unsupported));
-        assert_eq!(execution.pending_leave(), Ok(None));
-
-        // Global SIE is still off. A single locally enabled source is a
-        // different admission failure and must not be mistaken for global SIE.
-        unsafe {
-            asm!(
-                "csrs sie, {timer}",
-                "csrr {observed}, sie",
-                timer = in(reg) 1usize << 5,
-                observed = out(reg) observed,
-                options(nostack),
-            );
-        }
-        let rejected = execution.enter();
-        unsafe { asm!("csrc sie, {}", in(reg) 1usize << 5, options(nostack)) };
-        assert_ne!(observed & (1 << 5), 0);
-        assert_eq!(rejected, Err(Error::Unsupported));
-        assert_eq!(execution.pending_leave(), Ok(None));
-        write("PASS native-control fs=1 source-mask=1 restored=1\n");
+        #[cfg(target_arch = "riscv64")]
+        admission::reject_dispatch(execution);
 
         let initial = dispatch(a);
         assert_eq!(initial.admission(), a_admission);
@@ -285,6 +238,7 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         assert_eq!(execution.enter(), Ok(None));
         assert_eq!(SEQUENCE.load(Relaxed), 4);
 
+        #[cfg(target_arch = "riscv64")]
         write(concat!(
             "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1",
             " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1 binding_returned=1 admission=1\n",
