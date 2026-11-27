@@ -9,8 +9,8 @@ pub enum Retirement {
     Settled,
 }
 
-/// Unbind a live requester on this actual remapping unit. The controller
-/// keeps the original table entry and any unsettled operation after return.
+/// Unbind a live requester on this remapping unit. The controller retains the
+/// original binding and reserves its table slot while retirement is unsettled.
 pub trait Unbind: Sealed {
     type Binding: Copy;
     type Ticket;
@@ -19,8 +19,9 @@ pub trait Unbind: Sealed {
     /// Start retirement of the original binding.
     ///
     /// # Safety
-    /// The original endpoint is stopped and drained. Exclude endpoint
-    /// translation caches and retain the original backing through retirement.
+    /// Stop the original endpoint and drain its old requests. Keep it stopped
+    /// through completion, exclude endpoint translation caches, and retain the
+    /// original backing until settlement is confirmed.
     unsafe fn retire(&mut self, binding: Self::Binding) -> Result<Self::Ticket, Self::Error>;
 
     /// Recover observation of the unsettled retirement for this exact binding.

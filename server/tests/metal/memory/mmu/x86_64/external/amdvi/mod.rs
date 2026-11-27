@@ -1,8 +1,11 @@
+use super::super::test_firmware::Firmware;
 use super::{
-    Admissions, Binding, Context, Error, Scope, admit_binding, binding_slot,
-    reserve_binding_numbers,
+    Admissions, Binding, Completion, Context, Controller, DENY, Error, FEATURES, Progress, Queue,
+    RUNNING, STATUS, Scope, Storage, Table, admit_binding, binding_slot, reserve_binding_numbers,
 };
-use limen_treaty::model::{ByteLength, PhysicalAddress};
+use crate::metal::memory::mmu::{Retirement, Unbind, access::device::DeviceWindow};
+use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress};
+use std::boxed::Box;
 
 fn context(requester: u16, domain: u16) -> Context {
     Context {
@@ -111,4 +114,78 @@ fn admission_identity_exhaustion_cannot_wrap_into_an_old_epoch() {
     assert_eq!(admissions.epoch, u64::MAX);
     assert_eq!(admissions.advance(original), Err(Error::Exhausted));
     assert_eq!(admissions.epoch, u64::MAX);
+}
+
+#[test]
+fn only_the_original_running_batch_can_release_the_binding() {
+    let mut description = [0; 76];
+    description[..4].copy_from_slice(b"IVRS");
+    description[48..52].copy_from_slice(&[0x10, 0, 28, 0]);
+    description[54] = 0x40;
+    description[56..64].copy_from_slice(&0xfed8_0000u64.to_le_bytes());
+    description[72..].copy_from_slice(&[2, 0x30, 0, 0]);
+    let firmware = Firmware::new(description);
+    let unit = firmware.acpi().ivhd().unwrap().unwrap();
+    let mut registers = [0u64; 0x4000 / 8];
+    registers[FEATURES / 8] = 1 << 6;
+    let base = registers.as_mut_ptr().expose_provenance() as u64;
+    let mut window =
+        unsafe { DeviceWindow::admit(unit.registers(), InternalAddress::new(base)) }.unwrap();
+    let mut devices = Box::<Table>::new_uninit();
+    unsafe { devices.as_mut_ptr().write_bytes(0, 1) };
+    let mut devices = unsafe { devices.assume_init() };
+    devices.0.fill(DENY);
+    let mut queue = Queue::EMPTY;
+    let mut completion = Completion::zeroed();
+    let mut slots = [None];
+    let mut admissions = Admissions::new(unit);
+    let storage = Storage {
+        table: (&mut devices, PhysicalAddress::new(0x20_0000)),
+        queue: (&mut queue, PhysicalAddress::new(0x40_0000)),
+        completion: (&mut completion, PhysicalAddress::new(0x40_1000)),
+    };
+    let mut controller =
+        unsafe { Controller::admit(unit, &mut window, storage, &mut slots, &mut admissions) }
+            .unwrap();
+    controller.progress = Progress::Ready;
+    controller.write(STATUS, RUNNING);
+
+    assert_eq!(
+        unsafe { controller.bind(context(0x30, 1)) },
+        Err(Error::Pending)
+    );
+    let original = controller.bindings[0].unwrap();
+    let completion = controller.storage.completion.0.0.get();
+    unsafe { completion.write_volatile(original.number) };
+    assert_eq!(controller.poll(), Ok(()));
+    assert_eq!(controller.binding(0x30), Some(original));
+
+    let ticket = unsafe { controller.retire(original) }.unwrap();
+    let other = Binding {
+        epoch: original.epoch + 1,
+        ..original
+    };
+    assert!(controller.pending_retirement(other).is_none());
+    assert_eq!(controller.poll(), Err(Error::Occupied));
+    assert_eq!(controller.storage.table.0.0[0x30], DENY);
+    unsafe { completion.write_volatile(original.number) };
+    assert_eq!(
+        controller.observe_retirement(&ticket),
+        Ok(Retirement::Pending)
+    );
+    assert_eq!(controller.bindings[0], Some(original));
+
+    unsafe { completion.write_volatile(original.retirement) };
+    controller.write(STATUS, 0);
+    assert_eq!(
+        controller.observe_retirement(&ticket),
+        Err(Error::Unconfirmed)
+    );
+    let recovered = controller.pending_retirement(original).unwrap();
+    assert_eq!(
+        controller.observe_retirement(&recovered),
+        Err(Error::Unconfirmed)
+    );
+    assert_eq!(controller.bindings[0], Some(original));
+    assert_eq!(controller.storage.table.0.0[0x30], DENY);
 }
