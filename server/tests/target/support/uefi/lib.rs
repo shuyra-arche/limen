@@ -59,10 +59,6 @@ pub fn check_minor(minor: &Minor, hart: usize) {
 }
 
 pub fn load(prepare: impl FnOnce() -> Result<(), Status>) -> Status {
-    assert_eq!(
-        kernel::metal::sync::treaty::LeafLock::new(()).attempt(|()| ()),
-        Err(kernel::metal::sync::treaty::LeafError::Context)
-    );
     let loaded = match uefi::boot::open_protocol_exclusive::<uefi::proto::loaded_image::LoadedImage>(
         uefi::boot::image_handle(),
     ) {

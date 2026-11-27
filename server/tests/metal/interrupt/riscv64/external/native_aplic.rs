@@ -30,7 +30,7 @@ const INTERRUPT: usize = 1 << 63;
 const TIMER: usize = INTERRUPT | 5;
 const EXTERNAL: usize = INTERRUPT | 9;
 
-#[path = "../../../../target/support/riscv64/reception.rs"]
+#[path = "../window.rs"]
 mod reception;
 use reception::receive;
 

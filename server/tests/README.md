@@ -80,8 +80,16 @@ the latter supplies both Boot and Basis lifecycle scenarios. The migration
 contract and its SBI/UEFI admission adapters live together under
 `basis/execution/migration/`. Native clock observations and interrupt
 consumer contracts belong to Chrono and Interrupt respectively.
+Native MMU installation and binding contracts live under
+`metal/memory/mmu/internal/` and `metal/memory/mmu/external/`;
+the former also owns the shared paging material. The temporary RISC-V
+reception window belongs to its interrupt scenarios. The Boot handoff
+test owns the pre-admission synchronization rejection check rather than
+running it in every UEFI image.
 The target workspace retains compilation entries, the guest declaration,
-startup and completion, and reusable machine fixtures.
+startup and completion, and reusable machine fixtures such as the PCI
+board and EDU device preparation. The UEFI fixture is a separate library
+because it supplies loader and board services shared by UEFI guests.
 
 The linked `.testenv` record describes the selected execution purpose
 independently of the machine configuration (firmware, interrupt controller,

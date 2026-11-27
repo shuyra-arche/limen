@@ -1,4 +1,6 @@
-use super::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
+#[path = "../internal/pages.rs"]
+mod pages;
+use pages::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 use core::arch::asm;
 use kernel::metal::memory::mmu::{
     aarch64::internal::{context::Controls, format::Root, installation::admit_root},
@@ -6,7 +8,7 @@ use kernel::metal::memory::mmu::{
 };
 use limen_treaty::model::PhysicalAddress;
 
-#[path = "../../../../target/support/paging/installation.rs"]
+#[path = "../internal/installation.rs"]
 mod installation;
 
 static EMPTY: Page = Page([0; 512]);

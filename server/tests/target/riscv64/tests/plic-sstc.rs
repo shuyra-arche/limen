@@ -8,7 +8,7 @@ use guest::platform;
 
 #[path = "../../../metal/interrupt/riscv64/external/native_plic.rs"]
 mod plic;
-#[path = "../../support/riscv64/reception.rs"]
+#[path = "../../../metal/interrupt/riscv64/window.rs"]
 mod reception;
 #[path = "../../../metal/interrupt/riscv64/internal/timer/native_sstc.rs"]
 mod sstc;

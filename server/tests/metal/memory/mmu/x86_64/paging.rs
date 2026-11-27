@@ -1,4 +1,4 @@
-#[path = "../../../../target/support/paging/mod.rs"]
+#[path = "../internal/pages.rs"]
 mod pages;
 use core::{arch::asm, ptr};
 use kernel::metal::memory::access::treaty::device::DeviceMapping;
@@ -9,7 +9,7 @@ use kernel::metal::memory::mmu::{
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress, PhysicalRange};
 use pages::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 
-#[path = "../../../../target/support/paging/installation.rs"]
+#[path = "../internal/installation.rs"]
 mod installation;
 
 static mut ALTERNATE_TOP: Page = Page([0; 512]);

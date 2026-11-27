@@ -6,10 +6,6 @@
 
 use guest::platform;
 
-#[path = "../../support/paging/mod.rs"]
-mod pages;
-use pages::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
-
 #[path = "../../../metal/memory/mmu/aarch64/paging.rs"]
 mod scenario;
 

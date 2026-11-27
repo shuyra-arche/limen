@@ -24,7 +24,7 @@ use kernel::{
 
 #[path = "../../ipi.rs"]
 mod ipi;
-#[path = "../../../../target/support/riscv64/reception.rs"]
+#[path = "../window.rs"]
 mod reception;
 
 static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();

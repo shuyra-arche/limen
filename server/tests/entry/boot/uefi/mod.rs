@@ -118,6 +118,9 @@ fn finish(major: usize) {
 }
 
 pub fn prepare() -> Result<(), Status> {
+    // Firmware preparation still precedes kernel local-state admission.
+    use kernel::metal::sync::treaty::{LeafError, LeafLock};
+    assert_eq!(LeafLock::new(()).attempt(|()| ()), Err(LeafError::Context));
     #[cfg(target_arch = "x86_64")]
     fixture::q35::prepare_minor()?;
     ram::prepare()

@@ -12,7 +12,7 @@ use kernel::metal::memory::mmu::{
 };
 use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
 
-#[path = "../../../target/support/paging/installation.rs"]
+#[path = "../../memory/mmu/internal/installation.rs"]
 mod installation;
 
 pub const PAGE: u64 = 4096;
