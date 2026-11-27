@@ -4,7 +4,8 @@ use super::{GicV3, Trigger};
 
 mod route;
 use crate::metal::{
-    memory::mmu::access::device::DeviceWindow, processor::hart::aarch64::description::AFFINITY_MASK,
+    interrupt::PublishRoute, memory::mmu::access::device::DeviceWindow,
+    processor::hart::aarch64::description::AFFINITY_MASK,
 };
 pub use route::Route;
 
@@ -85,6 +86,21 @@ pub struct Distributor<'map, 'tree> {
     barrier: Barrier,
     slots: &'map mut [Slot<'tree>],
     count: usize,
+}
+
+struct Publication<'route, 'map, 'tree> {
+    owner: &'route mut Distributor<'map, 'tree>,
+    intid: usize,
+}
+
+impl crate::metal::interrupt::publication::Sealed for Publication<'_, '_, '_> {}
+
+impl PublishRoute for Publication<'_, '_, '_> {
+    type Failure = Failure;
+
+    unsafe fn publish(&mut self) -> Result<(), Failure> {
+        unsafe { self.owner.enable(self.intid) }
+    }
 }
 
 impl<'map, 'tree> Distributor<'map, 'tree> {
@@ -189,6 +205,9 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
             && !self.bit(PENDING, id)
     }
 
+    /// Configure the admitted SPI and return its original publication borrow.
+    /// The confirmed configuration stays in the Distributor when the borrow ends.
+    ///
     /// # Safety
     /// The admitted source remains quiescent while its route is changed.
     /// Affinity names a present PE in the same domain whose Group 1
@@ -198,7 +217,7 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
         id: usize,
         affinity: u64,
         priority: u8,
-    ) -> Result<(), Failure> {
+    ) -> Result<impl PublishRoute<Failure = Failure> + '_, Failure> {
         let slot = self.lookup(id)?;
         let (route, state) = self.slots[slot].route.unwrap();
         let operation = State::Configuring { affinity, priority };
@@ -249,7 +268,10 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
             return Err(Failure::Unconfirmed);
         }
         self.slots[slot].route = Some((route, State::Configured));
-        Ok(())
+        Ok(Publication {
+            owner: self,
+            intid: route.intid,
+        })
     }
 
     /// # Safety

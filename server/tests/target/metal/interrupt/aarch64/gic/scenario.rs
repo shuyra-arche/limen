@@ -4,6 +4,8 @@ use kernel::metal::interrupt::Completion;
 
 #[path = "../../../../support/interrupt.rs"]
 mod consumer;
+#[path = "../../../../support/route.rs"]
+mod route_consumer;
 #[path = "../../../../support/timer.rs"]
 mod timer_consumer;
 
@@ -405,10 +407,9 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
             spi.reserve(route).unwrap();
             spi.reserve(second_route).unwrap();
             assert!(spi.reserve(second_route).is_err());
-            spi.configure(id, major as u64, 0x10).unwrap();
-            spi.configure(second_id, major as u64, 0x20).unwrap();
-            spi.enable(id).unwrap();
-            spi.enable(second_id).unwrap();
+            route_consumer::publish(&mut spi.configure(id, major as u64, 0x10).unwrap());
+            assert_eq!(spi.state(second_id), Ok(SpiState::Masked));
+            route_consumer::publish(&mut spi.configure(second_id, major as u64, 0x20).unwrap());
         }
         for (input, uart) in [(id, &mut console), (second_id, &mut secondary)] {
             assert_eq!(spi.state(input), Ok(SpiState::Enabled));
@@ -450,6 +451,7 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
     local_frame = check_signal(local_frame);
     assert!(local_frame.awake());
     boot::write("PASS gicr frames=2 independent=1\n");
+    boot::write("PASS external-route published=2 repeated=0 independent=1\n");
     let bank = id / 32 * 4;
     let bit = (1 << (id % 32)) | (1 << (second_id % 32));
     assert_eq!(

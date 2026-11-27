@@ -6,6 +6,8 @@
   ],
   "sources": [
     "server/src/metal/interrupt/absolute.rs",
+    "server/src/metal/interrupt/publication.rs",
+    "server/tests/target/support/route.rs",
     "server/tests/target/support/timer.rs",
     "server/src/entry/boot/**",
     "server/src/entry/mod.rs",
@@ -74,6 +76,7 @@
         "expects": [
           "PASS virt interrupt uart-primary=2 uart-secondary=2 shared-words=1 iar=4 eoi=4 dir=2 masked=1",
           "PASS gicr frames=2 independent=1",
+          "PASS external-route published=2 repeated=0 independent=1",
           "PASS arm-virtual-timer programmed=1 ppi=1 eoi=1 retired=1 common=1",
           "PASS arm-sgi target=1 claim=1 eoi=1 retired=1"
         ]

@@ -9,3 +9,6 @@ pub use claim::{Completion, HardwareClaim};
 
 mod absolute;
 pub use absolute::AbsoluteTimer;
+
+mod publication;
+pub use publication::PublishRoute;

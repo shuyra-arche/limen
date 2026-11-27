@@ -4,6 +4,8 @@ use kernel::metal::interrupt::Completion;
 
 #[path = "../../../../support/interrupt.rs"]
 mod consumer;
+#[path = "../../../../support/route.rs"]
+mod route_consumer;
 
 use kernel::{
     entry::boot::{self, Boot},
@@ -125,7 +127,7 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
             domain.prepare(destination, 1).unwrap();
             domain.prepare(other, 2).unwrap();
             domain.reserve(other_rtc_route, 4).unwrap();
-            assert_eq!(domain.reserve(rtc_route, 3), Err(Failure::Busy));
+            assert!(matches!(domain.reserve(rtc_route, 3), Err(Failure::Busy)));
             domain.enable(rtc_id).unwrap();
             assert_eq!(
                 domain.open(other_index, &mut local.external),
@@ -152,13 +154,11 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
         unsafe {
             domain.retire(rtc_id).unwrap();
             domain.cancel(other_index).unwrap();
-            assert_eq!(domain.reserve(route, 8), Err(Failure::Scope));
-            domain.reserve(route, 2).unwrap();
-            domain.reserve(rtc_route, 3).unwrap();
-            assert_eq!(domain.reserve(rtc_route, 3), Err(Failure::Busy));
-            domain.enable(uart_id).unwrap();
-            domain.enable(rtc_id).unwrap();
+            assert!(matches!(domain.reserve(route, 8), Err(Failure::Scope)));
             domain.open(index, &mut local.external).unwrap();
+            route_consumer::publish(&mut domain.reserve(route, 2).unwrap());
+            route_consumer::publish(&mut domain.reserve(rtc_route, 3).unwrap());
+            assert!(matches!(domain.reserve(rtc_route, 3), Err(Failure::Busy)));
         }
         assert_eq!(unsafe { serial.read_u8(1) }, Ok(0));
         assert_eq!(unsafe { serial.read_u8(3) }.unwrap() & 0x80, 0);
@@ -235,6 +235,7 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
         unsafe { mapping.read_u32(rtc_priority) }.unwrap(),
         inherited_rtc_priority
     );
+    boot::write("\nPASS external-route published=2 repeated=0 independent=1\n");
     boot::write(
         "\nPASS plic uart=2 rtc=1 complete=3 contexts=2 shared-enable=1 duplicate=0 restored=1\n",
     );

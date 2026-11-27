@@ -5,7 +5,7 @@ use super::{
     registers::{enable, priority},
     source::Priority,
 };
-use crate::metal::platform::description::devicetree::Error;
+use crate::metal::{interrupt::PublishRoute, platform::description::devicetree::Error};
 
 /// A device source connected to an original supervisor context.
 #[derive(Clone, Copy, Debug)]
@@ -54,7 +54,25 @@ impl RouteSlot {
     }
 }
 
+struct Publication<'route, 'access, 'storage, 'tree> {
+    owner: &'route mut Access<'access, 'storage, 'tree>,
+    source: u32,
+}
+
+impl crate::metal::interrupt::publication::Sealed for Publication<'_, '_, '_, '_> {}
+
+impl PublishRoute for Publication<'_, '_, '_, '_> {
+    type Failure = Failure;
+
+    unsafe fn publish(&mut self) -> Result<(), Failure> {
+        unsafe { self.owner.enable(self.source) }
+    }
+}
+
 impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
+    /// Reserve the source and return a borrow that can publish this route.
+    /// The reservation stays in the controller when the borrow ends.
+    ///
     /// # Safety
     /// The stopped device and its original gateway are exclusive to this
     /// route. Other contexts exclude this source. Old deliveries and writes
@@ -63,7 +81,7 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         &mut self,
         route: Route<'tree>,
         requested_priority: u32,
-    ) -> Result<(), Failure> {
+    ) -> Result<impl PublishRoute<Failure = Failure> + '_, Failure> {
         if route.source.domain.node != self.controller.domain.node {
             return Err(Failure::Scope);
         }
@@ -93,7 +111,10 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
             source,
             state: RouteState::Prepared,
         });
-        Ok(())
+        Ok(Publication {
+            owner: self,
+            source: route.source.id,
+        })
     }
 
     fn lookup_route(&self, id: u32) -> Result<usize, Failure> {

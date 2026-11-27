@@ -243,6 +243,11 @@ change server/tests/target/support/timer.rs
 expect_suites aarch64-gic rv64-plic-sstc
 change server/src/metal/interrupt/absolute.rs
 expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc
+for source in server/src/metal/interrupt/publication.rs server/tests/target/support/route.rs; do
+    change "$source"
+    expect_suites aarch64-gic rv64-plic-sstc
+    [[ $(boards) == 'rv64 virt' ]]
+done
 change server/tests/target/support/interrupt.rs
 expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc x86-64-ioapic
 change server/src/metal/interrupt/claim.rs
