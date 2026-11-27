@@ -82,6 +82,22 @@ jobs:
           cargo fmt --all -- --check
           cargo fmt --manifest-path server/tests/runner/Cargo.toml -- --check
           cargo fmt --manifest-path server/tests/target/Cargo.toml --all -- --check
+      - name: Check guest discovery coverage
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 \
+            --manifest-path server/tests/target/Cargo.toml |
+            jq -e '
+              [.packages[] | select(.name == "kernel-guest") |
+                .targets[] | select(.kind == ["test"]) | .name] as $tests |
+              if ($tests | length) == 0 then
+                error("no guest integration tests discovered")
+              else
+                [$tests[] | select(test("^(common|riscv64|aarch64|x86_64|uefi)-.+$") | not)]
+                as $unselected |
+                if ($unselected | length) == 0 then true
+                else error("guest targets excluded by Target CI: \($unselected | join(", "))")
+                end
+              end'
       - name: Check runner
         if: fromJSON(steps.scope.outputs.plan).runner
         run: |

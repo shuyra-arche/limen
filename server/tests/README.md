@@ -72,6 +72,8 @@ cargo -Z panic-abort-tests --config "$config" test --locked \
 Add `--release` for the optimized image and select a fresh evidence root.
 The Target workflow runs each architecture and profile, using Cargo's
 `--test 'common-*'`, architecture and UEFI filters, not a list of test names.
+Check validates the compilation groups of all Cargo-discovered guest targets;
+an unclassified target is an error rather than a silently skipped test.
 Ordinary completion requires QEMU exit 97 and successful process settlement.
 Guest panic, ordinary shutdown, reset, trap and timeout are failures.
 Serial output is diagnostic, never a generic success oracle.
