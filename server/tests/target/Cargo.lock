@@ -21,6 +21,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "guest-support"
+version = "0.0.0"
+dependencies = [
+ "kernel",
+ "uefi-fixture",
+]
+
+[[package]]
 name = "kernel"
 version = "0.0.1"
 dependencies = [
@@ -31,6 +39,7 @@ dependencies = [
 name = "kernel-guest"
 version = "0.0.0"
 dependencies = [
+ "guest-support",
  "kernel",
  "limen-treaty",
  "uefi",
@@ -51,6 +60,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 name = "module-guest"
 version = "0.0.0"
 dependencies = [
+ "guest-support",
  "kernel",
  "limen-treaty",
  "uefi",

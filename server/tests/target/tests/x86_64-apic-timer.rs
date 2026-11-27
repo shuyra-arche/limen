@@ -1,27 +1,22 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(support::run)]
+#![test_runner(guest::run)]
 #![reexport_test_harness_main = "collected"]
 
-#[path = "../support/platform.rs"]
-mod platform;
-platform::declare!(platform::Platform::native(4));
-
-#[path = "../support/discovery/mod.rs"]
-mod support;
-
-use kernel::entry::boot::Boot;
+use guest::platform;
 
 #[path = "../../metal/interrupt/x86_64/internal/apic/native_timer.rs"]
 mod timer;
 
-#[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
-    uefi_fixture::check_handoff(&boot, None);
-    collected();
-    timer::check(&boot);
-    support::finish()
+guest::entry! {
+    platform: platform::Platform::native(4),
+    run: |boot| {
+        uefi_fixture::check_handoff(&boot, None);
+        collected();
+        timer::check(&boot);
+        guest::finish()
+    }
 }
 
 #[test_case]

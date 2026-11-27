@@ -1,25 +1,20 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(support::run)]
+#![test_runner(guest::run)]
 #![reexport_test_harness_main = "collected"]
 
-#[path = "../support/platform.rs"]
-mod platform;
-platform::declare!(platform::Platform::native(4));
-
-#[path = "../support/discovery/mod.rs"]
-mod support;
-
-use kernel::entry::boot::Boot;
+use guest::platform;
 
 #[path = "../../metal/sync/native.rs"]
 mod native;
 
-#[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(_boot: Boot<'_>) -> ! {
-    collected();
-    support::finish()
+guest::entry! {
+    platform: platform::Platform::native(4),
+    run: |_boot| {
+        collected();
+        guest::finish()
+    }
 }
 
 #[test_case]

@@ -6,6 +6,7 @@ publish = false
 autobins = false
 
 [dependencies]
+guest.workspace = true
 kernel.workspace = true
 limen-treaty.workspace = true
 
@@ -15,10 +16,11 @@ uefi-fixture.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["module", "support/uefi"]
+members = ["module", "support", "support/uefi"]
 default-members = ["."]
 
 [workspace.dependencies]
+guest = { package = "guest-support", path = "support" }
 kernel = { path = "../.." }
 limen-treaty = { path = "../../../treaty" }
 uefi = "=0.41.0"

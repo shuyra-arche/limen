@@ -1,13 +1,16 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(support::run)]
+#![test_runner(guest::run)]
 #![reexport_test_harness_main = "collected"]
 
-#[path = "../support/platform.rs"]
-mod platform;
-platform::declare!(
-    platform::Platform {
+use guest::platform;
+
+#[path = "../../metal/memory/mmu/riscv64/external/iommu/native.rs"]
+mod native;
+
+guest::entry! {
+    platform: platform::Platform {
         iommu: platform::Iommu::Riscv,
         ..platform::Platform::native(1)
     }
@@ -20,24 +23,14 @@ platform::declare!(
         slot: 7,
         function: 0,
         dma_mask: platform::DmaMask::Full32,
-    })
-);
-
-#[path = "../support/discovery/mod.rs"]
-mod support;
-
-use kernel::entry::boot::Boot;
-
-#[path = "../../metal/memory/mmu/riscv64/external/iommu/native.rs"]
-mod native;
-
-#[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
-    assert_eq!(boot.hart(), 0);
-    assert!(boot.riscv_cpus().cpu(1).unwrap().is_none());
-    collected();
-    native::check(boot);
-    support::finish()
+    }),
+    run: |boot| {
+        assert_eq!(boot.hart(), 0);
+        assert!(boot.riscv_cpus().cpu(1).unwrap().is_none());
+        collected();
+        native::check(boot);
+        guest::finish()
+    }
 }
 
 #[test_case]

@@ -1,26 +1,23 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(support::run)]
+#![test_runner(guest::run)]
 #![reexport_test_harness_main = "collected"]
 
-#[path = "../support/platform.rs"]
-mod platform;
-platform::declare!(platform::Platform::native(4));
+use guest::platform;
 
-#[path = "../support/discovery/mod.rs"]
-mod support;
+use kernel::metal::sync::treaty::turn_capacity;
 
-use kernel::{entry::boot::Boot, metal::sync::treaty::turn_capacity};
-
-#[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(mut boot: Boot<'_>) -> ! {
-    assert_ne!(boot.hart(), usize::MAX);
-    assert!(!boot.stack_range().is_empty());
-    let _major = boot.take_major().expect("original major ownership");
-    assert!(boot.take_major().is_none());
-    collected();
-    support::finish()
+guest::entry! {
+    platform: platform::Platform::native(4),
+    run: |mut boot| {
+        assert_ne!(boot.hart(), usize::MAX);
+        assert!(!boot.stack_range().is_empty());
+        let _major = boot.take_major().expect("original major ownership");
+        assert!(boot.take_major().is_none());
+        collected();
+        guest::finish()
+    }
 }
 
 #[test_case]

@@ -6,6 +6,7 @@ publish = false
 autobins = false
 
 [dependencies]
+guest.workspace = true
 kernel.workspace = true
 limen-treaty.workspace = true
 

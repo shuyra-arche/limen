@@ -273,6 +273,7 @@ impl Platform {
 }
 
 #[cfg(any(target_os = "none", target_os = "uefi"))]
+#[macro_export]
 macro_rules! declare {
     ($platform:expr) => {
         #[used]
@@ -282,5 +283,3 @@ macro_rules! declare {
     };
 }
 
-#[cfg(any(target_os = "none", target_os = "uefi"))]
-pub(super) use declare;

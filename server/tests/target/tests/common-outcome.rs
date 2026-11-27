@@ -1,17 +1,13 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(collection::run)]
+#![test_runner(guest::run)]
 #![reexport_test_harness_main = "collected"]
 
-#[path = "../support/platform.rs"]
-mod platform;
-platform::declare!(platform::Platform::native(4));
+use guest::platform;
 
 use core::{
     arch::asm,
-    fmt::Write,
-    panic::PanicInfo,
     sync::atomic::{AtomicUsize, Ordering},
 };
 #[cfg(target_arch = "riscv64")]
@@ -25,27 +21,13 @@ use kernel::{
     },
 };
 
-#[path = "../support/discovery/collection.rs"]
-mod collection;
-#[path = "../support/outcome/mod.rs"]
-mod outcome;
-
-#[cfg(target_arch = "riscv64")]
-kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
-
 #[cfg(target_os = "uefi")]
-use uefi::prelude::*;
-
-#[cfg(target_os = "uefi")]
-#[entry]
-fn main() -> Status {
-    uefi_fixture::load(|| {
-        #[cfg(target_arch = "x86_64")]
-        if matches!(case(), "minor-pass" | "minor-panic") {
-            uefi_fixture::q35::prepare_minor()?;
-        }
-        Ok(())
-    })
+fn prepare() -> Result<(), uefi::Status> {
+    #[cfg(target_arch = "x86_64")]
+    if matches!(case(), "minor-pass" | "minor-panic") {
+        uefi_fixture::q35::prepare_minor()?;
+    }
+    Ok(())
 }
 
 static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
@@ -172,19 +154,14 @@ fn check(boot: Boot<'_>) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
-    check(boot);
-    collected();
-    outcome::finish(true)
-}
-
-#[panic_handler]
-fn panic(info: &PanicInfo<'_>) -> ! {
-    if let Some(mut console) = diagnostic::console() {
-        let _ = writeln!(console, "{info}");
+guest::entry! {
+    platform: platform::Platform::native(4),
+    prepare: prepare,
+    run: |boot| {
+        check(boot);
+        collected();
+        guest::finish()
     }
-    outcome::finish(false)
 }
 
 #[test_case]

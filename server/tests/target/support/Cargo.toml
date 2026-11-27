@@ -1,0 +1,18 @@
+[package]
+name = "guest-support"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[lib]
+name = "guest"
+path = "lib.rs"
+test = false
+doctest = false
+
+[dependencies]
+kernel.workspace = true
+
+[target.'cfg(target_os = "uefi")'.dependencies]
+uefi-fixture.workspace = true

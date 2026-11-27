@@ -1,27 +1,24 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(support::run)]
+#![test_runner(guest::run)]
 #![reexport_test_harness_main = "collected"]
 
-#[path = "../../support/platform.rs"]
-mod platform;
-platform::declare!(platform::Platform::native(4));
-
-#[path = "../../support/discovery/mod.rs"]
-mod support;
+use guest::platform;
 
 mod leaf;
 #[cfg(not(target_arch = "riscv64"))]
 #[path = "../../../metal/sync/native.rs"]
 mod native;
 
-use kernel::{entry::boot::Boot, metal::sync::treaty::TurnLock};
+use kernel::metal::sync::treaty::TurnLock;
 
-#[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(_boot: Boot<'_>) -> ! {
-    collected();
-    support::finish()
+guest::entry! {
+    platform: platform::Platform::native(4),
+    run: |_boot| {
+        collected();
+        guest::finish()
+    }
 }
 
 #[test_case]
