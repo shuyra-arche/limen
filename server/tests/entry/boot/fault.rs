@@ -251,18 +251,14 @@ fn terminal_diagnostic_is_unique_across_the_recorded_channels() {
         [record, "PASS boot-handoff\n", ""],
         [record, "FAIL unrelated\n", ""],
     ] {
-        assert!(
-            std::panic::catch_unwind(|| diagnostic(&logs, 2, 0x100, 0, 0x200, 0x300)).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| diagnostic(&logs, 2, 0x100, 0, 0x200, 0x300)).is_err());
     }
 }
 
 #[test]
 fn terminal_diagnostic_must_match_the_observed_registers() {
     let record = "FAIL Limen boot trap: cause=0x2 pc=0x100 value=0x0 stack=0x200 status=0x300\n";
-    assert!(
-        std::panic::catch_unwind(|| diagnostic(&[record], 2, 0x102, 0, 0x200, 0x300)).is_err()
-    );
+    assert!(std::panic::catch_unwind(|| diagnostic(&[record], 2, 0x102, 0, 0x200, 0x300)).is_err());
 }
 
 fn fault_observation_error(directory: &Path, error: impl std::fmt::Display) -> ! {
