@@ -269,7 +269,11 @@ impl Execution {
             return Err(Error::Protection);
         }
         if !hart.on_dispatcher_stack() {
-            return Err(if hart.running().is_some() { Error::Busy } else { Error::Protection });
+            return Err(if hart.running().is_some() {
+                Error::Busy
+            } else {
+                Error::Protection
+            });
         }
         let Some((occupancy, context, entry)) = self.with_unit_room(|units, room| {
             let Some(unit) = room.candidate(id)? else {

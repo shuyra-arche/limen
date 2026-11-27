@@ -146,7 +146,13 @@ impl<Occupancy: Copy + Eq> LocalHart<'_, Occupancy> {
         }
 
         assert!(!self.hart.started.replace(true));
-        unsafe { native::start_stack(self.hart.stack.top(), enter::<F>, core::ptr::from_mut(dispatch).cast()) }
+        unsafe {
+            native::start_stack(
+                self.hart.stack.top(),
+                enter::<F>,
+                core::ptr::from_mut(dispatch).cast(),
+            )
+        }
     }
 
     pub(crate) fn running(&self) -> Option<Occupancy> {
