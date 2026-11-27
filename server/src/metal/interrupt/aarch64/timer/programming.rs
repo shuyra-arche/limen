@@ -78,5 +78,5 @@ impl State {
 }
 
 #[cfg(test)]
-#[path = "../../../../../../tests/metal/interrupt/aarch64/timer/programming.rs"]
+#[path = "../../../../../tests/metal/interrupt/aarch64/timer/programming.rs"]
 mod tests;

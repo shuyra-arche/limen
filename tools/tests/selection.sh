@@ -180,7 +180,7 @@ done
 for source in server/src/metal/processor/hart/aarch64/description.rs \
               server/src/metal/platform/firmware/psci/mod.rs \
               server/src/metal/interrupt/aarch64/gic/mod.rs \
-              server/src/metal/interrupt/aarch64/internal/timer/mod.rs \
+              server/src/metal/interrupt/aarch64/timer/mod.rs \
               server/src/metal/chrono/aarch64/mod.rs; do
     change "$source"
     [[ $(boards) == virt ]]

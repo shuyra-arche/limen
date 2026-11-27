@@ -62,12 +62,11 @@
         "server/tests/target/support/uefi/pl011.rs",
         "server/src/metal/interrupt/mod.rs",
         "server/src/metal/interrupt/aarch64/mod.rs",
-        "server/src/metal/interrupt/aarch64/internal/mod.rs",
         "server/src/metal/memory/mmu/access/**",
         "server/src/metal/memory/mmu/mod.rs",
         "server/src/metal/interrupt/aarch64/gic/**",
         "server/src/metal/interrupt/aarch64/gic/mod.rs",
-        "server/src/metal/interrupt/aarch64/internal/timer/**"
+        "server/src/metal/interrupt/aarch64/timer/**"
       ]
     },
     "launch": {

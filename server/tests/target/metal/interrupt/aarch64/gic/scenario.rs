@@ -30,7 +30,7 @@ use kernel::{
                 },
                 sgi::Sgi,
             },
-            internal::timer::{Failure as TimerFailure, GenericTimer, VirtualTimer},
+            timer::{Failure as TimerFailure, GenericTimer, VirtualTimer},
         },
         memory::mmu::access::device::DeviceWindow,
         platform::{description::devicetree::DeviceTree, firmware::psci::PsciDescription},

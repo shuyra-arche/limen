@@ -6,7 +6,7 @@ use kernel::metal::{
     chrono::aarch64::GenericCounter,
     interrupt::aarch64::{
         gic::{Trigger, cpu_interface, redistributor::PrivateInterrupts},
-        internal::timer::GenericTimer,
+        timer::GenericTimer,
     },
     platform::firmware::psci::Psci,
 };

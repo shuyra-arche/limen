@@ -72,9 +72,8 @@
         "server/tests/target/support/uefi/devicetree.rs",
         "server/tests/target/support/uefi/pl011.rs",
         "server/src/metal/interrupt/aarch64/gic/**",
-        "server/src/metal/interrupt/aarch64/internal/timer/**",
+        "server/src/metal/interrupt/aarch64/timer/**",
         "server/src/metal/interrupt/aarch64/mod.rs",
-        "server/src/metal/interrupt/aarch64/internal/mod.rs",
         "server/src/metal/interrupt/mod.rs",
         "server/src/metal/chrono/aarch64/**",
         "server/src/metal/chrono/mod.rs"
