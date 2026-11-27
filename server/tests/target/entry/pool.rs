@@ -3,7 +3,7 @@ use kernel::{
     metal::{
         memory::allocator::{
             Allocation, Allocator, Allowance, Config, Initial, MappedStorage,
-            pool::{GroupId, GroupSlot, Pool},
+            pool::{GroupId, GroupReceipt, GroupSlot, Pool},
         },
     },
 };
@@ -37,6 +37,7 @@ pub(super) unsafe fn install<T>(
     directory: &'static mut [GroupSlot<'static, T>],
     allocation: &mut Option<Allocation>,
     allowance: &mut Option<Allowance>,
+    receipt: &mut Option<GroupReceipt>,
 ) -> (Pool<'static, T>, GroupId, &'static Allocator) {
     let root = extent(BASE, BASE + PAGE as u64);
     let group_extent = group_extent();
@@ -60,14 +61,14 @@ pub(super) unsafe fn install<T>(
     }
     .unwrap()
     .unwrap();
-    let mut pool = Pool::new(directory).unwrap();
+    let pool = Pool::new(directory).unwrap();
     let mapping = unsafe { mapped(group_extent) };
     let mut paired = Some(
         unsafe { MappedStorage::prepare(allocation.take().unwrap(), mapping) }
             .ok()
             .unwrap(),
     );
-    let group = unsafe { pool.install(&mut paired) }.unwrap();
+    let group = unsafe { pool.install(&mut paired, receipt) }.unwrap();
 
     assert!(allocation.is_none() && paired.is_none());
     (pool, group, source)

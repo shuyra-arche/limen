@@ -11,7 +11,7 @@ use kernel::{
             Pending,
             RamPurpose::Metadata,
             Request,
-            ReturnId,
+            ReturnReceipt,
             Search,
         },
         sync::TurnMode::{Fast, Slow},
@@ -41,7 +41,7 @@ const CONFIG: Config = Config {
 
 static mut RECEIVER: Option<Allocation> = None;
 static mut ALLOWANCE: Option<Allowance> = None;
-static mut RECEIPT: Option<ReturnId> = None;
+static mut RECEIPT: Option<ReturnReceipt> = None;
 
 fn pages(first: u64, last: u64) -> PhysicalRange {
     extent(BASE + first * PAGE, BASE + last * PAGE)
@@ -168,14 +168,14 @@ pub(super) fn check(boot: &Boot<'_>) {
     let region = allocation.region();
     // This owner did not expose the allocation or issue any actual access.
     let receipt = unsafe { &mut *(&raw mut RECEIPT) };
-    let _lost = source.begin_return(unsafe { allocation.retire() }, receipt);
+    let _lost = unsafe { allocation.retire().begin_return(receipt) };
     let Pending::Found(pending) = source.pending(region, &mut 0, 64).unwrap() else {
         panic!("lost response made the return undiscoverable");
     };
     allowance.shut(Some(added), Fast).unwrap();
     let done = source.finish_return(pending, Slow).unwrap();
     let receipt = receipt.take().unwrap();
-    assert_eq!(receipt, pending);
+    assert_eq!(receipt.id(), pending);
     assert_eq!(done.physical, pages(0, 3));
     let capacity = capacity + 4 * PAGE;
     assert_eq!(
@@ -184,8 +184,8 @@ pub(super) fn check(boot: &Boot<'_>) {
         Ok((capacity, capacity))
     );
     allowance.reclaim(Slow).ok().unwrap();
-    assert_eq!(source.finish_return(receipt, Fast), Ok(done));
-    source.acknowledge(receipt).unwrap();
-    assert_eq!(source.finish_return(receipt, Fast), Err(Error::Stale));
+    assert_eq!(receipt.finish(Fast), Ok(done));
+    receipt.acknowledge().unwrap();
+    assert_eq!(receipt.finish(Fast), Err(Error::Stale));
     boot::write("PASS allocator source=1 negative=1 delayed=1 return=1\n");
 }
