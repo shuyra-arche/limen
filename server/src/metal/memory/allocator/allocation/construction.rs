@@ -1,6 +1,7 @@
 //! Durable allocation preparation and its original receiving position.
 
 use core::ptr;
+use limen_treaty::model::PhysicalRange;
 
 use crate::metal::sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace};
 
@@ -24,7 +25,7 @@ enum Preparation {
     Open,
     Reserved(Reservation),
     Shut(Option<Reservation>),
-    Issued(Option<Allocation>),
+    Issued(AllocationId, Option<Allocation>),
 }
 
 impl Preparation {
@@ -33,7 +34,7 @@ impl Preparation {
             Self::Open => *self = Self::Shut(None),
             Self::Reserved(reservation) => *self = Self::Shut(Some(reservation)),
             Self::Shut(_) => {}
-            Self::Issued(_) => return Err(Error::Receiver),
+            Self::Issued(..) => return Err(Error::Receiver),
         }
         Ok(())
     }
@@ -51,13 +52,27 @@ impl Preparation {
 /// place until the original owner settles or hands it off.
 pub struct AllocationConstruction {
     state: TurnLock<Preparation>,
+    physical: Option<PhysicalRange>,
 }
 
 impl AllocationConstruction {
     pub const fn new() -> Self {
         Self {
             state: TurnLock::new(Preparation::Open),
+            physical: None,
         }
+    }
+
+    pub(in crate::metal::memory::allocator) const fn within(physical: PhysicalRange) -> Self {
+        Self { physical: Some(physical), ..Self::new() }
+    }
+
+    pub(in crate::metal::memory::allocator) fn delivered(&self, id: AllocationId) -> Result<bool, Error> {
+        Ok(self.state.acquire(|state| matches!(state, Preparation::Issued(original, None) if *original == id))?)
+    }
+
+    pub(in crate::metal::memory::allocator) fn closed_empty(&self) -> Result<bool, Error> {
+        Ok(self.state.acquire(|state| matches!(state, Preparation::Shut(None)))?)
     }
 
     pub(crate) fn reservation(&self) -> Result<(RegionId, AllowanceId), Error> {
@@ -114,7 +129,7 @@ impl AllocationConstruction {
             return Err(Error::Receiver);
         }
         self.state.acquire(|state| {
-            let Preparation::Issued(allocation) = state else {
+            let Preparation::Issued(_, allocation) = state else {
                 return Err(Error::Receiver);
             };
             *receiver = Some(allocation.take().ok_or(Error::Receiver)?);
@@ -227,6 +242,9 @@ impl Allocator {
         permit: AllocationPermit,
         construction: &'static AllocationConstruction,
     ) -> Result<AllocationId, Error> {
+        if construction.physical.is_some_and(|physical| physical != candidate.physical) {
+            return Err(Error::Range);
+        }
         let region = self.region(candidate.region)?;
         permit.check(self, candidate)?;
         let allowance = permit.allowance();
@@ -303,7 +321,7 @@ impl Allocator {
         balance.issue(amount);
         held.access(slot).expect("Allowance").state = SlotState::Open(balance);
         *held.access(&construction.state).expect("receiver") =
-            Preparation::Issued(Some(Allocation::issued(self, reservation.id, physical)));
+            Preparation::Issued(reservation.id, Some(Allocation::issued(self, reservation.id, physical)));
         Ok(reservation.id)
     }
 

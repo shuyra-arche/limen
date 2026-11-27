@@ -1,6 +1,7 @@
 //! Fixed, mapped storage for a consumer's typed objects.
 
 mod group;
+mod growth;
 mod slot;
 
 use crate::metal::sync::{TurnAccess, TurnAcquireError, TurnLock, TurnPlan, TurnPlanError};
@@ -10,6 +11,7 @@ use group::{Chain, Group, Links};
 
 use group::GroupRecord;
 pub use group::{Geometry, Retirement, Supply};
+pub use growth::Growth;
 use slot::{Claim, Completion, SlotPosition, State};
 pub use slot::{
     DestructionReceipt, Occupied, Prepared, ReleaseCursor, ReleaseProgress, Reservation,
@@ -46,20 +48,35 @@ impl From<TurnAcquireError> for Error {
     }
 }
 
-/// A fixed directory position qualified by its original Allocation.
-/// The exact source AllocationId distinguishes every later group at this position.
+/// Original source material or a unique resident construction qualifies this position.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GroupId(usize, AllocationId);
+pub struct GroupId(usize, Origin);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Origin {
+    Material(AllocationId),
+    Growth(usize),
+}
 
 /// Storage supplied by the actual consumer outside its reclaimable pages.
 pub struct GroupSlot<'storage, T> {
     record: Option<GroupRecord<'storage, T>>,
+    growth: Option<&'static Growth>,
     next: Option<usize>,
 }
 
 impl<T> GroupSlot<'_, T> {
+    fn id(&self, index: usize) -> Option<GroupId> {
+        let origin = match self.growth {
+            Some(growth) => Origin::Growth(core::ptr::from_ref(growth).addr()),
+            None => Origin::Material(self.record.as_ref()?.allocation()),
+        };
+        Some(GroupId(index, origin))
+    }
+
     pub const EMPTY: Self = Self {
         record: None,
+        growth: None,
         next: None,
     };
 }
@@ -83,6 +100,7 @@ impl GroupReceipt {
             }
             let slot = &mut state.groups[self.id.0];
             slot.record = None;
+            slot.growth = None;
             slot.next = state.free_group;
             state.free_group = Some(self.id.0);
             Ok(())
@@ -100,6 +118,8 @@ struct Directory<'storage, T> {
     free_group: Option<usize>,
     open: usize,
     bytes: usize,
+    preparing: usize,
+    limit: usize,
     capacity: usize,
     free: usize,
     next_completion: Completion,
@@ -120,10 +140,15 @@ pub struct Capacity {
 impl<'storage, T> Pool<'storage, T> {
     /// Establish the fixed group directory outside all supplied group mappings.
     pub fn new(groups: &'storage mut [GroupSlot<'storage, T>]) -> Result<Self, Error> {
+        Self::bounded(groups, usize::MAX)
+    }
+
+    /// Bound open, retiring, and preparing material by one shared byte ceiling.
+    pub fn bounded(groups: &'storage mut [GroupSlot<'storage, T>], limit: usize) -> Result<Self, Error> {
         if groups.is_empty()
             || groups
                 .iter()
-                .any(|entry| entry.record.is_some() || entry.next.is_some())
+                .any(|entry| entry.record.is_some() || entry.growth.is_some() || entry.next.is_some())
         {
             return Err(Error::Directory);
         }
@@ -139,6 +164,8 @@ impl<'storage, T> Pool<'storage, T> {
                 free_group,
                 open: 0,
                 bytes: 0,
+                preparing: 0,
+                limit,
                 capacity: 0,
                 free: 0,
                 next_completion: Completion::FIRST,
@@ -162,6 +189,15 @@ impl<'storage, T> Pool<'storage, T> {
         material: &mut Option<MappedStorage<'storage>>,
         receipt: &mut Option<GroupReceipt>,
     ) -> Result<GroupId, Error> {
+        unsafe { self.install_at(None, material, receipt) }
+    }
+
+    unsafe fn install_at(
+        &self,
+        prepared: Option<GroupId>,
+        material: &mut Option<MappedStorage<'storage>>,
+        receipt: &mut Option<GroupReceipt>,
+    ) -> Result<GroupId, Error> {
         if receipt.is_some() {
             return Err(Error::Receiver);
         }
@@ -178,8 +214,12 @@ impl<'storage, T> Pool<'storage, T> {
             return Err(Error::Layout);
         }
         let retirement = supplied.allocation().return_position()?;
-        self.state
-            .acquire(|state| state.free_group.ok_or(Error::Directory).map(|_| ()))??;
+        let growth = self.state.acquire(|state| state.admission(prepared, geometry.bytes))??;
+        if let Some(growth) = growth
+            && (growth.physical != supplied.physical() || !growth.receiver.delivered(supplied.id())?)
+        {
+            return Err(Error::Material);
+        }
 
         // No Pool protection is held during the full private slot walk.
         Group::<T>::prepare(
@@ -191,7 +231,8 @@ impl<'storage, T> Pool<'storage, T> {
                 .bytes(),
         );
         self.state.acquire(|state| {
-            let index = state.free_group.ok_or(Error::Directory)?;
+            state.admission(prepared, geometry.bytes)?;
+            let index = prepared.map(|id| id.0).or(state.free_group).ok_or(Error::Directory)?;
             let capacity = state
                 .capacity
                 .checked_add(geometry.slots)
@@ -201,11 +242,15 @@ impl<'storage, T> Pool<'storage, T> {
                 .checked_add(geometry.bytes)
                 .ok_or(Error::Directory)?;
             let (allocation, mapping) = material.take().expect("checked material").into_parts();
-            let id = GroupId(index, allocation.id());
+            let id = prepared.unwrap_or(GroupId(index, Origin::Material(allocation.id())));
             let group = Group::new(allocation, retirement, geometry, mapping.into_bytes());
             let slot = &mut state.groups[index];
             assert!(slot.record.is_none());
-            state.free_group = slot.next.take();
+            if prepared.is_some() {
+                state.preparing -= geometry.bytes;
+            } else {
+                state.free_group = slot.next.take();
+            }
             slot.record = Some(GroupRecord::Open(group));
             state.extent = state.extent.max(index + 1);
             state.open += 1;
@@ -322,8 +367,8 @@ impl<'storage, T> Directory<'storage, T> {
     fn entry(&mut self, id: GroupId) -> Result<&mut GroupRecord<'storage, T>, Error> {
         self.groups
             .get_mut(id.0)
-            .and_then(|entry| entry.record.as_mut())
-            .filter(|entry| entry.allocation() == id.1)
+            .filter(|slot| slot.id(id.0) == Some(id))
+            .and_then(|slot| slot.record.as_mut())
             .ok_or(Error::Stale)
     }
 
