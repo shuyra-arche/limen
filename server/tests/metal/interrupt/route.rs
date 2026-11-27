@@ -48,7 +48,10 @@ pub unsafe fn resume(route: &mut impl RouteControl) {
 }
 
 pub unsafe fn retire<R: RouteControl>(route: &mut R) -> R::Retired {
-    assert_eq!(route.state(), RouteState::Masked);
+    assert!(matches!(
+        route.state(),
+        RouteState::Prepared | RouteState::Masked
+    ));
     for _ in 0..4096 {
         if let Ok(retired) = unsafe { route.retire() } {
             assert_eq!(route.state(), RouteState::Retired);

@@ -3,6 +3,7 @@
 use core::arch::asm;
 
 use super::super::{
+    distributor::{Destination, RetirementReceipt, RetirementRequest},
     reception::{Failure, Mode, State},
     redistributor::{
         self, Frame,
@@ -98,6 +99,35 @@ impl<'map> CpuInterface<'map> {
 
     pub fn state(&self) -> State {
         self.state
+    }
+
+    /// Observe the original locally admitted destination of an SPI.
+    pub fn destination(&self) -> Result<Destination, Failure> {
+        self.context()?;
+        Ok(Destination {
+            domain: self.frame.domain(),
+            frame: self.frame.physical(),
+            affinity: self.frame.affinity(),
+        })
+    }
+
+    /// Observe the exact route closed by its Distributor after all local
+    /// acknowledge, priority drop and deactivation effects have settled.
+    pub fn observe_retirement(
+        &self,
+        request: RetirementRequest,
+    ) -> Result<RetirementReceipt, (RetirementRequest, Failure)> {
+        let destination = match self.destination() {
+            Ok(destination) => destination,
+            Err(error) => return Err((request, error)),
+        };
+        if destination != request.destination() {
+            return Err((request, Failure::Scope));
+        }
+        if self.state != State::Empty {
+            return Err((request, Failure::Busy));
+        }
+        Ok(request.observed(self.frame.claim_round))
     }
 
     /// Return the original frame after all local receptions settle.

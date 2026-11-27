@@ -8,6 +8,9 @@ use kernel::metal::processor::treaty::{
     InstallError, Irq, LocalStorage, Minor, RuntimeTrap, Stack, Startup,
 };
 
+#[path = "spi.rs"]
+mod spi;
+
 #[path = "../../../claim.rs"]
 mod claim_consumer;
 #[path = "../../../completion.rs"]
@@ -302,11 +305,7 @@ fn observe_minor(processor: usize, _: usize) -> ! {
         frame.retire_sgi(signal).unwrap();
         SIGNAL_OBSERVED.store(round, Ordering::Release);
     }
-    loop {
-        // Keep the original Frame reserved for this PE until guest shutdown.
-        core::hint::black_box(&mut frame);
-        unsafe { asm!("wfe", options(nostack, nomem)) };
-    }
+    spi::on_minor(frame)
 }
 
 fn check_idle(receiver: &mut CpuInterface<'_>, round: usize) {
@@ -700,13 +699,17 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
             assert!(spi.reserve(second_route).is_err());
             route_consumer::publish(
                 &mut spi
-                    .configure(&mut primary_binding, major as u64, 0x10)
+                    .configure(&mut primary_binding, receiver.destination().unwrap(), 0x10)
                     .unwrap(),
             );
             assert_eq!(spi.state(second_id), Ok(SpiState::Masked));
             route_consumer::publish(
                 &mut spi
-                    .configure(&mut secondary_binding, major as u64, 0x20)
+                    .configure(
+                        &mut secondary_binding,
+                        receiver.destination().unwrap(),
+                        0x20,
+                    )
                     .unwrap(),
             );
             (primary_binding, secondary_binding)
@@ -750,7 +753,9 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
             unsafe { route_consumer::resume(&mut spi.control(binding).unwrap()) };
             assert_eq!(spi.state(input), Ok(SpiState::Enabled));
             route_consumer::mask(&mut spi.control(binding).unwrap());
-            unsafe { route_consumer::retire(&mut spi.control(binding).unwrap()) };
+            let request = unsafe { spi.begin_retirement(binding) }.unwrap();
+            let receipt = receiver.observe_retirement(request).unwrap();
+            unsafe { spi.finish_retirement(binding, receipt) }.unwrap();
             let mut replacement =
                 unsafe { spi.reserve(if input == id { route } else { second_route }) }.unwrap();
             assert!(spi.control(binding).is_err());
@@ -764,6 +769,17 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
     local_frame = check_virtual_timer(tree, controller, major, local_frame);
     local_frame = check_signal(local_frame);
     assert!(local_frame.awake());
+    let remote = unsafe { CpuInterface::admit(local_frame) }
+        .unwrap_or_else(|(_, reason)| panic!("major GIC interface: {reason:?}"));
+    spi::close_remote(
+        controller,
+        distributor.reborrow(),
+        second_route,
+        &mut secondary,
+        &remote,
+        minor,
+    );
+    assert!(remote.release().is_ok());
     boot_diagnostic::write("PASS gicr frames=2 independent=1\n");
     boot_diagnostic::write("PASS external-route published=2 repeated=0 independent=1\n");
     let bank = id / 32 * 4;
