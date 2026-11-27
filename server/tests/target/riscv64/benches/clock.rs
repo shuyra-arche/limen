@@ -2,7 +2,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::scenario)]
+#![test_runner(harness)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -12,9 +12,5 @@ mod clock;
 
 guest::entry! {
     platform: platform::Platform::native(1),
-    purpose: guest::Purpose::Bench,
-    run: |boot| {
-        clock::check(boot);
-        guest::finish()
-    }
+    bench: clock::check,
 }

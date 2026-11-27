@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::scenario)]
+#![test_runner(harness)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -18,13 +18,12 @@ guest::entry! {
         sstc: platform::Setting::On,
         ..platform::Platform::native(2)
     },
-    run: |mut boot| {
+    test: |mut boot| {
         assert!(boot.riscv_cpus().cpu(0).unwrap().unwrap().enabled());
         assert!(boot.riscv_cpus().cpu(1).unwrap().unwrap().enabled());
         assert!(boot.riscv_cpus().cpu(2).unwrap().is_none());
         let mut reception = boot.take_reception().unwrap();
         plic::check(&boot, &mut reception);
         sstc::check(&boot, &mut reception.timer);
-        guest::finish()
-    }
+    },
 }

@@ -1,46 +1,78 @@
-//! The standard guest image boundary. Test behavior stays in the caller.
-
+//! The standard guest image boundary. Behavior determines the harness.
 #[macro_export]
 macro_rules! entry {
     (
         platform: $platform:expr,
         $(prepare: $prepare:expr,)?
         $(major: ($stack:expr, $nodes:expr),)?
-        test: |$test_boot:ident| $test_body:block,
-        bench: |$bench_boot:ident| $bench_body:block $(,)?
+        test: collected $(=> $after:expr)?,
+        $($(#[cfg($($condition:tt)*)])? bench: $bench:expr,)?
     ) => {
         $crate::entry! {
-            platform: $platform,
-            $(prepare: $prepare,)?
-            $(major: ($stack, $nodes),)?
-            purpose: if cfg!(feature = "bench") {
-                $crate::Purpose::Bench
-            } else {
-                $crate::Purpose::Test
-            },
-            run: |boot| {
-                #[cfg(not(feature = "bench"))]
-                {
-                    let $test_boot = boot;
-                    $test_body
-                }
-                #[cfg(feature = "bench")]
-                {
-                    let $bench_boot = boot;
-                    $bench_body
-                }
-                $crate::finish()
-            }
+            @select [
+                platform: $platform,
+                $(prepare: $prepare,)?
+                $(major: ($stack, $nodes),)?
+            ]
+            $crate::run, $crate::entry!(@callback $($after)?),
+            $($(#[cfg($($condition)*)])? bench: $bench,)?
         }
     };
     (
         platform: $platform:expr,
         $(prepare: $prepare:expr,)?
         $(major: ($stack:expr, $nodes:expr),)?
-        $(purpose: $purpose:expr,)?
-        run: $($run:tt)+
+        test: $test:expr,
+        $($(#[cfg($($condition:tt)*)])? bench: $bench:expr,)?
     ) => {
-        $crate::declare!($platform $(, $purpose)?);
+        $crate::entry! {
+            @select [
+                platform: $platform,
+                $(prepare: $prepare,)?
+                $(major: ($stack, $nodes),)?
+            ]
+            $crate::scenario, $test,
+            $($(#[cfg($($condition)*)])? bench: $bench,)?
+        }
+    };
+    (
+        platform: $platform:expr,
+        $(prepare: $prepare:expr,)?
+        $(major: ($stack:expr, $nodes:expr),)?
+        bench: $bench:expr,
+    ) => {
+        $crate::entry! {
+            @emit [
+                platform: $platform,
+                $(prepare: $prepare,)?
+                $(major: ($stack, $nodes),)?
+            ]
+            $crate::Purpose::Bench, $crate::scenario, $bench
+        }
+    };
+    (@callback) => { |_: $crate::Boot<'_>| {} };
+    (@callback $callback:expr) => { $callback };
+    (@select [$($setup:tt)*] $harness:path, $test:expr,) => {
+        $crate::entry!(@emit [$($setup)*] $crate::Purpose::Test, $harness, $test);
+    };
+    (
+        @select [$($setup:tt)*] $harness:path, $test:expr,
+        $(#[cfg($($condition:tt)*)])? bench: $bench:expr,
+    ) => {
+        #[cfg(not(all(feature = "bench" $(, $($condition)*)?)))]
+        $crate::entry!(@emit [$($setup)*] $crate::Purpose::Test, $harness, $test);
+        #[cfg(all(feature = "bench" $(, $($condition)*)?))]
+        $crate::entry!(@emit [$($setup)*] $crate::Purpose::Bench, $crate::scenario, $bench);
+    };
+    (
+        @emit [
+            platform: $platform:expr,
+            $(prepare: $prepare:expr,)?
+            $(major: ($stack:expr, $nodes:expr),)?
+        ]
+        $purpose:expr, $harness:path, $operation:expr
+    ) => {
+        $crate::declare!($platform, $purpose);
 
         #[cfg(target_arch = "riscv64")]
         $crate::entry!(@major $($stack, $nodes)?);
@@ -51,7 +83,17 @@ macro_rules! entry {
             $crate::entry!(@load $($prepare)?)
         }
 
-        $crate::entry!(@ready $($run)+);
+        fn harness(cases: &[&dyn Fn()]) {
+            $harness(cases);
+        }
+
+        #[unsafe(no_mangle)]
+        extern "Rust" fn limen_platform_ready(boot: $crate::Boot<'_>) -> ! {
+            collected();
+            let operation: fn($crate::Boot<'_>) = $operation;
+            operation(boot);
+            $crate::finish()
+        }
 
         #[panic_handler]
         fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
@@ -69,19 +111,5 @@ macro_rules! entry {
     };
     (@load $prepare:expr) => {
         $crate::load($prepare)
-    };
-    (@ready |$boot:ident| $body:block) => {
-        #[unsafe(no_mangle)]
-        extern "Rust" fn limen_platform_ready($boot: $crate::Boot<'_>) -> ! {
-            collected();
-            $body
-        }
-    };
-    (@ready |mut $boot:ident| $body:block) => {
-        #[unsafe(no_mangle)]
-        extern "Rust" fn limen_platform_ready(mut $boot: $crate::Boot<'_>) -> ! {
-            collected();
-            $body
-        }
     };
 }

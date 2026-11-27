@@ -2,7 +2,7 @@
 //! The linked ELF is never modified. GDB changes only the running guest.
 
 use super::{diagnostic, observation};
-use kernel_verification::{evidence, machine, native, platform, qmp};
+use kernel_verification::{cargo, evidence, machine, native, platform, qmp};
 use object::{Architecture, Object, ObjectSection, ObjectSymbol};
 use serde_json::Value;
 use std::{
@@ -48,19 +48,12 @@ fn linked_guest(root: &Path, evidence: &Path) -> PathBuf {
         output.status.success(),
         "boot fault guest failed to compile"
     );
-    let artifacts: Vec<_> = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .filter(|message| {
-            message["reason"] == "compiler-artifact"
-                && message["target"]["name"] == "boot-handoff"
-                && message["profile"]["test"] == true
-        })
-        .filter_map(|message| message["executable"].as_str().map(PathBuf::from))
-        .collect();
+    let artifacts = cargo::images(&String::from_utf8(output.stdout).unwrap()).unwrap();
     assert_eq!(artifacts.len(), 1, "expected the exact linked test image");
-    artifacts[0].canonicalize().unwrap()
+    let artifact = &artifacts[0];
+    assert_eq!(artifact.kind, cargo::Kind::Test);
+    assert_eq!(artifact.target, "boot-handoff");
+    artifact.image.canonicalize().unwrap()
 }
 
 const WITNESS: u64 = 0x1234_5678_9abc_def0;

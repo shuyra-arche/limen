@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::scenario)]
+#![test_runner(harness)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -24,13 +24,12 @@ guest::entry! {
         function: 0,
         dma_mask: platform::DmaMask::Full32,
     }),
-    run: |boot| {
+    test: |boot| {
         assert_eq!(boot.hart(), 0);
         assert!(boot.riscv_cpus().cpu(1).unwrap().is_none());
         assert_bare_translation();
         native::check(boot);
-        guest::finish()
-    }
+    },
 }
 
 fn assert_bare_translation() {

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::scenario)]
+#![test_runner(harness)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -24,10 +24,9 @@ guest::entry! {
         function: 0,
         dma_mask: platform::DmaMask::Full32,
     }),
-    run: |boot| {
+    test: |boot| {
         // The native scenario consumes this boot admission once. There is no
         // independently collected case sharing its device state.
         native::check(boot);
-        guest::finish()
-    }
+    },
 }

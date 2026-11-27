@@ -25,6 +25,9 @@ Use a fresh evidence root for a repeated run.
 
 ## Responsibilities
 
+- `cargo` decodes Cargo's successful JSON build stream into native harness
+  artifacts; both benchmark selection and the Host observers consume these
+  actual build products.
 - `platform` decodes and admits the executable's machine declaration without
   preparing firmware or starting a process.
 - `machine` prepares the admitted QEMU command and its per-run boot material;

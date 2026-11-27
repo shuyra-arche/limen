@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::run)]
+#![test_runner(harness)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -158,10 +158,7 @@ fn check(boot: Boot<'_>) {
 guest::entry! {
     platform: platform::Platform::native(4),
     prepare: prepare,
-    run: |boot| {
-        check(boot);
-        guest::finish()
-    }
+    test: collected => check,
 }
 
 // This fixture tests the compiler-collected harness itself. No ordinary

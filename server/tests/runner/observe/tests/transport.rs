@@ -185,7 +185,7 @@ fn rejects_collected_panic() {
 
 #[test]
 fn rejects_test_image_as_benchmark_before_launch() {
-    use kernel_verification::{native, platform::Purpose};
+    use kernel_verification::{cargo, native, platform::Purpose};
 
     let target = env::var("LIMEN_TEST_TARGET").unwrap();
     let profile = env::var("LIMEN_TEST_PROFILE").unwrap();
@@ -222,17 +222,12 @@ fn rejects_test_image_as_benchmark_before_launch() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let images: Vec<_> = stdout
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .filter(|record| {
-            record["reason"] == "compiler-artifact" && record["target"]["name"] == "outcome"
-        })
-        .filter_map(|record| record["executable"].as_str().map(PathBuf::from))
-        .collect();
+    let images = cargo::images(&String::from_utf8(output.stdout).unwrap()).unwrap();
     assert_eq!(images.len(), 1);
-    let image = images[0].canonicalize().unwrap();
+    let artifact = &images[0];
+    assert_eq!(artifact.kind, cargo::Kind::Test);
+    assert_eq!(artifact.target, "outcome");
+    let image = artifact.image.canonicalize().unwrap();
     assert!(native::run(&image, Purpose::Bench, false, Some(&evidence)).is_err());
     let directory = evidence.join(image.file_name().unwrap());
     let verdict = receipt(&directory.join("result.json"));

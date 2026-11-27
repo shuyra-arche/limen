@@ -1,25 +1,13 @@
-use super::{Candidate, CargoImage, Selection, candidates};
-use serde_json::json;
+use super::{Candidate, Selection};
+use crate::cargo::{Image, Kind};
 use std::path::PathBuf;
 
-fn artifact(kind: &str, target: &str, image: &str) -> String {
-    json!({
-        "reason": "compiler-artifact",
-        "package_id": "fixture",
-        "manifest_path": "/compiled/Cargo.toml",
-        "target": {"kind": [kind], "name": target},
-        "profile": {"test": true},
-        "executable": image,
-    })
-    .to_string()
-}
-
-fn candidate(kind: &str, purpose: &str, target: &str) -> Candidate {
+fn candidate(kind: Kind, purpose: &str, target: &str) -> Candidate {
     Candidate {
-        cargo: CargoImage {
+        cargo: Image {
             package: "fixture".into(),
             target: target.into(),
-            kind: kind.into(),
+            kind,
             manifest: PathBuf::from("/compiled/Cargo.toml"),
             image: PathBuf::from(format!("/compiled/{target}")),
         },
@@ -30,29 +18,13 @@ fn candidate(kind: &str, purpose: &str, target: &str) -> Candidate {
 }
 
 #[test]
-fn cargo_discovery_requires_a_complete_build_and_actual_executables() {
-    let test = artifact("test", "arbitrary", "/compiled/arbitrary");
-    let bench = artifact("bench", "other", "/compiled/other");
-    let complete = json!({"reason": "build-finished", "success": true});
-    let failed = json!({"reason": "build-finished", "success": false});
-    let images = candidates(&format!("{test}\n{bench}\n{complete}\n")).unwrap();
-    assert_eq!(images.len(), 2);
-    assert_eq!(images[0].kind, "test");
-    assert_eq!(images[1].kind, "bench");
-    assert!(candidates(&test).is_err());
-    assert!(candidates(&format!("{test}\n{failed}")).is_err());
-    assert!(candidates(&format!("{complete}\n{test}")).is_err());
-    assert!(candidates(&complete.to_string()).is_err());
-}
-
-#[test]
 fn only_measurement_purpose_is_selected() {
     let mut selection = Selection {
         schema: 1,
         candidates: vec![
-            candidate("test", "test", "ordinary"),
-            candidate("test", "bench", "shared"),
-            candidate("bench", "bench", "dedicated"),
+            candidate(Kind::Test, "test", "ordinary"),
+            candidate(Kind::Test, "bench", "shared"),
+            candidate(Kind::Bench, "bench", "dedicated"),
         ],
     };
     let selected = selection.selected().unwrap();
@@ -61,11 +33,15 @@ fn only_measurement_purpose_is_selected() {
     assert!(selected.contains_key("dedicated"));
     assert!(!selected.contains_key("ordinary"));
 
-    selection.candidates.push(candidate("bench", "test", "invalid"));
+    selection
+        .candidates
+        .push(candidate(Kind::Bench, "test", "invalid"));
     assert!(selection.selected().is_err());
     selection.candidates.pop();
-    selection.candidates.push(candidate("test", "bench", "shared"));
+    selection
+        .candidates
+        .push(candidate(Kind::Test, "bench", "shared"));
     assert!(selection.selected().is_err());
-    selection.candidates = vec![candidate("test", "test", "ordinary")];
+    selection.candidates = vec![candidate(Kind::Test, "test", "ordinary")];
     assert!(selection.selected().is_err());
 }

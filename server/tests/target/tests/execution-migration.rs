@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::scenario)]
+#![test_runner(harness)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -16,7 +16,7 @@ mod native;
 guest::entry! {
     platform: platform::Platform::native(4),
     prepare: native::prepare,
-    run: |boot| {
+    test: |boot| {
         native::check(boot, guest::finish)
-    }
+    },
 }

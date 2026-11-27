@@ -1,8 +1,7 @@
 //! Select the benchmark purpose from actual Cargo artifacts, not target names.
 use super::run_in;
-use crate::{Result, evidence, platform, require};
+use crate::{Result, cargo, evidence, platform, require};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -10,18 +9,9 @@ use std::{
 };
 
 #[derive(Debug, Serialize, Deserialize)]
-struct CargoImage {
-    package: String,
-    target: String,
-    kind: String,
-    manifest: PathBuf,
-    image: PathBuf,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 struct Candidate {
     #[serde(flatten)]
-    cargo: CargoImage,
+    cargo: cargo::Image,
     image_sha256: String,
     architecture: String,
     purpose: String,
@@ -33,13 +23,6 @@ struct Selection {
     candidates: Vec<Candidate>,
 }
 
-fn string<'a>(record: &'a Value, field: &str) -> Result<&'a str> {
-    record[field]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("missing Cargo artifact field: {field}").into())
-}
-
 fn name(image: &Path) -> Result<String> {
     Ok(image
         .file_name()
@@ -48,51 +31,13 @@ fn name(image: &Path) -> Result<String> {
         .to_owned())
 }
 
-fn candidates(log: &str) -> Result<Vec<CargoImage>> {
-    let mut built = false;
-    let mut images = Vec::new();
-    for line in log.lines() {
-        let record: Value = serde_json::from_str(line)?;
-        require(!built, "Cargo message after build completion")?;
-        match record["reason"].as_str() {
-            Some("compiler-artifact") => {
-                let target = &record["target"];
-                let kind = match target["kind"].as_array().map(Vec::as_slice) {
-                    Some([kind]) if kind == "test" => "test",
-                    Some([kind]) if kind == "bench" => "bench",
-                    _ => continue,
-                };
-                require(
-                    record["profile"]["test"] == true,
-                    "expected a Cargo harness artifact",
-                )?;
-                images.push(CargoImage {
-                    package: string(&record, "package_id")?.to_owned(),
-                    target: string(target, "name")?.to_owned(),
-                    kind: kind.to_owned(),
-                    manifest: PathBuf::from(string(&record, "manifest_path")?),
-                    image: PathBuf::from(string(&record, "executable")?),
-                });
-            }
-            Some("build-finished") => {
-                require(record["success"] == true, "Cargo build did not succeed")?;
-                built = true;
-            }
-            Some(_) => {}
-            None => return Err("missing Cargo message reason".into()),
-        }
-    }
-    require(built && !images.is_empty(), "incomplete Cargo artifact stream")?;
-    Ok(images)
-}
-
 impl Selection {
     fn collect(log: &str) -> Result<Self> {
         let mut result = Self {
             schema: 1,
             candidates: Vec::new(),
         };
-        for mut cargo in candidates(log)? {
+        for mut cargo in cargo::images(log)? {
             cargo.image = cargo.image.canonicalize()?;
             cargo.manifest = cargo.manifest.canonicalize()?;
             require(cargo.manifest.is_file(), "missing Cargo manifest")?;
@@ -121,7 +66,7 @@ impl Selection {
                     && !candidate.cargo.target.is_empty()
                     && targets.insert((
                         &candidate.cargo.package,
-                        &candidate.cargo.kind,
+                        candidate.cargo.kind,
                         &candidate.cargo.target,
                     )),
                 "missing or duplicate Cargo target identity",
@@ -135,14 +80,17 @@ impl Selection {
                 "invalid selected image digest",
             )?;
             require(
-                matches!(candidate.architecture.as_str(), "riscv64" | "aarch64" | "x86_64"),
+                matches!(
+                    candidate.architecture.as_str(),
+                    "riscv64" | "aarch64" | "x86_64"
+                ),
                 "invalid selected architecture",
             )?;
-            match (candidate.cargo.kind.as_str(), candidate.purpose.as_str()) {
-                ("test" | "bench", "bench") => {
+            match (candidate.cargo.kind, candidate.purpose.as_str()) {
+                (cargo::Kind::Test | cargo::Kind::Bench, "bench") => {
                     selected.insert(name, candidate.image_sha256.clone());
                 }
-                ("test", "test") => {}
+                (cargo::Kind::Test, "test") => {}
                 _ => return Err("invalid artifact kind or purpose".into()),
             }
         }
@@ -163,7 +111,10 @@ pub fn run_set(artifacts: &Path, root: &Path) -> Result<()> {
     let directory = root.join("bench");
     evidence::fresh(&directory)?;
     let selection_path = root.join("selection.json");
-    require(!selection_path.exists(), "selection evidence already exists")?;
+    require(
+        !selection_path.exists(),
+        "selection evidence already exists",
+    )?;
     evidence::json(&selection_path, &selection)?;
 
     let mut failures = Vec::new();

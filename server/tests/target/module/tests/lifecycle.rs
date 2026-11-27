@@ -1,10 +1,12 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::scenario)]
+#![test_runner(harness)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
+#[cfg(target_os = "uefi")]
+use guest::scenario as harness;
 
 #[cfg(target_arch = "riscv64")]
 #[path = "../../../metal/module/retirement/mod.rs"]
@@ -13,11 +15,10 @@ mod retirement;
 #[cfg(target_arch = "riscv64")]
 guest::entry! {
     platform: platform::Platform::native(2),
-    run: |boot| {
+    test: |boot| {
         assert!(boot.riscv_cpus().cpu(2).unwrap().is_none());
         retirement::check(boot);
-        guest::finish()
-    }
+    },
 }
 
 // Strict NX requires a dedicated UEFI loader and pre-admission diagnostics.

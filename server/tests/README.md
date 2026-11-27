@@ -34,14 +34,19 @@ package needs no manifest entry or CI change.
 
 The `guest-support` library supplies the machine declaration, standard
 startup, compiler-collected harness, panic handler and completion transport.
-A stateful scenario uses `#![test_runner(guest::scenario)]` and an explicit
-Boot callback. A collected suite uses `#![test_runner(guest::run)]` with
-independent `#[test_case]` functions. Both use Cargo's discovered test targets.
-The shared entry invokes the compiler-generated `collected` function exactly
-once before the Boot callback; a custom entry must do the same. Scenario
-images reject nonempty collections instead of silently skipping cases;
-collected suites reject empty collections. Each image chooses its platform and
-optional firmware preparation:
+Standard guest roots use `#![test_runner(harness)]` and
+`#![reexport_test_harness_main = "collected"]`. The entry macro supplies the
+harness and completion path according to the declared behavior:
+`test: collected,` for independent `#[test_case]` functions,
+`test: <Boot callback>,` for a stateful scenario, and
+`bench: <Boot callback>,` for measurement. Scenario images reject
+nonempty collections; collected suites reject empty collections.
+The shared entry invokes the compiler-generated `collected` exactly
+once, then invokes the selected callback if one is provided. Returning
+normally completes the guest; a terminal callback retains its explicit
+completion responsibility. A custom loader must enforce the same collection
+and completion contract. Each image chooses its platform and optional
+firmware preparation:
 
 ```rust
 guest::entry! {
@@ -51,10 +56,7 @@ guest::entry! {
         sstc: platform::Setting::Off,
         ..platform::Platform::native(1)
     },
-    run: |boot| {
-        scenario::check(boot);
-        guest::finish()
-    }
+    test: scenario::check,
 }
 ```
 
@@ -66,7 +68,9 @@ restore the state they change. The shared Boot, migration and synchronization
 images compile their real backend with Rust's target configuration. Special
 loaders can use the library's declaration and completion without adopting its
 standard entry.
-The strict-NX Module retention case owns such a loader. Owner-local
+The strict-NX Module retention case owns such a loader. The completion
+transport fixture explicitly uses `test: collected => check,` because it
+verifies both compiler collection and terminal behavior. Owner-local
 assertions remain in Entry, Basis and Metal. One explicit path to an
 owner's test implementation is preferable to a registry of scenarios.
 
@@ -202,8 +206,13 @@ outcome prevents in-guest completion.
 Benchmark bodies live in the owning domain under `server/benches/`. The
 existing target-only Guest packages supply dedicated entry points when no
 matching Test image exists. A common entry can instead declare one platform
-and distinct `test:` and `bench:` callbacks; the `bench` feature selects the
-latter. Both use the same linker, startup, machine preparation, process
+and distinct `test:` and `bench:` behaviors. The package's `bench` feature
+selects measurement only where the entry declares it and its optional
+`#[cfg(...)]` condition holds. For example, Sync declares
+`test: collected,` and `#[cfg(target_arch = "riscv64")]` followed by
+`bench: measurement::check,`. On other architectures the same entry
+continues to declare and compile its Test behavior. Conditions on imports
+remain necessary where backend dependencies differ. Both use the same linker, startup, machine preparation, process
 settlement and completion contract. They execute in separate boots.
 No separate benchmark workspace or lockfile is required.
 The first target, `riscv64-guest:clock`, establishes a measurement transport
