@@ -2,11 +2,25 @@ pub mod aarch64;
 pub mod access;
 #[cfg(any(
     test,
-    all(limen_target, any(target_arch = "aarch64", target_arch = "x86_64"))
+    all(
+        limen_target,
+        any(
+            target_arch = "aarch64",
+            target_arch = "riscv64",
+            target_arch = "x86_64"
+        )
+    )
 ))]
 mod installation;
-#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "x86_64")))]
-pub use installation::{LocalInstall, LocalRoot};
+#[cfg(all(
+    limen_target,
+    any(
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "x86_64"
+    )
+))]
+pub use installation::{Context, LocalContext, LocalInstall};
 pub mod riscv64;
 pub mod x86_64;
 

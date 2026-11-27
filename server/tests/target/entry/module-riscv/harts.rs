@@ -12,9 +12,16 @@ use core::{
 use kernel::{
     entry::boot::{Boot, Minor, Startup},
     metal::{
-        processor::execution::description::riscv64::{RiscvExtension, RiscvIsa},
-        memory::mmu::riscv64::{internal::{context::{Context, Translation}, description::RiscvMmu, encoder::Encoder}, sv::Mode},
+        memory::mmu::riscv64::{
+            internal::{
+                context::{Context, admit_context},
+                description::RiscvMmu,
+                encoder::Encoder,
+            },
+            sv::Mode,
+        },
         module::ModuleUse,
+        processor::execution::description::riscv64::{RiscvExtension, RiscvIsa},
     },
 };
 
@@ -145,7 +152,7 @@ fn run(hart: usize, argument: usize) -> ! {
     wait(Phase::Initial);
     let description = unsafe { *ptr::with_exposed_provenance::<RiscvMmu<'_>>(argument) };
     assert_eq!(hart as u64, description.hart());
-    let mut translation = unsafe { Translation::admit(description) }.unwrap();
+    let mut translation = unsafe { admit_context(description) }.unwrap();
     let [initial, successor] = ROOTS
         .each_ref()
         .map(|root| Context::from_bits(root.load(Relaxed)).unwrap());

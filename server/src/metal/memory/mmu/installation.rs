@@ -1,27 +1,65 @@
-//! The actual local root register change shared by the x86 and Arm backends.
+//! Confirmed installation of the original local CPU translation context.
 
 use super::SwitchError;
 
-#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "x86_64")))]
-pub use bound::{LocalInstall, LocalRoot};
+#[cfg(all(
+    limen_target,
+    any(
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "x86_64"
+    )
+))]
+pub use bound::{Context, LocalContext, LocalInstall};
 
-#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "x86_64")))]
+#[cfg(all(
+    limen_target,
+    any(
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "x86_64"
+    )
+))]
 mod bound {
     use super::{Installation, SwitchError};
     #[cfg(target_arch = "aarch64")]
-    use crate::metal::memory::mmu::aarch64::internal::{Controls, NativeRoot};
+    use crate::metal::memory::mmu::aarch64::internal::{Controls, Format as Profile, NativeRoot};
+    #[cfg(target_arch = "riscv64")]
+    use crate::metal::memory::mmu::riscv64::internal::{
+        context::{Context as Controls, NativeRoot as Native},
+        description::MaximumMode as Profile,
+    };
     #[cfg(target_arch = "x86_64")]
-    use crate::metal::memory::mmu::x86_64::internal::{Controls, NativeRoot};
+    use crate::metal::memory::mmu::x86_64::internal::{Controls, Format as Profile, NativeRoot};
     use core::marker::PhantomData;
     use limen_treaty::model::PhysicalAddress;
 
-    /// Hardware readback of the completed root installation on one Hart.
-    /// Mapping, storage and residency retirement require their own evidence.
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    type Native<'scope> = NativeRoot;
+
+    /// Exact native translation state of one admitted local scope.
+    /// Its table trees and continuity are provided by the original owners.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct Context {
+        hart: usize,
+        profile: Profile,
+        controls: Controls,
+        root: Option<PhysicalAddress>,
+    }
+
+    impl Context {
+        pub fn root(self) -> Option<PhysicalAddress> {
+            self.root
+        }
+    }
+
+    /// Hardware readback of this local installation and its original context.
+    /// Storage, mapping and residency retirement require separate evidence.
     #[derive(Debug, Eq, PartialEq)]
     pub struct LocalInstall {
         hart: usize,
-        previous: PhysicalAddress,
-        installed: PhysicalAddress,
+        previous: Context,
+        installed: Context,
     }
 
     impl LocalInstall {
@@ -29,28 +67,28 @@ mod bound {
             self.hart
         }
 
-        pub fn previous(&self) -> PhysicalAddress {
+        pub fn previous(&self) -> Context {
             self.previous
         }
 
-        pub fn installed(&self) -> PhysicalAddress {
+        pub fn installed(&self) -> Context {
             self.installed
         }
     }
 
-    /// Bound authority to switch the executing Hart's supported CPU root.
-    /// Retains all affected native controls until the write is confirmed.
+    /// Bound access to the original Hart's supported translation controls.
+    /// Only its native admission may establish this local installation scope.
     #[must_use]
-    pub struct LocalRoot {
-        native: NativeRoot,
+    pub struct LocalContext<'scope> {
+        native: Native<'scope>,
         installation: Installation<Controls>,
-        local: PhantomData<*mut ()>,
+        local: PhantomData<(&'scope (), *mut ())>,
     }
 
-    impl LocalRoot {
+    impl<'scope> LocalContext<'scope> {
         pub(in crate::metal::memory::mmu) fn bind(
             hart: usize,
-            native: NativeRoot,
+            native: Native<'scope>,
             initial: Controls,
         ) -> Self {
             Self {
@@ -60,71 +98,122 @@ mod bound {
             }
         }
 
-        /// Last confirmed root, absent while the original write is unsettled.
-        pub fn current(&self) -> Option<PhysicalAddress> {
+        fn describe(&self, controls: Controls) -> Context {
+            Context {
+                hart: self.installation.hart(),
+                profile: self.native.profile(),
+                controls,
+                root: self.native.physical_root(controls),
+            }
+        }
+
+        /// Last confirmed context, absent while the original write is unsettled.
+        pub fn current(&self) -> Option<Context> {
             self.installation
                 .current()
-                .map(|controls| self.native.root(controls))
+                .map(|value| self.describe(value))
         }
 
-        /// Both roots retained during an uncertain local installation.
-        pub fn pending(&self) -> Option<(PhysicalAddress, PhysicalAddress)> {
-            self.installation.pending().map(|(previous, requested)| {
-                (self.native.root(previous), self.native.root(requested))
-            })
+        /// Both exact contexts retained during an uncertain installation.
+        pub fn pending(&self) -> Option<(Context, Context)> {
+            self.installation
+                .pending()
+                .map(|(previous, requested)| (self.describe(previous), self.describe(requested)))
         }
 
-        /// Install the requested root and complete the bound native maintenance.
+        /// Install the prepared context and complete its local native maintenance.
         ///
         /// # Safety
-        /// Both table trees must be live and coherent, and all code, stacks,
-        /// handlers and data used across the transition must stay accessible.
-        /// Retain the exact context and native admission obligations. Arm
-        /// additionally requires a retained opposite root for the transition
-        /// and excludes older accesses and conflicting ASID use on other PEs.
-        pub unsafe fn switch(
+        /// The original owners keep both actual table trees and all code,
+        /// stacks, handlers and data used across the transition live and
+        /// coherent. Retain the native admission obligations for both contexts
+        /// through any unconfirmed effect, including other roots or tag users.
+        /// Instruction visibility and remote synchronization remain with their
+        /// respective owners.
+        pub unsafe fn install(
             &mut self,
-            expected: PhysicalAddress,
-            requested: PhysicalAddress,
+            expected: Context,
+            requested: Context,
         ) -> Result<LocalInstall, SwitchError> {
-            NativeRoot::check(self.installation.hart())?;
+            Native::check(self.installation.hart())?;
             let previous = self
                 .installation
                 .current()
                 .ok_or(SwitchError::Unconfirmed)?;
-            if self.native.root(previous) != expected {
+            if self.describe(previous) != expected {
                 return Err(SwitchError::Current);
             }
-            let next = self
-                .native
-                .with_root(previous, requested)
-                .ok_or(SwitchError::Scope)?;
-            let observed = unsafe { Controls::current() };
-            self.installation.issue(previous, observed, next)?;
-            unsafe { self.complete(next) }
+            if self.describe(requested.controls) != requested
+                || !self.native.supports(previous, requested.controls)
+            {
+                return Err(SwitchError::Scope);
+            }
+            let observed = unsafe { Native::observe() };
+            self.installation
+                .issue(previous, observed, requested.controls)?;
+            unsafe { self.complete(requested.controls) }
         }
 
-        /// Repeat only the retained installation on its original Hart.
+        /// Retry only the exact retained installation on its original Hart.
         ///
         /// # Safety
-        /// Retain the original switch's ownership, mappings and ordering.
+        /// Keep the original switch's ownership, mappings and ordering live.
         /// No unrelated operation may have used its controls.
         pub unsafe fn retry(&mut self) -> Result<LocalInstall, SwitchError> {
-            NativeRoot::check(self.installation.hart())?;
-            let observed = unsafe { Controls::current() };
+            Native::check(self.installation.hart())?;
+            let observed = unsafe { Native::observe() };
             let next = self.installation.retry(observed)?;
             unsafe { self.complete(next) }
         }
 
         unsafe fn complete(&mut self, requested: Controls) -> Result<LocalInstall, SwitchError> {
             unsafe { self.native.install(requested) };
-            let (previous, installed) =
-                self.installation.complete(unsafe { Controls::current() })?;
+            let observed = unsafe { Native::observe() };
+            let (previous, installed) = self.installation.complete(observed)?;
             Ok(LocalInstall {
                 hart: self.installation.hart(),
-                previous: self.native.root(previous),
-                installed: self.native.root(installed),
+                previous: self.describe(previous),
+                installed: self.describe(installed),
             })
+        }
+    }
+
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    impl LocalContext<'_> {
+        /// Qualify a retained root for the original native controls and format.
+        ///
+        /// # Safety
+        /// The original owner supplies this exact live root and has checked
+        /// access continuity, table visibility and the native scope conditions.
+        pub unsafe fn prepare_root(&self, root: PhysicalAddress) -> Result<Context, SwitchError> {
+            let previous = self
+                .installation
+                .current()
+                .ok_or(SwitchError::Unconfirmed)?;
+            let next = self
+                .native
+                .with_root(previous, root)
+                .ok_or(SwitchError::Scope)?;
+            Ok(self.describe(next))
+        }
+    }
+
+    #[cfg(target_arch = "riscv64")]
+    impl LocalContext<'_> {
+        /// Qualify the exact retained Bare or ASID-zero paged context.
+        ///
+        /// # Safety
+        /// The original owner supplies this exact context and has checked
+        /// access continuity, table visibility and the native scope conditions.
+        pub unsafe fn prepare_context(&self, next: Controls) -> Result<Context, SwitchError> {
+            let previous = self
+                .installation
+                .current()
+                .ok_or(SwitchError::Unconfirmed)?;
+            if !self.native.supports(previous, next) {
+                return Err(SwitchError::Scope);
+            }
+            Ok(self.describe(next))
         }
     }
 }

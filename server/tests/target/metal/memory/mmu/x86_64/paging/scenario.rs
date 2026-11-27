@@ -5,7 +5,7 @@ use kernel::metal::memory::mmu::{
     access::device::DeviceMapping,
     x86_64::internal::{Controls, admit_root},
 };
-use limen_treaty::model::{ByteLength, InternalAddress, PhysicalRange};
+use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress, PhysicalRange};
 
 #[path = "../../../../../support/paging/installation.rs"]
 mod installation;
@@ -88,7 +88,14 @@ pub(crate) fn check(hart: usize, apic: PhysicalRange, version: u32) {
                 pat,
             )
             .unwrap();
-        installation::roundtrip(&mut control, hart, root, |control| {
+        let first = control.prepare_root(root).unwrap();
+        let alternate_context = control.prepare_root(alternate).unwrap();
+        assert_eq!(first.root(), Some(root));
+        assert!(matches!(
+            control.prepare_root(PhysicalAddress::new(root.get() + 1)),
+            Err(SwitchError::Scope)
+        ));
+        installation::roundtrip(&mut control, hart, first, |control| {
             let data: u64;
             asm!("mov {}, [{}]", out(reg) data, in(reg) slot << 39, options(nostack, readonly));
             assert_eq!(data, DATA.0[0]);
@@ -107,13 +114,12 @@ pub(crate) fn check(hart: usize, apic: PhysicalRange, version: u32) {
                 assert_eq!(registers.read_u32(0x30), Ok(version));
                 assert_eq!(registers.physical().end(), other.physical().start());
             }
-            assert_eq!(mapping.into_retention().current(), Some(root));
+            assert_eq!(mapping.into_retention().current(), Some(first));
 
             // The same virtual address must use the second root's translation
             // after the native CR3 switch flushes the first.
-            let second = control.switch(root, alternate).unwrap();
-            assert_eq!(second.previous(), root);
-            assert_eq!(second.installed(), alternate);
+            let second = installation::install(control, first, alternate_context);
+            assert_eq!(second.installed().root(), Some(alternate));
             let data: u64;
             asm!("mov {}, [{}]", out(reg) data, in(reg) slot << 39, options(nostack, readonly));
             assert_eq!(data, ALTERNATE_DATA.0[0]);
@@ -125,5 +131,6 @@ pub(crate) fn check(hart: usize, apic: PhysicalRange, version: u32) {
     }
     assert_eq!(unsafe { Controls::current() }, original);
     kernel::entry::boot::write("PASS internal paging switched=1 alias=1 restored=1\n");
+    kernel::entry::boot::write("PASS local-context original=1 installed=1 restored=1\n");
     kernel::entry::boot::write("PASS device mapping fixed=1 dynamic=1 split=1 restored=1\n");
 }

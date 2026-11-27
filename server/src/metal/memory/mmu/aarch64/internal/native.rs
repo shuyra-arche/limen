@@ -1,5 +1,5 @@
 use super::{Controls, Format, Root};
-use crate::metal::memory::mmu::{LocalRoot, SwitchError};
+use crate::metal::memory::mmu::{LocalContext, SwitchError};
 use crate::metal::processor::hart::local::try_current_hart;
 use core::arch::asm;
 use limen_treaty::model::PhysicalAddress;
@@ -41,7 +41,10 @@ impl Controls {
 /// or extended descriptor interpretation. Keep that ownership, the
 /// independently owned opposite root, and all affected table storage
 /// live through actual retirement.
-pub unsafe fn admit_root(hart: usize, selected: Root) -> Result<(LocalRoot, Format), SwitchError> {
+pub unsafe fn admit_root(
+    hart: usize,
+    selected: Root,
+) -> Result<(LocalContext<'static>, Format), SwitchError> {
     NativeRoot::check(hart)?;
     let initial = unsafe { Controls::current() };
     let format = unsafe { initial.local_format(selected) }.ok_or(SwitchError::Scope)?;
@@ -50,7 +53,7 @@ pub unsafe fn admit_root(hart: usize, selected: Root) -> Result<(LocalRoot, Form
     if initial.ttbr0 >> 48 != 0 || native.with_root(initial, root).is_none() {
         return Err(SwitchError::Scope);
     }
-    Ok((LocalRoot::bind(hart, native, initial), format))
+    Ok((LocalContext::bind(hart, native, initial), format))
 }
 
 pub(in crate::metal::memory::mmu) struct NativeRoot {
@@ -67,7 +70,30 @@ impl NativeRoot {
         Ok(())
     }
 
-    pub(in crate::metal::memory::mmu) fn root(&self, controls: Controls) -> PhysicalAddress {
+    pub(in crate::metal::memory::mmu) fn profile(&self) -> Format {
+        self.format
+    }
+
+    pub(in crate::metal::memory::mmu) unsafe fn observe() -> Controls {
+        unsafe { Controls::current() }
+    }
+
+    pub(in crate::metal::memory::mmu) fn physical_root(
+        &self,
+        controls: Controls,
+    ) -> Option<PhysicalAddress> {
+        Some(self.root(controls))
+    }
+
+    pub(in crate::metal::memory::mmu) fn supports(
+        &self,
+        previous: Controls,
+        requested: Controls,
+    ) -> bool {
+        self.with_root(previous, self.root(requested)) == Some(requested)
+    }
+
+    fn root(&self, controls: Controls) -> PhysicalAddress {
         PhysicalAddress::new(match self.format.root {
             Root::Lower => controls.ttbr0,
             Root::Upper => controls.ttbr1,

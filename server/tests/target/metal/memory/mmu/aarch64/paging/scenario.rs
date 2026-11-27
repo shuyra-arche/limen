@@ -4,6 +4,7 @@ use kernel::metal::memory::mmu::{
     LeafAccess, Memory, Privilege, SwitchError,
     aarch64::internal::{Controls, Root, admit_root},
 };
+use limen_treaty::model::PhysicalAddress;
 
 #[path = "../../../../../support/paging/installation.rs"]
 mod installation;
@@ -42,7 +43,13 @@ pub(crate) fn check(hart: usize) {
             .unwrap();
         let root = physical(&raw const TOP);
         let alias = 0xffff_0000_0000_0000u64;
-        installation::roundtrip(&mut control, hart, root, |_| {
+        let candidate = control.prepare_root(root).unwrap();
+        assert_eq!(candidate.root(), Some(root));
+        assert!(matches!(
+            control.prepare_root(PhysicalAddress::new(root.get() + 1)),
+            Err(SwitchError::Scope)
+        ));
+        installation::roundtrip(&mut control, hart, candidate, |_| {
             assert_eq!(Controls::current().ttbr0, current.ttbr0);
             let data: u64;
             asm!("ldr {}, [{}]", out(reg) data, in(reg) alias, options(nostack, readonly));
@@ -62,4 +69,5 @@ pub(crate) fn check(hart: usize) {
     }
     assert_eq!(unsafe { Controls::current() }, original);
     kernel::entry::boot::write("PASS internal paging switched=1 alias=1 restored=1\n");
+    kernel::entry::boot::write("PASS local-context original=1 installed=1 restored=1\n");
 }

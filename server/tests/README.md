@@ -323,10 +323,19 @@ the same EDU transfer and completion protocol through the board’s PCI fixture.
 | --- | --- |
 | x86-64 CPU paging | [x86_64/paging](target/metal/memory/mmu/x86_64/paging/) |
 | AArch64 CPU paging | [aarch64/paging](target/metal/memory/mmu/aarch64/paging/) |
+| RV64 CPU paging and module-bound Sv39/Sv48/Sv57 | [entry/module-riscv](target/entry/module-riscv/) |
 | RISC-V IOMMU | [riscv64/iommu](target/metal/memory/mmu/riscv64/iommu/) |
 | Intel VT-d | [x86_64/vtd](target/metal/memory/mmu/x86_64/vtd/) |
 | AMD-Vi | [x86_64/amdvi](target/metal/memory/mmu/x86_64/amdvi/) |
 | Arm SMMUv3 | [aarch64/smmu](target/metal/memory/mmu/aarch64/smmu/) |
+
+The CPU paging guests use the same local context consumer. Native composition
+supplies the retained table trees and checked control profile, then the consumer
+verifies the exact original and installed contexts and restores the original
+context after exercising real translations. RV64 also uses this path for the
+module-produced successor context on both Harts, with fetch synchronization
+performed by the module fixture. The local readback records the installed
+context. The table and residency owners still need their own retirement evidence.
 
 ## Module loading
 

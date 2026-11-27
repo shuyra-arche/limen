@@ -1,5 +1,5 @@
 use super::{Controls, Format};
-use crate::metal::memory::mmu::{LocalRoot, SwitchError};
+use crate::metal::memory::mmu::{LocalContext, SwitchError};
 use crate::metal::processor::hart::local::try_current_hart;
 use core::arch::asm;
 use limen_treaty::model::PhysicalAddress;
@@ -41,12 +41,12 @@ impl Controls {
 /// The caller owns the local root registers exclusively, with physical
 /// address modifiers excluded. Keep that ownership and all affected
 /// table storage live through actual retirement.
-pub unsafe fn admit_root(hart: usize) -> Result<(LocalRoot, Format), SwitchError> {
+pub unsafe fn admit_root(hart: usize) -> Result<(LocalContext<'static>, Format), SwitchError> {
     NativeRoot::check(hart)?;
     let initial = unsafe { Controls::current() };
     let format = initial.local_format().ok_or(SwitchError::Scope)?;
     Ok((
-        LocalRoot::bind(hart, NativeRoot { format }, initial),
+        LocalContext::bind(hart, NativeRoot { format }, initial),
         format,
     ))
 }
@@ -68,7 +68,30 @@ impl NativeRoot {
         Ok(())
     }
 
-    pub(in crate::metal::memory::mmu) fn root(&self, controls: Controls) -> PhysicalAddress {
+    pub(in crate::metal::memory::mmu) fn profile(&self) -> Format {
+        self.format
+    }
+
+    pub(in crate::metal::memory::mmu) unsafe fn observe() -> Controls {
+        unsafe { Controls::current() }
+    }
+
+    pub(in crate::metal::memory::mmu) fn physical_root(
+        &self,
+        controls: Controls,
+    ) -> Option<PhysicalAddress> {
+        Some(self.root(controls))
+    }
+
+    pub(in crate::metal::memory::mmu) fn supports(
+        &self,
+        previous: Controls,
+        requested: Controls,
+    ) -> bool {
+        self.with_root(previous, self.root(requested)) == Some(requested)
+    }
+
+    fn root(&self, controls: Controls) -> PhysicalAddress {
         PhysicalAddress::new(controls.cr3 as u64)
     }
 

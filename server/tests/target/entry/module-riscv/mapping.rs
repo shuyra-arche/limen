@@ -6,8 +6,14 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use kernel::metal::memory::mmu::{
+    LeafAccess, LocalContext,
+    riscv64::{internal::context::Context, sv::Mode},
+};
 use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
-use kernel::metal::memory::mmu::{LeafAccess, riscv64::{internal::context::{Context, Translation}, sv::Mode}};
+
+#[path = "../../support/paging/installation.rs"]
+mod installation;
 
 pub const PAGE: u64 = 4096;
 const ENTRIES: usize = 512;
@@ -68,14 +74,39 @@ fn write(pte: &AtomicU64, bits: u64) {
 ///
 /// The caller keeps a complete live identity path for the next context and
 /// establishes both page-table and instruction-store visibility on this Hart.
-pub unsafe fn switch_context(translation: &mut Translation<'_>, previous: Context, next: Context) {
+pub unsafe fn switch_context(translation: &mut LocalContext<'_>, previous: Context, next: Context) {
     assert_ne!(previous, next);
     check_interrupts();
+    let previous = unsafe { translation.prepare_context(previous) }.unwrap();
+    let next = unsafe { translation.prepare_context(next) }.unwrap();
     unsafe {
-        translation.switch(previous, next).unwrap();
-        asm!("fence.i", options(nostack));
+        installation::install(translation, previous, next);
+        synchronize_fetch();
     }
     check_interrupts();
+}
+
+/// Observe actual data while the original Hart temporarily uses the probe root.
+pub(super) unsafe fn probe_context(
+    translation: &mut LocalContext<'_>,
+    hart: usize,
+    candidate: Context,
+    observe: impl FnOnce(),
+) {
+    check_interrupts();
+    let candidate = unsafe { translation.prepare_context(candidate) }.unwrap();
+    unsafe {
+        installation::roundtrip(translation, hart, candidate, |_| {
+            synchronize_fetch();
+            observe();
+        });
+        synchronize_fetch();
+    }
+    check_interrupts();
+}
+
+unsafe fn synchronize_fetch() {
+    unsafe { asm!("fence.i", options(nostack)) };
 }
 
 fn check_interrupts() {
@@ -227,7 +258,7 @@ impl Root {
     }
 
     /// The caller has checked identity mappings for the live image and DTB.
-    pub unsafe fn activate(&self, translation: &mut Translation<'_>) {
+    pub unsafe fn activate(&self, translation: &mut LocalContext<'_>) {
         unsafe { switch_context(translation, Context::BARE, self.context()) };
     }
 

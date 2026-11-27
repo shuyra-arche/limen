@@ -1,5 +1,6 @@
 use super::{Installation, SwitchError};
-use crate::metal::memory::mmu::{aarch64, x86_64};
+use crate::metal::memory::mmu::{aarch64, riscv64, x86_64};
+use limen_treaty::model::PhysicalAddress;
 
 #[test]
 fn uncertain_readback_retains_the_original_operation() {
@@ -78,4 +79,22 @@ fn an_unrelated_arm_root_change_cannot_complete_the_original_install() {
     assert_eq!(install.complete(next), Ok((first, next)));
     install.issue(next, next, first).unwrap();
     assert_eq!(install.complete(first), Ok((next, first)));
+}
+
+#[test]
+fn satp_readback_carries_its_exact_mode_even_when_the_root_is_unchanged() {
+    use riscv64::{internal::context::Context, sv::Mode};
+
+    let root = PhysicalAddress::new(0x2000);
+    let previous = Context::paged(Mode::Sv39, root).unwrap();
+    let requested = Context::paged(Mode::Sv48, root).unwrap();
+    let unrelated = Context::paged(Mode::Sv57, root).unwrap();
+    let mut install = Installation::new(2, previous);
+
+    install.issue(previous, previous, requested).unwrap();
+    assert_eq!(install.complete(previous), Err(SwitchError::Unconfirmed));
+    assert_eq!(install.retry(unrelated), Err(SwitchError::Unconfirmed));
+    assert_eq!(install.pending(), Some((previous, requested)));
+    assert_eq!(install.retry(previous), Ok(requested));
+    assert_eq!(install.complete(requested), Ok((previous, requested)));
 }

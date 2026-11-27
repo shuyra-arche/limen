@@ -54,7 +54,6 @@
         "server/src/metal/memory/mmu/mod.rs",
         "server/src/metal/platform/description/acpi/madt.rs",
         "server/tests/target/support/paging/mod.rs",
-        "server/tests/target/support/paging/installation.rs",
         "server/src/metal/memory/mmu/access/device.rs"
       ]
     },
@@ -62,6 +61,7 @@
       "q35": {
         "expects": [
           "PASS internal paging switched=1 alias=1 restored=1",
+          "PASS local-context original=1 installed=1 restored=1",
           "PASS device mapping fixed=1 dynamic=1 split=1 restored=1"
         ]
       }

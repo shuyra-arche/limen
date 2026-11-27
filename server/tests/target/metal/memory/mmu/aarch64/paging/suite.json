@@ -54,14 +54,14 @@
         "server/src/metal/memory/mmu/aarch64/internal/**",
         "server/src/metal/memory/mmu/aarch64/mod.rs",
         "server/src/metal/memory/mmu/mod.rs",
-        "server/tests/target/support/paging/mod.rs",
-        "server/tests/target/support/paging/installation.rs"
+        "server/tests/target/support/paging/mod.rs"
       ]
     },
     "launch": {
       "virt": {
         "expects": [
-          "PASS internal paging switched=1 alias=1 restored=1"
+          "PASS internal paging switched=1 alias=1 restored=1",
+          "PASS local-context original=1 installed=1 restored=1"
         ]
       }
     }

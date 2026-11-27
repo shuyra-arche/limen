@@ -9,8 +9,20 @@ use kernel::{
     entry::boot::{self, Boot, Occupant},
     metal::{
         memory::mmu::access::ram::MappedRange,
-        memory::mmu::{GEOMETRY, LeafAccess, riscv64::{internal::{context::{Context, Translation}, description::RiscvMmu, encoder}, sv::Mode}},
-        module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, SegmentPermissions, UseError},
+        memory::mmu::{
+            GEOMETRY, LeafAccess, LocalContext,
+            riscv64::{
+                internal::{
+                    context::{Context, admit_context},
+                    description::RiscvMmu,
+                    encoder,
+                },
+                sv::Mode,
+            },
+        },
+        module::{
+            Contract, Layout, Machine, ModuleImage, ModuleSlots, SegmentPermissions, UseError,
+        },
     },
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
@@ -280,8 +292,8 @@ fn prepare(
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     let [major, peer] = harts::check(&boot, &MODES);
-    assert!(unsafe { Translation::admit(peer) }.is_err());
-    let mut translation = unsafe { Translation::admit(major) }.unwrap();
+    assert!(unsafe { admit_context(peer) }.is_err());
+    let mut translation = unsafe { admit_context(major) }.unwrap();
     let service = boot
         .sbi_services()
         .hart_state_management()
@@ -291,16 +303,22 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     let start = storage.addr().get() as u64;
     let resident = Resident::from_boot(&boot, start..start + size_of::<[Storage; 2]>() as u64);
     for (mode, image) in MODES.into_iter().zip(ROOT_IMAGES) {
-        prove_geometry(&mut translation, mode, &resident);
+        prove_geometry(&mut translation, boot.hart(), mode, &resident);
         exercise(&mut translation, mode, image, peer, service, &resident, storage);
     }
     boot::write(
         "PASS riscv-module-execution virt modes=sv39,sv48,sv57 high-leaves=12 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2\n",
     );
+    boot::write("PASS local-context original=1 installed=1 restored=1\n");
     boot::shutdown(true)
 }
 
-fn prove_geometry(translation: &mut Translation<'_>, mode: Mode, resident: &Resident) {
+fn prove_geometry(
+    translation: &mut LocalContext<'_>,
+    hart: usize,
+    mode: Mode,
+    resident: &Resident,
+) {
     static PROBE: u64 = 0x46c8_ce4b_34d7_985e;
     let physical = (&raw const PROBE).addr() as u64;
     assert!(covers(&resident.read_only, &(physical..physical + 8)));
@@ -324,23 +342,21 @@ fn prove_geometry(translation: &mut Translation<'_>, mode: Mode, resident: &Resi
 
     // The identity mapping is still complete. The minor remains stopped,
     // and neither module has been staged or installed.
-    unsafe { root.activate(translation) };
-    for &address in &probes[..mode.levels()] {
-        let value: u64;
-        unsafe {
-            asm!("ld {value}, 0({address})", value = out(reg) value, address = in(reg) address, options(nostack, readonly));
-        }
-        assert_eq!(value, PROBE);
-    }
     unsafe {
-        mapping::switch_context(translation, root.context(), Context::BARE);
+        mapping::probe_context(translation, hart, root.context(), || {
+            for &address in &probes[..mode.levels()] {
+                let value: u64;
+                asm!("ld {value}, 0({address})", value = out(reg) value, address = in(reg) address, options(nostack, readonly));
+                assert_eq!(value, PROBE);
+            }
+        });
         root.clear_inactive();
     }
     root.release();
 }
 
 fn exercise(
-    translation: &mut Translation<'_>,
+    translation: &mut LocalContext<'_>,
     mode: Mode,
     image: &'static [u8],
     peer: RiscvMmu<'_>,

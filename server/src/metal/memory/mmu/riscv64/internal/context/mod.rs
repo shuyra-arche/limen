@@ -3,7 +3,9 @@
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 mod satp;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
-pub use satp::{SwitchError, Translation};
+pub(in crate::metal::memory::mmu) use satp::NativeRoot;
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+pub use satp::admit_context;
 
 use crate::metal::memory::mmu::riscv64::sv::{Mode, PAGE_BYTES, PageNumber};
 use limen_treaty::model::PhysicalAddress;

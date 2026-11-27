@@ -106,12 +106,12 @@ expect_suites aarch64-gic
 change server/tests/target/metal/memory/mmu/x86_64/amdvi/Cargo.toml
 expect_suites x86-64-amdvi
 [[ $(boards) == q35 ]]
-for source in server/tests/target/support/paging/mod.rs \
-              server/tests/target/support/paging/installation.rs; do
-    change "$source"
-    expect_suites aarch64-paging x86-64-paging
-    [[ $(boards) == 'q35 virt' ]]
-done
+change server/tests/target/support/paging/mod.rs
+expect_suites aarch64-paging x86-64-paging
+[[ $(boards) == 'q35 virt' ]]
+change server/tests/target/support/paging/installation.rs
+expect_suites aarch64-paging riscv-module-execution x86-64-paging
+[[ $(boards) == 'q35 rv64 virt' ]]
 change server/tests/target/support/uefi/interrupt.rs
 expect_suites x86-64-ioapic x86-64-local-apic-ipi x86-64-local-apic-timer
 [[ $(boards) == q35 ]]
@@ -222,8 +222,8 @@ change server/src/metal/memory/mmu/x86_64/internal/native.rs
 expect_suites x86-64-paging
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 change server/src/metal/memory/mmu/installation.rs
-expect_suites aarch64-paging x86-64-paging
-[[ $(boards) == 'q35 virt' ]]
+expect_suites aarch64-paging riscv-module-execution x86-64-paging
+[[ $(boards) == 'q35 rv64 virt' ]]
 change server/src/metal/memory/mmu/aarch64/internal/native.rs
 expect_suites aarch64-paging
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null

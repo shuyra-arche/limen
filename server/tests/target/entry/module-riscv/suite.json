@@ -14,6 +14,8 @@
     "server/src/metal/processor/mod.rs",
     "server/src/metal/module/**",
     "server/src/metal/memory/mmu/mod.rs",
+    "server/src/metal/memory/mmu/installation.rs",
+    "server/tests/target/support/paging/installation.rs",
     "server/src/metal/memory/mmu/access/**",
     "server/src/metal/memory/mmu/riscv64/mod.rs",
     "server/src/metal/memory/mmu/riscv64/internal/**",
@@ -61,7 +63,8 @@
     "kernel": "module-riscv",
     "harts": 2,
     "expects": [
-      "PASS riscv-module-execution virt modes=sv39,sv48,sv57 high-leaves=12 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2"
+      "PASS riscv-module-execution virt modes=sv39,sv48,sv57 high-leaves=12 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2",
+      "PASS local-context original=1 installed=1 restored=1"
     ]
   }
 }
