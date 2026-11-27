@@ -6,8 +6,8 @@ use kernel::{
     metal::{
         memory::allocator::{
             Allocation, AllocationConstruction, AllocationId, Allocator, Allowance,
-            BudgetObservation, BudgetProgress, Cancellation, Candidate, Config, Error as SourceError, Initial,
-            LookupObservation, MappedStorage, Pending,
+            BudgetObservation, BudgetProgress, Cancellation, Candidate, Config,
+            Error as SourceError, Initial, LookupObservation, MappedStorage, Pending,
             RamPurpose::Metadata,
             Request, ReturnId, ReturnReceipt, Returned, Search,
             pool::{
@@ -347,20 +347,32 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     // Discovery cannot close the still-live preparation. Ordinary capacity
     // is full, and the same two slots must suffice for cancellation and reuse.
     for _ in 0..CONFIG.allocations {
-        assert_eq!(source.cancel_closed(candidate.region(), &mut cursor, Fast), Ok(Cancellation::More));
+        assert_eq!(
+            source.cancel_closed(candidate.region(), &mut cursor, Fast),
+            Ok(Cancellation::More)
+        );
     }
-    assert_eq!(source.cancel_closed(candidate.region(), &mut cursor, Fast), Ok(Cancellation::End));
+    assert_eq!(
+        source.cancel_closed(candidate.region(), &mut cursor, Fast),
+        Ok(Cancellation::End)
+    );
     assert_eq!(allowance.balance().unwrap().reserved().get(), PAGE);
     ABANDONED.shut().unwrap();
     let mut recovered = None;
     for _ in 0..CONFIG.allocations {
-        match source.cancel_closed(candidate.region(), &mut cursor, Fast).unwrap() {
+        match source
+            .cancel_closed(candidate.region(), &mut cursor, Fast)
+            .unwrap()
+        {
             Cancellation::Cancelled(id) => assert_eq!(recovered.replace(id), None),
             Cancellation::More => {}
             Cancellation::End => panic!("premature end of recovery pass"),
         }
     }
-    assert_eq!(source.cancel_closed(candidate.region(), &mut cursor, Fast), Ok(Cancellation::End));
+    assert_eq!(
+        source.cancel_closed(candidate.region(), &mut cursor, Fast),
+        Ok(Cancellation::End)
+    );
     assert_eq!(recovered, Some(reserved));
     assert_eq!(allowance.balance().unwrap(), original);
     let first = issue(handle, search(source, PAGE, physical).unwrap(), &FIRST);
