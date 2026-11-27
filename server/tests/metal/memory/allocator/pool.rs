@@ -161,6 +161,34 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
 }
 
 #[test]
+fn prepaid_position_rejects_material_from_another_construction_at_the_same_address() {
+    let [mut material, _] = supplies();
+    let physical = material.as_ref().unwrap().physical();
+    let original = material.as_ref().unwrap().id();
+    let mut directory = [GroupSlot::<u64>::EMPTY];
+    let mut bytes = Page([MaybeUninit::uninit(); PAGE]);
+    let pool = Pool::bounded(&mut directory, PAGE).unwrap();
+    let mut growth = Some(std::boxed::Box::leak(std::boxed::Box::new(
+        crate::metal::memory::allocator::pool::Growth::new(physical),
+    )));
+    let (group, receiver) = pool.prepare(&mut growth).unwrap();
+    let mut paired = mapped(&mut material, &mut bytes.0);
+    let mut receipt = None;
+    assert_eq!(
+        unsafe { pool.install_prepared(group, &mut paired, &mut receipt) },
+        Err(Error::Material)
+    );
+    assert_eq!(paired.as_ref().unwrap().id(), original);
+    assert!(receipt.is_none());
+    assert_eq!(pool.capacity().unwrap().slots, 0);
+    receiver.shut().unwrap();
+    pool.discard_empty(group).unwrap();
+    let published = unsafe { pool.install(&mut paired, &mut receipt) }.unwrap();
+    assert_ne!(published, group);
+    assert_eq!(pool.supply(published).unwrap().allocation, original);
+}
+
+#[test]
 fn the_layout_counts_alignment_state_and_zero_sized_values() {
     #[repr(align(128))]
     struct Overaligned;

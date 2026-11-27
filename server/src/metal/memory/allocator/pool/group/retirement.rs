@@ -52,6 +52,8 @@ impl<T> GroupRecord<'_, T> {
 /// Work rediscovered from the Pool's original directory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Retirement {
+    /// Original fresh preparation. Discovery confers no authority to close it.
+    Preparing(GroupId),
     /// Check the original access evidence before beginning the physical return.
     Shutting(GroupId, PhysicalRange),
     /// The original source accepted the handoff. Its refund can be reconciled.
@@ -70,10 +72,11 @@ impl<T> Pool<'_, T> {
             while *cursor < stop {
                 let index = *cursor;
                 *cursor += 1;
-                let Some(entry) = state.groups[index].record.as_ref() else {
-                    continue;
+                let slot = &state.groups[index];
+                let Some(id) = slot.id(index) else { continue };
+                let Some(entry) = slot.record.as_ref() else {
+                    return Retirement::Preparing(id);
                 };
-                let id = GroupId(index, entry.allocation());
                 match entry {
                     GroupRecord::Shutting(material) => {
                         return Retirement::Shutting(id, material.allocation.physical());
