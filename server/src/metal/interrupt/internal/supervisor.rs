@@ -98,7 +98,11 @@ mod native {
         }
     }
 
-    static OPERATIONS: Operations = Operations { valid, enabled, set };
+    static OPERATIONS: Operations = Operations {
+        valid,
+        enabled,
+        set,
+    };
 
     impl Reception {
         fn new(hart: u64, cause: Cause) -> Self {
