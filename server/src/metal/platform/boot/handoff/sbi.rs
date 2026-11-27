@@ -84,11 +84,13 @@ pub(crate) unsafe fn admit<'a>(
     }
     // The entry ABI supplies the current Hart identity in a0. HSM can also
     // report the state of that named Hart when the extension is available.
-    let sbi = platform_services();
-    if sbi
-        .hart_state_management()
-        .is_some_and(|service| !service.started(hart))
-    {
+    let sbi = platform_services().unwrap_or_else(|error| {
+        Services::active().reject(format_args!("FAIL Limen boot: SBI BASE {error:?}\n"))
+    });
+    let hsm = sbi.hart_state_management().unwrap_or_else(|error| {
+        Services::active().reject(format_args!("FAIL Limen boot: SBI HSM probe {error:?}\n"))
+    });
+    if hsm.is_some_and(|service| !service.started(hart)) {
         Services::active().reject(format_args!("FAIL Limen boot: SBI Hart status mismatch\n"));
     }
     descriptions.cpus = Some(cpus);
