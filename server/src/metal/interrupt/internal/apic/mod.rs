@@ -2,7 +2,9 @@
 
 use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
-use crate::metal::{memory::mmu::internal::device::DeviceWindow, platform::description::acpi::Madt};
+use crate::metal::{
+    memory::mmu::internal::device::DeviceWindow, platform::description::acpi::Madt,
+};
 
 const PAGE: u64 = 4096;
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
