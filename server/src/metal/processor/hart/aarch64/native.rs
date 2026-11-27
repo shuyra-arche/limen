@@ -47,3 +47,21 @@ pub(crate) fn stack_pointer() -> usize {
     unsafe { asm!("mov {}, sp", out(reg) sp, options(nomem, nostack)) };
     sp
 }
+
+/// Actual EL1 vector base. Observe only after confirming the exception level.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::metal) struct Entry {
+    pub(in crate::metal) vector: usize,
+}
+
+pub(in crate::metal) fn entry() -> Option<Entry> {
+    let level: usize;
+    unsafe { asm!("mrs {}, CurrentEL", out(reg) level, options(nostack, nomem, preserves_flags)) };
+    const EL1: usize = 1 << 2;
+    if level != EL1 {
+        return None;
+    }
+    let vector: usize;
+    unsafe { asm!("mrs {}, VBAR_EL1", out(reg) vector, options(nostack, nomem, preserves_flags)) };
+    Some(Entry { vector })
+}

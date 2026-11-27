@@ -2,7 +2,7 @@
 
 use core::{cell::Cell, marker::PhantomData, mem::DropGuard, sync::atomic::AtomicBool};
 
-use super::{HartLocal, QueueNode, backend, installed, ordinary_entry};
+use super::{HartLocal, QueueNode, backend, ordinary_local};
 
 /// The fixed queue-node storage supplied by the current boot image per Hart.
 /// Owners check their maximum joint acquisition against this supply.
@@ -65,14 +65,12 @@ impl LocalProtection {
 type InterruptGuard = DropGuard<usize, fn(usize)>;
 
 fn protect() -> Result<(&'static HartLocal, InterruptGuard), Error> {
-    if !ordinary_entry() {
-        return Err(Error::Context);
-    }
+    let local = ordinary_local().ok_or(Error::Context)?;
     let interrupt: InterruptGuard =
         DropGuard::new(unsafe { backend::mask_interrupts() }, |saved| unsafe {
             backend::restore_interrupts(saved)
         });
-    Ok((installed().ok_or(Error::Context)?, interrupt))
+    Ok((local, interrupt))
 }
 
 pub(crate) fn can_switch() -> bool {

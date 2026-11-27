@@ -60,6 +60,7 @@
     "expects": [
       "PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1",
       "PASS synchronization",
+      "PASS hart-entry revalidated=1 restored=1",
       "PASS allocator source=1 negative=1 delayed=1 return=1",
       "PASS typed-pool mapped=1 slots=1 reuse=1 joint=1 stable=1 refund=1",
       "PASS bootstrap-foundation pend=1 pool=1 retained=1 refund=1 generation=1 stale=1 revoked=1",
