@@ -17,7 +17,7 @@ use kernel::metal::{
 };
 use limen_treaty::model::{ByteLength, PhysicalAddress};
 
-#[path = "../synchronization.rs"]
+#[path = "../../../metal/sync/native.rs"]
 mod synchronization;
 
 mod allocator;

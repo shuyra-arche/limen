@@ -43,7 +43,7 @@
     "server/src/metal/processor/treaty/mod.rs",
     "server/src/metal/processor/mod.rs",
     "server/src/metal/sync/**",
-    "server/tests/target/entry/synchronization.rs",
+    "server/tests/metal/sync/native.rs",
     "server/tests/target/support/uefi/Cargo.toml",
     "server/tests/target/support/uefi/build.rs",
     "server/tests/target/basis/execution/platforms/scenario.rs",

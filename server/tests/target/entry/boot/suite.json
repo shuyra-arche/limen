@@ -60,7 +60,7 @@
     "server/src/metal/processor/executor/riscv64/native.rs",
     "server/src/metal/sync/**",
     "server/src/basis/pend.rs",
-    "server/tests/target/entry/synchronization.rs",
+    "server/tests/metal/sync/native.rs",
     "server/tests/target/entry/memory.rs",
     "server/tests/target/entry/foundation.rs",
     "server/tests/target/entry/pool.rs",
@@ -79,6 +79,7 @@
   "run": {
     "kind": "qemu",
     "kernel": "boot-handoff",
+    "imports": ["metal/sync/native.rs"],
     "expects": [
       "PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1",
       "PASS synchronization",

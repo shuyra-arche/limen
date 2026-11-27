@@ -21,9 +21,3 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
-
-[[test]]
-name = "outcome-probe"
-path = "../../../../support/outcome/probe.rs"
-harness = false
-test = false

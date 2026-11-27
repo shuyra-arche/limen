@@ -14,7 +14,7 @@ use uefi_fixture as fixture;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 mod scenario;
-#[path = "../../../entry/synchronization.rs"]
+#[path = "../../../../metal/sync/native.rs"]
 mod synchronization;
 
 static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();

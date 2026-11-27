@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/cargo-native-t0.yml"
+      - "server/tests/metal/sync/native.rs"
       - "server/tests/target/support/outcome/**"
       - "server/tests/target/support/discovery/**"
       - "server/tests/target/tests/**"

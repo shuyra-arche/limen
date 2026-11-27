@@ -1,5 +1,8 @@
 #![no_std]
 #![no_main]
+#![feature(custom_test_frameworks)]
+#![test_runner(collection::run)]
+#![reexport_test_harness_main = "collected"]
 
 use core::{
     arch::asm,
@@ -18,7 +21,9 @@ use kernel::{
     },
 };
 
-#[path = "mod.rs"]
+#[path = "../support/discovery/collection.rs"]
+mod collection;
+#[path = "../support/outcome/mod.rs"]
 mod outcome;
 
 #[cfg(target_arch = "riscv64")]
@@ -166,6 +171,7 @@ fn check(boot: Boot<'_>) {
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     check(boot);
+    collected();
     outcome::finish(true)
 }
 
@@ -175,4 +181,9 @@ fn panic(info: &PanicInfo<'_>) -> ! {
         let _ = writeln!(console, "{info}");
     }
     outcome::finish(false)
+}
+
+#[test_case]
+fn admitted_local_state_is_available() {
+    assert_eq!(kernel::metal::sync::treaty::turn_capacity(), Some(5));
 }

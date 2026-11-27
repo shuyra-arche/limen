@@ -45,7 +45,7 @@
     "server/src/metal/sync/**",
     "server/tests/target/entry/foundation.rs",
     "server/tests/target/entry/memory.rs",
-    "server/tests/target/entry/synchronization.rs",
+    "server/tests/metal/sync/native.rs",
     "server/tests/target/support/uefi/Cargo.toml",
     "server/tests/target/support/uefi/build.rs",
     "server/src/basis/mod.rs",

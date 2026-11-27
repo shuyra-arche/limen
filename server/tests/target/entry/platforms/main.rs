@@ -23,7 +23,7 @@ mod foundation;
 #[path = "../memory.rs"]
 mod memory;
 mod ram;
-#[path = "../synchronization.rs"]
+#[path = "../../../metal/sync/native.rs"]
 mod synchronization;
 
 static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
