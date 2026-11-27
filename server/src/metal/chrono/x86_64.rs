@@ -9,7 +9,7 @@ fn frequency(denominator: u32, numerator: u32, crystal_hertz: u32) -> Option<Non
     if !scaled.is_multiple_of(denominator.get()) {
         return None;
     }
-    NonZeroU64::new(scaled / denominator.get())
+    NonZeroU64::new(scaled / denominator)
 }
 
 #[cfg(all(limen_target, target_arch = "x86_64"))]
