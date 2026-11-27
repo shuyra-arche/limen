@@ -25,6 +25,8 @@ enum Commands {
         observe: bool,
         #[arg(long)]
         evidence_root: Option<PathBuf>,
+        #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u8).range(1..=64))]
+        harts: u8,
         architecture: String,
         image: PathBuf,
     },
@@ -46,9 +48,10 @@ fn main() {
         Commands::Native {
             observe,
             evidence_root,
+            harts,
             architecture,
             image,
-        } => native::run(&architecture, &image, observe, evidence_root.as_deref()),
+        } => native::run(&architecture, &image, observe, evidence_root.as_deref(), harts),
         Commands::Observe { elf, output } => scenario::observe(elf, output),
         Commands::Symbolize {
             elf,

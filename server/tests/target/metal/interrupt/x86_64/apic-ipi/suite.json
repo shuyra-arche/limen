@@ -68,6 +68,7 @@
         "server/src/metal/memory/mmu/mod.rs",
         "server/src/metal/platform/description/acpi/madt.rs",
         "server/tests/target/support/uefi/interrupt.rs",
+        "server/tests/metal/interrupt/x86_64/internal/apic/native_ipi.rs",
         "server/tests/target/support/ipi.rs",
         "server/src/metal/interrupt/treaty/mod.rs",
         "server/src/metal/interrupt/treaty/ipi.rs",

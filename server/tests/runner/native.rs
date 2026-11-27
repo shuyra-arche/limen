@@ -11,18 +11,30 @@ fn variable(name: &str, default: &str) -> String {
     env::var(name).unwrap_or_else(|_| default.into())
 }
 
-fn command(architecture: &str, image: &Path, directory: &Path, observe: bool) -> Result<Command> {
+fn command(
+    architecture: &str,
+    image: &Path,
+    directory: &Path,
+    observe: bool,
+    harts: u8,
+) -> Result<Command> {
     let mut command = Command::new(match architecture {
         "riscv64" => variable("QEMU_RISCV64", "qemu-system-riscv64"),
         "aarch64" => variable("QEMU_AARCH64", "qemu-system-aarch64"),
         "x86_64" => variable("QEMU_X86_64", "qemu-system-x86_64"),
         _ => return Err("unsupported architecture".into()),
     });
+    let count = harts.to_string();
+    let accel = if architecture == "riscv64" {
+        "tcg,thread=multi"
+    } else {
+        "tcg"
+    };
     command.args([
         "-accel",
-        "tcg",
+        accel,
         "-smp",
-        "4",
+        &count,
         "-display",
         "none",
         "-monitor",
@@ -130,7 +142,9 @@ pub fn run(
     image: &Path,
     observe: bool,
     evidence_root: Option<&Path>,
+    harts: u8,
 ) -> Result<()> {
+    require(harts != 0, "a guest requires at least one Hart")?;
     let image = image.canonicalize()?;
     let evidence = match evidence_root {
         Some(root) => root.join(image.file_name().ok_or("missing executable name")?),
@@ -138,7 +152,7 @@ pub fn run(
     };
     kernel_verification::fresh(&evidence)?;
     let directory = evidence.canonicalize()?;
-    let mut command = command(architecture, &image, &directory, observe)?;
+    let mut command = command(architecture, &image, &directory, observe, harts)?;
     let version = output(Command::new(command.get_program()).arg("--version"))?;
     require(
         version
