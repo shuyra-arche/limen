@@ -3,7 +3,7 @@
 use core::ptr;
 use limen_treaty::model::PhysicalRange;
 
-use crate::metal::sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace};
+use crate::metal::sync::treaty::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace};
 
 use super::super::{
     Allocation, AllocationId, Allocator, AllowanceId, Candidate, Error, RegionId,

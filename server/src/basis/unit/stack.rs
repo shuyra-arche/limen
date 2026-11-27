@@ -2,7 +2,7 @@
 
 use core::{cell::UnsafeCell, mem::MaybeUninit, ptr};
 
-use crate::metal::processor::execution::cooperative::Context;
+use crate::metal::processor::treaty::Context;
 
 const STACK_BYTES: usize = 16 * 1024;
 pub(crate) const STACK_CAPACITY: usize = 2;

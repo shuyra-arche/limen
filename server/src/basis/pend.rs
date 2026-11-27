@@ -3,11 +3,11 @@
 use limen_treaty::model::{Alignment, ByteLength};
 
 use crate::metal::{
-    memory::allocator::{
-        self, AllocationConstruction, AllocationId, AllocationPermit, AllocationPermitSlot,
-        Allowance, Candidate, LayoutLimit,
+    memory::allocator::treaty::{
+        self as allocator, AllocationConstruction, AllocationId, AllocationPermit,
+        AllocationPermitSlot, Allowance, Candidate, LayoutLimit,
     },
-    sync::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
+    sync::treaty::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

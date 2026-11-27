@@ -1,3 +1,4 @@
+use kernel::metal::platform::boot::treaty::{write};
 use core::{
     hint::black_box,
     mem::{MaybeUninit, align_of, size_of},
@@ -5,8 +6,8 @@ use core::{
 };
 
 use kernel::{
-    entry::boot::{Boot, write},
-    metal::memory::allocator::{
+    entry::boot::{Boot},
+    metal::memory::allocator::treaty::{
         Allocation, Allowance,
         pool::{GroupReceipt, GroupSlot, Pool, Prepared, Reservation, VALUE_ALIGNMENT, VALUE_BYTES},
     },

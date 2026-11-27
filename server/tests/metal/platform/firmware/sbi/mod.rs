@@ -43,7 +43,7 @@ fn discovers_hart_timer_and_ipi_services_independently() {
                 .unwrap();
                 assert_eq!(found.hart_state_management().unwrap().is_some(), hart);
                 assert_eq!(found.timer().unwrap().is_some(), timer);
-                assert_eq!(found.inter_processor_interrupt(), Ok(ipi));
+                assert_eq!(found.ipi().map(|service| service.is_some()), Ok(ipi));
             }
         }
     }
@@ -79,5 +79,5 @@ fn failed_extension_preserves_other_independent_outcomes() {
     .unwrap();
     assert_eq!(found.hart_state_management(), Err(ProbeError::Firmware(-2)));
     assert!(found.timer().unwrap().is_some());
-    assert_eq!(found.inter_processor_interrupt(), Ok(false));
+    assert_eq!(found.ipi(), Ok(None));
 }

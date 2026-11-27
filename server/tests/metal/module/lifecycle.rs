@@ -1,11 +1,11 @@
 use super::{IMAGES, PAGE, ROOT, SV39_ROOT};
 use kernel::metal::{
-    memory::mmu::internal::access::MappedRange,
-    memory::mmu::internal::{
-        GEOMETRY,
-        riscv::{Mode, encoder},
+    memory::access::treaty::ram::MappedRange,
+    memory::mmu::{
+        riscv64::internal::{encoder, format::Format},
+        treaty::GEOMETRY,
     },
-    module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, UseError},
+    module::treaty::{Contract, Layout, Machine, ModuleImage, ModuleSlots, UseError},
 };
 use limen_treaty::model::{InternalAddress, PhysicalAddress};
 use std::{mem::MaybeUninit, sync::Barrier, thread};
@@ -210,13 +210,13 @@ fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
     // These buffers only model custody. Their numerical entries are never
     // called on the Host.
     assert_eq!(
-        encoder::check(Mode::Sv39, &root_layout, &[]),
+        encoder::check(Format::Sv39, &root_layout, &[]),
         Err(UseError::Interface)
     );
     let wrong_machine = other.acquire(GEOMETRY).unwrap();
     assert_eq!(
         encoder::check(
-            Mode::Sv39,
+            Format::Sv39,
             &root_layout,
             std::slice::from_ref(&wrong_machine)
         ),
@@ -232,7 +232,7 @@ fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
             geometry.acquire(GEOMETRY).unwrap(),
         ];
         assert_eq!(
-            encoder::check(Mode::Sv39, &root_layout, &ambiguous),
+            encoder::check(Format::Sv39, &root_layout, &ambiguous),
             Err(UseError::Interface)
         );
         let [first, second] = ambiguous;
@@ -247,8 +247,8 @@ fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
     assert_eq!(root_material.as_ptr(), root_storage);
 
     let dependency = [first];
-    encoder::check(Mode::Sv39, &root_layout, &dependency).unwrap();
-    for mode in [Mode::Sv48, Mode::Sv57] {
+    encoder::check(Format::Sv39, &root_layout, &dependency).unwrap();
+    for mode in [Format::Sv48, Format::Sv57] {
         assert_eq!(
             encoder::check(mode, &root_layout, &dependency),
             Err(UseError::Interface)
@@ -260,7 +260,7 @@ fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
     let wrong_contract = root.acquire(ROOT).unwrap();
     assert_eq!(
         encoder::check(
-            Mode::Sv39,
+            Format::Sv39,
             &second_layout,
             std::slice::from_ref(&wrong_contract)
         ),

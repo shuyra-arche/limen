@@ -4,12 +4,13 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::metal::sync::{TurnAccess, TurnLock};
+use crate::metal::sync::treaty::{TurnAccess, TurnLock};
 
 use super::super::{Error, SourceError};
 use super::{Claim, DestructionReceipt, Occupied, State};
 
-/// Maximum simultaneous owners of a stable object, including its base owner.
+/// Fixed admission cap on simultaneous owners of a stable object, including
+/// its base owner. It is independent of the Pool's supplied directory and slots.
 pub const REFERENCE_LIMIT: usize = 64;
 
 /// Opt-in stable storage. Only pools for stable values pay for the count.

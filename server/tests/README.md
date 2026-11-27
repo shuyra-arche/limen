@@ -4,7 +4,7 @@ Host suites under `entry/boot/` and `metal/` exercise bounded Device Tree
 traversal, original node scope, address translation, ACPI source and table
 validation, UEFI descriptor geometry, SBI extension discovery, the bounded allocation
 cursor, fixed identity slots and portable Arm CPU/firmware descriptions. The
-RV64 PTE activity experiments under `metal/mmu/internal/riscv/activity/`
+RV64 PTE activity experiments under `metal/memory/mmu/riscv64/internal/activity/`
 exercise an independent candidate atomic-word model, not a production table
 or actual hardware A/D and translation retirement. The Identity
 suite exercises the table implementation with owner-supplied slot storage,
@@ -38,6 +38,27 @@ cargo test --locked -p kernel --test contracts -- metal::firmware::devicetree
 Keep independent build fixtures, compiler contracts and target guests separate
 only when they require their own compilation or execution boundary.
 
+## Metal profile boundaries
+
+Host and target compile the same Clock identity, observations and deadline
+rules, GIC private-input state, MMU installation record, synchronization
+state, identity slots, allocator geometry and boot descriptions. A supplied
+Clock observation cannot produce a deadline for an admitted native counter.
+An ordinary Host lacks installed Hart protection and returns a context error
+on lock acquisition. The owner-local Sync tests supply controlled observations
+at the local-address and interrupt-mask edges.
+
+| Remaining profile selection | Native dependency |
+| --- | --- |
+| `chrono/counter` and the Arm, RV64 and x86 counter bindings | Trusted current-Hart observation, CNTVCT/CNTFRQ, `rdtime`, or CPUID/RDTSC. |
+| Arm GIC CPU interface, distributor barrier, redistributor wake and private-input operations, and virtual timer | ICC and comparator registers, the current PE, ordered GIC register writes, and readback. |
+| RV64 external barrier, supervisor reception, timer and SBI software delivery | I/O fence, supervisor CSRs, comparator access and the selected SBI call. |
+| x86 local APIC native operations | Live local APIC mode, registers and current CPU observation. |
+| CPU MMU native context bindings and RV64 encoder binding | Live translation controls and maintenance, or the resident module's native call ABI. Format, installation transitions and offer checks are shared. |
+| SMMUv3, RV64 IOMMU and VT-d ordering constructors and operations | Native memory ordering, cache-line publication and register synchronization. The controller records and descriptor encoders are shared. |
+| Platform Boot major and firmware handoff, Processor Executor entry and launch, Execution Terminal, and PSCI invocation | Installed machine entry, native stacks and vector ABI, terminal service delivery, or an actual PSCI conduit. SBI and UEFI handoff selection follows the firmware profile. |
+| Hart ISA backends and local entry, stack access, resident storage installation and protection | Actual entry registers, trusted stack range, CPU-local address and interrupt masking/restoration. Resident construction requires native entry or the owner-local Host observation fixture. |
+
 The Metal Sync Host suite executes the production MCS queue with the same
 spin hint and atomic operations as the target. Tests arrange a real tail
 exchange before linking, inspect the private departure decision, then finish
@@ -64,9 +85,22 @@ handoff. Runtime admission of a Buddy region requires the Allocator source.
 RUSTFLAGS=-Dwarnings cargo test --locked -p kernel --lib --target x86_64-unknown-linux-gnu metal::allocator
 ```
 
-## RV64 interrupt backends
+## Interrupt backends
 
-[The interrupt target](target/entry/interrupt/) selects the exact single-Hart
+| Target | Source and receiver | Observed behavior |
+| --- | --- | --- |
+| RV64 virt | 16550 UART and Goldfish RTC → PLIC supervisor contexts; Sstc → supervisor timer line | Two physical PLIC contexts admit independent routes. The boot Hart receives three interrupts and completes each original claim. Its two timer deadlines use the real STIMECMP after taking over the inherited comparator. |
+| RV64 virt with AIA | 16550 UART → APLIC direct IDC; SBI TIME programs the supervisor comparator | The interrupt guest exercises direct delivery, deadline replacement and hardware shutdown. |
+| x86_64 q35 | COM1 → I/O APIC → local xAPIC | The BSP receives a fixed vector through a guest IDT gate, checks the in-service vector, clears the device and sends the original EOI. |
+| AArch64 virt | Two PL011 UARTs → GICv3 Distributor → Group 1 CPU interface | The guest verifies independent source bits, exact IAR/EOI pairing and the active bit before and after split deactivation. |
+
+The RV64 and UEFI interrupt scenarios execute from the platform fixture’s
+inherited mappings. Each guest owns its reception interval. Production Trap
+dispatch and driver Sign delivery have separate entry and lifecycle contracts.
+
+### APLIC and ACLINT
+
+[The interrupt target](target/metal/interrupt/riscv64/aplic/) selects the exact single-Hart
 QEMU machine profile `virt,aia=aplic,aclint=on` with `rv64,sstc=false`.
 It exercises real supervisor timer and UART external traps, original claim
 retention, explicit state admission, rearm, shutdown and rejected operations.
@@ -75,14 +109,27 @@ ordinary runtime Trap or Interrupt Server integration.
 
 ```sh
 server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
-  --suite server/tests/target/entry/interrupt --kernel "$PWD" \
+  --suite server/tests/target/metal/interrupt/riscv64/aplic --kernel "$PWD" \
   --output /tmp/limen-interrupt --profile debug
 ```
 
-Repeat with `--profile release`. The [Quint state contracts](https://github.com/shuyra-arche/document-limen/tree/master/tests/interrupt)
+Repeat with `--profile release`. The [Quint state contracts](https://github.com/shuyra-arche/document-limen/tree/master/model/interrupt)
 also cover unknown readbacks, retained pending edges during shutdown, and
 finite identity exhaustion. Their abstract evidence inputs are not hardware
 fault-injection tests.
+
+### PLIC, Sstc, I/O APIC and GIC
+
+Run a suite from the repository root with the same runner and a fresh output
+directory. Each suite owns its manifest, hardware inputs and expected
+observations.
+
+| Scenario | Suite |
+| --- | --- |
+| RV64 PLIC with Sstc | [riscv64/plic-sstc](target/metal/interrupt/riscv64/plic-sstc/) |
+| Local APIC startup failure | [x86_64/apic-failure](target/metal/interrupt/x86_64/apic-failure/) |
+| q35 I/O APIC reception | [x86_64/ioapic](target/metal/interrupt/x86_64/ioapic/) |
+| Arm GIC reception | [aarch64/gic](target/metal/interrupt/aarch64/gic/) |
 
 ## RV64 boot
 
@@ -126,14 +173,15 @@ expose the SBI reset reason in QMP; the diagnostic and absence of the normal
 handoff marker distinguish the injected failure from a normal boot. The test
 does not independently observe the SBI reset reason.
 Its image, injection record, serial output and verdict are kept beside the
-normal result. No production hook or extra linker symbols are used. Run it
+normal result. The verifier uses the linked stack boundaries consumed by the
+production entry. Run it
 against the selected output plan with `PLAN` set to the discovery JSON:
 
 ```sh
 bash server/tests/target/entry/boot/fault.sh "$runner" "$evidence"
 ```
 
-The Target workflow runs affected owner-local `suite.json` scenarios on four virtual CPUs and uploads their evidence. Ordinary boots enter on the
+The Target workflow runs affected owner-local `suite.json` scenarios with the declared machine and Hart count and uploads their evidence. Ordinary boots enter on the
 firmware-selected CPU. The RV64 cross-Hart scenario provisions three
 participation slots and checks rejection of a fourth actual Hart; both UEFI
 board fixtures exercise two participants.
@@ -196,6 +244,36 @@ test-only linker wrapper sets distinct `s0`–`s11` values for each saved
 frame and checks their restoration at the production switch boundary,
 including the call that resumes on the other Hart.
 
+## q35 Local APIC timer
+
+The [one-shot timer guest](target/metal/interrupt/x86_64/apic-timer/) settles the
+inherited legacy countdown on q35, then arms the original local timer, observes its leased vector through a temporary
+test IDT, and stops the source. The vector stays occupied until the original
+Local APIC in-service entry has been completed. It checks that the vector can
+be returned after EOI and that the stopped countdown emits no second entry.
+
+## UEFI Kernel Unit execution
+
+Each UEFI scenario builds the guest next to its own `suite.json`. Its Cargo
+package owns both firmware entry and the kernel handoff. The guest calls the
+shared `uefi-fixture` library to prepare the board and retain the firmware
+inputs, then runs its own assertions. The target workspace shares a lockfile
+across these guests, and the launcher uses the suite's board configuration
+and evidence expectations to build and observe the selected guest.
+
+The [platform execution suite](target/basis/execution/platforms/) boots q35
+or Arm virt, attaches both entered Harts to the actual Room and runs a
+migratable Kernel Unit. It verifies both migrations, address stability on the
+Unit stack, preserved control and callee-saved registers, cancellation,
+stale departure rejection and stack reuse. Select a board with `--board`,
+or omit it to run both.
+
+```sh
+server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify run \
+  --suite server/tests/target/basis/execution/platforms --kernel "$PWD" \
+  --output /tmp/limen-platform-execution --profile debug
+```
+
 ## q35 and AArch64 virt boot
 
 All target suites use the exact upstream version in [qemu.version](qemu.version).
@@ -256,6 +334,30 @@ entry with absent retirement and mapping evidence and require that it
 leave the source unpublished. The Host boot suite additionally exercises
 joint lock contention, cancellation, allowance reuse and independent
 return history.
+
+## Native translation
+
+The paging and IOMMU suites own their test conditions. They reuse the platform
+fixture for firmware inputs, mappings and shutdown. The IOMMU scenarios use
+the same EDU transfer and completion protocol through the board’s PCI fixture.
+
+| Scenario | Suite |
+| --- | --- |
+| x86-64 CPU paging | [x86_64/paging](target/metal/memory/mmu/x86_64/paging/) |
+| AArch64 CPU paging | [aarch64/paging](target/metal/memory/mmu/aarch64/paging/) |
+| RV64 CPU paging and module-bound Sv39/Sv48/Sv57 | [entry/module-riscv](target/entry/module-riscv/) |
+| RISC-V IOMMU | [riscv64/iommu](target/metal/memory/mmu/riscv64/iommu/) |
+| Intel VT-d | [x86_64/vtd](target/metal/memory/mmu/x86_64/vtd/) |
+| AMD-Vi | [x86_64/amdvi](target/metal/memory/mmu/x86_64/amdvi/) |
+| Arm SMMUv3 | [aarch64/smmu](target/metal/memory/mmu/aarch64/smmu/) |
+
+The CPU paging guests use the same local context consumer. Native composition
+supplies the retained table trees and checked control profile, then the consumer
+verifies the exact original and installed contexts and restores the original
+context after exercising real translations. RV64 also uses this path for the
+module-produced successor context on both Harts, with fetch synchronization
+performed by the module fixture. The local readback records the installed
+context. The table and residency owners still need their own retirement evidence.
 
 ## Module loading
 

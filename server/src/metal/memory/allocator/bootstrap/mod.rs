@@ -10,9 +10,9 @@ use core::{
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
 use crate::metal::{
-    identity::{Entry, Generation, Slot},
-    memory::mmu::internal::access::MappedRange,
-    sync::TurnLock,
+    identity::treaty::{Entry, Generation, Slot},
+    memory::access::treaty::ram::MappedRange,
+    sync::treaty::TurnLock,
 };
 
 use super::{
@@ -40,11 +40,12 @@ pub struct Config {
     pub allocations: usize,
     pub returns: usize,
     pub allowances: usize,
+    /// Maximum Buddy nodes visited by one exact edit, checked against each Region's geometry.
     pub edits: usize,
 }
 
 impl Config {
-    fn check(self) -> Result<(), Error> {
+    pub(super) fn check(self) -> Result<(), Error> {
         let alignment = Alignment::new(self.granule.get()).ok_or(Error::Layout)?;
         if !alignment.is_aligned(self.maximum) {
             return Err(Error::Layout);
@@ -70,33 +71,8 @@ impl Config {
         Alignment::new(self.granule.get()).expect("validated Allocator configuration")
     }
 
-    fn nodes(self) -> Result<usize, Error> {
+    pub(super) fn nodes(self) -> Result<usize, Error> {
         self.grains.checked_mul(2).ok_or(Error::Capacity)
-    }
-
-    /// Full fixed root, including backing for delayed admission and history.
-    pub fn layout(self) -> Result<Layout, Error> {
-        self.check()?;
-        let mut root = Layout::new::<Allocator>();
-        for element in [
-            array::<Region>(self.regions)?,
-            array::<Link>(self.regions)?,
-            array::<TurnLock<AllowanceSlot>>(self.allowances)?,
-        ] {
-            root = root.extend(element).map_err(|_| Error::Layout)?.0;
-        }
-        let region = [
-            array::<Root>(self.roots)?,
-            array::<u8>(self.nodes()?)?,
-            array::<Entry<AllocationRecord>>(self.allocations)?,
-            array::<Entry<ReturnRecord>>(self.returns)?,
-        ];
-        for _ in 0..self.regions {
-            for element in region {
-                root = root.extend(element).map_err(|_| Error::Layout)?.0;
-            }
-        }
-        Ok(root.pad_to_align())
     }
 
     pub(super) fn geometry(self, description: RegionDescription) -> Result<Geometry, Error> {
@@ -112,7 +88,7 @@ impl Config {
     }
 }
 
-fn array<T>(count: usize) -> Result<Layout, Error> {
+pub(super) fn array<T>(count: usize) -> Result<Layout, Error> {
     Layout::array::<T>(count).map_err(|_| Error::Layout)
 }
 

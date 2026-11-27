@@ -7,13 +7,13 @@ use core::{
     },
 };
 
-use crate::metal::processor::hart::local::QueueNode;
+use super::node::QueueNode;
 
 #[cfg(test)]
 #[path = "../../../../tests/metal/sync/turn/queue.rs"]
 mod tests;
 
-pub(super) struct Queue {
+pub(in crate::metal::sync) struct Queue {
     tail: AtomicPtr<QueueNode>,
 }
 

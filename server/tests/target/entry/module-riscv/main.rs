@@ -1,23 +1,34 @@
 #![no_std]
 #![no_main]
 
+kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
+
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 mod harts;
 mod mapping;
 
 use core::{arch::asm, fmt::Write, mem::MaybeUninit, ops::Range, ptr::NonNull};
 use kernel::{
-    entry::boot::{self, Boot, Occupant},
+    entry::boot::{Boot, Occupant},
     metal::{
-        memory::mmu::internal::access::MappedRange,
-        memory::mmu::internal::{GEOMETRY, riscv::{LeafAccess, Mode, context::{Context, Translation}, description::RiscvMmu, encoder}},
-        module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, SegmentPermissions, UseError},
+        memory::access::treaty::ram::MappedRange,
+        memory::mmu::{
+            riscv64::internal::{
+                context::Context, description::RiscvMmu, encoder, format::Format,
+                installation::admit_context,
+            },
+            treaty::{GEOMETRY, LeafAccess, LocalContext},
+        },
+        module::treaty::{
+            Contract, Layout, Machine, ModuleImage, ModuleSlots, SegmentPermissions, UseError,
+        },
     },
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
 use mapping::PAGE;
 
 const IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/module.elf"));
-const MODES: [Mode; 3] = [Mode::Sv39, Mode::Sv48, Mode::Sv57];
+const MODES: [Format; 3] = [Format::Sv39, Format::Sv48, Format::Sv57];
 const ROOT_IMAGES: [&[u8]; 3] = [
     include_bytes!(concat!(env!("OUT_DIR"), "/sv39-root.elf")),
     include_bytes!(concat!(env!("OUT_DIR"), "/sv48-root.elf")),
@@ -49,10 +60,10 @@ unsafe extern "C" {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    if let Some(mut console) = boot::console() {
+    if let Some(mut console) = boot_diagnostic::console() {
         let _ = writeln!(console, "FAIL riscv-module-execution {info}");
     }
-    boot::shutdown(false)
+    boot_diagnostic::shutdown(false)
 }
 
 fn physical(range: Range<u64>) -> PhysicalRange {
@@ -240,12 +251,16 @@ fn prepare(
         // This reserved arena has one verified writable, nonexecuting view.
         let mut view =
             unsafe { MappedRange::from_identity(material.physical, material.storage) }.unwrap();
-        image.prepare(&mut view, InternalAddress::new(start)).unwrap()
+        image
+            .prepare(&mut view, InternalAddress::new(start))
+            .unwrap()
     };
     assert_eq!(layout.physical(), material.physical);
     assert_eq!(
         layout.internal(),
-        InternalAddress::new(start).range(ByteLength::new(length)).unwrap()
+        InternalAddress::new(start)
+            .range(ByteLength::new(length))
+            .unwrap()
     );
     let mut permissions = [None; MAX_PAGES];
     for segment in layout.segments() {
@@ -280,8 +295,8 @@ fn prepare(
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     let [major, peer] = harts::check(&boot, &MODES);
-    assert!(unsafe { Translation::admit(peer) }.is_err());
-    let mut translation = unsafe { Translation::admit(major) }.unwrap();
+    assert!(unsafe { admit_context(peer) }.is_err());
+    let mut translation = unsafe { admit_context(major) }.unwrap();
     let service = boot
         .sbi_services()
         .hart_state_management()
@@ -291,16 +306,30 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     let start = storage.addr().get() as u64;
     let resident = Resident::from_boot(&boot, start..start + size_of::<[Storage; 2]>() as u64);
     for (mode, image) in MODES.into_iter().zip(ROOT_IMAGES) {
-        prove_geometry(&mut translation, mode, &resident);
-        exercise(&mut translation, mode, image, peer, service, &resident, storage);
+        prove_geometry(&mut translation, boot.hart(), mode, &resident);
+        exercise(
+            &mut translation,
+            mode,
+            image,
+            peer,
+            service,
+            &resident,
+            storage,
+        );
     }
-    boot::write(
+    boot_diagnostic::write(
         "PASS riscv-module-execution virt modes=sv39,sv48,sv57 high-leaves=12 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2\n",
     );
-    boot::shutdown(true)
+    boot_diagnostic::write("PASS local-context original=1 installed=1 restored=1\n");
+    boot_diagnostic::shutdown(true)
 }
 
-fn prove_geometry(translation: &mut Translation<'_>, mode: Mode, resident: &Resident) {
+fn prove_geometry(
+    translation: &mut LocalContext<'_>,
+    hart: usize,
+    mode: Format,
+    resident: &Resident,
+) {
     static PROBE: u64 = 0x46c8_ce4b_34d7_985e;
     let physical = (&raw const PROBE).addr() as u64;
     assert!(covers(&resident.read_only, &(physical..physical + 8)));
@@ -324,27 +353,25 @@ fn prove_geometry(translation: &mut Translation<'_>, mode: Mode, resident: &Resi
 
     // The identity mapping is still complete. The minor remains stopped,
     // and neither module has been staged or installed.
-    unsafe { root.activate(translation) };
-    for &address in &probes[..mode.levels()] {
-        let value: u64;
-        unsafe {
-            asm!("ld {value}, 0({address})", value = out(reg) value, address = in(reg) address, options(nostack, readonly));
-        }
-        assert_eq!(value, PROBE);
-    }
     unsafe {
-        mapping::switch_context(translation, root.context(), Context::BARE);
+        mapping::probe_context(translation, hart, root.context(), || {
+            for &address in &probes[..mode.levels()] {
+                let value: u64;
+                asm!("ld {value}, 0({address})", value = out(reg) value, address = in(reg) address, options(nostack, readonly));
+                assert_eq!(value, PROBE);
+            }
+        });
         root.clear_inactive();
     }
     root.release();
 }
 
 fn exercise(
-    translation: &mut Translation<'_>,
-    mode: Mode,
+    translation: &mut LocalContext<'_>,
+    mode: Format,
     image: &'static [u8],
     peer: RiscvMmu<'_>,
-    service: kernel::metal::platform::firmware::sbi::HartService,
+    service: kernel::metal::platform::firmware::treaty::sbi::HartService,
     resident: &Resident,
     storage: NonNull<Storage>,
 ) {

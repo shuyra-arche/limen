@@ -1,5 +1,5 @@
-//! Physical allocation and translation mechanisms.
+//! Physical allocation, mapped access and address translation.
 
-#[cfg(any(limen_target, test))]
+pub mod access;
 pub mod allocator;
 pub mod mmu;

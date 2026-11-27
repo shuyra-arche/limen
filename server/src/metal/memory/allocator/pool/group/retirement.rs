@@ -1,4 +1,4 @@
-use crate::metal::sync::{TurnMode, TurnWorkspace};
+use crate::metal::sync::treaty::{TurnMode, TurnWorkspace};
 use limen_treaty::model::PhysicalRange;
 
 use super::super::super::{
@@ -62,13 +62,18 @@ pub enum Retirement {
     End,
 }
 
+// Directory observations per call, independent of prepaid Group capacity.
+const GROUP_SCAN_LIMIT: usize = 64;
+
 impl<T> Pool<'_, T> {
     /// Advance a recovery pass by at most `budget` directory entries, capped
     /// at 64. A failed acquisition leaves the cursor intact. End resets it
     /// to revisit retained work. No mapped group bytes are accessed.
     pub fn retirement(&self, cursor: &mut usize, budget: usize) -> Result<Retirement, Error> {
         Ok(self.state.acquire(|state| {
-            let stop = (*cursor).saturating_add(budget.min(64)).min(state.extent);
+            let stop = (*cursor)
+                .saturating_add(budget.min(GROUP_SCAN_LIMIT))
+                .min(state.extent);
             while *cursor < stop {
                 let index = *cursor;
                 *cursor += 1;

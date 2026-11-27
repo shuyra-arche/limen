@@ -3,12 +3,12 @@
 use core::num::NonZeroU64;
 
 mod stack;
-use crate::metal::processor::execution::cooperative::Context;
+use crate::metal::processor::treaty::Context;
 pub(super) use stack::STACK_CAPACITY;
 pub use stack::Stacks;
 use stack::{StackLease, StackPool};
 
-use crate::metal::identity::Slot;
+use crate::metal::identity::treaty::Slot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Scope(usize);

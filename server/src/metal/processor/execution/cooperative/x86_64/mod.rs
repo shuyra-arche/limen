@@ -6,15 +6,15 @@ use core::{
 };
 
 use crate::metal::processor::{
-    execution::description::x86_64::{StateControl, base_xcr0},
-    hart::x86_64::status,
+    description::x86_64::status,
+    execution::profile::x86_64::{StateControl, base_xcr0},
 };
 
 // The base save shape does not own AVX or other extended components.
 #[cfg(target_feature = "avx")]
 compile_error!("cooperative x86_64 requires the base x87/SSE execution profile");
 
-pub(super) fn ready() -> bool {
+pub(in crate::metal::processor) fn ready() -> bool {
     let features = __cpuid(1);
     let (cr0, cr4, flags): (usize, usize, usize);
     unsafe {
@@ -39,7 +39,7 @@ pub(super) fn ready() -> bool {
 }
 
 #[repr(C, align(16))]
-pub(super) struct Saved {
+pub(in crate::metal::processor) struct Saved {
     resume: usize,
     stack: usize,
     preserved: [usize; 8],
@@ -47,7 +47,7 @@ pub(super) struct Saved {
 }
 
 impl Saved {
-    pub(super) const EMPTY: Self = Self {
+    pub(in crate::metal::processor) const EMPTY: Self = Self {
         resume: 0,
         stack: 0,
         preserved: [0; 8],
@@ -63,7 +63,10 @@ impl Saved {
         },
     };
 
-    pub(super) fn initial(stack: usize, entry: extern "C" fn(*const ()) -> !) -> Self {
+    pub(in crate::metal::processor) fn initial(
+        stack: usize,
+        entry: extern "C" fn(*const ()) -> !,
+    ) -> Self {
         let mut saved = Self {
             resume: (first as *const ()).addr(),
             stack,
@@ -97,7 +100,7 @@ extern "win64" fn launch(argument: *const (), entry: extern "C" fn(*const ()) ->
 /// integers and the complete base floating/SIMD environment). GS and the
 /// interrupt configuration belong to the executing Hart, not the Unit.
 #[unsafe(naked)]
-pub(super) unsafe extern "win64" fn switch(
+pub(in crate::metal::processor) unsafe extern "win64" fn switch(
     outgoing: *mut Saved,
     incoming: *const Saved,
     argument: *const (),
@@ -139,7 +142,7 @@ pub(super) unsafe extern "win64" fn switch(
 
 /// Enter the resident dispatcher with this target's existing kernel ABI.
 #[unsafe(naked)]
-pub(super) unsafe extern "win64" fn start_stack(
+pub(in crate::metal::processor) unsafe extern "win64" fn start_stack(
     stack: usize,
     entry: extern "C" fn(*const ()) -> !,
     argument: *const (),

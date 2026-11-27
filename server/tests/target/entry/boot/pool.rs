@@ -1,18 +1,20 @@
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use core::{mem::MaybeUninit, ptr};
 
-use limen_treaty::model::PhysicalAddress;
 use kernel::{
-    entry::boot::{self, Boot},
+    entry::boot::{Boot},
     metal::{
-        memory::allocator::{
-            Allocation,
-            Allowance,
-            Error as SourceError,
-            pool::{Error, GroupReceipt, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement, Stable},
+        memory::allocator::treaty::{
+            Allocation, Allowance, Error as SourceError,
+            pool::{
+                Error, GroupReceipt, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement,
+                Stable,
+            },
         },
-        sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
+        sync::treaty::{TurnLock, TurnMode::Fast, TurnWorkspace},
     },
 };
+use limen_treaty::model::PhysicalAddress;
 
 use super::{
     foundation::{inspect_budget, reference},
@@ -106,8 +108,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     }
     assert_eq!(pool.capacity().unwrap().free, geometry.slots);
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((PAGE as u64, 0))
     );
     let owner = allowance.as_ref().unwrap();
@@ -137,5 +138,5 @@ pub(super) fn check(boot: &Boot<'_>) {
     assert_eq!(pool.capacity().unwrap().bytes, 0);
     receipt.as_ref().unwrap().acknowledge(pool).unwrap();
     assert_eq!(pool.finish_return(group, Fast), Err(Error::Stale));
-    boot::write("PASS typed-pool mapped=1 slots=1 reuse=1 joint=1 stable=1 refund=1\n");
+    boot_diagnostic::write("PASS typed-pool mapped=1 slots=1 reuse=1 joint=1 stable=1 refund=1\n");
 }

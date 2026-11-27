@@ -9,12 +9,17 @@ use core::{
         Ordering::{Acquire, Relaxed, Release},
     },
 };
+use kernel::metal::processor::treaty::{LocalStorage, Minor, Stack, Startup};
 use kernel::{
-    entry::boot::{Boot, Minor, Startup},
+    entry::boot::Boot,
     metal::{
-        processor::execution::description::riscv::{RiscvExtension, RiscvIsa},
-        memory::mmu::internal::riscv::{Mode, context::{Context, Translation}, description::RiscvMmu, encoder::Encoder},
-        module::ModuleUse,
+        memory::mmu::riscv64::internal::{
+            context::Context, description::RiscvMmu, encoder::Encoder, format::Format,
+            installation::admit_context,
+        },
+        module::treaty::ModuleUse,
+        processor::description::riscv64::isa::{RiscvExtension, RiscvIsa},
+        sync::treaty::Supply,
     },
 };
 
@@ -37,14 +42,20 @@ enum Phase {
     Departed,
 }
 
-static MINORS: [Minor; 3] = [const { Minor::new() }; 3];
+static STACKS: [Stack<{ 32 * 1024 }>; 3] = [const { Stack::new() }; 3];
+static LOCALS: [LocalStorage<5>; 3] = [const { LocalStorage::new(Supply::new()) }; 3];
+static MINORS: [Minor; 3] = [
+    Minor::new(&STACKS[0], &LOCALS[0]),
+    Minor::new(&STACKS[1], &LOCALS[1]),
+    Minor::new(&STACKS[2], &LOCALS[2]),
+];
 static PHASE: AtomicU8 = AtomicU8::new(Phase::Idle as u8);
 static ROOTS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 static ENTRY: AtomicU64 = AtomicU64::new(0);
 static ENCODER: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static RETURNS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 
-pub fn check<'a>(boot: &Boot<'a>, modes: &[Mode]) -> [RiscvMmu<'a>; 2] {
+pub fn check<'a>(boot: &Boot<'a>, modes: &[Format]) -> [RiscvMmu<'a>; 2] {
     let major = boot.hart();
     assert!(major < 2);
     let minor = 1 - major;
@@ -68,7 +79,12 @@ pub fn check<'a>(boot: &Boot<'a>, modes: &[Mode]) -> [RiscvMmu<'a>; 2] {
         assert_eq!(mmu.hart(), hart as u64);
         mmu
     });
-    assert!(boot.sbi_services().hart_state_management().unwrap().is_some());
+    assert!(
+        boot.sbi_services()
+            .hart_state_management()
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(status(major), STARTED);
     assert_eq!(status(minor), STOPPED);
     descriptions
@@ -97,7 +113,7 @@ fn wait(phase: Phase) {
 /// the stop receipt. The held interface has the scalar geometry entry ABI.
 pub unsafe fn exercise(
     description: RiscvMmu<'_>,
-    service: kernel::metal::platform::firmware::sbi::HartService,
+    service: kernel::metal::platform::firmware::treaty::sbi::HartService,
     roots: [Context; 2],
     held: &ModuleUse<'_>,
     encoder: &Encoder<'_>,
@@ -145,7 +161,7 @@ fn run(hart: usize, argument: usize) -> ! {
     wait(Phase::Initial);
     let description = unsafe { *ptr::with_exposed_provenance::<RiscvMmu<'_>>(argument) };
     assert_eq!(hart as u64, description.hart());
-    let mut translation = unsafe { Translation::admit(description) }.unwrap();
+    let mut translation = unsafe { admit_context(description) }.unwrap();
     let [initial, successor] = ROOTS
         .each_ref()
         .map(|root| Context::from_bits(root.load(Relaxed)).unwrap());

@@ -1,16 +1,20 @@
 #![no_std]
 #![no_main]
 
+kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
+
+use kernel::metal::platform::boot::treaty::{shutdown, write};
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
+use kernel::entry::boot::Boot;
 use kernel::metal::{
-    chrono::riscv::RiscvTimebase,
-    processor::execution::description::riscv::RiscvExtension, processor::execution::description::riscv::RiscvIsa,
-    platform::description::devicetree::memory::Source,
-    memory::mmu::internal::riscv::description::{MaximumMode, RiscvMmu},
+    chrono::riscv64::description::RiscvTimebase,
+    memory::mmu::riscv64::internal::description::{MaximumMode, RiscvMmu},
+    platform::description::treaty::devicetree::memory::Source,
+    processor::description::riscv64::isa::RiscvExtension,
+    processor::description::riscv64::isa::RiscvIsa,
 };
-use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 use limen_treaty::model::{ByteLength, PhysicalAddress};
 
 #[path = "../synchronization.rs"]
@@ -69,10 +73,7 @@ fn check_discovery(boot: &Boot<'_>) {
     let mmu = RiscvMmu::describe(&cpu)
         .unwrap()
         .expect("declared MMU mode");
-    assert!(matches!(
-        mmu.maximum(),
-        MaximumMode::Paged(_)
-    ));
+    assert!(matches!(mmu.maximum(), MaximumMode::Paged(_)));
     assert_eq!(mmu.source(), cpu.node().id());
     let isa = RiscvIsa::describe(&cpu).unwrap().expect("declared ISA");
     assert_eq!(isa.source(), cpu.node().id());
@@ -96,7 +97,7 @@ fn check_discovery(boot: &Boot<'_>) {
     assert!(
         sbi.hart_state_management().unwrap().is_some()
             && sbi.timer().unwrap().is_some()
-            && sbi.inter_processor_interrupt().unwrap()
+            && sbi.ipi().unwrap().is_some()
     );
     write("PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1\n");
 }
@@ -156,7 +157,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     );
     let top: usize;
     unsafe { asm!("ld {}, 0({})", out(reg) top, in(reg) sscratch, options(nostack, readonly)) };
-    let reserved = stack_range();
+    let reserved = boot.stack_range();
     let emergency = top.checked_sub(16 * 1024).expect("emergency stack top");
     assert!(
         top.is_multiple_of(16)
@@ -256,7 +257,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
-    if let Some(mut console) = kernel::entry::boot::console() {
+    if let Some(mut console) = kernel::metal::platform::boot::treaty::console() {
         let _ = writeln!(console, "FAIL boot-handoff: {info}");
     }
     shutdown(false)

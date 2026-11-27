@@ -1,3 +1,4 @@
+use super::{MAJOR_NODES, MINOR_NODES};
 use core::{
     hint::spin_loop,
     sync::atomic::{
@@ -7,8 +8,8 @@ use core::{
 };
 use kernel::{
     basis::execution::{Current, Error},
-    metal::sync::{
-        TURN_CAPACITY, TurnAcquireError, TurnLock, TurnMode, TurnPlanError, TurnWorkspace,
+    metal::sync::treaty::{
+        TurnAcquireError, TurnLock, TurnMode, TurnPlanError, TurnWorkspace, turn_capacity,
     },
 };
 
@@ -40,7 +41,7 @@ fn wait(phase: Phase) {
 }
 
 pub(super) fn major() {
-    check_capacity();
+    check_capacity(MAJOR_NODES);
 
     let mut work = TurnWorkspace::<1>::new();
     let mut plan = work.plan();
@@ -86,11 +87,12 @@ pub(super) fn major() {
     .expect("both Harts returned their nodes");
 }
 
-fn check_capacity() {
-    let locks = [const { TurnLock::new(()) }; TURN_CAPACITY + 1];
-    let mut work = TurnWorkspace::<{ TURN_CAPACITY + 1 }>::new();
+fn check_capacity(expected: usize) {
+    assert_eq!(turn_capacity(), Some(expected));
+    let locks = [const { TurnLock::new(()) }; MAJOR_NODES + 1];
+    let mut work = TurnWorkspace::<{ MAJOR_NODES + 1 }>::new();
     let mut plan = work.plan();
-    for lock in &locks {
+    for lock in &locks[..=expected] {
         plan.insert(lock).unwrap();
     }
     assert_eq!(
@@ -99,17 +101,19 @@ fn check_capacity() {
     );
 
     let mut plan = work.plan();
-    for lock in &locks[..TURN_CAPACITY] {
+    for lock in &locks[..expected] {
         plan.insert(lock).unwrap();
+        plan.insert(lock).expect("duplicate roles share the original node");
     }
     plan.acquire(TurnMode::Slow, |_| ())
         .expect("capacity failure left the admitted node supply available");
 }
 
 pub(super) fn minor() {
+    check_capacity(MINOR_NODES);
     wait(Phase::Held);
-    let prefix = [const { TurnLock::new(()) }; TURN_CAPACITY - 1];
-    let mut work = TurnWorkspace::<TURN_CAPACITY>::new();
+    let prefix = [const { TurnLock::new(()) }; MINOR_NODES - 1];
+    let mut work = TurnWorkspace::<MINOR_NODES>::new();
     for count in 1..=prefix.len() {
         let mut plan = work.plan();
         for lock in &prefix[..count] {

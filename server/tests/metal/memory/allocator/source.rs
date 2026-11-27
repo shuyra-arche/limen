@@ -1,13 +1,13 @@
 use crate::{
     basis::pend::{Error as PendError, Handle, Initial as InitialPend, PendSpace, Revoker},
     metal::{
-        memory::allocator::{
+        memory::access::treaty::ram::MappedRange,
+        memory::allocator::treaty::{
             Allocation, Allocator, Allowance, BudgetObservation, BudgetProgress, Config, Error,
             Initial, LookupObservation, Pending, RamPurpose::Metadata, RegionDescription,
             RegionOrigin, Request, Retired, ReturnReceipt, Search,
         },
-        memory::mmu::internal::access::MappedRange,
-        sync::{
+        sync::treaty::{
             TurnAcquireError,
             TurnMode::{Fast, Slow},
         },
@@ -18,7 +18,7 @@ use crate::{
         Boot, Regions, Retirement,
         tests::{describe, image, organization::retired, range},
     },
-    metal::platform::{boot::handoff::Descriptions, firmware::uefi::map::FirmwareMap},
+    metal::platform::{boot::handoff::Descriptions, firmware::treaty::map::FirmwareMap},
 };
 use core::mem::MaybeUninit;
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
@@ -144,7 +144,7 @@ fn initial_capacity(source: &Allocator) -> u64 {
 
 #[test]
 fn only_the_original_source_can_resolve_region_and_allowance_slots() {
-    use crate::metal::sync::TurnWorkspace;
+    use crate::metal::sync::treaty::TurnWorkspace;
 
     let mut original = None;
     let (source, allowance) = source(&mut original, 4 * PAGE);
@@ -259,7 +259,9 @@ fn metadata_spending(allowance: &Allowance) -> (Handle, Revoker) {
     (spending.unwrap(), closing.unwrap())
 }
 
-fn metadata_candidate(source: &'static Allocator) -> crate::metal::memory::allocator::Candidate {
+fn metadata_candidate(
+    source: &'static Allocator,
+) -> crate::metal::memory::allocator::treaty::Candidate {
     let request = Request::new(
         ByteLength::new(PAGE),
         Alignment::new(PAGE).unwrap(),
@@ -282,8 +284,8 @@ fn metadata_candidate(source: &'static Allocator) -> crate::metal::memory::alloc
 #[test]
 fn initial_pend_limits_and_revalidates_the_original_spender() {
     use crate::metal::{
-        memory::allocator::{AllocationConstruction, RamPurpose},
-        sync::TurnWorkspace,
+        memory::allocator::treaty::{AllocationConstruction, RamPurpose},
+        sync::treaty::TurnWorkspace,
     };
     use std::{sync::mpsc::sync_channel, thread};
 
@@ -477,7 +479,7 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
 
 #[test]
 fn reserve_and_revocation_order_the_original_holding() {
-    use crate::metal::memory::allocator::AllocationConstruction;
+    use crate::metal::memory::allocator::treaty::AllocationConstruction;
     use std::{sync::Barrier, thread};
 
     let mut initial = None;
@@ -517,7 +519,7 @@ fn reserve_and_revocation_order_the_original_holding() {
 
 #[test]
 fn issue_and_allowance_shut_order_the_same_charge() {
-    use crate::metal::memory::allocator::AllocationConstruction;
+    use crate::metal::memory::allocator::treaty::AllocationConstruction;
     use std::{sync::Barrier, thread};
 
     let mut initial = None;
@@ -566,7 +568,7 @@ fn issue_and_allowance_shut_order_the_same_charge() {
 
 #[test]
 fn issue_and_cancellation_have_one_winner() {
-    use crate::metal::memory::allocator::AllocationConstruction;
+    use crate::metal::memory::allocator::treaty::AllocationConstruction;
     use std::{sync::Barrier, thread};
 
     let mut initial = None;
@@ -859,7 +861,9 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
 
 #[test]
 fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
-    use crate::metal::{memory::allocator::AllocationConstruction, sync::TurnWorkspace};
+    use crate::metal::{
+        memory::allocator::treaty::AllocationConstruction, sync::treaty::TurnWorkspace,
+    };
     use std::{sync::mpsc::sync_channel, thread};
 
     // The Host owner explicitly funds its single actual construction, with a
@@ -931,7 +935,9 @@ fn reservation_and_cancellation_use_the_complete_plan_under_contention() {
 
 #[test]
 fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
-    use crate::metal::{memory::allocator::AllocationConstruction, sync::TurnWorkspace};
+    use crate::metal::{
+        memory::allocator::treaty::AllocationConstruction, sync::treaty::TurnWorkspace,
+    };
     let mut initial = None;
     let (source, allowance) = source(&mut initial, 3 * PAGE);
     let capacity = initial_capacity(source);
@@ -1015,7 +1021,7 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
 
 #[test]
 fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation() {
-    use crate::metal::memory::allocator::AllocationConstruction;
+    use crate::metal::memory::allocator::treaty::AllocationConstruction;
 
     let mut initial = None;
     let mut receiver = None;
@@ -1167,10 +1173,10 @@ fn skip_only_advances_the_lookup_with_an_outstanding_candidate() {
 
 #[test]
 fn source_directory_scale_is_independent_of_joint_lock_capacity() {
-    use crate::metal::sync::{TURN_CAPACITY, TurnWorkspace};
+    use crate::metal::sync::treaty::{TurnWorkspace, turn_capacity};
 
     const REGIONS: usize = 6;
-    assert!(REGIONS > TURN_CAPACITY);
+    assert!(turn_capacity().is_some_and(|capacity| REGIONS > capacity));
     let mut receiver = None;
     bootstrap(|regions, mapping| {
         let config = Config {

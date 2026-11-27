@@ -1,17 +1,23 @@
 #![no_std]
 #![no_main]
 
-use core::fmt::Write;
-use core::sync::atomic::{AtomicUsize, Ordering};
-use kernel::entry::boot;
-#[cfg(target_arch = "x86_64")]
-use kernel::metal::platform::firmware::uefi::AcpiInput;
-use kernel::metal::platform::firmware::uefi::{DeviceTree as LoaderTree, Loader};
-#[cfg(target_arch = "x86_64")]
-use limen_treaty::model::PhysicalRange;
-use limen_treaty::model::{ByteLength, PhysicalAddress};
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::metal::processor::treaty::{Minor, StartError, Startup};
+use kernel::metal::{
+    processor::treaty::{LocalStorage, Stack},
+    sync::treaty::Supply,
+};
 
-mod cooperative;
+use kernel::entry::boot;
+use uefi::prelude::*;
+use uefi_fixture as fixture;
+
+use core::{
+    fmt::Write,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+use limen_treaty::model::ByteLength;
+
 #[path = "../foundation.rs"]
 mod foundation;
 #[path = "../memory.rs"]
@@ -20,162 +26,19 @@ mod ram;
 #[path = "../synchronization.rs"]
 mod synchronization;
 
-static MINOR: boot::Minor = boot::Minor::new();
-static TARGET: AtomicUsize = AtomicUsize::new(usize::MAX);
+static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 fn observe_minor(hart: usize) {
-    assert_eq!(MINOR.stack_range().len(), boot::stack_range().len());
-    assert_eq!(boot::stack_range().len(), 32 * 1024);
-    assert_eq!(hart, TARGET.load(Ordering::Relaxed));
-    assert_eq!(hart, board::hart());
-    let sp: usize;
-    unsafe {
-        #[cfg(target_arch = "aarch64")]
-        core::arch::asm!("mov {},sp",out(reg) sp, options(nostack,nomem));
-        #[cfg(target_arch = "x86_64")]
-        core::arch::asm!("mov {},rsp",out(reg) sp, options(nostack,nomem));
-    }
-    assert!(
-        MINOR.ready() && MINOR.stack_range().contains(&sp) && !boot::stack_range().contains(&sp)
-    );
+    fixture::check_minor(&MINOR, hart);
     synchronization::check();
     OBSERVED.store(hart, Ordering::Release);
 }
-
-use uefi::{
-    mem::memory_map::{MemoryMap, MemoryMapRef},
-    prelude::*,
-};
-
-#[cfg(target_arch = "x86_64")]
-#[path = "q35.rs"]
-mod board;
-#[cfg(target_arch = "aarch64")]
-#[path = "virt.rs"]
-mod board;
-
-#[entry]
-fn main() -> Status {
-    assert_eq!(
-        kernel::metal::sync::LeafLock::new(()).attempt(|()| ()),
-        Err(kernel::metal::sync::LeafError::Context)
-    );
-    let loaded = match uefi::boot::open_protocol_exclusive::<uefi::proto::loaded_image::LoadedImage>(
-        uefi::boot::image_handle(),
-    ) {
-        Ok(loaded) => loaded,
-        Err(error) => return error.status(),
-    };
-    let (base, size) = loaded.info();
-    drop(loaded);
-    let start = PhysicalAddress::new(base.addr() as u64);
-    let Some(image) = start.range(ByteLength::new(size)) else {
-        return Status::COMPROMISED_DATA;
-    };
-    let board = match board::capture() {
-        Ok(input) => input,
-        Err(status) => {
-            uefi::println!("Board input: {status:?}");
-            return status;
-        }
-    };
-    if let Err(status) = ram::prepare() {
-        uefi::println!("Foundation RAM grant: {status:?}");
-        return status;
-    }
-    #[cfg(target_arch = "x86_64")]
-    let rsdp = match board::acpi_root() {
-        Some(address) => address,
-        None => return Status::NOT_FOUND,
-    };
-    let map = unsafe { uefi::boot::exit_boot_services(None) };
-    #[cfg(target_arch = "x86_64")]
-    let read_acpi = |physical: PhysicalRange| {
-        use uefi::mem::memory_map::MemoryType;
-        // This loader keeps ACPI Reclaim and NVS pages identity-mapped and
-        // unmodified. Nothing in that window is freed or handed to Limen RAM.
-        let start = physical.start().get();
-        let end = physical.end().get();
-        let source = map.entries().find(|descriptor| {
-            matches!(
-                descriptor.ty,
-                MemoryType::ACPI_RECLAIM | MemoryType::ACPI_NON_VOLATILE
-            ) && descriptor.phys_start <= start
-                && descriptor
-                    .page_count
-                    .checked_mul(uefi::boot::PAGE_SIZE as u64)
-                    .and_then(|length| descriptor.phys_start.checked_add(length))
-                    .is_some_and(|limit| end <= limit)
-        })?;
-        let length = usize::try_from(end - start).ok()?;
-        let address = usize::try_from(start).ok()?;
-        if address == 0 || length > isize::MAX as usize || source.virt_start != 0 {
-            return None;
-        }
-        Some(unsafe {
-            core::slice::from_raw_parts(core::ptr::with_exposed_provenance(address), length)
-        })
-    };
-    let meta = map.meta();
-    let input = Loader {
-        image,
-        descriptors: map.buffer(),
-        stride: meta.desc_size,
-        version: meta.desc_version,
-        // The selected test configurations admit at most 512 descriptors.
-        descriptor_limit: 512,
-        device_tree: board.map(LoaderTree::Memory),
-        #[cfg(target_arch = "x86_64")]
-        acpi: Some(AcpiInput {
-            rsdp,
-            read: &read_acpi,
-        }),
-        #[cfg(target_arch = "aarch64")]
-        acpi: None,
-    };
-    unsafe { boot::major(board::hart(), &input, &board::SERVICES) }
-}
-
-#[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
-    assert_eq!(boot.hart(), board::hart());
-    let map = boot.firmware_map().expect("final UEFI map");
+fn check_retention(boot: &boot::Boot<'_>) {
+    let map = boot.firmware_map().unwrap();
     let early = boot.exclusions();
-    let major = boot::stack_range();
-    let minor = MINOR.stack_range();
-    let image = boot.image();
-    assert!(image.covers(memory::extent(minor.start as u64, minor.end as u64)));
-    assert!(
-        early
-            .entries()
-            .any(|entry| entry.occupant == boot::Occupant::MajorStack
-                && entry.physical == memory::extent(major.start as u64, major.end as u64))
-    );
-    assert!(
-        early.entries().any(
-            |entry| entry.occupant == boot::Occupant::TrapStack && image.covers(entry.physical)
-        )
-    );
-    let descriptors = map.descriptors().as_ptr_range();
-    assert!(
-        early
-            .entries()
-            .any(|entry| entry.occupant == boot::Occupant::FirmwareMap
-                && entry.physical
-                    == memory::extent(
-                        descriptors.start.addr() as u64,
-                        descriptors.end.addr() as u64
-                    ))
-    );
-    if let Some(tree) = boot.device_tree() {
-        assert!(
-            early
-                .entries()
-                .any(|entry| entry.occupant == boot::Occupant::DeviceTree
-                    && entry.physical == memory::extent(tree.start as u64, tree.end as u64))
-        );
-    }
     let candidate = map
         .regions()
         .find(|entry| entry.kind == 7)
@@ -192,7 +55,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
             .unwrap()
             .is_none()
     );
-    let configuration = kernel::metal::memory::allocator::Config {
+    let configuration = kernel::metal::memory::allocator::treaty::Config {
         granule,
         maximum: ByteLength::new(0),
         regions: 1,
@@ -208,74 +71,75 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
             .unwrap()
             .is_none()
     );
-    boot::write(
-        "PASS allocator retained without retirement or mapping
-",
+    boot_diagnostic::write("PASS allocator retained without retirement or mapping\n");
+}
+
+fn minor(hart: usize, _: usize) -> ! {
+    observe_minor(hart);
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+fn start_minor(major: usize, target: usize, startup: &mut Startup) -> ! {
+    assert_eq!(
+        unsafe { MINOR.start(major, minor, 0, startup) },
+        Err(StartError::Busy),
     );
-    let view = MemoryMapRef::new(
-        map.descriptors(),
-        uefi::mem::memory_map::MemoryMapMeta {
-            map_size: map.descriptors().len(),
-            desc_size: map.stride(),
-            desc_version: map.version(),
-            map_key: Default::default(),
-        },
-    )
-    .unwrap();
-    assert_eq!(map.regions().len(), view.entries().count());
-    assert!(map.regions().any(|r| r.kind == 7));
-    for (region, descriptor) in map.regions().zip(view.entries()) {
-        assert_eq!(region.physical.start().get(), descriptor.phys_start);
-        assert_eq!(
-            region.physical.end().get(),
-            descriptor
-                .phys_start
-                .checked_add(descriptor.page_count.checked_mul(4096).unwrap())
-                .unwrap()
-        );
-        assert_eq!(
-            region.kind == 7,
-            descriptor.ty == uefi::mem::memory_map::MemoryType::CONVENTIONAL
-        );
+    unsafe { MINOR.start(target, minor, 0, startup) }.expect("minor startup");
+    while OBSERVED.load(Ordering::Acquire) != target {
+        core::hint::spin_loop();
     }
-    ram::check(&boot);
-    let target = TARGET.load(Ordering::Acquire);
-    assert_ne!(target, boot.hart());
-    #[cfg(target_arch = "x86_64")]
-    board::check_discovery(&boot, target);
-    let major = boot.hart();
-    let mut startup = board::inspect(&boot, &view);
-    #[cfg(target_arch = "x86_64")]
-    if cfg!(feature = "apic-failure") {
-        board::check_failure(&mut startup, target);
-        // Keep the uncertain controller, trampoline and Minor resident
-        // through terminal shutdown. No normal execution in this scenario.
-        boot::shutdown(true);
-    }
-    cooperative::run(boot, major, target, &mut startup, |startup| {
-        board::inspect_started(startup, target);
-    })
+    assert!(MINOR.ready());
+    fixture::inspect_started(startup, target);
+    assert_eq!(
+        unsafe { MINOR.start(target, minor, 0, startup) },
+        Err(StartError::Busy),
+    );
+    finish(major)
 }
 
 fn finish(major: usize) -> ! {
     synchronization::check();
-    boot::write("PASS synchronization\n");
+    boot_diagnostic::write("PASS synchronization\n");
     writeln!(
-        boot::console().expect("console"),
+        boot_diagnostic::console().expect("console"),
         "OBSERVED major={} minor={}",
         major,
         OBSERVED.load(Ordering::Acquire)
     )
     .unwrap();
-    boot::write("PASS early physical exclusions regions=0 roots=0\n");
-    board::report()
+    boot_diagnostic::write("PASS early physical exclusions regions=0 roots=0\n");
+    #[cfg(target_arch = "x86_64")]
+    boot_diagnostic::write(
+        "PASS q35 major=1 minor=1 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1\n",
+    );
+    #[cfg(target_arch = "aarch64")]
+    boot_diagnostic::write(
+        "PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1 ram=1 reconciled=1\n",
+    );
+    boot_diagnostic::shutdown(true)
+}
+
+#[entry]
+fn main() -> Status {
+    fixture::load(|| {
+        #[cfg(target_arch = "x86_64")]
+        fixture::q35::prepare_minor()?;
+        ram::prepare()
+    })
+}
+
+#[unsafe(no_mangle)]
+extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
+    let view = fixture::check_handoff(&boot, Some(&MINOR));
+    check_retention(&boot);
+    let mut startup = fixture::inspect(&boot, &view);
+    ram::check(&boot);
+    start_minor(boot.hart(), fixture::target(), &mut startup)
 }
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    use core::fmt::Write;
-    if let Some(mut console) = boot::console() {
-        let _ = writeln!(console, "FAIL UEFI platform boot: {info}");
-    }
-    boot::shutdown(false)
+    fixture::report_panic(info)
 }

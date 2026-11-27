@@ -2,24 +2,23 @@
 
 ## Provisioning
 
-The trusted image consumes the unique Boot handoff through
-`basis::execution::Execution::new`, supplying resident Unit records, two
-16 KiB stacks with saved continuations, and independent `room::Harts<N>`
-participation and dispatcher-context storage. Unit owns each exclusive stack
-lease until its continuation has retired. The current RV64 profile uses Bare
-translation and integer continuations; the UEFI profiles retain their own
-verified native save shapes.
+The trusted image transfers the admitted Major and Terminal from Boot to
+`basis::execution::Execution::new`. It supplies resident Unit records and
+two 16 KiB Unit stacks. Room holds participation in independent
+`room::Harts<N>` storage. Processor holds the machine continuations and
+dispatcher stacks in separately supplied `processor::treaty::Dispatchers`.
+Unit owns each exclusive stack lease until its continuation has retired.
+RV64 uses Bare translation and integer continuations. The UEFI profiles
+validate their respective native save shapes before entry.
 
-Construction does not attach a Hart. If the environment or supply is rejected,
-`EstablishFailure` returns Boot and all original supplies so the image can
-retry. Every actual Hart uses `Execution::attach` after its trusted entry.
-The trusted image starts other Harts directly through `entry::boot::Minor`;
-startup failure and an unconfirmed wake remain Boot's responsibility. Room
-publishes each permanent participation and its associated machine record in
-one protected operation. Only the current Hart uses its scope-checked local
-locator, without a second Room acquisition. Duplicate and exhausted
-participation are rejected before publication. Each machine record owns a
-32 KiB dispatcher stack. After attachment the trusted platform calls
+On rejection, `EstablishFailure` returns the original Major, Terminal and
+storage for retry. Each actual Hart uses `Execution::attach` after its
+trusted entry. The image uses `processor::treaty::Minor` to start secondary
+Harts. Processor retains a launch with uncertain delivery. Room's protected
+admission and Processor's reserved machine record are published together.
+The current Executor locates its own machine record in the original scope.
+A duplicate or exhausted attempt fails before publication. Each machine
+record owns a 32 KiB dispatcher stack. After attachment the trusted platform calls
 `Execution::run` once to enter that stack. The original startup stack stays
 reserved while the running closure or firmware description borrows it.
 

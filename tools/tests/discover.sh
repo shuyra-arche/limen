@@ -39,11 +39,16 @@ while IFS= read -r -d '' file; do
         and (.sources | type == "array" and length > 0)
         and (if .run.kind == "board-boot" then
             (.run.boards | length > 0 and all(.[]; . == "q35" or . == "virt"))
+            and (.run.boards | length == (unique | length))
             and (((.run.board_sources // {}) | keys) - .run.boards == [])
+            and (if .run.launcher then ((.run.launch | keys) == (.run.boards | sort)) else .run.launch == null end)
         else .run.kind == "qemu" or .run.kind == "cargo-test" end)
-        and (.run.machine | if . == null then true else . == "virt" or . == "aplic-aclint" end)
+        and (.run.hardware | . == null or type == "object")
         and (.run.harts | if . == null then true else type == "number" and . == floor and . >= 1 and . <= 255 end)' "$file" >/dev/null
-    mapfile -t common < <(jq -r '.sources[], (.run.imports[]? | "server/tests/" + . + "/**")' "$file")
+    mapfile -t common < <(jq -r '
+        .sources[],
+        (.run.imports[]? | "server/tests/" + . | ., . + "/**"),
+        (.run.launcher | select(. != null) | "server/tests/target/" + .)' "$file")
     mapfile -t scoped < <(jq -r '.run.board_sources[]?[]' "$file")
     mapfile -t platforms < <(jq -r 'if .run.kind == "board-boot" then .run.boards[] elif .run.kind == "qemu" then "rv64" else "host" end' "$file")
     for platform in "${platforms[@]}"; do

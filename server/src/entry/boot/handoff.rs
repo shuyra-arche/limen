@@ -1,6 +1,10 @@
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, FirmwareRegion, devicetree, physical::Exclusions};
 use crate::metal::platform::boot::handoff::Descriptions;
+#[cfg(limen_target)]
+use crate::metal::platform::boot::major::Admission;
+#[cfg(limen_cooperative)]
+use crate::metal::processor::treaty::Major;
 use core::ops::Range;
 use limen_treaty::model::PhysicalRange;
 
@@ -10,8 +14,14 @@ pub struct Boot<'a> {
     image: PhysicalRange,
     descriptions: &'a Descriptions<'a>,
     firmware_map: Option<FirmwareMap<'a>>,
-    #[cfg(limen_firmware = "sbi")]
-    reception: Option<crate::metal::interrupt::internal::supervisor::Supervisor>,
+    #[cfg(limen_target)]
+    terminal: crate::metal::processor::treaty::Terminal,
+    #[cfg(limen_target)]
+    stack: Range<usize>,
+    #[cfg(limen_cooperative)]
+    major: Option<Major>,
+    #[cfg(all(limen_target, target_arch = "riscv64"))]
+    reception: Option<crate::metal::interrupt::riscv64::internal::supervisor::Supervisor>,
 }
 
 impl<'a> Boot<'a> {
@@ -23,6 +33,28 @@ impl<'a> Boot<'a> {
         self.image
     }
 
+    /// The terminal operations supplied by the trusted platform handoff.
+    #[cfg(limen_target)]
+    pub const fn terminal(&self) -> crate::metal::processor::treaty::Terminal {
+        self.terminal
+    }
+
+    /// The ordinary stack supplied by the trusted image for the major CPU.
+    #[cfg(limen_target)]
+    pub fn stack_range(&self) -> Range<usize> {
+        self.stack.clone()
+    }
+
+    /// Transfer the original native construction relation to its consumer.
+    #[cfg(limen_cooperative)]
+    pub fn take_major(&mut self) -> Option<Major> {
+        self.major.take()
+    }
+
+    #[cfg_attr(
+        not(any(limen_target, test)),
+        expect(dead_code, reason = "native entry supplies the original stack ranges")
+    )]
     pub(crate) fn exclusions_for(
         &self,
         major: PhysicalRange,
@@ -51,7 +83,7 @@ impl<'a> Boot<'a> {
 
     /// CPU scope already checked at the SBI handoff.
     #[cfg(limen_firmware = "sbi")]
-    pub fn riscv_cpus(&self) -> &crate::metal::processor::hart::riscv::description::RiscvCpus<'a> {
+    pub fn riscv_cpus(&self) -> &crate::metal::processor::description::riscv64::cpu::RiscvCpus<'a> {
         self.descriptions
             .cpus
             .as_ref()
@@ -59,15 +91,15 @@ impl<'a> Boot<'a> {
     }
 
     #[cfg(limen_firmware = "sbi")]
-    pub fn sbi_services(&self) -> crate::metal::platform::firmware::sbi::SbiServices {
+    pub fn sbi_services(&self) -> crate::metal::platform::firmware::treaty::sbi::SbiServices {
         self.descriptions.sbi.expect("admitted SBI services")
     }
 
     /// Move the major Hart's exclusive reception lines out of the handoff.
-    #[cfg(limen_firmware = "sbi")]
+    #[cfg(all(limen_target, target_arch = "riscv64"))]
     pub fn take_reception(
         &mut self,
-    ) -> Option<crate::metal::interrupt::internal::supervisor::Supervisor> {
+    ) -> Option<crate::metal::interrupt::riscv64::internal::supervisor::Supervisor> {
         self.reception.take()
     }
 
@@ -98,20 +130,49 @@ impl<'a> Boot<'a> {
         ))
     }
 
+    #[cfg(limen_target)]
+    pub(super) fn from_major(admission: Admission<'a>, descriptions: &'a Descriptions<'a>) -> Self {
+        Self::new(
+            admission.hart,
+            admission.facts.image,
+            admission.facts.firmware_map,
+            descriptions,
+            admission.terminal,
+            admission.stack,
+            #[cfg(limen_cooperative)]
+            admission.major,
+            #[cfg(target_arch = "riscv64")]
+            admission.reception,
+        )
+    }
+
+    #[cfg_attr(
+        not(any(limen_target, test)),
+        expect(dead_code, reason = "native entry delivers admitted boot data")
+    )]
     pub(crate) fn new(
         hart: usize,
         image: PhysicalRange,
         firmware_map: Option<FirmwareMap<'a>>,
         descriptions: &'a Descriptions<'a>,
-        #[cfg(limen_firmware = "sbi")]
-        reception: crate::metal::interrupt::internal::supervisor::Supervisor,
+        #[cfg(limen_target)] terminal: crate::metal::processor::treaty::Terminal,
+        #[cfg(limen_target)] stack: Range<usize>,
+        #[cfg(limen_cooperative)] major: Major,
+        #[cfg(all(limen_target, target_arch = "riscv64"))]
+        reception: crate::metal::interrupt::riscv64::internal::supervisor::Supervisor,
     ) -> Self {
         Self {
             hart,
             image,
             descriptions,
             firmware_map,
-            #[cfg(limen_firmware = "sbi")]
+            #[cfg(limen_target)]
+            terminal,
+            #[cfg(limen_target)]
+            stack,
+            #[cfg(limen_cooperative)]
+            major: Some(major),
+            #[cfg(all(limen_target, target_arch = "riscv64"))]
             reception: Some(reception),
         }
     }

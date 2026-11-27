@@ -166,22 +166,39 @@ fn symbolizer_preserves_literal_return_addresses() {
 }
 
 #[test]
-fn rv64_machine_profiles_are_explicit_and_reproducible() {
-    let manifest = |machine| {
+fn rv64_hardware_is_declared_by_the_scenario() {
+    let manifest = |value: &str| {
         serde_json::json!({
             "kind": "qemu", "kernel": "interrupt", "expects": ["PASS"],
-            "machine": machine
+            "hardware": {
+                "machine": {"name": "virt", "options": {"aia": "aplic", "aclint": "on"}},
+                "cpu": {"name": "rv64", "options": {"sstc": "false"}},
+                "devices": [{"name": "example", "options": {"bus": "pcie.0", "addr": value}}],
+            }
         })
     };
-    let run = serde_json::from_value::<suite::Run>(manifest("aplic-aclint")).unwrap();
-    let suite::Run::Qemu { machine, .. } = run else {
+    let run = serde_json::from_value::<suite::Run>(manifest("06.0")).unwrap();
+    let suite::Run::Qemu { hardware, .. } = run else {
         panic!("not a QEMU suite");
     };
+    assert!(hardware.valid());
     assert_eq!(
-        machine.arguments(),
-        ("virt,aia=aplic,aclint=on", "rv64,sstc=false")
+        hardware.arguments(),
+        [
+            "-machine",
+            "virt,aclint=on,aia=aplic",
+            "-cpu",
+            "rv64,sstc=false",
+            "-device",
+            "example,addr=06.0,bus=pcie.0",
+        ]
     );
-    assert!(serde_json::from_value::<suite::Run>(manifest("arbitrary")).is_err());
+    let malformed = serde_json::from_value::<suite::Run>(manifest("06.0,extra=on")).unwrap();
+    assert!(matches!(malformed, suite::Run::Qemu { hardware, .. } if !hardware.valid()));
+    assert_eq!(
+        suite::QemuHardware::default().arguments(),
+        ["-machine", "virt", "-cpu", "rv64"]
+    );
 }
 
 mod execution;

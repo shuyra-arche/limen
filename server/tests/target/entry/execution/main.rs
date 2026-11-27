@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
+
+use kernel::metal::platform::boot::treaty::{shutdown, write};
 mod buddy;
 #[path = "../memory.rs"]
 mod memory;
@@ -22,11 +25,13 @@ use kernel::{
         room::{Harts, Occupancy},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
-    entry::boot::{Boot, shutdown, write},
+    entry::boot::{Boot},
 };
 
 static mut STACKS: Stacks = Stacks::new();
 static mut HARTS: Harts<1> = Harts::new();
+static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy, 1> =
+    kernel::metal::processor::treaty::Dispatchers::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
@@ -107,35 +112,51 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
+extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
     pool::prepare(&boot);
     let major = boot.hart();
     let device_tree = boot.device_tree();
     assert!(major < 4, "unexpected QEMU boot hart");
-    // The fixture owns both static objects and runs on the sole Boot Hart.
+    // The fixture owns these static objects and runs on the sole Boot Hart.
     let stacks = &raw mut STACKS;
+    let records = (&raw mut RECORDS).cast::<UnitRecord<KernelBinding>>();
+    let harts = &raw mut HARTS;
+    let dispatchers = &raw mut DISPATCHERS;
+    let admitted = boot.take_major().expect("original native major relation");
+    assert!(boot.take_major().is_none());
     // Individual interrupt sources remain masked. SIE makes the execution
     // environment unsupported before the constructor binds the stack supply.
     unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-    let harts = &raw mut HARTS;
     let rejected = Execution::new(
-        boot,
+        admitted,
+        boot.terminal(),
         unsafe { &mut *stacks },
         unsafe { &mut *(&raw mut RECORDS) },
         unsafe { &mut *harts },
+        unsafe { &mut *dispatchers },
     );
     unsafe { asm!("csrci sstatus, 2", options(nostack)) };
     let Err(failure) = rejected else {
         panic!("execution admitted with interrupts enabled");
     };
     assert_eq!(failure.reason, EstablishError::Unsupported);
-    assert_eq!(failure.boot.hart(), major);
-    assert_eq!(failure.boot.device_tree(), device_tree);
+    assert_eq!(boot.hart(), major);
+    assert_eq!(boot.device_tree(), device_tree);
     assert!(core::ptr::eq(failure.stacks, stacks));
+    assert!(core::ptr::eq(failure.records.as_ptr(), records));
     assert!(core::ptr::eq(failure.harts, harts));
-    let runtime = Execution::new(failure.boot, failure.stacks, failure.records, failure.harts)
-        .map_err(|failure| failure.reason)
-        .expect("original handoff and independent supplies can be retried");
+    assert!(core::ptr::eq(failure.dispatchers, dispatchers));
+    let major_stack = boot.stack_range();
+    let runtime = Execution::new(
+        failure.major,
+        failure.terminal,
+        failure.stacks,
+        failure.records,
+        failure.harts,
+        failure.dispatchers,
+    )
+    .map_err(|failure| failure.reason)
+    .expect("original handoff and independent supplies can be retried");
     unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     let execution = execution();
     assert_eq!(execution.enter(), Err(Error::Unsupported));
@@ -149,7 +170,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let mut schedule = || {
         let mark = core::hint::black_box(0u8);
         let address = core::hint::black_box(&mark) as *const u8 as usize;
-        assert!(!kernel::entry::boot::stack_range().contains(&address));
+        assert!(!major_stack.contains(&address));
         let a = unsafe { execution.create(first) }.expect("first unit");
         let dormant = unsafe { execution.create(abandoned) }.expect("dormant unit");
         assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));

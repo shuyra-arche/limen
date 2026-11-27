@@ -51,15 +51,32 @@ pub fn apply(project: &Path, root: &Path, evidence: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn copy(relative: &str, destination: &Path) -> Result<()> {
+fn copy(source: &Path, destination: &Path) -> Result<()> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(suite().join(relative), destination)?;
+    fs::copy(source, destination)?;
     Ok(())
 }
 
-pub fn hashes(root: &Path) -> Result<BTreeMap<String, String>> {
+pub fn import(relative: &Path, destination: &Path) -> Result<BTreeMap<String, String>> {
+    let source = suite().join(relative);
+    if source.is_file() {
+        copy(&source, destination)?;
+        let name = relative.file_name().ok_or("missing test import filename")?;
+        return Ok(BTreeMap::from([(
+            name.to_string_lossy().into_owned(),
+            digest(destination)?,
+        )]));
+    }
+    let files = hashes(&source)?;
+    for file in files.keys() {
+        copy(&source.join(file), &destination.join(file))?;
+    }
+    Ok(files)
+}
+
+fn hashes(root: &Path) -> Result<BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
     fn visit(root: &Path, path: &Path, result: &mut BTreeMap<String, String>) -> Result<()> {
         for entry in fs::read_dir(path)? {

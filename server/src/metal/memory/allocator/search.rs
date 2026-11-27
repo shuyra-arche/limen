@@ -1,99 +1,14 @@
 use core::sync::atomic::Ordering::Acquire;
-use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
+use limen_treaty::model::PhysicalRange;
 
 use super::{
-    Allocator, Error, RegionDescription, RegionId, RegionOrigin,
+    Allocator, Candidate, Error, RegionId,
     region::{
         Revision,
         buddy::{self, Scan},
     },
+    treaty::{Request, Search},
 };
-
-/// The recipient's intended use, independent of the physical range selected.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RamPurpose {
-    Metadata,
-    Execution,
-    PageTable,
-    Cell,
-}
-
-/// Fixed purpose, layout and physical eligibility for one lookup. Actual
-/// spending still revalidates these facts under the authorization's protection.
-#[derive(Clone, Copy, Debug)]
-pub struct Request {
-    buddy: buddy::Request,
-    attributes: Option<RegionOrigin>,
-    purpose: RamPurpose,
-}
-
-impl Request {
-    pub fn new(
-        length: ByteLength,
-        alignment: Alignment,
-        window: PhysicalRange,
-        attributes: Option<RegionOrigin>,
-        purpose: RamPurpose,
-    ) -> Result<Self, Error> {
-        let buddy = buddy::Request::new(length, alignment)
-            .map_err(|_| Error::Layout)?
-            .restrict(window);
-        Ok(Self {
-            buddy,
-            attributes,
-            purpose,
-        })
-    }
-
-    pub fn length(self) -> ByteLength {
-        self.buddy.length()
-    }
-
-    pub fn alignment(self) -> Alignment {
-        self.buddy.alignment()
-    }
-
-    pub fn purpose(self) -> RamPurpose {
-        self.purpose
-    }
-
-    fn accepts(self, region: RegionDescription) -> bool {
-        self.buddy
-            .window()
-            .is_some_and(|window| window.overlaps(region.physical))
-            && self
-                .attributes
-                .is_none_or(|attributes| attributes == region.origin)
-    }
-}
-
-/// Physical observation only. The candidate is rechecked during occupation.
-#[derive(Clone, Copy)]
-pub struct Candidate {
-    pub(super) region: RegionId,
-    pub(super) physical: PhysicalRange,
-    pub(super) request: Request,
-}
-
-impl Candidate {
-    pub fn physical(self) -> PhysicalRange {
-        self.physical
-    }
-
-    pub fn region(self) -> RegionId {
-        self.region
-    }
-
-    pub fn request(self) -> Request {
-        self.request
-    }
-}
-
-pub enum Search {
-    Pending,
-    Candidate(Candidate),
-    NoRange,
-}
 
 enum Pass {
     Observe,
@@ -126,8 +41,9 @@ impl LookupObservation {
     pub const EMPTY: Self = Self(None);
 }
 
-// A scan visit or cursor advance is one step. Fast lookup and exact edits
-// already have the separate checked structural bound at Region admission.
+// Fixed per-call bound for the resumable Buddy search under one Region Turn.
+// A visit or cursor advance is one step. Fast lookups and exact edits have
+// separate geometry bounds checked when that Region is admitted.
 const SCAN_STEPS: usize = 64;
 
 impl Allocator {

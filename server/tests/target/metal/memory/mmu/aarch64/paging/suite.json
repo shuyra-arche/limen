@@ -1,0 +1,85 @@
+{
+  "id": "aarch64-paging",
+  "profiles": [
+    "debug",
+    "release"
+  ],
+  "sources": [
+    "server/src/entry/boot/**",
+    "server/src/entry/mod.rs",
+    "server/src/lib.rs",
+    "server/src/metal/platform/description/devicetree/**",
+    "server/src/metal/platform/description/treaty/mod.rs",
+    "server/src/metal/platform/description/treaty/devicetree.rs",
+    "server/src/metal/memory/mod.rs",
+    "server/src/metal/mod.rs",
+    "server/src/metal/processor/execution/mod.rs",
+    "server/src/metal/processor/execution/terminal/mod.rs",
+    "server/src/metal/processor/execution/terminal/console.rs",
+    "server/src/metal/processor/execution/terminal/trap.rs",
+    "server/src/metal/processor/executor/entry/mod.rs",
+    "server/src/metal/platform/boot/treaty/mod.rs",
+    "server/src/metal/platform/boot/handoff/mod.rs",
+    "server/src/metal/platform/boot/handoff/uefi.rs",
+    "server/src/metal/platform/boot/major.rs",
+    "server/src/metal/platform/boot/mod.rs",
+    "server/src/metal/platform/description/acpi/mod.rs",
+    "server/src/metal/platform/description/treaty/acpi.rs",
+    "server/src/metal/platform/description/mod.rs",
+    "server/src/metal/platform/firmware/mod.rs",
+    "server/src/metal/platform/firmware/uefi/**",
+    "server/src/metal/platform/firmware/treaty/mod.rs",
+    "server/src/metal/platform/firmware/treaty/map.rs",
+    "server/src/metal/platform/firmware/uefi/map.rs",
+    "server/src/metal/platform/firmware/uefi/mod.rs",
+    "server/src/metal/platform/mod.rs",
+    "server/src/metal/processor/executor/local/**",
+    "server/src/metal/processor/executor/mod.rs",
+    "server/src/metal/processor/treaty/mod.rs",
+    "server/src/metal/processor/mod.rs",
+    "server/tests/target/support/uefi/Cargo.toml",
+    "server/tests/target/support/uefi/build.rs",
+    "server/src/metal/sync/**",
+    "server/tests/target/Cargo.toml",
+    "server/tests/target/Cargo.lock",
+    "server/tests/target/support/uefi/lib.rs",
+    "server/src/metal/memory/mmu/treaty/mod.rs",
+    "server/src/metal/memory/mmu/treaty/installation.rs",
+    "server/tests/target/support/paging/installation.rs"
+  ],
+  "run": {
+    "kind": "board-boot",
+    "boards": [
+      "virt"
+    ],
+    "launcher": "support/uefi/run.sh",
+    "board_sources": {
+      "virt": [
+        "server/src/metal/processor/executor/entry/aarch64.rs",
+        "server/src/metal/processor/execution/terminal/aarch64.rs",
+        "server/src/metal/platform/boot/aarch64/**",
+        "server/src/metal/platform/firmware/psci/**",
+        "server/src/metal/platform/firmware/treaty/psci.rs",
+        "server/src/metal/processor/executor/aarch64/**",
+        "server/src/metal/processor/description/aarch64/cpu.rs",
+        "server/src/metal/processor/description/aarch64/mod.rs",
+        "server/src/metal/processor/description/aarch64/status.rs",
+        "server/tests/target/support/uefi/virt.rs",
+        "server/tests/target/support/uefi/devicetree.rs",
+        "server/tests/target/support/uefi/pl011.rs",
+        "server/src/metal/memory/mmu/aarch64/internal/**",
+        "server/src/metal/memory/mmu/aarch64/mod.rs",
+        "server/src/metal/memory/mmu/mod.rs",
+        "server/tests/target/support/paging/mod.rs"
+      ]
+    },
+    "launch": {
+      "virt": {
+        "expects": [
+          "PASS internal paging switched=1 alias=1 restored=1",
+          "PASS local-context original=1 installed=1 restored=1"
+        ]
+      }
+    }
+  }
+}

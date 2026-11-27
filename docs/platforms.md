@@ -40,14 +40,14 @@ CPU node can supply source-scoped MMU mode and ISA extension facts. The
 `/cpus` node can supply a timebase frequency. Boot exposes the independently
 probed SBI HSM, TIME and IPI extensions. A minor starts through SBI HSM
 with its resident record in `a1`.
-[RV64 entry](../server/src/metal/platform/boot/riscv/) · [SBI](../server/src/metal/platform/firmware/sbi/)
+[RV64 entry](../server/src/metal/platform/boot/riscv64/) · [SBI](../server/src/metal/platform/firmware/sbi/)
 
 ## UEFI loader
 
 The two UEFI test images share a loader. OVMF loads `EFI/BOOT/BOOTX64.EFI` on
 q35 and AAVMF loads `EFI/BOOT/BOOTAA64.EFI` on virt. The loader captures board
 inputs, exits Boot Services with the final memory map and calls
-`entry::boot::major`. It keeps the handoff, firmware allocations, loader stack
+`metal::platform::boot::treaty::major`. It keeps the handoff, firmware allocations, loader stack
 and identity mappings reserved. It supplies optional post-exit output and
 shutdown callbacks. The loader supplies the actual descriptor bytes, stride,
 version and a configured descriptor-count limit. After entry, the common
@@ -120,10 +120,26 @@ PSCI `CPU_ON` with a launch record as context, restores the major's EL1
 translation controls and installs its stack and vectors. QEMU verifies the
 HVC conduit. [AArch64 entry](../server/src/metal/platform/boot/aarch64/) · [PSCI](../server/src/metal/platform/firmware/psci.rs)
 
-The verified scope on x86 and Arm covers major and minor boot, and on Arm
-also the DTB and UEFI memory cross-check. CPU hotplug,
-general topology admission, interrupt routing and Unit scheduling on these
-targets require separate implementation and verification.
+## Interrupt and translation profiles
+
+| QEMU platform | Internal interrupt | External interrupt | Internal MMU | External MMU |
+| --- | --- | --- | --- | --- |
+| RV64 virt | Supervisor timer through SBI TIME or Sstc | PLIC claim/complete and APLIC direct delivery | Sv39, Sv48, Sv57 | RISC-V IOMMU with a one-level device directory and Sv39 first-stage translation |
+| x86_64 q35 | xAPIC in-service vector and EOI | I/O APIC delivery from a UART | Four-level IA-32e paging with 4 KiB leaves and qualified large pages | Intel VT-d legacy translation or AMD-Vi with an IVHD-selected requester |
+| AArch64 virt | GICv3 CPU interface acknowledge, priority drop and deactivate | GICv3 Distributor SPI from PL011 | EL1 stage 1, 48-bit VA and 4 KiB granule | SMMUv3 stage 2, linear stream table and 4 KiB granule |
+
+The x86 and Arm guests switch the active CPU root, exercise an alias and
+restore the firmware root. On all three architectures a PCI EDU function
+issues writes at a nonidentity IOVA. The RISC-V IOMMU, VT-d and SMMUv3
+guests revoke write permission, invalidate the old translation and repeat
+the write to the same address. The AMD-Vi guest removes the device binding
+and repeats the write after its matching completion store. The RV64 guest
+also checks the controller's debug translation interface and completion
+across command queue wrap.
+
+These tests exercise individual controller and translation backends.
+Delivery to a waiting Unit, system-wide retirement of mappings and physical
+boards require separate integration and verification.
 
 ## Early physical exclusions
 

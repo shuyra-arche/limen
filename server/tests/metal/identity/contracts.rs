@@ -6,7 +6,7 @@
 //! # mod identity {
 //! #     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../src/metal/identity/mod.rs"));
 //! # }
-//! # use identity::{Entry, GenerationTable};
+//! # use identity::treaty::{Entry, GenerationTable};
 //! let mut slots = [Entry::<()>::EMPTY];
 //! let mut table = GenerationTable::new(1u32, &mut slots).unwrap();
 //! let prepared = table.reserve().unwrap();
@@ -20,7 +20,7 @@
 //! # mod identity {
 //! #     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../src/metal/identity/mod.rs"));
 //! # }
-//! # use identity::{Entry, GenerationTable};
+//! # use identity::treaty::{Entry, GenerationTable};
 //! let mut slots = [Entry::<()>::EMPTY];
 //! let mut table = GenerationTable::new(1u32, &mut slots).unwrap();
 //! let prepared = table.reserve().unwrap();
@@ -34,7 +34,7 @@
 //! # mod identity {
 //! #     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../src/metal/identity/mod.rs"));
 //! # }
-//! # use identity::{Entry, GenerationTable};
+//! # use identity::treaty::{Entry, GenerationTable};
 //! let mut slots = [Entry::<()>::EMPTY];
 //! let mut table = GenerationTable::new(1u32, &mut slots).unwrap();
 //! let prepared = table.reserve().unwrap();
@@ -47,7 +47,7 @@
 //! # mod identity {
 //! #     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../src/metal/identity/mod.rs"));
 //! # }
-//! # use identity::{Entry, GenerationTable};
+//! # use identity::treaty::{Entry, GenerationTable};
 //! let mut slots = [Entry::<()>::EMPTY];
 //! let mut table = GenerationTable::new(1u32, &mut slots).unwrap();
 //! let prepared = table.reserve().unwrap();
@@ -62,7 +62,7 @@
 //! # mod identity {
 //! #     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../src/metal/identity/mod.rs"));
 //! # }
-//! # use identity::{Entry, GenerationTable};
+//! # use identity::treaty::{Entry, GenerationTable};
 //! let mut slots = [Entry::<()>::EMPTY];
 //! let mut table = GenerationTable::new(1u32, &mut slots).unwrap();
 //! let prepared = table.reserve().unwrap();
@@ -76,7 +76,7 @@
 //! # mod identity {
 //! #     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../src/metal/identity/mod.rs"));
 //! # }
-//! # use identity::{Entry, GenerationTable};
+//! # use identity::treaty::{Entry, GenerationTable};
 //! #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 //! struct Allocation(u32);
 //! #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,7 +95,7 @@
 //! # mod identity {
 //! #     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../src/metal/identity/mod.rs"));
 //! # }
-//! # use identity::{Entry, GenerationTable};
+//! # use identity::treaty::{Entry, GenerationTable};
 //! let mut slots = [Entry::<usize>::EMPTY];
 //! let mut table = GenerationTable::new(1u32, &mut slots).unwrap();
 //! let prepared = table.reserve().unwrap();

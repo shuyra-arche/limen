@@ -8,6 +8,7 @@ const ELF_HEADER: usize = 64;
 const PROGRAM_HEADER: usize = 56;
 const DYNAMIC_ENTRY: usize = 16;
 const RELA: usize = 24;
+// The loader's bounded input envelope. ELF permits larger images and tables.
 const MAX_IMAGE: usize = 16 * 1024 * 1024;
 const MAX_HEADERS: usize = 32;
 const MAX_NOTES: u64 = 8 * 1024;

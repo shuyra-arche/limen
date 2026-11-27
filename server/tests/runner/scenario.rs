@@ -1,11 +1,12 @@
 use crate::{
     composition, qmp,
-    suite::{self, Board, RiscvMachine, Run, Suite},
+    suite::{self, Board, QemuHardware, Run, Suite},
     verify,
 };
 use clap::Args;
 use kernel_verification::{process, *};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -34,13 +35,13 @@ struct Variant {
     root: PathBuf,
     elf: PathBuf,
     harts: u8,
-    machine: RiscvMachine,
+    hardware: QemuHardware,
 }
 
 fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result<Variant> {
     let Run::Qemu {
         kernel,
-        machine,
+        hardware,
         harts,
         imports,
         features,
@@ -68,13 +69,13 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         composition::apply(&project, &provider, &patches)?;
     }
 
+    let mut test_sha256 = BTreeMap::new();
     for path in std::iter::once(relative.to_path_buf()).chain(imports.iter().map(PathBuf::from)) {
         let destination = provider.join("server/tests").join(&path);
-        for file in composition::hashes(&owner.join(&path))?.keys() {
-            let file_path = path.join(file);
-            composition::copy(&file_path.to_string_lossy(), &destination.join(file))?;
-        }
+        let hashes = composition::import(&path, &destination)?;
+        test_sha256.insert(path, hashes);
     }
+    let suite_sha256 = test_sha256.remove(relative).ok_or("missing suite inputs")?;
 
     let manifest = provider
         .join("server/tests")
@@ -109,10 +110,11 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         "suite": suite.id,
         "profile": args.profile,
         "harts": harts,
-        "machine": machine,
-        "machine_arguments": machine.arguments(),
+        "hardware": hardware,
+        "hardware_arguments": hardware.arguments(),
         "tools": tools(&provider, &qemu, &firmware)?,
-        "suite_sha256": composition::hashes(&owner.join(relative))?,
+        "suite_sha256": suite_sha256,
+        "imports_sha256": test_sha256,
         "builds": [format!("{command:?}")],
     });
     let lock = manifest.with_file_name("Cargo.lock");
@@ -137,7 +139,7 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         root: root.to_owned(),
         elf,
         harts,
-        machine: *machine,
+        hardware: hardware.clone(),
     })
 }
 
@@ -145,23 +147,16 @@ fn run_image(
     elf: &Path,
     evidence: &Path,
     harts: u8,
-    machine: RiscvMachine,
+    hardware: &QemuHardware,
 ) -> Result<(process::Outcome, std::io::Result<qmp::Shutdown>)> {
     fresh(evidence)?;
     let firmware = Path::new(&std::env::var("QEMU_OPENSBI")?).canonicalize()?;
     let qemu = std::env::var("QEMU_RISCV64").unwrap_or("qemu-system-riscv64".into());
     let mut command = Command::new(qemu);
-    let (machine, cpu) = machine.arguments();
     command
-        .args([
-            "-accel",
-            "tcg,thread=multi",
-            "-machine",
-            machine,
-            "-cpu",
-            cpu,
-            "-smp",
-        ])
+        .args(["-accel", "tcg,thread=multi"])
+        .args(hardware.arguments())
+        .arg("-smp")
         .arg(harts.to_string())
         .args(["-m", "128M", "-monitor", "none", "-nic", "none", "-bios"])
         .arg(firmware)
@@ -174,7 +169,7 @@ fn run_image(
 /// The scenario owner, not the launcher, decides whether the evidence passes.
 pub fn observe(elf: PathBuf, evidence: PathBuf) -> Result<()> {
     let elf = elf.canonicalize()?;
-    let (result, shutdown) = run_image(&elf, &evidence, GUEST_CPUS, RiscvMachine::Virt)?;
+    let (result, shutdown) = run_image(&elf, &evidence, GUEST_CPUS, &QemuHardware::default())?;
     let mut value = serde_json::to_value(&result)?;
     value["qmp_shutdown"] = match shutdown {
         Ok(receipt) => serde_json::to_value(receipt)?,
@@ -184,7 +179,7 @@ pub fn observe(elf: PathBuf, evidence: PathBuf) -> Result<()> {
     json(&evidence.join("observation.json"), &value)
 }
 
-fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<bool> {
+fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<&'static str> {
     let Run::Qemu {
         expects, distinct, ..
     } = &suite.run
@@ -193,7 +188,7 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<bo
     };
     let harts = variant.harts;
     let evidence = variant.root.join(format!("harts-{harts}-round-{round}"));
-    let (mut result, shutdown) = run_image(&variant.elf, &evidence, harts, variant.machine)?;
+    let (mut result, shutdown) = run_image(&variant.elf, &evidence, harts, &variant.hardware)?;
     let log = fs::read(evidence.join("serial.log"))?;
     let details = match std::str::from_utf8(&log) {
         Ok(log) => verify::check(log, expects, distinct.as_ref())?,
@@ -217,7 +212,29 @@ fn boot(args: &Inputs, suite: &Suite, variant: &Variant, round: u8) -> Result<bo
         args.profile,
         evidence.display()
     );
-    Ok(result.passed)
+    Ok(verdict)
+}
+
+fn summarize(output: &Path, cases: BTreeMap<String, &'static str>) -> Result<()> {
+    let verdict = ["fail", "timeout", "inconclusive"]
+        .into_iter()
+        .find(|candidate| cases.values().any(|verdict| verdict == candidate))
+        .unwrap_or("pass");
+    json(
+        &output.join("result.json"),
+        &serde_json::json!({"verdict": verdict, "cases": cases}),
+    )?;
+    require(
+        verdict == "pass",
+        format!("{verdict}: evidence at {}", output.display()),
+    )
+}
+
+fn record_process(output: &Path, mut process: process::Outcome, verdict: &str) -> Result<()> {
+    process.passed = verdict == "pass";
+    let mut receipt = serde_json::to_value(&process)?;
+    receipt["verdict"] = verdict.into();
+    json(&output.join("result.json"), &receipt)
 }
 
 fn cargo_test(
@@ -247,13 +264,16 @@ fn cargo_test(
     if ignored {
         command.args(["--", "--ignored", "--nocapture"]);
     }
-    let result = process::run(
-        &mut command,
-        &args.output.join("cargo"),
-        Duration::from_secs(900),
-    )?;
-    json(&args.output.join("result.json"), &result)?;
-    require(result.success(), "Cargo test suite failed")
+    let output = args.output.join("cargo");
+    let result = process::run(&mut command, &output, Duration::from_secs(900))?;
+    let verdict = match result.status.as_str() {
+        "timeout" => "timeout",
+        "exited" if result.success() => "pass",
+        "exited" => "fail",
+        _ => "inconclusive",
+    };
+    record_process(&output, result, verdict)?;
+    summarize(&args.output, BTreeMap::from([("cargo".into(), verdict)]))
 }
 
 pub fn run(args: Inputs) -> Result<()> {
@@ -273,49 +293,91 @@ pub fn run(args: Inputs) -> Result<()> {
     fresh(&args.output)?;
     args.output = args.output.canonicalize()?;
     match &suite.run {
-        Run::BoardBoot { boards, harts } => {
+        Run::BoardBoot {
+            boards,
+            harts,
+            launcher,
+            ..
+        } => {
             let harts = harts.map_or(GUEST_CPUS, |count| count.get());
             require(!boards.is_empty(), "expected boot boards")?;
             let source = revision(&args.kernel)?;
             let provider = args.output.join("provider");
             archive(&args.kernel, &source, &provider)?;
+            let project = provider.join("server/tests").join(relative);
+            let script = match launcher {
+                Some(launcher) => {
+                    let target = provider.join("server/tests/target").canonicalize()?;
+                    let script = target.join(launcher).canonicalize()?;
+                    require(
+                        script.starts_with(&target) && script.is_file(),
+                        "archived launcher must be in the target test tree",
+                    )?;
+                    script
+                }
+                None => project.join("run.sh"),
+            };
+            let declaration = project.join("suite.json");
+            let declaration_sha256 = digest(&declaration)?;
+            require(
+                declaration_sha256 == digest(&args.suite.join("suite.json"))?,
+                "archived suite differs from the checked scenario declaration",
+            )?;
             json(
                 &args.output.join("inputs.json"),
                 &serde_json::json!({
                     "source": source,
+                    "suite": suite.id,
                     "profile": args.profile,
                     "harts": harts,
+                    "launcher": script,
+                    "launcher_sha256": digest(&script)?,
+                    "suite_sha256": declaration_sha256,
                     "rustc": output(Command::new("rustc").current_dir(&provider).arg("-Vv"))?,
                     "cargo": output(Command::new("cargo").current_dir(&provider).arg("-V"))?,
                 }),
             )?;
-            let script = provider.join("server/tests").join(relative).join("run.sh");
+            let mut cases = BTreeMap::new();
             for board in boards
                 .iter()
                 .filter(|board| args.board.is_none_or(|want| want == **board))
             {
                 for round in 0..args.rounds {
                     let label = format!("{}-{round}", board.name());
+                    let evidence = args.output.join(&label);
                     let mut command = Command::new("bash");
                     command
                         .current_dir(&provider)
                         .arg(&script)
                         .arg(board.name())
                         .arg(&args.profile)
-                        .arg(args.output.join(&label))
+                        .arg(&evidence)
                         .arg(harts.to_string());
-                    let result = process::run(
-                        &mut command,
-                        &args.output.join(format!("{label}-runner")),
-                        Duration::from_secs(600),
-                    )?;
-                    require(
-                        result.success(),
-                        format!("{label} failed; see {}", args.output.display()),
-                    )?;
+                    if launcher.is_some() {
+                        command.arg(&suite.id).arg(&declaration);
+                    }
+                    let launcher_output = args.output.join(format!("{label}-runner"));
+                    let result =
+                        process::run(&mut command, &launcher_output, Duration::from_secs(600));
+                    let verdict = match result {
+                        Ok(result) => {
+                            let verdict = verify::board_verdict(
+                                &result,
+                                &evidence,
+                                launcher.as_ref().map(|_| (suite.id.as_str(), board.name())),
+                            );
+                            record_process(&launcher_output, result, verdict)?;
+                            verdict
+                        }
+                        Err(error) => {
+                            eprintln!("{label}: {error}");
+                            "inconclusive"
+                        }
+                    };
+                    cases.insert(label, verdict);
                 }
             }
-            Ok(())
+            summarize(&args.output, cases)
         }
         Run::CargoTest {
             package,
@@ -332,14 +394,18 @@ pub fn run(args: Inputs) -> Result<()> {
         ),
         Run::Qemu { .. } => {
             let variant = prepare(&args, &suite, &relative, &args.output.join("candidate"))?;
-            let mut passed = true;
+            let mut cases = BTreeMap::new();
             for round in 0..args.rounds {
-                passed &= boot(&args, &suite, &variant, round)?;
+                let verdict = match boot(&args, &suite, &variant, round) {
+                    Ok(verdict) => verdict,
+                    Err(error) => {
+                        eprintln!("{} round {round}: {error}", suite.id);
+                        "inconclusive"
+                    }
+                };
+                cases.insert(format!("harts-{}-round-{round}", variant.harts), verdict);
             }
-            require(
-                passed,
-                format!("scenario failed; evidence: {}", args.output.display()),
-            )
+            summarize(&args.output, cases)
         }
     }
 }

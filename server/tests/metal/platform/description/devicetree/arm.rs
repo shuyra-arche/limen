@@ -1,16 +1,16 @@
 //! Interpret Arm platform descriptions on the ordinary Host, without native calls.
 use super::fixture::Fixture;
 use kernel::metal::{
-    chrono::aarch64::GenericCounter,
-    interrupt::internal::{
-        architected::GenericTimer,
-        gic::{GicV3, PrivateInterrupts, Trigger},
+    chrono::aarch64::description::GenericCounter,
+    interrupt::aarch64::{
+        gic::{GicV3, Trigger, redistributor::input::description::PrivateInterrupts},
+        timer::GenericTimer,
     },
     platform::{
-        description::devicetree::{DeviceTree, Error},
-        firmware::psci::{Conduit, PsciDescription, PsciVersion},
+        description::treaty::devicetree::{DeviceTree, Error},
+        firmware::treaty::psci::{Conduit, PsciDescription, PsciVersion},
     },
-    processor::hart::aarch64::description::Aarch64Cpus,
+    processor::description::aarch64::cpu::Aarch64Cpus,
 };
 
 fn cpus(affinities: &[u64]) -> Vec<u8> {
@@ -291,4 +291,42 @@ fn counter_and_timer_validate_only_their_own_facts() {
             .intid,
         27
     );
+}
+
+#[test]
+fn shared_routes_retain_their_domain_and_exclude_private_and_special_ids() {
+    use kernel::metal::interrupt::aarch64::gic::distributor::Route;
+    for (entry, expected) in [
+        ([0, 0, 4], Ok((32, Trigger::LevelHigh))),
+        ([0, 987, 1], Ok((1019, Trigger::EdgeRising))),
+        ([1, 0, 4], Err(Error::Unsupported)),
+        ([0, 988, 4], Err(Error::Range)),
+        ([0, 0, 8], Err(Error::Unsupported)),
+    ] {
+        for extended in [false, true] {
+            let mut cells = Vec::new();
+            if extended {
+                cells.push(7);
+            }
+            cells.extend(entry);
+            let bytes = timer_with(&cells, None, extended);
+            let tree = DeviceTree::new(&bytes).unwrap();
+            let gic = GicV3::read(&tree).unwrap().unwrap();
+            let device = tree.find_path(b"/timer").unwrap().unwrap().id();
+            assert_eq!(
+                Route::read(&tree, device, gic, 0).map(|route| (route.intid(), route.trigger())),
+                expected
+            );
+            assert_eq!(
+                Route::read(&tree, device, gic, 1).unwrap_err(),
+                Error::Range
+            );
+            let other = bytes.clone();
+            let other = DeviceTree::new(&other).unwrap();
+            assert_eq!(
+                Route::read(&other, device, gic, 0).unwrap_err(),
+                Error::Missing
+            );
+        }
+    }
 }

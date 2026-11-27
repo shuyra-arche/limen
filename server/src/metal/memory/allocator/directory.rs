@@ -2,7 +2,7 @@
 
 use limen_treaty::model::{ByteLength, PhysicalRange};
 
-use crate::metal::identity::Slot;
+use crate::metal::identity::treaty::Slot;
 
 use super::{Error, Region};
 

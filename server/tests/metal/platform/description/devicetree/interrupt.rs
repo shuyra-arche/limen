@@ -1,9 +1,9 @@
 //! Physical target indices, source scope and machine timer geometry.
 use super::Fixture;
-use kernel::metal::processor::hart::riscv::description::RiscvCpus;
+use kernel::metal::processor::description::riscv64::cpu::RiscvCpus;
 use kernel::metal::{
-    interrupt::{external::aplic, internal::aclint::timer},
-    platform::description::devicetree::{DeviceTree, Error},
+    interrupt::riscv64::{external::aplic, internal::aclint},
+    platform::description::treaty::devicetree::{DeviceTree, Error},
 };
 
 fn fixture(
@@ -73,16 +73,16 @@ fn sparse_hart_ids_follow_the_actual_controller_order() {
     let tree = DeviceTree::new(&bytes).unwrap();
     let cpus = RiscvCpus::new(tree).unwrap().unwrap();
     let aplic = aplic::Description::read(&tree, &cpus, 3).unwrap().unwrap();
-    assert_eq!(aplic.hart(), 3);
-    assert_eq!(aplic.index(), 1);
-    assert_eq!(aplic.contexts(), 2);
-    assert_eq!(aplic.registers().start().get(), 0x0d00_0000);
+    assert_eq!(aplic.destination().hart(), 3);
+    assert_eq!(aplic.destination().index(), 1);
+    assert_eq!(aplic.destination().contexts(), 2);
+    assert_eq!(aplic.domain().registers().start().get(), 0x0d00_0000);
     let device = tree.find_path(b"/device").unwrap().unwrap();
-    let route = aplic.route(&tree, device).unwrap();
-    assert_eq!(route.domain(), aplic.source());
+    let route = aplic.domain().route(&tree, device).unwrap();
+    assert_eq!(route.domain(), aplic.domain().source());
     assert_eq!(route.id(), 10);
     assert_eq!(route.mode(), aplic::Mode::LevelHigh);
-    let timer = timer::Description::read(&tree, &cpus, 3).unwrap().unwrap();
+    let timer = aclint::Description::read(&tree, &cpus, 3).unwrap().unwrap();
     assert_eq!(timer.counter().start().get(), 0x0200_bff8);
     assert_eq!(timer.comparator().start().get(), 0x0200_4008);
     assert_eq!(timer.comparator().length().get(), 8);
@@ -113,7 +113,10 @@ fn malformed_or_mixed_targets_are_not_admitted() {
         let bytes = fixture(&[2, 9, 1, 9], targets, 10, 5, 0x8000);
         let tree = DeviceTree::new(&bytes).unwrap();
         let cpus = RiscvCpus::new(tree).unwrap().unwrap();
-        assert_eq!(timer::Description::read(&tree, &cpus, 3).err(), Some(error));
+        assert_eq!(
+            aclint::Description::read(&tree, &cpus, 3).err(),
+            Some(error)
+        );
     }
 }
 
@@ -129,7 +132,7 @@ fn routes_and_windows_are_checked_before_native_access() {
         let cpus = RiscvCpus::new(tree).unwrap().unwrap();
         let description = aplic::Description::read(&tree, &cpus, 3).unwrap().unwrap();
         let device = tree.find_path(b"/device").unwrap().unwrap();
-        assert_eq!(description.route(&tree, device).err(), Some(error));
+        assert_eq!(description.domain().route(&tree, device).err(), Some(error));
     }
     let bytes = fixture(&[2, 9, 1, 9], &[2, 7, 1, 7], 10, 5, 0x4000);
     let tree = DeviceTree::new(&bytes).unwrap();
@@ -153,7 +156,62 @@ fn controller_discovery_rejects_foreign_cpu_scope() {
         Some(Error::Conflict)
     );
     assert_eq!(
-        timer::Description::read(&tree, &cpus, 3).err(),
+        aclint::Description::read(&tree, &cpus, 3).err(),
         Some(Error::Conflict)
     );
+}
+
+#[test]
+fn plic_supervisor_route_preserves_holes_and_rejects_ambiguous_contexts() {
+    use kernel::metal::interrupt::riscv64::external::plic::{Destination, Route, Source};
+    for (targets, index) in [
+        (vec![1, u32::MAX, 1, 9], Ok(1)),
+        (vec![1, 11, 1, 9], Ok(1)),
+        (vec![1, 9, 1, 9], Err(Error::Conflict)),
+        (vec![1, 11], Err(Error::Missing)),
+        (vec![1, 9, 1], Err(Error::Format)),
+    ] {
+        let mut fixture = Fixture::root();
+        fixture.node(b"cpus");
+        fixture.cells(b"#address-cells", &[1]);
+        fixture.cells(b"#size-cells", &[0]);
+        fixture.node(b"cpu@3");
+        fixture.property(b"device_type", b"cpu\0");
+        fixture.cells(b"reg", &[3]);
+        fixture.node(b"interrupt-controller");
+        fixture.property(b"compatible", b"riscv,cpu-intc\0");
+        fixture.cells(b"#interrupt-cells", &[1]);
+        fixture.property(b"interrupt-controller", b"");
+        fixture.cells(b"phandle", &[1]);
+        fixture.end();
+        fixture.end();
+        fixture.end();
+        fixture.node(b"plic");
+        fixture.property(b"compatible", b"riscv,plic0\0");
+        fixture.property(b"interrupt-controller", b"");
+        fixture.cells(b"#interrupt-cells", &[1]);
+        fixture.cells(b"phandle", &[2]);
+        fixture.cells(b"reg", &[0x0c00_0000, 0x40_0000]);
+        fixture.cells(b"riscv,ndev", &[31]);
+        fixture.cells(b"interrupts-extended", &targets);
+        fixture.end();
+        fixture.node(b"uart");
+        fixture.cells(b"interrupt-parent", &[2]);
+        fixture.cells(b"interrupts", &[10]);
+        fixture.end();
+        let bytes = fixture.finish();
+        let tree = DeviceTree::new(&bytes).unwrap();
+        let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+        let device = tree.find_path(b"/uart").unwrap().unwrap();
+        assert_eq!(
+            Source::read(&tree, device).and_then(|source| {
+                assert_eq!(source.number(), 10);
+                assert_eq!(source.device(), device.id());
+                let target = Destination::read(&tree, &cpus, source.controller(), 3)?;
+                Route::connect(source, target)?;
+                Ok(target.number())
+            }),
+            index
+        );
+    }
 }

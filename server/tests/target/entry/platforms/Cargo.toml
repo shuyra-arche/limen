@@ -4,24 +4,14 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-[workspace]
-
 [[bin]]
 name = "platform-boot"
 path = "main.rs"
 test = false
 bench = false
 
-[features]
-apic-failure = []
-
 [dependencies]
-kernel = { path = "../../../.." }
-limen-treaty = { path = "../../../../../treaty" }
-uefi = "=0.41.0"
-
-[profile.dev]
-panic = "abort"
-
-[profile.release]
-panic = "abort"
+kernel.workspace = true
+limen-treaty.workspace = true
+uefi.workspace = true
+uefi-fixture.workspace = true

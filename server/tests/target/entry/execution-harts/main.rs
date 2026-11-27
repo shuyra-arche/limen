@@ -1,6 +1,20 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::{
+    processor::treaty::{LocalStorage, Stack},
+    sync::treaty::Supply,
+};
+const MAJOR_BYTES: usize = 40 * 1024;
+const MAJOR_NODES: usize = 5;
+const MINOR_BYTES: usize = 32 * 1024;
+const MINOR_NODES: usize = 3;
+
+kernel::limen_riscv_major!(stack: MAJOR_BYTES, nodes: MAJOR_NODES);
+
+use kernel::metal::platform::boot::treaty::{shutdown, write};
+use kernel::metal::processor::treaty::{Minor, StartError, Startup};
+
 use core::{
     arch::global_asm,
     fmt::{self, Write},
@@ -18,7 +32,7 @@ use kernel::{
         room::{Harts, Occupancy},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
-    entry::boot::{Boot, Minor, StartError, Startup, shutdown, write},
+    entry::boot::Boot,
 };
 
 mod snapshot;
@@ -28,10 +42,18 @@ global_asm!(include_str!("register-probe.S"));
 
 static mut STACKS: Stacks = Stacks::new();
 static mut HARTS: Harts<3> = Harts::new();
+static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy, 3> =
+    kernel::metal::processor::treaty::Dispatchers::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
-static MINOR: Minor = Minor::new();
-static THIRD: Minor = Minor::new();
-static FOURTH: Minor = Minor::new();
+static MINOR_STACK: Stack<MINOR_BYTES> = Stack::new();
+static MINOR_LOCAL: LocalStorage<MINOR_NODES> = LocalStorage::new(Supply::new());
+static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
+static THIRD_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static THIRD_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static THIRD: Minor = Minor::new(&THIRD_STACK, &THIRD_LOCAL);
+static FOURTH_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static FOURTH_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static FOURTH: Minor = Minor::new(&FOURTH_STACK, &FOURTH_LOCAL);
 static EXTRA: AtomicU8 = AtomicU8::new(0);
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static mut SCENARIO: MaybeUninit<Scenario> = MaybeUninit::uninit();
@@ -247,12 +269,11 @@ fn run_fourth(_: usize, argument: usize) -> ! {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
-    assert_eq!(
-        MINOR.stack_range().len(),
-        kernel::entry::boot::stack_range().len()
-    );
-    assert_eq!(MINOR.stack_range().len(), 32 * 1024);
+extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
+    assert_eq!(boot.stack_range().len(), MAJOR_BYTES);
+    assert_eq!(MINOR.stack_range(), MINOR_STACK.range());
+    assert!(boot.stack_range().end <= MINOR.stack_range().start
+        || MINOR.stack_range().end <= boot.stack_range().start);
     let major = boot.hart();
     assert!(major < 4, "unexpected QEMU Boot Hart");
     let mut others = (0..4).filter(|&hart| hart != major);
@@ -264,11 +285,14 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         .hart_state_management()
         .unwrap()
         .expect("SBI HSM");
+    let major_stack = boot.stack_range();
     let runtime = Execution::new(
-        boot,
+        boot.take_major().expect("original native major relation"),
+        boot.terminal(),
         unsafe { &mut *(&raw mut STACKS) },
         unsafe { &mut *(&raw mut RECORDS) },
         unsafe { &mut *(&raw mut HARTS) },
+        unsafe { &mut *(&raw mut DISPATCHERS) },
     )
     .map_err(|failure| failure.reason)
     .expect("Bare scalar execution");
@@ -280,7 +304,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let mut schedule = || {
         let mark = core::hint::black_box(0u8);
         let address = core::hint::black_box(&mark) as *const u8 as usize;
-        assert!(!kernel::entry::boot::stack_range().contains(&address));
+        assert!(!major_stack.contains(&address));
         let argument = core::ptr::from_ref(execution).expose_provenance();
         // The continuation holds scalar locals, the Unit stack and shared fixture
         // state across Yield. It holds no Hart-local resource.

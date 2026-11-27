@@ -2,7 +2,12 @@
 
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
+pub(super) mod dmar;
+pub(super) mod ivrs;
+pub(crate) use ivrs::DeviceSelections;
+pub use ivrs::Ivhd;
 mod madt;
+pub use dmar::{Dmar, RemappingUnit};
 pub use madt::{IoApic, Madt, Polarity, Processor, Record, SourceOverride, Trigger};
 
 const RSDP_PREFIX: usize = 20;

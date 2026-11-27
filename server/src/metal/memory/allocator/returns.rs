@@ -1,10 +1,12 @@
 //! Independently prepaid Return positions and retained settlement history.
 
 use crate::metal::{
-    identity::Key,
-    sync::{TurnLock, TurnMode, TurnWorkspace},
+    identity::treaty::Key,
+    sync::treaty::{TurnLock, TurnMode, TurnWorkspace},
 };
 use limen_treaty::model::PhysicalRange;
+
+use super::treaty::ReturnReceipt;
 
 use super::{
     Allocation, AllocationId, Allocator, AllowanceId, Error, RegionId,
@@ -78,37 +80,11 @@ impl Retired {
             region.state.acquire(|state| {
                 // The original Retired input certifies all prior uses ended.
                 let id = unsafe { state.begin_retired(allocation, ReceiptOwner::Receiver) }?;
-                *receipt = Some(ReturnReceipt { source, id });
+                *receipt = Some(ReturnReceipt::new(source, id));
                 Ok(())
             })?
         })();
         result.map_err(|error| (self, error))
-    }
-}
-
-/// The original owner's prepaid refund and acknowledgement position.
-#[must_use]
-pub struct ReturnReceipt {
-    source: &'static Allocator,
-    id: ReturnId,
-}
-
-impl ReturnReceipt {
-    /// Locate the original return for recovery, without acknowledgement authority.
-    pub fn id(&self) -> ReturnId {
-        self.id
-    }
-
-    /// Finish the original refund or read its retained result.
-    pub fn finish(&self, mode: TurnMode) -> Result<Returned, Error> {
-        self.source.finish_return(self.id, mode)
-    }
-
-    /// Release the original owner's completed receipt position.
-    pub fn acknowledge(&self) -> Result<(), Error> {
-        self.source
-            .return_state(self.id)?
-            .acquire(|state| state.acknowledge_return(self.id, ReceiptOwner::Receiver))?
     }
 }
 
@@ -209,36 +185,6 @@ impl Allocator {
             debug_assert_eq!(refund, credit);
             Ok(done)
         })?
-    }
-
-    /// Advance a caller-owned cyclic recovery pass through the prepaid table.
-    /// A failed acquisition leaves the cursor unchanged. End resets to zero,
-    /// so subsequent passes revisit Pending entries and delayed publications.
-    pub fn pending(
-        &self,
-        id: RegionId,
-        cursor: &mut usize,
-        budget: usize,
-    ) -> Result<Pending, Error> {
-        let region = self.region(id)?;
-        Ok(region.state.acquire(|state| {
-            let end = state.returns.capacity();
-            let stop = (*cursor).saturating_add(budget.min(64)).min(end);
-            while *cursor < stop {
-                let current = *cursor;
-                *cursor += 1;
-                if let Some((key, ReturnRecord::Pending(..))) = state.returns.published_at(current)
-                {
-                    return Pending::Found(ReturnId { key });
-                }
-            }
-            if *cursor >= end {
-                *cursor = 0;
-                Pending::End
-            } else {
-                Pending::More
-            }
-        })?)
     }
 }
 

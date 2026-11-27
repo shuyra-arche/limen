@@ -2,23 +2,12 @@
 
 use core::arch::asm;
 
-use super::probe::{
-    DEBUG_CONSOLE, Extensions, HART_STATE_MANAGEMENT, HartService, ProbeError, SYSTEM_RESET,
-    SbiServices, TIMER, TimerService,
-};
+use super::probe::{DEBUG_CONSOLE, Extensions, SYSTEM_RESET};
 
-const BASE: usize = 0x10;
-const HART_STATUS: usize = 2;
-const STARTED: usize = 0;
+pub(in crate::metal::platform::firmware) const BASE: usize = 0x10;
 
 pub(crate) fn extensions() -> Extensions {
     Extensions::probe(|function, extension| call(BASE, function, extension, 0, 0))
-}
-
-/// Probe the running SBI implementation for its HSM, timer and IPI services.
-/// The current CPU must be executing in the supported SBI supervisor environment.
-pub fn platform_services() -> Result<SbiServices, ProbeError> {
-    SbiServices::probe(|function, extension| call(BASE, function, extension, 0, 0))
 }
 
 pub(crate) fn write_byte(byte: u8) -> bool {
@@ -31,7 +20,7 @@ pub(crate) fn reset(success: bool) {
     let _ = call(SYSTEM_RESET, 0, 0, usize::from(!success), 0);
 }
 
-fn call(
+pub(in crate::metal::platform::firmware) fn call(
     extension: usize,
     function: usize,
     first: usize,
@@ -51,28 +40,4 @@ fn call(
         );
     }
     (error, value)
-}
-
-impl HartService {
-    /// Check the live state of the exact Hart described by the caller.
-    pub(crate) fn started(self, hart: usize) -> bool {
-        call(HART_STATE_MANAGEMENT, HART_STATUS, hart, 0, 0) == (0, STARTED)
-    }
-
-    pub(crate) fn start(self, hart: usize, address: usize, opaque: usize) -> Result<(), isize> {
-        match call(HART_STATE_MANAGEMENT, 0, hart, address, opaque).0 {
-            0 => Ok(()),
-            error => Err(error),
-        }
-    }
-}
-
-impl TimerService {
-    /// The consumer owns the current Hart's comparator and its old obligations.
-    pub(crate) fn set(self, count: u64) -> Result<(), isize> {
-        match call(TIMER, 0, count as usize, 0, 0).0 {
-            0 => Ok(()),
-            error => Err(error),
-        }
-    }
 }

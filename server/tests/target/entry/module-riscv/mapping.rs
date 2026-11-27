@@ -6,8 +6,14 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use kernel::metal::memory::mmu::{
+    riscv64::internal::{context::Context, format::Format},
+    treaty::{LeafAccess, LocalContext},
+};
 use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
-use kernel::metal::memory::mmu::internal::riscv::{LeafAccess, Mode, context::{Context, Translation}};
+
+#[path = "../../support/paging/installation.rs"]
+mod installation;
 
 pub const PAGE: u64 = 4096;
 const ENTRIES: usize = 512;
@@ -68,14 +74,39 @@ fn write(pte: &AtomicU64, bits: u64) {
 ///
 /// The caller keeps a complete live identity path for the next context and
 /// establishes both page-table and instruction-store visibility on this Hart.
-pub unsafe fn switch_context(translation: &mut Translation<'_>, previous: Context, next: Context) {
+pub unsafe fn switch_context(translation: &mut LocalContext<'_>, previous: Context, next: Context) {
     assert_ne!(previous, next);
     check_interrupts();
+    let previous = unsafe { translation.prepare_context(previous) }.unwrap();
+    let next = unsafe { translation.prepare_context(next) }.unwrap();
     unsafe {
-        translation.switch(previous, next).unwrap();
-        asm!("fence.i", options(nostack));
+        installation::install(translation, previous, next);
+        synchronize_fetch();
     }
     check_interrupts();
+}
+
+/// Observe actual data while the original Hart temporarily uses the probe root.
+pub(super) unsafe fn probe_context(
+    translation: &mut LocalContext<'_>,
+    hart: usize,
+    candidate: Context,
+    observe: impl FnOnce(),
+) {
+    check_interrupts();
+    let candidate = unsafe { translation.prepare_context(candidate) }.unwrap();
+    unsafe {
+        installation::roundtrip(translation, hart, candidate, |_| {
+            synchronize_fetch();
+            observe();
+        });
+        synchronize_fetch();
+    }
+    check_interrupts();
+}
+
+unsafe fn synchronize_fetch() {
+    unsafe { asm!("fence.i", options(nostack)) };
 }
 
 fn check_interrupts() {
@@ -94,14 +125,14 @@ fn check_interrupts() {
 }
 
 pub struct Root {
-    mode: Mode,
+    mode: Format,
     bank: usize,
     tables: &'static [Table; TABLE_COUNT],
     used: usize,
 }
 
 impl Root {
-    pub fn new(mode: Mode) -> Self {
+    pub fn new(mode: Format) -> Self {
         assert_eq!(Context::current(), Some(Context::BARE));
         check_interrupts();
         Self::take(0, mode)
@@ -115,7 +146,7 @@ impl Root {
         next
     }
 
-    fn take(bank: usize, mode: Mode) -> Self {
+    fn take(bank: usize, mode: Format) -> Self {
         assert!(!CLAIMED[bank].swap(true, Ordering::AcqRel));
         let tables = &TABLES[bank];
         assert!(tables.iter().all(Table::is_empty));
@@ -170,13 +201,15 @@ impl Root {
     ) {
         self.check_inactive();
         assert!(range.start < range.end && range.end <= self.low_end());
-        assert!(self.mode.is_canonical_range(
-            InternalRange::new(
-                InternalAddress::new(range.start),
-                InternalAddress::new(range.end),
+        assert!(
+            self.mode.is_canonical_range(
+                InternalRange::new(
+                    InternalAddress::new(range.start),
+                    InternalAddress::new(range.end),
+                )
+                .unwrap()
             )
-            .unwrap()
-        ));
+        );
         assert!(range.start.is_multiple_of(PAGE) && range.end.is_multiple_of(PAGE));
         for address in range.step_by(PAGE as usize) {
             let entry = self.slot(address, 0, |branch| encode(branch, None));
@@ -207,7 +240,10 @@ impl Root {
     ) -> &AtomicU64 {
         let mut table = 0;
         for level in (leaf_level + 1..self.mode.levels()).rev() {
-            let entry = &self.tables[table].0[self.mode.index(InternalAddress::new(address), level).unwrap()];
+            let entry = &self.tables[table].0[self
+                .mode
+                .index(InternalAddress::new(address), level)
+                .unwrap()];
             let pte = read(entry);
             table = if pte == 0 {
                 let next = self.used;
@@ -221,13 +257,16 @@ impl Root {
                 self.child(pte)
             };
         }
-        let entry = &self.tables[table].0[self.mode.index(InternalAddress::new(address), leaf_level).unwrap()];
+        let entry = &self.tables[table].0[self
+            .mode
+            .index(InternalAddress::new(address), leaf_level)
+            .unwrap()];
         assert_eq!(read(entry), 0);
         entry
     }
 
     /// The caller has checked identity mappings for the live image and DTB.
-    pub unsafe fn activate(&self, translation: &mut Translation<'_>) {
+    pub unsafe fn activate(&self, translation: &mut LocalContext<'_>) {
         unsafe { switch_context(translation, Context::BARE, self.context()) };
     }
 

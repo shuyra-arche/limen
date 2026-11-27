@@ -1,6 +1,8 @@
-use super::{status, vectors};
-use crate::metal::platform::boot::{STACK_BYTES, major::STACK};
+use crate::metal::platform::boot::treaty::MajorMaterial;
 use crate::metal::platform::firmware::uefi::Loader;
+use crate::metal::processor::{
+    description::aarch64::status, execution::terminal::aarch64::vectors,
+};
 use core::arch::naked_asm;
 
 /// Establish the major CPU stack and exception vectors before delivering Boot.
@@ -9,20 +11,23 @@ use core::arch::naked_asm;
 /// Call once on the boot PE, in non-secure EL1 with the image addressable.
 /// Other PEs must stay parked. The Loader and its immutable buffers must remain valid.
 #[unsafe(naked)]
-pub unsafe extern "C" fn major(hart: usize, input: &Loader<'_>) -> ! {
+pub unsafe extern "C" fn major(
+    hart: usize,
+    input: &Loader<'_>,
+    stack_top: usize,
+    material: &'static MajorMaterial,
+) -> ! {
     naked_asm!(
-        "mrs x2, CurrentEL",
-        "cmp x2, #{level}",
+        "mrs x4, CurrentEL",
+        "cmp x4, #{level}",
         "b.ne 2f",
         "msr daifset, #{exceptions}",
         "msr spsel, #{stack_select}",
         "msr tpidr_el1, xzr",
-        "adrp x2, {stack}",
-        "add x2, x2, :lo12:{stack}",
-        "add sp, x2, {size}",
-        "adrp x2, {vectors}",
-        "add x2, x2, :lo12:{vectors}",
-        "msr vbar_el1, x2",
+        "mov sp, x2",
+        "adrp x4, {vectors}",
+        "add x4, x4, :lo12:{vectors}",
+        "msr vbar_el1, x4",
         "isb",
         "b {loaded}",
         "2: wfe",
@@ -32,7 +37,5 @@ pub unsafe extern "C" fn major(hart: usize, input: &Loader<'_>) -> ! {
         stack_select = const status::SP_EL1,
         vectors = sym vectors,
         loaded = sym crate::entry::boot::start,
-        stack = sym STACK,
-        size = const STACK_BYTES,
     );
 }

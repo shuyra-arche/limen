@@ -425,10 +425,6 @@ fn delayed_initialization_touches_only_actual_roots() {
 
     // A near-full address-space geometry does not need a backing forest
     // for this pure bound check.
-    let wide = Geometry::new(
-        physical(PAGE..(u64::MAX & !(PAGE - 1))),
-        ByteLength::new(PAGE),
-    )
-    .unwrap();
+    let wide = Geometry::new(physical(PAGE..(!(PAGE - 1))), ByteLength::new(PAGE)).unwrap();
     assert!(wide.root_count() <= 2 * u64::BITS as usize);
 }

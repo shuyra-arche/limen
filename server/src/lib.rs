@@ -5,9 +5,7 @@
     feature(fn_align)
 )]
 
-#[cfg(any(limen_target, test))]
 pub mod basis;
-#[cfg(any(limen_target, test))]
 pub mod entry;
 pub mod metal;
 

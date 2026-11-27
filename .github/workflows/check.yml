@@ -59,11 +59,15 @@ jobs:
           bash tools/check-tooling.sh
           bash tools/tests/selection.sh
           bash -n tools/tests/batch.sh
-          bash -n server/tests/target/entry/platforms/run.sh
+          while IFS= read -r -d '' script; do
+            bash -n "$script"
+          done < <(git ls-files -z 'server/tests/target/*.sh')
       - name: Install host toolchain
         run: |
           rustc -Vv
           rustup component add rustfmt clippy
+      - name: Check build profiles
+        run: bash server/tests/entry/boot/profiles.sh
       - name: Identify compiler
         id: compiler
         run: echo "hash=$(rustc -Vv | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
@@ -81,7 +85,10 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo fmt --manifest-path server/tests/runner/Cargo.toml -- --check
-          cargo fmt --manifest-path server/tests/target/entry/platforms/Cargo.toml -- --check
+          cargo fmt --manifest-path server/tests/target/Cargo.toml --all -- --check
+          while IFS= read -r -d '' manifest; do
+            cargo fmt --manifest-path "$manifest" -- --check
+          done < <(git ls-files -z 'server/tests/target/metal/*/riscv64/*/Cargo.toml')
       - name: Check runner
         if: fromJSON(steps.scope.outputs.plan).runner
         run: |

@@ -1,8 +1,8 @@
 //! Versioned module declarations carried in a bounded ELF note.
 
-use super::super::{Contract, Interface};
+use super::super::{interface::Interface, treaty::Contract};
 use super::{ImageAddress, elf::Elf};
-use crate::metal::devicetree::{DeviceTree, Error as TreeError, Node};
+use crate::metal::platform::description::devicetree::{DeviceTree, Error as TreeError, Node};
 
 const NOTE_OWNER: &[u8] = b"SHUYRA\0";
 const NOTE_TYPE: u32 = 1;

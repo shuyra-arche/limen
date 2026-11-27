@@ -1,10 +1,12 @@
 use core::{mem::MaybeUninit, ptr};
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 
 use kernel::{
     basis::pend::{Error, Handle, Initial as InitialPend, PendSpace, Revoker},
-    entry::boot::{self, Boot, Retirement as PhysicalRetirement},
+    entry::boot::{Boot, Retirement as PhysicalRetirement},
     metal::{
-        memory::allocator::{
+        memory::access::treaty::ram::MappedRange,
+        memory::allocator::treaty::{
             Allocation, AllocationConstruction, AllocationId, Allocator, Allowance,
             BudgetObservation, BudgetProgress, Cancellation, Candidate, Config,
             Error as SourceError, Initial, LookupObservation, MappedStorage, Pending,
@@ -15,8 +17,7 @@ use kernel::{
                 Reference, Retirement, Stable, StableOwner,
             },
         },
-        memory::mmu::internal::access::MappedRange,
-        sync::TurnMode::Fast,
+        sync::treaty::TurnMode::Fast,
     },
 };
 
@@ -507,11 +508,11 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
         inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((managed, managed - PAGE))
     );
-    boot::write(
+    boot_diagnostic::write(
         "PASS bootstrap-foundation pend=1 pool=1 retained=1 refund=1 generation=1 stale=1 revoked=1\n",
     );
-    boot::write(
+    boot_diagnostic::write(
         "PASS foundation-pressure preflight=1 fragments=1 allocation=1 pool=1 history=1 rediscover=1 shut=1\n",
     );
-    boot::write("PASS boot-mapped-storage identity=1 range=1 rw=1 reuse=1\n");
+    boot_diagnostic::write("PASS boot-mapped-storage identity=1 range=1 rw=1 reuse=1\n");
 }
