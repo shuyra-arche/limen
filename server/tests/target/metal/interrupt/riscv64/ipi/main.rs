@@ -18,10 +18,10 @@ use kernel::{
     },
 };
 
-#[path = "../../../../support/riscv64/reception.rs"]
-mod reception;
 #[path = "../../../../support/ipi.rs"]
 mod ipi;
+#[path = "../../../../support/riscv64/reception.rs"]
+mod reception;
 
 static MINOR: Minor = Minor::new();
 static READY: AtomicUsize = AtomicUsize::new(0);
