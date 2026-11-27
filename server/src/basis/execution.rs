@@ -12,7 +12,7 @@ use crate::{
             self, Hart, LeaveReceipt, LocalHart, cooperative_ready,
         },
         processor::hart::local::{self, HartId},
-        sync::{TURN_CAPACITY, TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
+        sync::{TurnAcquireError, TurnLock, TurnMode, TurnWorkspace, turn_capacity},
     },
 };
 
@@ -137,7 +137,6 @@ impl Execution {
         &self,
         operation: impl FnOnce(&mut Units<KernelBinding>, &mut Room<STACK_CAPACITY>) -> Result<R, Error>,
     ) -> Result<R, Error> {
-        const { assert!(TURN_CAPACITY >= 2) };
         let mut workspace = TurnWorkspace::<2>::new();
         let mut plan = workspace.plan();
         plan.insert(&self.units).expect("Unit owner");
@@ -166,6 +165,9 @@ impl Execution {
         }
         if !local::can_switch() {
             return Err(Error::Protection);
+        }
+        if turn_capacity().ok_or(Error::Protection)? < 2 {
+            return Err(Error::Capacity);
         }
         self.room.acquire(|room| {
             if cooperative::attached() {
