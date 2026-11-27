@@ -244,7 +244,9 @@ expect_suites rv64-ipi
 change server/tests/target/support/clock.rs
 expect_suites aarch64-gic rv64-plic-sstc
 change server/src/metal/chrono/clock.rs
-expect_suites aarch64-gic rv64-interrupt rv64-ipi rv64-plic-sstc
+expect_suites aarch64-gic rv64-interrupt rv64-ipi rv64-plic-sstc x86-64-local-apic-timer
+change server/src/metal/chrono/x86_64.rs
+expect_suites x86-64-local-apic-timer
 change server/tests/target/support/timer.rs
 expect_suites aarch64-gic rv64-plic-sstc
 change server/src/metal/interrupt/absolute.rs
