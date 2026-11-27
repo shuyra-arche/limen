@@ -176,6 +176,12 @@ the receiving processor. It checks real peer delivery, coalescing, same-layer
 return and ordinary synchronization after the IRQ. The timer and external IRQ
 fixtures still exercise their individual controller contracts.
 
+The AArch64 GIC guest installs the permanent EL1h IRQ vector on the receiving
+processor before enabling its original Group 1 SGI. It checks the exact
+claim and completion, refuses ordinary Turn with idle Sync, and observes
+the interrupted stack, IRQ mask, GPR and full-width SIMD continuation after
+hardware return. Other GIC scenarios retain their polling reception checks.
+
 ## Host-assisted observations
 
 The `machine-observer` package in `runner/observe/` uses ordinary Host

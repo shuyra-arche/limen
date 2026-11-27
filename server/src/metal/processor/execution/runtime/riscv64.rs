@@ -17,17 +17,14 @@ use crate::metal::{
     },
 };
 
-use super::terminal::{Terminal, riscv64::trap as terminal};
+use super::{
+    super::terminal::{Terminal, riscv64::trap as terminal},
+    InstallError,
+};
 
 const STACK_BYTES: usize = 16 * 1024;
 const SUPERVISOR_PREVIOUS: usize = 1 << 8;
 const SOFTWARE_CAUSE: usize = (1 << (usize::BITS - 1)) | 1;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InstallError {
-    Context,
-    Occupied,
-}
 
 /// One permanent, non-nesting supervisor trap stack and its software IRQ entry.
 /// The entry may run only bounded processing without taking ordinary locks.
@@ -98,6 +95,14 @@ impl RuntimeTrap {
             vector: vector as *const () as usize,
             scratch: self.stack.top(),
         }
+    }
+
+    pub(in crate::metal::processor) fn ordinary_context(&self) -> bool {
+        !self.stack().contains(&native::stack_pointer())
+    }
+
+    pub(in crate::metal::processor) fn interrupt_context(&self, observed: native::Entry) -> bool {
+        observed.vector == self.ordinary_entry().vector && observed.scratch == 0
     }
 
     pub(in crate::metal::processor) fn stack(&self) -> Range<usize> {

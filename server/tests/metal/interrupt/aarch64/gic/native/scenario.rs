@@ -3,7 +3,9 @@
 
 use kernel::metal::interrupt::treaty::{AbsoluteTimer, ClaimId, Completion, HardwareClaim};
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-use kernel::metal::processor::treaty::{LocalStorage, Minor, Stack, Startup};
+use kernel::metal::processor::treaty::{
+    InstallError, Irq, LocalStorage, Minor, RuntimeTrap, Stack, Startup,
+};
 
 #[path = "../../../claim.rs"]
 mod claim_consumer;
@@ -16,6 +18,7 @@ mod timer_consumer;
 
 use core::{
     arch::asm,
+    cell::UnsafeCell,
     fmt::Write,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
@@ -41,7 +44,7 @@ use kernel::metal::{
         description::treaty::devicetree::DeviceTree, firmware::treaty::psci::PsciDescription,
     },
     processor::description::aarch64::cpu::Aarch64Cpus,
-    sync::treaty::{LeafLock, Supply},
+    sync::treaty::{LeafLock, Supply, TurnAcquireError, TurnLock},
 };
 use limen_treaty::model::{InternalAddress, PhysicalRange};
 
@@ -107,6 +110,90 @@ static SIGNAL_ISSUED: AtomicBool = AtomicBool::new(false);
 static SIGNAL_OBSERVED: AtomicBool = AtomicBool::new(false);
 const SIGNAL_ID: u8 = 12;
 
+struct Reception {
+    processor: usize,
+    receiver: CpuInterface<'static>,
+    signal: Sgi<'static>,
+}
+
+struct LocalReception(UnsafeCell<Option<Reception>>);
+
+// Only the minor accesses the slot. Ordinary access is while IRQ is masked,
+// and the handler's borrow ends before the original continuation resumes.
+unsafe impl Sync for LocalReception {}
+
+static MINOR_IRQ: LocalReception = LocalReception(UnsafeCell::new(None));
+static MINOR_VECTORS: RuntimeTrap = RuntimeTrap::new(handle_irq);
+static RETURN_READY: AtomicBool = AtomicBool::new(false);
+static IRQ_TURN: TurnLock<()> = TurnLock::new(());
+
+fn handle_irq(irq: Irq<'_>) {
+    assert_eq!(IRQ_TURN.acquire(|_| ()), Err(TurnAcquireError::Context));
+    let original = unsafe { (&mut *MINOR_IRQ.0.get()).as_mut().expect("prepared SGI") };
+    assert_eq!(irq.processor().get(), original.processor);
+    let mut claim = original
+        .receiver
+        .receive()
+        .unwrap()
+        .expect("actual SGI claim");
+    assert_eq!(claim.intid(), u32::from(original.signal.intid()));
+    claim.complete_sgi(&mut original.signal).unwrap();
+    assert!(claim.complete_sgi(&mut original.signal).is_err());
+    // The interrupted register values are live across this ordinary call ABI.
+    unsafe {
+        asm!("movi v0.16b, #0x11", "mov x8, #0x42", out("v0") _, out("x8") _, options(nostack, nomem));
+    }
+    RETURN_READY.store(true, Ordering::Release);
+}
+
+fn check_return() {
+    let state: usize;
+    let integers: usize;
+    let vectors: usize;
+    let stack: usize;
+    unsafe {
+        asm!(
+            "mov x8, #0xabcd",
+            "mov x9, sp",
+            // Make the interrupted SP unaligned without using it for memory.
+            "sub sp, sp, #8",
+            "movi v0.16b, #0x55",
+            "msr daifclr, #2",
+            "isb",
+            "2: ldarb w10, [{ready}]",
+            "cbz w10, 2b",
+            "mrs {state}, daif",
+            "msr daifset, #2",
+            "add sp, sp, #8",
+            "mov x10, sp",
+            "cmp x9, x10",
+            "cset {stack}, eq",
+            "mov x10, #0xabcd",
+            "cmp x8, x10",
+            "cset {integers}, eq",
+            "movi v1.16b, #0x55",
+            "cmeq v1.16b, v0.16b, v1.16b",
+            "uminv b1, v1.16b",
+            "umov w10, v1.b[0]",
+            "cmp w10, #0xff",
+            "cset {vectors}, eq",
+            ready = in(reg) RETURN_READY.as_ptr(),
+            state = lateout(reg) state,
+            integers = lateout(reg) integers,
+            vectors = lateout(reg) vectors,
+            stack = lateout(reg) stack,
+            out("x8") _,
+            out("x9") _,
+            out("x10") _,
+            out("v0") _,
+            out("v1") _,
+            options(nostack),
+        );
+    }
+    assert_eq!(state & 0x80, 0, "the interrupted IRQ mask was restored");
+    assert_eq!((integers, vectors, stack), (1, 1, 1));
+}
+
 fn wake(frame: &mut Frame<'_>) {
     for _ in 0..4096 {
         if frame.wake().is_ok() {
@@ -159,15 +246,33 @@ fn observe_minor(processor: usize, _: usize) -> ! {
     while !SIGNAL_ISSUED.load(Ordering::Acquire) {
         unsafe { asm!("wfe", options(nostack, nomem)) };
     }
-    let mut signal = MINOR_SIGNAL
+    let signal = MINOR_SIGNAL
         .acquire(Option::take)
         .unwrap()
         .expect("original sent SGI");
-    wait_for_claim(&mut receiver, usize::from(SIGNAL_ID));
-    let mut claim = receiver.claim().expect("original minor SGI");
-    assert_eq!(claim.intid(), u32::from(signal.intid()));
-    claim.complete_sgi(&mut signal).unwrap();
-    assert!(claim.complete_sgi(&mut signal).is_err());
+    unsafe {
+        MINOR_IRQ.0.get().write(Some(Reception {
+            processor,
+            receiver,
+            signal,
+        }));
+        MINOR_VECTORS.install().unwrap();
+        assert_eq!(MINOR_VECTORS.install(), Err(InstallError::Occupied));
+    }
+    assert_eq!(IRQ_TURN.acquire(|_| ()), Ok(()));
+    check_return();
+    assert_eq!(IRQ_TURN.acquire(|_| ()), Ok(()));
+    let Reception {
+        mut receiver,
+        signal,
+        ..
+    } = unsafe {
+        (&mut *MINOR_IRQ.0.get())
+            .take()
+            .expect("returned local SGI")
+    };
+    assert_eq!(receiver.state(), State::Empty);
+    assert!(receiver.receive().unwrap().is_none());
     let mut frame = receiver
         .release()
         .unwrap_or_else(|_| panic!("minor SGI remains live"));
@@ -241,7 +346,7 @@ fn check_signal(frame: Frame<'static>) -> Frame<'static> {
             "minor SGI completion timeout"
         );
     }
-    boot_diagnostic::write("PASS arm-sgi target=1 claim=1 eoi=1 retired=1\n");
+    boot_diagnostic::write("PASS arm-sgi target=1 irq=1 claim=1 eoi=1 restored=1 retired=1\n");
     sender
         .release()
         .unwrap_or_else(|_| panic!("major SGI interface busy"))

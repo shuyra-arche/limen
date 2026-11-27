@@ -10,7 +10,7 @@ use core::ptr;
 #[cfg(limen_target)]
 use core::{cell::Cell, ops::Range};
 
-#[cfg(all(limen_target, target_arch = "riscv64"))]
+#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
 use super::super::execution::runtime::RuntimeTrap;
 use crate::metal::sync::local::LocalSync;
 #[cfg(any(limen_target, test))]
@@ -148,7 +148,7 @@ pub(in crate::metal) struct Executor {
     entry: Cell<Option<Entry>>,
     #[cfg(limen_cooperative)]
     cooperative: Cell<Option<CooperativeBinding>>,
-    #[cfg(all(limen_target, target_arch = "riscv64"))]
+    #[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
     runtime: Cell<Option<&'static RuntimeTrap>>,
     protection: protection::LocalProtection,
     synchronization: OnceCell<&'static LocalSync>,
@@ -168,7 +168,7 @@ impl Executor {
             entry: Cell::new(None),
             #[cfg(limen_cooperative)]
             cooperative: Cell::new(None),
-            #[cfg(all(limen_target, target_arch = "riscv64"))]
+            #[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
             runtime: Cell::new(None),
             protection: protection::LocalProtection::new(),
             synchronization: OnceCell::new(),
@@ -192,12 +192,12 @@ impl Executor {
         unsafe { backend::install_local(ptr::from_ref(self).expose_provenance()) };
     }
 
-    #[cfg(all(limen_target, target_arch = "riscv64"))]
+    #[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
     pub(in crate::metal::processor) fn runtime(&self) -> Option<&'static RuntimeTrap> {
         self.runtime.get()
     }
 
-    #[cfg(all(limen_target, target_arch = "riscv64"))]
+    #[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
     pub(in crate::metal::processor) fn publish_runtime(&self, runtime: &'static RuntimeTrap) {
         let entry = self.entry.get().expect("admitted local entry");
         self.runtime.set(Some(runtime));
@@ -234,21 +234,25 @@ fn installed() -> Option<&'static Executor> {
 pub(in crate::metal::processor) fn ordinary_local() -> Option<&'static Executor> {
     let observed = backend::entry()?;
     let local = installed()?;
+    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    if local
+        .runtime()
+        .is_some_and(|runtime| !runtime.ordinary_context())
+    {
+        return None;
+    }
     local.entry.get()?.permits(observed).then_some(local)
 }
 
-/// The runtime vector calls this only for an admitted supervisor trap.
-#[cfg(all(limen_target, target_arch = "riscv64"))]
+/// Called from the recovering IRQ vector after saving the interrupted frame.
+#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
 pub(in crate::metal::processor) fn interrupt_local() -> Option<(ProcessorId, &'static RuntimeTrap)>
 {
     let observed = backend::entry()?;
     let local = installed()?;
     let runtime = local.runtime()?;
-    let expected = runtime.ordinary_entry();
-    (observed.vector == expected.vector
-        && observed.scratch == 0
-        && runtime.stack().contains(&backend::stack_pointer()))
-    .then(|| (local.identity(), runtime))
+    (runtime.interrupt_context(observed) && runtime.stack().contains(&backend::stack_pointer()))
+        .then(|| (local.identity(), runtime))
 }
 
 #[cfg(all(test, not(limen_target)))]

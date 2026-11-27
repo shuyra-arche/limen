@@ -54,8 +54,12 @@ pub(crate) fn can_switch() -> bool {
     protect().is_some_and(|protection| protection.is_outer())
 }
 
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+pub use super::execution::runtime::Irq;
 #[cfg(all(limen_target, target_arch = "riscv64"))]
-pub use super::execution::runtime::{InstallError, RuntimeTrap, SoftwareInterrupt};
+pub use super::execution::runtime::SoftwareInterrupt;
+#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
+pub use super::execution::runtime::{InstallError, RuntimeTrap};
 
 pub use super::execution::terminal::Console;
 #[cfg(limen_target)]
