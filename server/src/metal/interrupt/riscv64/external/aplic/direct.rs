@@ -517,3 +517,25 @@ impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_> {
         unsafe { self.settle() }.map(|()| Completion::Settled)
     }
 }
+
+impl crate::metal::interrupt::claim::Sealed for Direct<'_> {}
+
+impl<'description> crate::metal::interrupt::Receive for Direct<'description> {
+    type Error = Failure;
+    type Claim<'receiver>
+        = Claim<'receiver, 'description>
+    where
+        Self: 'receiver;
+
+    fn receive(&mut self) -> Result<Option<Self::Claim<'_>>, Failure> {
+        self.claim()
+    }
+
+    fn pending_claim(&mut self) -> Result<Option<Self::Claim<'_>>, Failure> {
+        self.context()?;
+        if self.uncertain_claim().is_some() {
+            return Err(Failure::Unconfirmed);
+        }
+        Ok(self.current())
+    }
+}

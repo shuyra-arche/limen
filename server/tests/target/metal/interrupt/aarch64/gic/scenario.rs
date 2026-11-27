@@ -2,6 +2,8 @@
 //! security state. Keep the PE IRQ/FIQ masks closed and poll its real IAR.
 use kernel::metal::interrupt::Completion;
 
+#[path = "../../../../support/claim.rs"]
+mod claim_consumer;
 #[path = "../../../../support/interrupt.rs"]
 mod consumer;
 #[path = "../../../../support/route.rs"]
@@ -80,8 +82,7 @@ fn wait_for_claim(receiver: &mut CpuInterface<'_>, expected: usize) {
         asm!("mrs {}, CNTVCT_EL0", "mrs {}, CNTFRQ_EL0", out(reg) start, out(reg) frequency, options(nostack))
     };
     loop {
-        if let Some(claimed) = receiver.receive().unwrap() {
-            assert_eq!(claimed.intid(), expected as u32);
+        if claim_consumer::receive(receiver, expected as u32).is_some() {
             return;
         }
         let now: u64;
@@ -416,10 +417,7 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
             transmit(uart);
             wait_for_claim(&mut receiver, input);
             assert_eq!(receiver.state(), State::Claimed(input as u32));
-            assert!(receiver.receive().is_err());
-            let mut claim = receiver
-                .claim()
-                .expect("dropped borrow preserves original IAR");
+            let mut claim = claim_consumer::pending(&mut receiver, input as u32);
             assert_eq!(claim.intid(), input as u32);
             assert!(unsafe { claim.deactivate() }.is_err());
             assert_eq!(unsafe { uart.read_u32(UART_STATUS) }.unwrap(), TX_INTERRUPT);

@@ -2,6 +2,8 @@
 
 use kernel::metal::interrupt::Completion;
 
+#[path = "../../../../support/claim.rs"]
+mod claim_consumer;
 #[path = "../../../../support/interrupt.rs"]
 mod consumer;
 #[path = "../../../../support/route.rs"]
@@ -173,20 +175,19 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
             synchronize();
             receive(&clock);
             {
-                let claim = domain.claim(index, &local.external).unwrap().unwrap();
+                let mut receiver = domain.receiver(destination, &local.external).unwrap();
+                let claim = claim_consumer::receive(&mut receiver, uart_id).unwrap();
                 assert!(claim.expected());
                 assert_eq!(claim.source(), uart_id);
                 assert!(claim.round() > prior);
                 prior = claim.round();
             }
-            assert!(matches!(
-                domain.claim(index, &local.external),
-                Err(Failure::Busy)
-            ));
             assert_eq!(unsafe { serial.read_u8(2) }.unwrap() & 0x0f, 2);
             unsafe { serial.write_u8(1, 0) }.unwrap();
             assert_eq!(unsafe { serial.read_u8(1) }, Ok(0));
-            let mut original = domain.current(index, &local.external).unwrap().unwrap();
+            let mut receiver = domain.receiver(destination, &local.external).unwrap();
+            let mut original = claim_consumer::pending(&mut receiver, uart_id);
+            assert_eq!(original.round(), prior);
             // QEMU virt accepts this enabled context's exact completion on the
             // original MMIO write. Device drain is asserted independently.
             unsafe { consumer::finish(&mut original, uart_id, Completion::AwaitingConfirmation) };
@@ -206,14 +207,16 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
     receive(&clock);
     {
         let mut domain = unsafe { controller.access(&mut mapping, Barrier::native()) }.unwrap();
-        let claim = domain.claim(index, &local.external).unwrap().unwrap();
+        let mut receiver = domain.receiver(destination, &local.external).unwrap();
+        let claim = claim_consumer::receive(&mut receiver, rtc_id).unwrap();
         assert!(claim.expected());
         assert_eq!(claim.source(), rtc_id);
         assert!(claim.round() > prior);
     }
     clear_alarm(&mut alarm);
     let mut domain = unsafe { controller.access(&mut mapping, Barrier::native()) }.unwrap();
-    let mut original = domain.current(index, &local.external).unwrap().unwrap();
+    let mut receiver = domain.receiver(destination, &local.external).unwrap();
+    let mut original = claim_consumer::pending(&mut receiver, rtc_id);
     assert_eq!(
         original.source(),
         rtc_id,

@@ -1,6 +1,23 @@
-//! Common use of an already acquired native interrupt claim.
+//! Reception and completion on an already bound interrupt interface.
 
 pub trait Sealed {}
+
+/// An admitted local receiver that reads a hardware claim register. The
+/// original context keeps the only open claim until completion is settled.
+/// Architectures that accept vectors at Trap use that entry to bind their
+/// claim and do not emulate a destructive register read.
+pub trait Receive: Sealed {
+    type Error;
+    type Claim<'receiver>: HardwareClaim<Error = Self::Error>
+    where
+        Self: 'receiver;
+
+    /// Read the original controller only if its previous claim has settled.
+    fn receive(&mut self) -> Result<Option<Self::Claim<'_>>, Self::Error>;
+
+    /// Reborrow the receiver's retained claim without reading hardware again.
+    fn pending_claim(&mut self) -> Result<Option<Self::Claim<'_>>, Self::Error>;
+}
 
 /// Result of completing the exact claimed interrupt on the originating receiver.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -44,6 +44,7 @@
     "server/tests/target/support/clock.rs",
     "server/src/metal/chrono/aarch64/**",
     "server/src/metal/interrupt/claim.rs",
+    "server/tests/target/support/claim.rs",
     "server/tests/target/support/interrupt.rs"
   ],
   "run": {

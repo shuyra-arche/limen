@@ -12,7 +12,7 @@ mod registers;
 mod route;
 mod source;
 
-pub use context::{Claim, ContextSlot, Destination, State};
+pub use context::{Claim, ContextSlot, Destination, Receiver, State};
 pub use route::{Route, RouteSlot, RouteState};
 pub use source::{Source, SourceSlot};
 

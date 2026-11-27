@@ -59,6 +59,7 @@
     "server/src/metal/chrono/clock.rs",
     "server/tests/target/support/clock.rs",
     "server/src/metal/interrupt/claim.rs",
+    "server/tests/target/support/claim.rs",
     "server/tests/target/support/interrupt.rs"
   ],
   "run": {

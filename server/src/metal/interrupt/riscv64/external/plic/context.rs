@@ -5,7 +5,11 @@ use super::{
     registers::{claim, enable, enables, threshold},
 };
 use crate::metal::{
-    interrupt::riscv64::internal::supervisor::{Cause, Reception},
+    interrupt::{
+        Receive,
+        claim::Sealed,
+        riscv64::internal::supervisor::{Cause, Reception},
+    },
     platform::description::devicetree::{DeviceTree, Error},
     processor::hart::riscv64::description::RiscvCpus,
 };
@@ -116,6 +120,32 @@ impl ContextSlot {
     }
 }
 
+/// The original PLIC Context paired with its live Hart reception line.
+#[must_use]
+pub struct Receiver<'scope, 'access, 'storage, 'tree> {
+    owner: &'scope mut Access<'access, 'storage, 'tree>,
+    local: &'scope Reception,
+    slot: usize,
+}
+
+impl Sealed for Receiver<'_, '_, '_, '_> {}
+
+impl<'access, 'storage, 'tree> Receive for Receiver<'_, 'access, 'storage, 'tree> {
+    type Error = Failure;
+    type Claim<'receiver>
+        = Claim<'receiver, 'access, 'storage, 'tree>
+    where
+        Self: 'receiver;
+
+    fn receive(&mut self) -> Result<Option<Self::Claim<'_>>, Failure> {
+        self.owner.claim_slot(self.slot, self.local)
+    }
+
+    fn pending_claim(&mut self) -> Result<Option<Self::Claim<'_>>, Failure> {
+        self.owner.current_slot(self.slot, self.local)
+    }
+}
+
 /// An exact borrow of the context that performed the original claim read.
 #[must_use]
 pub struct Claim<'slot, 'access, 'storage, 'tree> {
@@ -180,6 +210,35 @@ impl Claim<'_, '_, '_, '_> {
 }
 
 impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
+    /// Borrow the exact prepared controller context and its original Hart
+    /// line for receive and reacquisition without passing context numbers.
+    pub fn receiver<'scope>(
+        &'scope mut self,
+        destination: Destination<'tree>,
+        local: &'scope Reception,
+    ) -> Result<Receiver<'scope, 'access, 'storage, 'tree>, Failure> {
+        if destination.domain.node != self.controller.domain.node {
+            return Err(Failure::Scope);
+        }
+        let slot = self.lookup_context(destination.index)?;
+        let context = self.controller.contexts[slot].0.unwrap();
+        self.check(context, local)?;
+        if context.hart != destination.hart {
+            return Err(Failure::Scope);
+        }
+        if !matches!(
+            context.state,
+            State::Open | State::Received(..) | State::Awaiting(..)
+        ) {
+            return Err(Failure::Busy);
+        }
+        Ok(Receiver {
+            owner: self,
+            local,
+            slot,
+        })
+    }
+
     /// # Safety
     /// The previous context has drained all claims and retained writes.
     /// The original Hart's reception line stays masked until its owner
@@ -282,6 +341,14 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         local: &'slot Reception,
     ) -> Result<Option<Claim<'slot, 'access, 'storage, 'tree>>, Failure> {
         let slot = self.lookup_context(index)?;
+        self.claim_slot(slot, local)
+    }
+
+    fn claim_slot<'slot>(
+        &'slot mut self,
+        slot: usize,
+        local: &'slot Reception,
+    ) -> Result<Option<Claim<'slot, 'access, 'storage, 'tree>>, Failure> {
         let context = self.controller.contexts[slot].0.unwrap();
         self.check(context, local)?;
         if context.state != State::Open {
@@ -290,13 +357,13 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         let round = self.controller.next_round;
         self.controller.next_round = round.checked_add(1).ok_or(Failure::Exhausted)?;
         self.set_context(slot, State::Receiving(round));
-        let source = self.read(claim(index));
+        let source = self.read(claim(context.index));
         if source == 0 {
             self.set_context(slot, State::Open);
             return Ok(None);
         }
         self.set_context(slot, State::Received(round, source));
-        self.current(index, local)
+        self.current_slot(slot, local)
     }
 
     pub fn current<'slot>(
@@ -305,6 +372,14 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         local: &'slot Reception,
     ) -> Result<Option<Claim<'slot, 'access, 'storage, 'tree>>, Failure> {
         let slot = self.lookup_context(index)?;
+        self.current_slot(slot, local)
+    }
+
+    fn current_slot<'slot>(
+        &'slot mut self,
+        slot: usize,
+        local: &'slot Reception,
+    ) -> Result<Option<Claim<'slot, 'access, 'storage, 'tree>>, Failure> {
         let context = self.controller.contexts[slot].0.unwrap();
         self.check(context, local)?;
         let (State::Received(round, source) | State::Awaiting(round, source)) = context.state

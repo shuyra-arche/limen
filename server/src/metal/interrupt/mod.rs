@@ -5,7 +5,7 @@ pub mod riscv64;
 pub mod x86_64;
 
 mod claim;
-pub use claim::{Completion, HardwareClaim};
+pub use claim::{Completion, HardwareClaim, Receive};
 
 mod absolute;
 pub use absolute::AbsoluteTimer;

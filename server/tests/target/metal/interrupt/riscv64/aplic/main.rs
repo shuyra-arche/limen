@@ -3,6 +3,8 @@
 
 use kernel::metal::interrupt::{AbsoluteTimer, Completion};
 
+#[path = "../../../../support/claim.rs"]
+mod claim_consumer;
 #[path = "../../../../support/interrupt.rs"]
 mod consumer;
 
@@ -250,19 +252,18 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
             "supervisor external trap"
         );
         {
-            let claim = direct.claim().unwrap().expect("real UART claim");
+            let claim = claim_consumer::receive(&mut direct, route.id()).expect("real UART claim");
             assert_eq!(claim.source(), route.id());
             assert_eq!(claim.priority(), 1);
             assert!(claim.round() > previous);
             previous = claim.round();
             // Borrow ends here, but the persistent hardware obligation remains.
         }
-        assert!(matches!(direct.claim(), Err(aplic::Failure::Busy)));
         assert_eq!(
             direct.source(route.id()).unwrap(),
             aplic::Source::Masked(route.mode())
         );
-        let mut claim = direct.current().expect("retained original claim");
+        let mut claim = claim_consumer::pending(&mut direct, route.id());
         assert_eq!(claim.round(), previous);
         assert_eq!(uart_read(&mut serial, 2) & 0x0f, 2, "UART THRE cause");
         uart_write(&mut serial, 1, 0);

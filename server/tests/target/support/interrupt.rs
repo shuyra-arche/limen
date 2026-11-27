@@ -1,4 +1,4 @@
-//! Consume only the already acquired claim supplied by the real receiver.
+//! Complete the retained native claim after servicing the original source.
 
 use kernel::metal::interrupt::{Completion, HardwareClaim};
 

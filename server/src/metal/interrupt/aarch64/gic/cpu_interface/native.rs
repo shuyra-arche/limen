@@ -238,3 +238,22 @@ impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_> {
         unsafe { self.deactivate() }.map(|()| Completion::Settled)
     }
 }
+
+impl crate::metal::interrupt::claim::Sealed for CpuInterface<'_> {}
+
+impl<'map> crate::metal::interrupt::Receive for CpuInterface<'map> {
+    type Error = Failure;
+    type Claim<'receiver>
+        = Claim<'receiver, 'map>
+    where
+        Self: 'receiver;
+
+    fn receive(&mut self) -> Result<Option<Self::Claim<'_>>, Failure> {
+        CpuInterface::receive(self)
+    }
+
+    fn pending_claim(&mut self) -> Result<Option<Self::Claim<'_>>, Failure> {
+        self.context()?;
+        Ok(self.claim())
+    }
+}
