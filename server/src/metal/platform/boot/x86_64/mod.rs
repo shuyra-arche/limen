@@ -2,7 +2,10 @@ use crate::metal::{
     interrupt::internal::apic,
     platform::boot::handoff::{Descriptions, Facts, uefi},
     platform::boot::trap as diagnostic,
-    processor::hart::{local, x86_64::{native, status}},
+    processor::hart::{
+        local,
+        x86_64::{native, status},
+    },
 };
 mod major;
 pub(crate) use major::major as enter_major;
