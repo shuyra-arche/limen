@@ -6,7 +6,11 @@ macro_rules! entry {
         $(prepare: $prepare:expr,)?
         $(major: ($stack:expr, $nodes:expr),)?
         test: collected $(=> $after:expr)?,
-        $($(#[cfg($($condition:tt)*)])? bench: $bench:expr,)?
+        $(items: { $($test_item:item)* },)?
+        $(
+            $(#[cfg($($condition:tt)*)])? bench: $bench:expr,
+            $(items: { $($bench_item:item)* },)?
+        )?
     ) => {
         $crate::entry! {
             @select [
@@ -14,8 +18,12 @@ macro_rules! entry {
                 $(prepare: $prepare,)?
                 $(major: ($stack, $nodes),)?
             ]
+            [$($($test_item)*)?]
             $crate::run, $crate::entry!(@callback $($after)?),
-            $($(#[cfg($($condition)*)])? bench: $bench,)?
+            $(
+                $(#[cfg($($condition)*)])? bench: $bench,
+                $(items: { $($bench_item)* },)?
+            )?
         }
     };
     (
@@ -23,7 +31,11 @@ macro_rules! entry {
         $(prepare: $prepare:expr,)?
         $(major: ($stack:expr, $nodes:expr),)?
         test: $test:expr,
-        $($(#[cfg($($condition:tt)*)])? bench: $bench:expr,)?
+        $(items: { $($test_item:item)* },)?
+        $(
+            $(#[cfg($($condition:tt)*)])? bench: $bench:expr,
+            $(items: { $($bench_item:item)* },)?
+        )?
     ) => {
         $crate::entry! {
             @select [
@@ -31,8 +43,12 @@ macro_rules! entry {
                 $(prepare: $prepare,)?
                 $(major: ($stack, $nodes),)?
             ]
+            [$($($test_item)*)?]
             $crate::scenario, $test,
-            $($(#[cfg($($condition)*)])? bench: $bench,)?
+            $(
+                $(#[cfg($($condition)*)])? bench: $bench,
+                $(items: { $($bench_item)* },)?
+            )?
         }
     };
     (
@@ -40,6 +56,7 @@ macro_rules! entry {
         $(prepare: $prepare:expr,)?
         $(major: ($stack:expr, $nodes:expr),)?
         bench: $bench:expr,
+        $(items: { $($bench_item:item)* },)?
     ) => {
         $crate::entry! {
             @emit [
@@ -47,22 +64,33 @@ macro_rules! entry {
                 $(prepare: $prepare,)?
                 $(major: ($stack, $nodes),)?
             ]
+            [$($($bench_item)*)?]
             $crate::Purpose::Bench, $crate::scenario, $bench
         }
     };
     (@callback) => { |_: $crate::Boot<'_>| {} };
     (@callback $callback:expr) => { $callback };
-    (@select [$($setup:tt)*] $harness:path, $test:expr,) => {
-        $crate::entry!(@emit [$($setup)*] $crate::Purpose::Test, $harness, $test);
+    (@select [$($setup:tt)*] [$($test_item:item)*] $harness:path, $test:expr,) => {
+        $crate::entry! {
+            @emit [$($setup)*] [$($test_item)*]
+            $crate::Purpose::Test, $harness, $test
+        }
     };
     (
-        @select [$($setup:tt)*] $harness:path, $test:expr,
+        @select [$($setup:tt)*] [$($test_item:item)*] $harness:path, $test:expr,
         $(#[cfg($($condition:tt)*)])? bench: $bench:expr,
+        $(items: { $($bench_item:item)* },)?
     ) => {
         #[cfg(not(all(feature = "bench" $(, $($condition)*)?)))]
-        $crate::entry!(@emit [$($setup)*] $crate::Purpose::Test, $harness, $test);
+        $crate::entry! {
+            @emit [$($setup)*] [$($test_item)*]
+            $crate::Purpose::Test, $harness, $test
+        }
         #[cfg(all(feature = "bench" $(, $($condition)*)?))]
-        $crate::entry!(@emit [$($setup)*] $crate::Purpose::Bench, $crate::scenario, $bench);
+        $crate::entry! {
+            @emit [$($setup)*] [$($($bench_item)*)?]
+            $crate::Purpose::Bench, $crate::scenario, $bench
+        }
     };
     (
         @emit [
@@ -70,8 +98,11 @@ macro_rules! entry {
             $(prepare: $prepare:expr,)?
             $(major: ($stack:expr, $nodes:expr),)?
         ]
+        [$($item:item)*]
         $purpose:expr, $harness:path, $operation:expr
     ) => {
+        // Only the selected behavior contributes its Rust items and cases.
+        $($item)*
         $crate::declare!($platform, $purpose);
 
         #[cfg(target_arch = "riscv64")]

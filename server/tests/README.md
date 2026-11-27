@@ -208,11 +208,30 @@ existing target-only Guest packages supply dedicated entry points when no
 matching Test image exists. A common entry can instead declare one platform
 and distinct `test:` and `bench:` behaviors. The package's `bench` feature
 selects measurement only where the entry declares it and its optional
-`#[cfg(...)]` condition holds. For example, Sync declares
-`test: collected,` and `#[cfg(target_arch = "riscv64")]` followed by
-`bench: measurement::check,`. On other architectures the same entry
-continues to declare and compile its Test behavior. Conditions on imports
-remain necessary where backend dependencies differ. Both use the same linker, startup, machine preparation, process
+`#[cfg(...)]` condition holds. The optional `items: { ... },` immediately
+after a behavior contains ordinary Rust items emitted at crate scope only
+when that behavior is selected. Collected cases are therefore compiled
+only with their own behavior, and one capability condition also governs
+its module dependencies. Sync uses this form:
+```rust
+guest::entry! {
+    platform: platform::Platform::native(4),
+
+    test: collected,
+    items: {
+        mod contracts;
+    },
+
+    #[cfg(target_arch = "riscv64")]
+    bench: measurement::check,
+    items: {
+        #[path = "../../../../benches/metal/sync/shared/mod.rs"]
+        mod measurement;
+    },
+}
+```
+On other architectures the same entry continues to declare and compile
+its Test behavior. Both use the same linker, startup, machine preparation, process
 settlement and completion contract. They execute in separate boots.
 No separate benchmark workspace or lockfile is required.
 The first target, `riscv64-guest:clock`, establishes a measurement transport
