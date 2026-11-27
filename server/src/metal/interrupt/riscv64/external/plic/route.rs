@@ -7,6 +7,8 @@ use super::{
 };
 use crate::metal::{interrupt::PublishRoute, platform::description::devicetree::Error};
 
+const PENDING: usize = 0x1000;
+
 /// A device source connected to an original supervisor context.
 #[derive(Clone, Copy, Debug)]
 pub struct Route<'a> {
@@ -32,6 +34,9 @@ pub enum RouteState {
     Prioritizing,
     Enabling,
     Enabled,
+    Masking,
+    Masked,
+    Reprioritizing,
     Disabling,
     Restoring,
 }
@@ -54,9 +59,16 @@ impl RouteSlot {
     }
 }
 
+/// The exclusive reference to an admitted source and original context.
+#[must_use]
+pub struct BoundRoute<'tree> {
+    route: Option<Route<'tree>>,
+    slot: usize,
+}
+
 struct Publication<'route, 'access, 'storage, 'tree> {
     owner: &'route mut Access<'access, 'storage, 'tree>,
-    source: u32,
+    binding: &'route mut BoundRoute<'tree>,
 }
 
 impl crate::metal::interrupt::publication::Sealed for Publication<'_, '_, '_, '_> {}
@@ -65,23 +77,37 @@ impl PublishRoute for Publication<'_, '_, '_, '_> {
     type Failure = Failure;
 
     unsafe fn publish(&mut self) -> Result<(), Failure> {
-        unsafe { self.owner.enable(self.source) }
+        let slot = self.owner.bound_slot(self.binding)?;
+        unsafe { self.owner.enable(slot) }
+    }
+
+    fn mask(&mut self) -> Result<(), Failure> {
+        let slot = self.owner.bound_slot(self.binding)?;
+        self.owner.mask(slot)
+    }
+
+    unsafe fn retire(&mut self) -> Result<(), Failure> {
+        let slot = self.owner.bound_slot(self.binding)?;
+        unsafe { self.owner.retire(slot) }?;
+        self.binding.route = None;
+        Ok(())
     }
 }
 
 impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
-    /// Reserve the source and return a borrow that can publish this route.
-    /// The reservation stays in the controller when the borrow ends.
+    /// Reserve the source and return the exclusive construction relation.
     ///
     /// # Safety
     /// The stopped device and its original gateway are exclusive to this
     /// route. Other contexts exclude this source. Old deliveries and writes
     /// have settled. Configuration comes from the admitted hardware profile.
+    /// An ordered priority read settles preceding writes to that priority
+    /// register on the actual interconnect, including mismatched readback.
     pub unsafe fn reserve(
         &mut self,
         route: Route<'tree>,
         requested_priority: u32,
-    ) -> Result<impl PublishRoute<Failure = Failure> + '_, Failure> {
+    ) -> Result<BoundRoute<'tree>, Failure> {
         if route.source.domain.node != self.controller.domain.node {
             return Err(Failure::Scope);
         }
@@ -111,9 +137,9 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
             source,
             state: RouteState::Prepared,
         });
-        Ok(Publication {
-            owner: self,
-            source: route.source.id,
+        Ok(BoundRoute {
+            route: Some(route),
+            slot,
         })
     }
 
@@ -131,6 +157,37 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
             .ok_or(Failure::Scope)
     }
 
+    fn bound_slot(&self, binding: &BoundRoute<'tree>) -> Result<usize, Failure> {
+        let route = binding.route.ok_or(Failure::Scope)?;
+        if route.source.domain.node != self.controller.domain.node {
+            return Err(Failure::Scope);
+        }
+        let original = self
+            .controller
+            .routes
+            .get(binding.slot)
+            .and_then(|slot| slot.0)
+            .ok_or(Failure::Scope)?;
+        if route.destination.index != original.context
+            || self.controller.sources[original.source].0.unwrap().id != route.source.id
+        {
+            return Err(Failure::Scope);
+        }
+        Ok(binding.slot)
+    }
+
+    /// Recover the bound route using this access to its original controller.
+    pub fn control<'route>(
+        &'route mut self,
+        binding: &'route mut BoundRoute<'tree>,
+    ) -> Result<impl PublishRoute<Failure = Failure> + 'route, Failure> {
+        self.bound_slot(binding)?;
+        Ok(Publication {
+            owner: self,
+            binding,
+        })
+    }
+
     pub(super) fn has_routes(&self, context: usize) -> bool {
         self.controller
             .routes
@@ -143,12 +200,19 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         Ok(self.controller.routes[slot].0.unwrap().state)
     }
 
-    pub(super) fn route_state_at(&self, id: u32, context: usize) -> Result<RouteState, Failure> {
-        let slot = self.lookup_route(id)?;
-        let binding = self.controller.routes[slot].0.unwrap();
-        (binding.context == context)
-            .then_some(binding.state)
-            .ok_or(Failure::Scope)
+    pub(super) fn delivered_by_route(&self, id: u32, context: usize) -> bool {
+        self.lookup_route(id).is_ok_and(|slot| {
+            let binding = self.controller.routes[slot].0.unwrap();
+            binding.context == context
+                && matches!(
+                    binding.state,
+                    RouteState::Enabling
+                        | RouteState::Enabled
+                        | RouteState::Masking
+                        | RouteState::Masked
+                        | RouteState::Reprioritizing
+                )
+        })
     }
 
     fn set_route(&mut self, slot: usize, state: RouteState) {
@@ -164,44 +228,68 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
     /// # Safety
     /// A compatible receiver and the source's handler are ready. An open
     /// Context may receive the interrupt immediately.
-    pub unsafe fn enable(&mut self, id: u32) -> Result<(), Failure> {
-        let slot = self.lookup_route(id)?;
+    unsafe fn enable(&mut self, slot: usize) -> Result<(), Failure> {
         let binding = self.controller.routes[slot].0.unwrap();
-        if !matches!(
-            binding.state,
-            RouteState::Prepared | RouteState::Prioritizing | RouteState::Enabling
-        ) || !self.state(binding.context)?.excludes_source(id)
-            || self.holds_claim(id)
-        {
+        let source = self.controller.sources[binding.source].0.unwrap();
+        let id = source.id;
+        if !self.state(binding.context)?.excludes_source(id) || self.holds_claim(id) {
             return Err(Failure::Busy);
         }
-        if binding.state != RouteState::Enabling {
-            let source = self.controller.sources[binding.source].0.unwrap();
-            self.set_route(slot, RouteState::Prioritizing);
-            self.program(priority(id), source.requested)?;
-            self.set_route(slot, RouteState::Enabling);
+        match binding.state {
+            RouteState::Prepared | RouteState::Prioritizing => {
+                self.set_route(slot, RouteState::Prioritizing);
+                self.program(priority(id), source.requested)?;
+                self.set_route(slot, RouteState::Enabling);
+                self.set_enabled(binding.context, id, true)?;
+            }
+            RouteState::Enabling => self.set_enabled(binding.context, id, true)?,
+            RouteState::Masking | RouteState::Masked | RouteState::Reprioritizing => {
+                self.set_route(slot, RouteState::Reprioritizing);
+                self.program(priority(id), source.requested)?;
+            }
+            _ => return Err(Failure::Busy),
         }
-        self.set_enabled(binding.context, id, true)?;
         self.set_route(slot, RouteState::Enabled);
+        Ok(())
+    }
+
+    fn mask(&mut self, slot: usize) -> Result<(), Failure> {
+        let binding = self.controller.routes[slot].0.unwrap();
+        match binding.state {
+            RouteState::Masked => return Ok(()),
+            RouteState::Enabled | RouteState::Masking | RouteState::Reprioritizing => {}
+            _ => return Err(Failure::Busy),
+        }
+        // Only this route owns the global priority. Keep the original IE
+        // bit through Complete, including while the claim is still held.
+        let id = self.controller.sources[binding.source].0.unwrap().id;
+        self.set_route(slot, RouteState::Masking);
+        self.program(priority(id), 0)?;
+        self.set_route(slot, RouteState::Masked);
         Ok(())
     }
 
     /// # Safety
     /// Original device assertions, deliveries and prior writes have drained.
     /// Keep excluding the retiring source's new assertions until retirement.
-    pub unsafe fn retire(&mut self, id: u32) -> Result<(), Failure> {
-        let slot = self.lookup_route(id)?;
+    unsafe fn retire(&mut self, slot: usize) -> Result<(), Failure> {
         let binding = self.controller.routes[slot].0.unwrap();
-        if !self.state(binding.context)?.excludes_source(id) || self.holds_claim(id) {
+        let source = self.controller.sources[binding.source].0.unwrap();
+        let id = source.id;
+        if !self.state(binding.context)?.excludes_source(id)
+            || self.holds_claim(id)
+            || self.read(PENDING + id as usize / 32 * 4) & (1 << (id % 32)) != 0
+        {
             return Err(Failure::Busy);
         }
-        if binding.state != RouteState::Restoring {
-            self.set_route(slot, RouteState::Disabling);
-            self.set_enabled(binding.context, id, false)?;
-            self.set_route(slot, RouteState::Restoring);
+        if binding.state != RouteState::Prepared {
+            if binding.state != RouteState::Restoring {
+                self.set_route(slot, RouteState::Disabling);
+                self.set_enabled(binding.context, id, false)?;
+                self.set_route(slot, RouteState::Restoring);
+            }
+            self.program(priority(id), source.inherited)?;
         }
-        let source = self.controller.sources[binding.source].0.unwrap();
-        self.program(priority(id), source.inherited)?;
         self.controller.routes[slot].0 = None;
         self.controller.sources[binding.source].0 = None;
         Ok(())

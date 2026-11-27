@@ -13,7 +13,7 @@ mod route;
 mod source;
 
 pub use context::{Claim, ContextSlot, Destination, Receiver, State};
-pub use route::{Route, RouteSlot, RouteState};
+pub use route::{BoundRoute, Route, RouteSlot, RouteState};
 pub use source::{Source, SourceSlot};
 
 use registers::{CONTEXTS, SOURCES, threshold};

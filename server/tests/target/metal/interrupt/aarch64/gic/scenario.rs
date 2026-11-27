@@ -401,15 +401,27 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
             )
         }
         .expect("physical Distributor");
-        unsafe {
-            spi.reserve(route).unwrap();
-            spi.reserve(second_route).unwrap();
+        let (mut primary_binding, mut secondary_binding) = unsafe {
+            let mut primary_binding = spi.reserve(route).unwrap();
+            let mut secondary_binding = spi.reserve(second_route).unwrap();
             assert!(spi.reserve(second_route).is_err());
-            route_consumer::publish(&mut spi.configure(id, major as u64, 0x10).unwrap());
+            route_consumer::publish(
+                &mut spi
+                    .configure(&mut primary_binding, major as u64, 0x10)
+                    .unwrap(),
+            );
             assert_eq!(spi.state(second_id), Ok(SpiState::Masked));
-            route_consumer::publish(&mut spi.configure(second_id, major as u64, 0x20).unwrap());
-        }
-        for (input, uart) in [(id, &mut console), (second_id, &mut secondary)] {
+            route_consumer::publish(
+                &mut spi
+                    .configure(&mut secondary_binding, major as u64, 0x20)
+                    .unwrap(),
+            );
+            (primary_binding, secondary_binding)
+        };
+        for (input, uart, binding) in [
+            (id, &mut console, &mut primary_binding),
+            (second_id, &mut secondary, &mut secondary_binding),
+        ] {
             assert_eq!(spi.state(input), Ok(SpiState::Enabled));
             transmit(uart);
             wait_for_claim(&mut receiver, input);
@@ -419,12 +431,12 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
             assert!(unsafe { claim.deactivate() }.is_err());
             assert_eq!(unsafe { uart.read_u32(UART_STATUS) }.unwrap(), TX_INTERRUPT);
             clear_transmit(uart);
-            for _ in 0..4096 {
-                if spi.disable(input).is_ok() {
-                    break;
-                }
+            route_consumer::mask(&mut spi.control(binding).unwrap());
+            assert_eq!(spi.state(input), Ok(SpiState::Quiesced));
+            assert_eq!(spi.active(input), Ok(true));
+            if input == id {
+                assert_eq!(spi.state(second_id), Ok(SpiState::Enabled));
             }
-            assert_eq!(spi.state(input), Ok(SpiState::Masked));
             if !split {
                 unsafe { consumer::finish(&mut claim, input as u32, Completion::Settled) };
             } else {
@@ -436,7 +448,8 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
             }
             assert_eq!(spi.active(input), Ok(false));
             assert_eq!(receiver.state(), State::Empty);
-            unsafe { spi.retire(input).unwrap() };
+            unsafe { route_consumer::retire(&mut spi.control(binding).unwrap()) };
+            assert!(spi.control(binding).is_err());
         }
         local_frame = receiver
             .release()

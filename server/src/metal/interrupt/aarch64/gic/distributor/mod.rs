@@ -45,6 +45,7 @@ pub enum State {
     Enabling,
     Enabled,
     Masking,
+    Quiesced,
 }
 
 /// Bounded storage for one live SPI. Keep it with the Distributor until
@@ -55,6 +56,14 @@ pub struct Slot<'tree> {
 
 impl Slot<'_> {
     pub const EMPTY: Self = Self { route: None };
+}
+
+/// The exclusive reference to an admitted SPI binding. Keep it until the
+/// original route is retired, even when the Distributor is lent elsewhere.
+#[must_use]
+pub struct BoundRoute<'tree> {
+    route: Option<Route<'tree>>,
+    slot: usize,
 }
 
 /// Ordering for an admitted GIC Distributor window.
@@ -90,7 +99,7 @@ pub struct Distributor<'map, 'tree> {
 
 struct Publication<'route, 'map, 'tree> {
     owner: &'route mut Distributor<'map, 'tree>,
-    intid: usize,
+    binding: &'route mut BoundRoute<'tree>,
 }
 
 impl crate::metal::interrupt::publication::Sealed for Publication<'_, '_, '_> {}
@@ -99,7 +108,20 @@ impl PublishRoute for Publication<'_, '_, '_> {
     type Failure = Failure;
 
     unsafe fn publish(&mut self) -> Result<(), Failure> {
-        unsafe { self.owner.enable(self.intid) }
+        let slot = self.owner.bound_slot(self.binding)?;
+        unsafe { self.owner.enable(slot) }
+    }
+
+    fn mask(&mut self) -> Result<(), Failure> {
+        let slot = self.owner.bound_slot(self.binding)?;
+        self.owner.disable(slot)
+    }
+
+    unsafe fn retire(&mut self) -> Result<(), Failure> {
+        let slot = self.owner.bound_slot(self.binding)?;
+        unsafe { self.owner.retire(slot) }?;
+        self.binding.route = None;
+        Ok(())
     }
 }
 
@@ -144,7 +166,7 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     /// The caller has quiesced this source and settled previous receptions
     /// and writes. In a two-security-state domain trusted firmware must grant
     /// this Non-secure Group 1 SPI as the group register is Secure-only.
-    pub unsafe fn reserve(&mut self, route: Route<'tree>) -> Result<(), Failure> {
+    pub unsafe fn reserve(&mut self, route: Route<'tree>) -> Result<BoundRoute<'tree>, Failure> {
         if route.controller.source() != self.gic.source() || route.intid >= self.count {
             return Err(Failure::Profile);
         }
@@ -154,11 +176,14 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
         }
         let slot = self
             .slots
-            .iter_mut()
-            .find(|slot| slot.route.is_none())
+            .iter()
+            .position(|slot| slot.route.is_none())
             .ok_or(Failure::Capacity)?;
-        slot.route = Some((route, State::Masked));
-        Ok(())
+        self.slots[slot].route = Some((route, State::Masked));
+        Ok(BoundRoute {
+            route: Some(route),
+            slot,
+        })
     }
 
     fn lookup(&self, id: usize) -> Result<usize, Failure> {
@@ -166,6 +191,34 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
             .iter()
             .position(|slot| slot.route.is_some_and(|(route, _)| route.intid == id))
             .ok_or(Failure::State)
+    }
+
+    fn bound_slot(&self, binding: &BoundRoute<'tree>) -> Result<usize, Failure> {
+        let route = binding.route.ok_or(Failure::State)?;
+        let (original, _) = self
+            .slots
+            .get(binding.slot)
+            .and_then(|slot| slot.route)
+            .ok_or(Failure::State)?;
+        if route.controller.source() != self.gic.source()
+            || route.intid != original.intid
+            || route.device() != original.device()
+        {
+            return Err(Failure::Profile);
+        }
+        Ok(binding.slot)
+    }
+
+    /// Recover the original route control after using a different route.
+    pub fn control<'route>(
+        &'route mut self,
+        binding: &'route mut BoundRoute<'tree>,
+    ) -> Result<impl PublishRoute<Failure = Failure> + 'route, Failure> {
+        self.bound_slot(binding)?;
+        Ok(Publication {
+            owner: self,
+            binding,
+        })
     }
 
     pub fn state(&self, id: usize) -> Result<State, Failure> {
@@ -212,14 +265,15 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     /// The admitted source remains quiescent while its route is changed.
     /// Affinity names a present PE in the same domain whose Group 1
     /// reception will be available before unmasking.
-    pub unsafe fn configure(
-        &mut self,
-        id: usize,
+    pub unsafe fn configure<'route>(
+        &'route mut self,
+        binding: &'route mut BoundRoute<'tree>,
         affinity: u64,
         priority: u8,
-    ) -> Result<impl PublishRoute<Failure = Failure> + '_, Failure> {
-        let slot = self.lookup(id)?;
+    ) -> Result<impl PublishRoute<Failure = Failure> + 'route, Failure> {
+        let slot = self.bound_slot(binding)?;
         let (route, state) = self.slots[slot].route.unwrap();
+        let id = route.intid;
         let operation = State::Configuring { affinity, priority };
         if state != State::Masked && state != operation {
             return Err(Failure::State);
@@ -268,19 +322,16 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
             return Err(Failure::Unconfirmed);
         }
         self.slots[slot].route = Some((route, State::Configured));
-        Ok(Publication {
-            owner: self,
-            intid: route.intid,
-        })
+        self.control(binding)
     }
 
     /// # Safety
     /// The original target can receive this route with durable capacity
     /// to retain the matching IAR, priority drop and deactivation.
-    pub unsafe fn enable(&mut self, id: usize) -> Result<(), Failure> {
-        let slot = self.lookup(id)?;
+    unsafe fn enable(&mut self, slot: usize) -> Result<(), Failure> {
         let (route, state) = self.slots[slot].route.unwrap();
-        if state != State::Configured {
+        let id = route.intid;
+        if !matches!(state, State::Configured | State::Quiesced) {
             return Err(Failure::State);
         }
         self.slots[slot].route = Some((route, State::Enabling));
@@ -294,13 +345,13 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     }
 
     /// Mask this source. Success still leaves old reception obligations.
-    pub fn disable(&mut self, id: usize) -> Result<(), Failure> {
-        let slot = self.lookup(id)?;
+    fn disable(&mut self, slot: usize) -> Result<(), Failure> {
         let (route, state) = self.slots[slot].route.unwrap();
+        let id = route.intid;
         if matches!(state, State::Configuring { .. }) {
             return Err(Failure::Unconfirmed);
         }
-        if state == State::Masked {
+        if matches!(state, State::Masked | State::Quiesced) {
             return Ok(());
         }
         if state != State::Masking {
@@ -311,7 +362,7 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
         if self.word(CTLR) & WRITE_PENDING != 0 || self.bit(ENABLE, id) {
             return Err(Failure::Busy);
         }
-        self.slots[slot].route = Some((route, State::Masked));
+        self.slots[slot].route = Some((route, State::Quiesced));
         Ok(())
     }
 
@@ -319,9 +370,9 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     /// Exclude future assertions and old writes, and settle the original
     /// source and CPU interface reception. Distributor bits cannot prove
     /// the separately owned software and device obligations.
-    pub unsafe fn retire(&mut self, id: usize) -> Result<(), Failure> {
-        let slot = self.lookup(id)?;
-        if self.state(id)? != State::Masked || !self.available(id) {
+    unsafe fn retire(&mut self, slot: usize) -> Result<(), Failure> {
+        let (route, state) = self.slots[slot].route.unwrap();
+        if !matches!(state, State::Masked | State::Quiesced) || !self.available(route.intid) {
             return Err(Failure::Busy);
         }
         self.slots[slot].route = None;

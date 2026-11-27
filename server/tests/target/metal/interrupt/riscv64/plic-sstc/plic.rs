@@ -120,24 +120,26 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
     let mut controller =
         unsafe { Controller::admit(domain, limits, &mut contexts, &mut sources, &mut routes) }
             .unwrap();
-    {
+    let mut other_binding = {
         let mut domain = unsafe { controller.access(&mut mapping, Barrier::native()) }.unwrap();
         // The second firmware Hart stays parked and its local reception is
         // masked. Prepare both real contexts without minting its authority.
-        unsafe {
+        let binding = unsafe {
             assert_eq!(domain.prepare(destination, 8), Err(Failure::Scope));
             domain.prepare(destination, 1).unwrap();
             domain.prepare(other, 2).unwrap();
-            domain.reserve(other_rtc_route, 4).unwrap();
+            let mut binding = domain.reserve(other_rtc_route, 4).unwrap();
             assert!(matches!(domain.reserve(rtc_route, 3), Err(Failure::Busy)));
-            domain.enable(rtc_id).unwrap();
+            route_consumer::publish(&mut domain.control(&mut binding).unwrap());
             assert_eq!(
                 domain.open(other_index, &mut local.external),
                 Err(Failure::Scope)
             );
-        }
+            binding
+        };
         assert_eq!(domain.cancel(other_index), Err(Failure::Busy));
-    }
+        binding
+    };
     assert_eq!(unsafe { mapping.read_u32(rtc_priority) }.unwrap(), 4);
     assert_eq!(
         unsafe { mapping.read_u32(enable_word(index)) }.unwrap() & rtc_bit,
@@ -147,27 +149,32 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
         unsafe { mapping.read_u32(enable_word(other_index)) }.unwrap() & rtc_bit,
         rtc_bit
     );
-    let prior = {
+    let (prior, mut rtc_binding) = {
         let mut domain = unsafe { controller.access(&mut mapping, Barrier::native()) }.unwrap();
         assert_eq!(
             unsafe { domain.open(index, &mut local.timer) },
             Err(Failure::Scope)
         );
-        unsafe {
-            domain.retire(rtc_id).unwrap();
+        let (mut uart_binding, rtc_binding) = unsafe {
+            route_consumer::mask(&mut domain.control(&mut other_binding).unwrap());
+            route_consumer::retire(&mut domain.control(&mut other_binding).unwrap());
             domain.cancel(other_index).unwrap();
             assert!(matches!(domain.reserve(route, 8), Err(Failure::Scope)));
             domain.open(index, &mut local.external).unwrap();
-            route_consumer::publish(&mut domain.reserve(route, 2).unwrap());
-            route_consumer::publish(&mut domain.reserve(rtc_route, 3).unwrap());
+            let mut uart_binding = domain.reserve(route, 2).unwrap();
+            let mut rtc_binding = domain.reserve(rtc_route, 3).unwrap();
+            assert!(domain.control(&mut other_binding).is_err());
+            route_consumer::publish(&mut domain.control(&mut uart_binding).unwrap());
+            route_consumer::publish(&mut domain.control(&mut rtc_binding).unwrap());
             assert!(matches!(domain.reserve(rtc_route, 3), Err(Failure::Busy)));
-        }
+            (uart_binding, rtc_binding)
+        };
         assert_eq!(unsafe { serial.read_u8(1) }, Ok(0));
         assert_eq!(unsafe { serial.read_u8(3) }.unwrap() & 0x80, 0);
         assert!(domain.claim(index, &local.external).unwrap().is_none());
 
         let mut prior = 0;
-        for _ in 0..2 {
+        for round in 0..2 {
             unsafe {
                 serial.write_u8(1, 2).unwrap();
                 serial.write_u8(0, b' ').unwrap();
@@ -185,17 +192,24 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
             assert_eq!(unsafe { serial.read_u8(2) }.unwrap() & 0x0f, 2);
             unsafe { serial.write_u8(1, 0) }.unwrap();
             assert_eq!(unsafe { serial.read_u8(1) }, Ok(0));
+            route_consumer::mask(&mut domain.control(&mut uart_binding).unwrap());
+            assert_eq!(domain.route_state(uart_id), Ok(RouteState::Masked));
+            assert_eq!(domain.route_state(rtc_id), Ok(RouteState::Enabled));
             let mut receiver = domain.receiver(destination, &local.external).unwrap();
             let mut original = claim_consumer::pending(&mut receiver, uart_id);
             assert_eq!(original.round(), prior);
+            assert!(original.expected());
             // QEMU virt accepts this enabled context's exact completion on the
             // original MMIO write. Device drain is asserted independently.
             unsafe { consumer::finish(&mut original, uart_id, Completion::AwaitingConfirmation) };
             unsafe { original.confirm() }.unwrap();
+            if round == 0 {
+                unsafe { route_consumer::publish(&mut domain.control(&mut uart_binding).unwrap()) };
+            }
         }
-        unsafe { domain.retire(uart_id) }.unwrap();
+        unsafe { route_consumer::retire(&mut domain.control(&mut uart_binding).unwrap()) };
         assert_eq!(domain.route_state(rtc_id), Ok(RouteState::Enabled));
-        prior
+        (prior, rtc_binding)
     };
     assert_eq!(unsafe { mapping.read_u32(threshold) }.unwrap(), 1);
     assert_eq!(unsafe { mapping.read_u32(rtc_priority) }.unwrap(), 3);
@@ -203,7 +217,30 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
         unsafe { mapping.read_u32(enable_word(other_index)) }.unwrap() & rtc_bit,
         0
     );
+    {
+        let mut domain = unsafe { controller.access(&mut mapping, Barrier::native()) }.unwrap();
+        route_consumer::mask(&mut domain.control(&mut rtc_binding).unwrap());
+    }
+    assert_eq!(unsafe { mapping.read_u32(rtc_priority) }.unwrap(), 0);
+    assert_eq!(unsafe { mapping.read_u32(threshold) }.unwrap(), 1);
+    assert_eq!(
+        unsafe { mapping.read_u32(enable_word(index)) }.unwrap() & rtc_bit,
+        rtc_bit
+    );
     arm_alarm(&mut alarm);
+    let pending_word = 0x1000 + rtc_id as usize / 32 * 4;
+    let deadline = clock.read().unwrap() + u64::from(clock.hertz()) * 2;
+    while unsafe { mapping.read_u32(pending_word) }.unwrap() & rtc_bit == 0 {
+        assert!(
+            clock.read().unwrap() < deadline,
+            "masked RTC did not reach the gateway"
+        );
+    }
+    {
+        let mut domain = unsafe { controller.access(&mut mapping, Barrier::native()) }.unwrap();
+        assert!(domain.claim(index, &local.external).unwrap().is_none());
+        unsafe { route_consumer::publish(&mut domain.control(&mut rtc_binding).unwrap()) };
+    }
     receive(&clock);
     {
         let mut domain = unsafe { controller.access(&mut mapping, Barrier::native()) }.unwrap();
@@ -228,7 +265,8 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
     }
     assert!(domain.claim(index, &local.external).unwrap().is_none());
     unsafe {
-        domain.retire(rtc_id).unwrap();
+        route_consumer::mask(&mut domain.control(&mut rtc_binding).unwrap());
+        route_consumer::retire(&mut domain.control(&mut rtc_binding).unwrap());
         domain.shut(index, &mut local.external).unwrap();
     }
     assert_eq!(domain.state(index), Ok(State::Shut));

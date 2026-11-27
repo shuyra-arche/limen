@@ -1,7 +1,7 @@
 //! Independent supervisor contexts, their threshold and original claim.
 
 use super::{
-    Access, Domain, Failure, RouteState,
+    Access, Domain, Failure,
     registers::{claim, enable, enables, threshold},
 };
 use crate::metal::{
@@ -167,7 +167,7 @@ impl Claim<'_, '_, '_, '_> {
 
     pub fn expected(&self) -> bool {
         let context = self.owner.controller.contexts[self.slot].0.unwrap();
-        self.owner.route_state_at(self.source, context.index) == Ok(RouteState::Enabled)
+        self.owner.delivered_by_route(self.source, context.index)
     }
 
     /// # Safety
