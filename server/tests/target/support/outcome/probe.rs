@@ -68,7 +68,11 @@ fn check_minor(boot: &Boot<'_>) {
     #[cfg(target_arch = "riscv64")]
     let (target, mut startup) = {
         let target = (0..4).find(|hart| *hart != major).unwrap();
-        let harts = boot.sbi_services().hart_state_management().unwrap().unwrap();
+        let harts = boot
+            .sbi_services()
+            .hart_state_management()
+            .unwrap()
+            .unwrap();
         (target, Startup::Sbi(harts))
     };
     #[cfg(target_os = "uefi")]

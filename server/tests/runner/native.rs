@@ -144,8 +144,16 @@ pub fn run(architecture: &str, image: &Path, observe: bool) -> Result<()> {
     let mut outcome = if observe {
         // External observation is optional; ordinary Cargo tests need only
         // the dedicated completion status.
-        let (outcome, shutdown) = crate::qmp::run(command, &directory, timeout)?;
-        kernel_verification::json(&directory.join("shutdown.json"), &shutdown?)?;
+        let (outcome, shutdown) = crate::qmp::run_isolated(command, &directory, timeout)?;
+        match shutdown {
+            Ok(shutdown) => {
+                kernel_verification::json(&directory.join("shutdown.json"), &shutdown)?;
+            }
+            Err(error) => {
+                fs::write(directory.join("qmp-error.txt"), error.to_string())?;
+                return Err(error.into());
+            }
+        }
         outcome
     } else {
         process::run(&mut command, &directory, timeout)?
