@@ -77,6 +77,9 @@ fn minor(hart: usize, hertz: usize) -> ! {
 }
 
 pub fn check(boot: Boot<'_>) {
+    assert!(!MINOR.ready());
+    assert_eq!(READY.load(Acquire), 0);
+
     let cpus = boot.riscv_cpus();
     assert!(cpus.cpu(0).unwrap().unwrap().enabled());
     assert!(cpus.cpu(1).unwrap().unwrap().enabled());
@@ -112,11 +115,4 @@ pub fn check(boot: Boot<'_>) {
     boot_diagnostic::write(
         "PASS riscv64-ipi original-hart=1 issued=3 rechecked=2 cleared=2 shut=1\n",
     );
-}
-
-#[cfg(test)]
-#[test_case]
-fn launch_is_initially_unpublished() {
-    assert!(!MINOR.ready());
-    assert_eq!(READY.load(Acquire), 0);
 }

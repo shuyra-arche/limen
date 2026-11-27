@@ -40,10 +40,16 @@ macro_rules! entry {
     };
     (@ready |$boot:ident| $body:block) => {
         #[unsafe(no_mangle)]
-        extern "Rust" fn limen_platform_ready($boot: $crate::Boot<'_>) -> ! $body
+        extern "Rust" fn limen_platform_ready($boot: $crate::Boot<'_>) -> ! {
+            collected();
+            $body
+        }
     };
     (@ready |mut $boot:ident| $body:block) => {
         #[unsafe(no_mangle)]
-        extern "Rust" fn limen_platform_ready(mut $boot: $crate::Boot<'_>) -> ! $body
+        extern "Rust" fn limen_platform_ready(mut $boot: $crate::Boot<'_>) -> ! {
+            collected();
+            $body
+        }
     };
 }

@@ -12,6 +12,12 @@ pub use uefi_fixture::load;
 mod outcome;
 pub mod platform;
 
+/// A stateful image has one explicit scenario, not independently collected cases.
+pub fn scenario(tests: &[&dyn Fn()]) {
+    assert!(tests.is_empty(), "scenario image contains collected cases");
+}
+
+/// Independent cases share the admitted initial machine, not mutable test state.
 pub fn run(tests: &[&dyn Fn()]) {
     assert!(!tests.is_empty(), "compiler must collect at least one case");
     for test in tests {

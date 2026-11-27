@@ -150,6 +150,7 @@ fn check(boot: Boot<'_>) {
         "timeout" => loop {
             core::hint::spin_loop();
         },
+        "discovery-panic" => panic!("compiler collection missed the nested case"),
         _ => panic!("unknown T0 case"),
     }
 }
@@ -159,12 +160,18 @@ guest::entry! {
     prepare: prepare,
     run: |boot| {
         check(boot);
-        collected();
         guest::finish()
     }
 }
 
-#[test_case]
-fn admitted_local_state_is_available() {
-    assert_eq!(kernel::metal::sync::treaty::turn_capacity(), Some(5));
+// This fixture tests the compiler-collected harness itself. No ordinary
+// hardware contract has to contain a synthetic discovery probe.
+mod collection {
+    #[test_case]
+    fn admitted_local_state_is_available() {
+        assert_eq!(kernel::metal::sync::treaty::turn_capacity(), Some(5));
+        if super::case() == "discovery-panic" {
+            panic!("intentional nested collected test failure");
+        }
+    }
 }

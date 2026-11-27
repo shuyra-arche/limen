@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::run)]
+#![test_runner(guest::scenario)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;

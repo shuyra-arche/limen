@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::run)]
+#![test_runner(guest::scenario)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -15,7 +15,6 @@ guest::entry! {
     platform: platform::Platform::native(2),
     prepare: fixture::q35::prepare_minor,
     run: |boot| {
-        collected();
         scenario::check(boot);
         guest::finish()
     }

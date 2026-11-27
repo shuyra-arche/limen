@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::run)]
+#![test_runner(guest::scenario)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -15,12 +15,7 @@ guest::entry! {
         assert!(!boot.stack_range().is_empty());
         let _major = boot.take_major().expect("original major ownership");
         assert!(boot.take_major().is_none());
-        collected();
+        assert_eq!(turn_capacity(), Some(5));
         guest::finish()
     }
-}
-
-#[test_case]
-fn installed_local_state_is_available() {
-    assert_eq!(turn_capacity(), Some(5));
 }

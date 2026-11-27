@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::run)]
+#![test_runner(guest::scenario)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -27,14 +27,13 @@ guest::entry! {
     run: |boot| {
         assert_eq!(boot.hart(), 0);
         assert!(boot.riscv_cpus().cpu(1).unwrap().is_none());
-        collected();
+        assert_bare_translation();
         native::check(boot);
         guest::finish()
     }
 }
 
-#[test_case]
-fn cpu_translation_starts_bare() {
+fn assert_bare_translation() {
     let satp: usize;
     unsafe { core::arch::asm!("csrr {}, satp", out(reg) satp, options(nostack, nomem)) };
     assert_eq!(satp >> 60, 0);

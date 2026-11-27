@@ -34,8 +34,14 @@ package needs no manifest entry or CI change.
 
 The `guest-support` library supplies the machine declaration, standard
 startup, compiler-collected harness, panic handler and completion transport.
-A test chooses its own platform, optional firmware preparation and explicit
-Boot callback:
+A stateful scenario uses `#![test_runner(guest::scenario)]` and an explicit
+Boot callback. A collected suite uses `#![test_runner(guest::run)]` with
+independent `#[test_case]` functions. Both use Cargo's discovered test targets.
+The shared entry invokes the compiler-generated `collected` function exactly
+once before the Boot callback; a custom entry must do the same. Scenario
+images reject nonempty collections instead of silently skipping cases;
+collected suites reject empty collections. Each image chooses its platform and
+optional firmware preparation:
 
 ```rust
 guest::entry! {
@@ -52,9 +58,14 @@ guest::entry! {
 }
 ```
 
-The shared Boot, migration and synchronization images compile their real
-backend with Rust's target configuration. Special loaders can use the
-library's declaration and completion without adopting its standard entry.
+Use a separate image when initial machine state, hardware topology or an
+unretired resource requires isolation. Keep ordered preconditions, mutations
+and assertions together in the scenario; do not turn dependent steps into
+collected cases. Cases within a collected suite must be order-independent and
+restore the state they change. The shared Boot, migration and synchronization
+images compile their real backend with Rust's target configuration. Special
+loaders can use the library's declaration and completion without adopting its
+standard entry.
 The strict-NX Module retention case owns such a loader. Owner-local
 assertions remain in Entry, Basis and Metal. One explicit path to an
 owner's test implementation is preferable to a registry of scenarios.
@@ -87,6 +98,11 @@ cargo -Z panic-abort-tests --config "$config" test --locked \
     --manifest-path server/tests/target/Cargo.toml -p riscv64-guest \
     --target "$target" --test aplic
 ```
+
+Guest selection is at the image boundary (`-p`, `--test`, `--tests`). Unlike
+Host libtest, the bare-metal harness does not implement name filters for
+individual cases; selecting an image runs its entire contract. Do not pass
+libtest case filters after `--` to the native runner.
 
 Add `--release` for the optimized image and select a fresh evidence root.
 For independent Module images select `-p module-guest --test lifecycle`.
@@ -135,7 +151,9 @@ not select this package. Cargo discovers all its integration targets with
 `LIMEN_TEST_TARGET` triple, independently of the Host compiler target.
 The machine-specific fault test uses libtest's native ignore attribute on
 other guest architectures. The full-duration timeout probe is explicitly
-ignored in its own test definition; CI names neither case.
+ignored in its own test definition; CI names neither case. The outcome Guest
+owns transport and nested compiler-collection probes; ordinary synchronization
+tests do not contain injected harness failures.
 
 A terminal boot fault cannot execute a normal guest test assertion. The
 Boot-owned Host test compiles the ordinary RV64 boot guest via Cargo's JSON

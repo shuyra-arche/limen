@@ -15,7 +15,6 @@ use kernel::metal::sync::treaty::TurnLock;
 guest::entry! {
     platform: platform::Platform::native(4),
     run: |_boot| {
-        collected();
         guest::finish()
     }
 }

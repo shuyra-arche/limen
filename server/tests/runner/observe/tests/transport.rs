@@ -31,11 +31,6 @@ fn run(case: &str, verdict: &str) -> (Value, PathBuf, String) {
         .canonicalize()
         .unwrap();
     let runner = runner.to_str().expect("UTF-8 runner path");
-    let test = if case == "discovery-panic" {
-        "sync"
-    } else {
-        "outcome"
-    };
     let evidence = root.join(".integration/transport").join(case);
     let logs = root.join(".integration/transport/cargo").join(case);
     fs::create_dir_all(&logs).unwrap();
@@ -55,7 +50,7 @@ fn run(case: &str, verdict: &str) -> (Value, PathBuf, String) {
             .args(["--config", &config, "-Z", "panic-abort-tests"])
             .args(["test", "--locked", "--manifest-path"])
             .arg(root.join("server/tests/target/Cargo.toml"))
-            .args(["-p", "kernel-guest", "--test", test, "--target", &target])
+            .args(["-p", "kernel-guest", "--test", "outcome", "--target", &target])
             .env("LIMEN_TEST_CASE", case)
             .env("LIMEN_TEST_EVIDENCE", &evidence);
         match profile.as_str() {
@@ -178,5 +173,5 @@ fn rejects_collected_panic() {
     let (result, evidence, _) = run("discovery-panic", "fail");
     exited(&result, 99);
     let serial = fs::read_to_string(evidence.join("serial.log")).unwrap();
-    assert!(serial.contains("T1 intentional collected test failure"));
+    assert!(serial.contains("intentional nested collected test failure"));
 }

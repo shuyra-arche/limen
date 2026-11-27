@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::run)]
+#![test_runner(guest::scenario)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -15,13 +15,8 @@ guest::entry! {
         ..platform::Platform::native(4)
     },
     run: |boot| {
-        collected();
+        assert_ne!(uefi_fixture::target(), uefi_fixture::hart());
         native::check(boot);
         guest::finish()
     }
-}
-
-#[test_case]
-fn firmware_peer_is_distinct() {
-    assert_ne!(uefi_fixture::target(), uefi_fixture::hart());
 }

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::run)]
+#![test_runner(guest::scenario)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -17,12 +17,7 @@ guest::entry! {
     platform: platform::Platform::native(4),
     run: |boot| {
         uefi_fixture::check_handoff(&boot, None);
-        collected();
+        scenario::check(uefi_fixture::hart());
         guest::finish()
     }
-}
-
-#[test_case]
-fn native_translation_roundtrip() {
-    scenario::check(uefi_fixture::hart());
 }

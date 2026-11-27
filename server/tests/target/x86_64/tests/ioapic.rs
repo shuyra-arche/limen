@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::run)]
+#![test_runner(guest::scenario)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -15,13 +15,8 @@ guest::entry! {
         ..platform::Platform::native(4)
     },
     run: |boot| {
-        collected();
+        assert_eq!(kernel::metal::sync::treaty::turn_capacity(), Some(5));
         native::check(boot);
         guest::finish()
     }
-}
-
-#[test_case]
-fn local_interrupt_context_is_admitted() {
-    assert_eq!(kernel::metal::sync::treaty::turn_capacity(), Some(5));
 }

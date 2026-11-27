@@ -20,7 +20,10 @@ fn sbi_uses_the_selected_firmware_and_original_image() {
     Material::select(Firmware::OpenSbi, &code)
         .attach(&mut command, &image, &root)
         .unwrap();
-    let args: Vec<_> = command.get_args().map(|arg| arg.to_str().unwrap()).collect();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_str().unwrap())
+        .collect();
     let bios = ["-bios", code.to_str().unwrap()];
     let kernel = ["-kernel", image.to_str().unwrap()];
     assert!(args.windows(2).any(|pair| pair == bios));

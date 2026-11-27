@@ -113,6 +113,11 @@ fn minor(hart: usize, argument: usize) -> ! {
 }
 
 pub fn check(boot: boot::Boot<'_>) {
+    assert!(!MINOR.ready());
+    assert_eq!(ICR_PROBE.load(Acquire), 0);
+    assert_eq!(READY.load(Acquire), 0);
+    assert_eq!(CLOSED.load(Acquire), 0);
+
     let view = fixture::check_handoff(&boot, Some(&MINOR));
     let mut startup = fixture::inspect(&boot, &view);
     let madt = boot.acpi().unwrap().madt().unwrap();
@@ -168,13 +173,4 @@ pub fn check(boot: boot::Boot<'_>) {
     boot_diagnostic::write(
         "PASS local-apic-ipi issued=3 rechecked=2 eoi=2 stale=0 scope-rejected=1 icr-blocked=1\n",
     );
-}
-
-#[cfg(test)]
-#[test_case]
-fn launch_is_initially_unpublished() {
-    assert!(!MINOR.ready());
-    assert_eq!(ICR_PROBE.load(Acquire), 0);
-    assert_eq!(READY.load(Acquire), 0);
-    assert_eq!(CLOSED.load(Acquire), 0);
 }

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::run)]
+#![test_runner(guest::scenario)]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
@@ -46,6 +46,7 @@ fn main() -> uefi::Status {
 #[cfg(target_os = "uefi")]
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: guest::Boot<'_>) -> ! {
+    collected();
     retention::check(boot);
     guest::finish()
 }

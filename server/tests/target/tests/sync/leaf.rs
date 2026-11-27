@@ -13,12 +13,3 @@ fn leaf_rejects_reentrant_access_and_releases() {
     );
     assert_eq!(lock.attempt(|value| *value), Ok(1));
 }
-
-// T1 deliberately rejects one automatically collected case in a separate
-// infrastructure test. No test list or runner change identifies this function.
-#[test_case]
-fn collection_reaches_nested_modules() {
-    if option_env!("LIMEN_TEST_CASE") == Some("discovery-panic") {
-        panic!("T1 intentional collected test failure");
-    }
-}
