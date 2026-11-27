@@ -222,7 +222,7 @@ mkdir -p server/src/metal/platform/boot/aarch64
 git mv server/src/metal/platform/boot/{x86_64,aarch64}/example.rs
 git commit -qm rename
 [[ $(bash "$discover" . "$previous" | jq -r 'map(.platform)|unique|join(" ")') == 'q35 virt' ]]
-change server/src/devicetree/mod.rs
+change server/src/metal/devicetree/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 change server/src/metal/processor/hart/local/mod.rs
