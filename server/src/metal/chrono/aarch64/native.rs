@@ -2,7 +2,28 @@
 use core::{arch::asm, num::NonZeroU32};
 
 use super::GenericCounter;
-use crate::metal::platform::description::devicetree::Error;
+use crate::metal::{
+    chrono::Clock,
+    platform::description::devicetree::{Error, NodeId},
+    processor::hart::local::try_current_hart,
+};
+
+/// Original virtual counter and its firmware scope for the native comparator.
+#[must_use]
+pub struct VirtualCounter<'tree> {
+    source: NodeId<'tree>,
+    clock: Clock,
+}
+
+impl<'tree> VirtualCounter<'tree> {
+    pub fn source(&self) -> NodeId<'tree> {
+        self.source
+    }
+
+    pub fn clock(&self) -> &Clock {
+        &self.clock
+    }
+}
 
 impl<'tree> GenericCounter<'tree> {
     /// Admit the local virtual counter sourced by this descriptor.
@@ -11,15 +32,16 @@ impl<'tree> GenericCounter<'tree> {
     /// The caller establishes EL1 access to CNTVCT_EL0 and CNTFRQ_EL0 and
     /// retains the admitted virtual time domain while the clock is used.
     /// A changed virtual offset requires a new admission.
-    pub unsafe fn clock(self, hart: usize) -> Result<crate::metal::chrono::Clock<'tree>, Error> {
-        if !crate::metal::processor::hart::local::try_current_hart()
-            .is_some_and(|current| current.get() == hart)
-        {
-            return Err(Error::Conflict);
-        }
+    pub unsafe fn bind(self, hart: usize) -> Result<VirtualCounter<'tree>, Error> {
+        let hart = try_current_hart()
+            .filter(|current| current.get() == hart)
+            .ok_or(Error::Conflict)?;
         let frequency = unsafe { self.counter_frequency() }?;
-        crate::metal::chrono::Clock::bind(self.source, hart, frequency, read_virtual)
-            .ok_or(Error::Conflict)
+        let clock = Clock::bind(hart, frequency.into(), read_virtual).ok_or(Error::Conflict)?;
+        Ok(VirtualCounter {
+            source: self.source,
+            clock,
+        })
     }
 
     /// Read the frequency from the current PE and compare an explicit DT value.

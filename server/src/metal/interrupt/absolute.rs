@@ -13,7 +13,7 @@ pub trait AbsoluteTimer: Sealed {
     type Failure;
 
     /// Start from a settled idle comparator and confirm the original target.
-    fn arm_at(&mut self, target: Deadline<'_, '_>) -> Result<(), Self::Failure>;
+    fn arm_at(&mut self, target: Deadline<'_>) -> Result<(), Self::Failure>;
 
     fn due(&self) -> Result<bool, Self::Failure>;
 }

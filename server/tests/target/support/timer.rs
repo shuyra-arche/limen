@@ -3,7 +3,7 @@
 use core::{fmt::Debug, time::Duration};
 use kernel::metal::{chrono::Clock, interrupt::AbsoluteTimer};
 
-pub fn arm<T: AbsoluteTimer>(clock: &Clock<'_>, timer: &mut T, delay: Duration)
+pub fn arm<T: AbsoluteTimer>(clock: &Clock, timer: &mut T, delay: Duration)
 where
     T::Failure: Debug,
 {

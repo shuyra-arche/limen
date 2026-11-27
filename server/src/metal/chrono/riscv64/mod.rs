@@ -40,7 +40,8 @@ impl<'a> RiscvTimebase<'a> {
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 #[must_use]
 pub struct Counter<'a> {
-    clock: super::Clock<'a>,
+    timebase: RiscvTimebase<'a>,
+    clock: super::Clock,
 }
 
 #[cfg(all(limen_target, target_arch = "riscv64"))]
@@ -50,18 +51,20 @@ impl<'a> Counter<'a> {
     /// establishes its relationship to the described source. These conditions
     /// must remain valid throughout this use.
     pub unsafe fn admit(timebase: RiscvTimebase<'a>, hart: u64) -> Option<Self> {
-        let hart = usize::try_from(hart).ok()?;
+        let hart = crate::metal::processor::hart::local::try_current_hart()
+            .filter(|local| local.get() as u64 == hart)?;
         Some(Self {
-            clock: super::Clock::bind(timebase.source, hart, timebase.hertz, read_native)?,
+            timebase,
+            clock: super::Clock::bind(hart, timebase.hertz.into(), read_native)?,
         })
     }
 
-    pub fn clock(&self) -> &super::Clock<'a> {
+    pub fn clock(&self) -> &super::Clock {
         &self.clock
     }
 
     pub fn source(&self) -> NodeId<'a> {
-        self.clock.source()
+        self.timebase.source()
     }
 
     pub fn hart(&self) -> u64 {
@@ -69,10 +72,10 @@ impl<'a> Counter<'a> {
     }
 
     pub fn hertz(&self) -> u32 {
-        self.clock.frequency().get()
+        self.timebase.hertz()
     }
 
-    pub fn deadline(&self, count: u64) -> super::Deadline<'_, 'a> {
+    pub fn deadline(&self, count: u64) -> super::Deadline<'_> {
         self.clock.deadline(count)
     }
 

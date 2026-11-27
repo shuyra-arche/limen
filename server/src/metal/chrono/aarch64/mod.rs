@@ -6,6 +6,8 @@ use crate::metal::platform::description::devicetree::{DeviceTree, Error, NodeId,
 
 #[cfg(all(limen_target, target_arch = "aarch64"))]
 mod native;
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+pub use native::VirtualCounter;
 
 /// Counter facts from the architected timer node, independent of IRQ delivery.
 #[derive(Clone, Copy, Debug)]

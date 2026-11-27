@@ -150,7 +150,7 @@ impl<'a> Timer<'a> {
     /// This replacement preserves every committed stop and wake obligation.
     /// A later target requires independent evidence that earlier obligations
     /// have settled or another source still covers them.
-    pub unsafe fn rearm(&mut self, deadline: Deadline<'_, '_>) -> Result<(), Failure> {
+    pub unsafe fn rearm(&mut self, deadline: Deadline<'_>) -> Result<(), Failure> {
         let target = deadline
             .count_for(self.counter.clock())
             .ok_or(Failure::Scope)?;
@@ -218,7 +218,7 @@ impl Sealed for Timer<'_> {}
 impl AbsoluteTimer for Timer<'_> {
     type Failure = Failure;
 
-    fn arm_at(&mut self, deadline: Deadline<'_, '_>) -> Result<(), Failure> {
+    fn arm_at(&mut self, deadline: Deadline<'_>) -> Result<(), Failure> {
         let target = deadline
             .count_for(self.counter.clock())
             .ok_or(Failure::Scope)?;

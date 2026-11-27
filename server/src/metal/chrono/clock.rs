@@ -1,30 +1,25 @@
 //! An admitted hardware counter and samples from its one local time domain.
 
-use core::{marker::PhantomData, num::NonZeroU32, time::Duration};
+use core::{marker::PhantomData, num::NonZeroU64, time::Duration};
 
-use crate::metal::platform::description::devicetree::NodeId;
+#[cfg(limen_target)]
+use crate::metal::processor::hart::local::{HartId, try_current_hart};
 
-/// Sampling is local to the Hart qualified by the actual counter provider.
+/// One admitted counter and time domain, bound to its verified local Hart.
 #[must_use]
-pub struct Clock<'tree> {
-    source: NodeId<'tree>,
-    hart: usize,
-    hertz: NonZeroU32,
+pub struct Clock {
+    #[cfg(limen_target)]
+    hart: HartId,
+    hertz: NonZeroU64,
     #[cfg(limen_target)]
     read: fn() -> u64,
     local: PhantomData<*mut ()>,
 }
 
-impl<'tree> Clock<'tree> {
-    #[cfg(all(limen_target, any(target_arch = "riscv64", target_arch = "aarch64")))]
-    pub(super) fn bind(
-        source: NodeId<'tree>,
-        hart: usize,
-        hertz: NonZeroU32,
-        read: fn() -> u64,
-    ) -> Option<Self> {
-        Self::current(hart).then_some(Self {
-            source,
+impl Clock {
+    #[cfg(limen_target)]
+    pub(super) fn bind(hart: HartId, hertz: NonZeroU64, read: fn() -> u64) -> Option<Self> {
+        (try_current_hart() == Some(hart)).then_some(Self {
             hart,
             hertz,
             read,
@@ -32,35 +27,26 @@ impl<'tree> Clock<'tree> {
         })
     }
 
-    pub fn source(&self) -> NodeId<'tree> {
-        self.source
-    }
-
+    #[cfg(limen_target)]
     pub fn hart(&self) -> usize {
-        self.hart
+        self.hart.get()
     }
 
-    pub fn frequency(&self) -> NonZeroU32 {
+    pub fn frequency(&self) -> NonZeroU64 {
         self.hertz
     }
 
-    pub(crate) fn deadline(&self, count: u64) -> Deadline<'_, 'tree> {
+    pub(crate) fn deadline(&self, count: u64) -> Deadline<'_> {
         Deadline { clock: self, count }
     }
 
     #[cfg(limen_target)]
-    fn current(hart: usize) -> bool {
-        crate::metal::processor::hart::local::try_current_hart()
-            .is_some_and(|current| current.get() == hart)
-    }
-
-    #[cfg(limen_target)]
     pub(crate) fn read(&self) -> Option<u64> {
-        Self::current(self.hart).then(self.read)
+        (try_current_hart() == Some(self.hart)).then(self.read)
     }
 
     #[cfg(limen_target)]
-    pub fn sample(&self) -> Option<Sample<'_, 'tree>> {
+    pub fn sample(&self) -> Option<Sample<'_>> {
         Some(Sample {
             clock: self,
             count: self.read()?,
@@ -70,12 +56,12 @@ impl<'tree> Clock<'tree> {
 
 /// One observation. Comparison requires the same live admitted Clock.
 #[derive(Clone, Copy)]
-pub struct Sample<'clock, 'tree> {
-    clock: &'clock Clock<'tree>,
+pub struct Sample<'clock> {
+    clock: &'clock Clock,
     count: u64,
 }
 
-impl<'clock, 'tree> Sample<'clock, 'tree> {
+impl<'clock> Sample<'clock> {
     /// Elapsed time rounded down to a nanosecond. Stale ordering, another
     /// clock or a wrapped counter fails instead of implying calibration.
     pub fn elapsed_since(self, earlier: Self) -> Option<Duration> {
@@ -90,7 +76,7 @@ impl<'clock, 'tree> Sample<'clock, 'tree> {
 
     /// A later comparison in this same time domain. Rounds up so the
     /// number is never earlier than the requested elapsed duration.
-    pub fn after(self, delay: Duration) -> Option<Deadline<'clock, 'tree>> {
+    pub fn after(self, delay: Duration) -> Option<Deadline<'clock>> {
         let count = later_count(self.count, self.clock.frequency(), delay)?;
         Some(self.clock.deadline(count))
     }
@@ -98,27 +84,27 @@ impl<'clock, 'tree> Sample<'clock, 'tree> {
 
 /// An exact comparison target issued by one admitted hardware counter.
 #[derive(Clone, Copy)]
-pub struct Deadline<'clock, 'tree> {
-    clock: &'clock Clock<'tree>,
+pub struct Deadline<'clock> {
+    clock: &'clock Clock,
     count: u64,
 }
 
-impl Deadline<'_, '_> {
+impl Deadline<'_> {
     /// Return the native comparison count in its original clock domain.
-    pub fn count_for(self, clock: &Clock<'_>) -> Option<u64> {
+    pub fn count_for(self, clock: &Clock) -> Option<u64> {
         core::ptr::eq(self.clock, clock).then_some(self.count)
     }
 }
 
-fn later_count(now: u64, frequency: NonZeroU32, delay: Duration) -> Option<u64> {
+fn later_count(now: u64, frequency: NonZeroU64, delay: Duration) -> Option<u64> {
     let numerator = delay.as_nanos().checked_mul(u128::from(frequency.get()))?;
     let ticks = u64::try_from(numerator.div_ceil(1_000_000_000)).ok()?;
     now.checked_add(ticks).filter(|count| *count > now)
 }
 
-fn duration(ticks: u64, frequency: NonZeroU32) -> Duration {
-    let hz = u64::from(frequency.get());
-    let nanos = ticks % hz * 1_000_000_000 / hz;
+fn duration(ticks: u64, frequency: NonZeroU64) -> Duration {
+    let hz = frequency.get();
+    let nanos = u128::from(ticks % hz) * 1_000_000_000 / u128::from(hz);
     Duration::new(ticks / hz, nanos as u32)
 }
 

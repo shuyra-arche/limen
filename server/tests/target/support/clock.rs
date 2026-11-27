@@ -3,7 +3,7 @@
 use core::{hint::spin_loop, time::Duration};
 use kernel::metal::chrono::Clock;
 
-pub fn observe(clock: &Clock<'_>) {
+pub fn observe(clock: &Clock) {
     let initial = clock.sample().expect("admitted local clock");
     assert_eq!(initial.elapsed_since(initial), Some(Duration::ZERO));
     for _ in 0..200_000 {
