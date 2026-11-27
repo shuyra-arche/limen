@@ -5,13 +5,13 @@ use crate::metal::{
     interrupt::internal::apic::{Failure, LocalApic},
     platform::boot::minor::{self, Minor, StartError},
 };
-use limen_treaty::model::PhysicalAddress;
 use core::{
     arch::{asm, naked_asm},
     mem::offset_of,
     ptr,
     sync::atomic::Ordering,
 };
+use limen_treaty::model::PhysicalAddress;
 
 pub(crate) struct MinorContext;
 pub(crate) const fn minor_context() -> MinorContext {
