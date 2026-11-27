@@ -43,5 +43,5 @@ unsafe extern "sysv64" fn install(
 ) -> ! {
     unsafe { crate::metal::processor::executor::x86_64::native::clear_local() };
     unsafe { terminal::initialize() };
-    unsafe { crate::entry::boot::start(processor, input, stack_top, material) }
+    unsafe { super::super::major::start(processor, input, stack_top, material) }
 }

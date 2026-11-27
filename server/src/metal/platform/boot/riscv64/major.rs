@@ -41,6 +41,6 @@ unsafe extern "C" fn major(hart: usize, dtb: usize) -> ! {
         material = sym LIMEN_MAJOR_MATERIAL,
         top = sym diagnostic::TOP,
         vector = sym trap,
-        loaded = sym crate::entry::boot::start,
+        loaded = sym super::super::major::start,
     );
 }

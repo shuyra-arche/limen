@@ -20,6 +20,7 @@ pub use super::allowance::{
     Allowance, AllowanceCandidate, AllowanceId, Balance, Budget, BudgetObservation, BudgetProgress,
 };
 pub use super::bootstrap::{Config, Initial, RootStorage};
+pub(crate) use super::bootstrap::{InitialRegions, RootInitialization, RootReservation};
 pub use super::returns::{Pending, Retired, ReturnId, Returned};
 pub use super::search::{Lookup, LookupObservation};
 pub use super::source::{Allocator, RegionId};

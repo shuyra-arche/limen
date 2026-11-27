@@ -1,8 +1,8 @@
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, FirmwareRegion, devicetree, physical::Exclusions};
-use crate::metal::platform::boot::handoff::Descriptions;
 #[cfg(limen_target)]
-use crate::metal::platform::boot::major::Admission;
+use crate::metal::platform::boot::treaty::Admission;
+use crate::metal::platform::boot::treaty::Descriptions;
 #[cfg(limen_cooperative)]
 use crate::metal::processor::treaty::Major;
 use core::ops::Range;
@@ -14,6 +14,9 @@ pub struct Boot<'a> {
     image: PhysicalRange,
     descriptions: &'a Descriptions<'a>,
     firmware_map: Option<FirmwareMap<'a>>,
+    map_storage: Option<PhysicalRange>,
+    #[cfg(limen_target)]
+    physical_stacks: [PhysicalRange; 2],
     #[cfg(limen_target)]
     terminal: crate::metal::processor::treaty::Terminal,
     #[cfg(limen_target)]
@@ -45,6 +48,11 @@ impl<'a> Boot<'a> {
         self.stack.clone()
     }
 
+    #[cfg(limen_target)]
+    pub(super) fn physical_stacks(&self) -> [PhysicalRange; 2] {
+        self.physical_stacks
+    }
+
     /// Transfer the original native construction relation to its consumer.
     #[cfg(limen_cooperative)]
     pub fn take_major(&mut self) -> Option<Major> {
@@ -64,8 +72,9 @@ impl<'a> Boot<'a> {
             self.image(),
             major,
             trap,
-            self.device_tree(),
+            self.descriptions.device_tree_physical,
             self.firmware_map(),
+            self.map_storage,
             self.descriptions.memory.as_ref(),
         )
         .with_acpi(self.acpi())
@@ -131,49 +140,37 @@ impl<'a> Boot<'a> {
     }
 
     #[cfg(limen_target)]
-    pub(super) fn from_major(admission: Admission<'a>, descriptions: &'a Descriptions<'a>) -> Self {
-        Self::new(
-            admission.processor,
-            admission.facts.image,
-            admission.facts.firmware_map,
-            descriptions,
-            admission.terminal,
-            admission.stack,
+    pub(super) fn from_major(admission: Admission<'a>) -> Self {
+        let physical_stacks = admission.physical_stacks();
+        Self {
+            processor: admission.processor,
+            image: admission.facts.image,
+            firmware_map: admission.facts.firmware_map,
+            map_storage: admission.facts.map_storage,
+            descriptions: admission.descriptions,
+            terminal: admission.terminal,
+            stack: admission.stack,
+            physical_stacks,
             #[cfg(limen_cooperative)]
-            admission.major,
+            major: Some(admission.major),
             #[cfg(target_arch = "riscv64")]
-            admission.reception,
-        )
+            reception: Some(admission.reception),
+        }
     }
 
-    #[cfg_attr(
-        not(any(limen_target, test)),
-        expect(dead_code, reason = "native entry delivers admitted boot data")
-    )]
+    #[cfg(all(test, not(limen_target)))]
     pub(crate) fn new(
         processor: usize,
         image: PhysicalRange,
         firmware_map: Option<FirmwareMap<'a>>,
         descriptions: &'a Descriptions<'a>,
-        #[cfg(limen_target)] terminal: crate::metal::processor::treaty::Terminal,
-        #[cfg(limen_target)] stack: Range<usize>,
-        #[cfg(limen_cooperative)] major: Major,
-        #[cfg(all(limen_target, target_arch = "riscv64"))]
-        reception: crate::metal::interrupt::riscv64::internal::supervisor::Supervisor,
     ) -> Self {
         Self {
             processor,
             image,
-            descriptions,
             firmware_map,
-            #[cfg(limen_target)]
-            terminal,
-            #[cfg(limen_target)]
-            stack,
-            #[cfg(limen_cooperative)]
-            major: Some(major),
-            #[cfg(all(limen_target, target_arch = "riscv64"))]
-            reception: Some(reception),
+            descriptions,
+            map_storage: None,
         }
     }
 }
