@@ -8,7 +8,9 @@ use crate::{
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, UnitRecord, Units},
     },
     metal::{
-        processor::execution::cooperative::{self, Hart, LeaveReceipt, LocalHart, cooperative_ready},
+        processor::execution::cooperative::{
+            self, Hart, LeaveReceipt, LocalHart, cooperative_ready,
+        },
         processor::hart::local::{self, HartId},
         sync::{TurnAcquireError, TurnLock},
     },
@@ -391,4 +393,3 @@ extern "C" fn start(argument: *const ()) -> ! {
     }
     boot::shutdown(false)
 }
-

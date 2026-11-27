@@ -159,7 +159,9 @@ pub(in crate::metal) fn cooperative_slot(scope: usize) -> Option<(HartId, usize)
 pub(in crate::metal) unsafe fn bind_cooperative(scope: usize, slot: usize) {
     let local = ordinary_local().expect("verified ordinary Hart");
     assert!(local.cooperative.get().is_none());
-    local.cooperative.set(Some(CooperativeBinding { scope, slot }));
+    local
+        .cooperative
+        .set(Some(CooperativeBinding { scope, slot }));
 }
 
 #[cfg(limen_target)]
