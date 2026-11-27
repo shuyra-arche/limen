@@ -152,6 +152,12 @@ for source in server/src/metal/interrupt/external/aplic/mod.rs \
     change "$source"
     bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["rv64-interrupt"]' >/dev/null
 done
+change server/src/metal/memory/mmu/external/riscv/queue.rs
+bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["rv64-iommu"]' >/dev/null
+change server/src/metal/memory/mmu/external/vtd.rs
+[[ $(boards) == q35 ]]
+change server/src/metal/memory/mmu/external/smmu/mod.rs
+[[ $(boards) == virt ]]
 change server/tests/metal/memory/mmu/internal/riscv/activity/mod.rs
 [[ $(bash "$discover" . "$base") == '[]' ]]
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
@@ -224,7 +230,7 @@ for source in server/src/metal/processor/hart/riscv/status.rs \
               server/src/metal/memory/mmu/internal/riscv/context/satp.rs; do
     change "$source"
     bash "$discover" . "$base" | jq -e 'map(.id) | unique ==
-        ["boot-handoff","kernel-execution","kernel-execution-harts","riscv-module-execution","rv64-interrupt"]' >/dev/null
+        ["boot-handoff","kernel-execution","kernel-execution-harts","riscv-module-execution","rv64-interrupt","rv64-iommu"]' >/dev/null
     bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 done
 for source in server/src/metal/processor/hart/aarch64/status.rs \

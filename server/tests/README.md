@@ -64,7 +64,21 @@ handoff. Runtime admission of a Buddy region requires the Allocator source.
 RUSTFLAGS=-Dwarnings cargo test --locked -p kernel --lib --target x86_64-unknown-linux-gnu metal::allocator
 ```
 
-## RV64 interrupt backends
+## Interrupt backends
+
+| Target | Source and receiver | Observed behavior |
+| --- | --- | --- |
+| RV64 virt | 16550 UART → PLIC supervisor context; Sstc → supervisor timer line | Two external receptions keep IE set through the original completion. Two timer deadlines use the real STIMECMP after taking over the inherited comparator. |
+| RV64 virt with AIA | 16550 UART → APLIC direct IDC; ACLINT through SBI TIME | The interrupt guest exercises direct delivery, deadline replacement and hardware shutdown. |
+| x86_64 q35 | COM1 → I/O APIC → local xAPIC | The BSP receives a fixed vector through a guest IDT gate, checks the in-service vector, clears the device and sends the original EOI. |
+| AArch64 virt | PL011 → GICv3 Distributor → Group 1 CPU interface | The guest polls IAR on the original PE, clears the real UART and tests combined and split EOI, including the Distributor active bit before and after DIR. |
+
+The standard RV64 boot and UEFI board guests check the fixed bootstrap
+mappings supplied by their respective fixtures. The guest owns its test
+reception interval. Production Trap dispatch and driver Sign delivery
+have separate entry and lifecycle contracts.
+
+### APLIC and ACLINT
 
 [The interrupt target](target/entry/interrupt/) selects the exact single-Hart
 QEMU machine profile `virt,aia=aplic,aclint=on` with `rv64,sstc=false`.

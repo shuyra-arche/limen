@@ -59,7 +59,12 @@
     "server/src/metal/interrupt/internal/mod.rs",
     "server/src/metal/interrupt/internal/supervisor.rs",
     "server/src/metal/memory/mmu/internal/riscv/context/**",
-    "server/src/metal/memory/mmu/internal/riscv/mode.rs"
+    "server/src/metal/memory/mmu/internal/riscv/mode.rs",
+    "server/src/metal/interrupt/external/plic/**",
+    "server/src/metal/interrupt/external/mod.rs",
+    "server/src/metal/memory/mmu/internal/device.rs",
+    "server/tests/target/entry/reception.rs",
+    "server/src/metal/interrupt/internal/sstc/**"
   ],
   "run": {
     "kind": "qemu",
@@ -73,7 +78,9 @@
       "PASS bootstrap-foundation pend=1 pool=1 retained=1 refund=1 generation=1 stale=1 revoked=1",
       "PASS foundation-pressure preflight=1 fragments=1 allocation=1 pool=1 history=1 rediscover=1 shut=1",
       "PASS boot-mapped-storage identity=1 range=1 rw=1 reuse=1",
-      "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1 regions=0 roots=0"
+      "PASS boot-handoff firmware-hart=1 bare=1 masked=1 trap=1 stacks=1 bss=1 fdt=1 ram=1 reserved=1 exclusions=1 regions=0 roots=0",
+      "PASS plic uart=2 complete=2 duplicate=0 restored=1",
+      "PASS sstc expired=2 replaced=1 shut=1"
     ]
   }
 }

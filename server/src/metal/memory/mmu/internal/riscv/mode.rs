@@ -6,13 +6,7 @@ pub const PAGE_BYTES: u64 = 4096;
 pub const TABLE_ENTRIES: usize = 512;
 pub(super) const PPN_MASK: u64 = (1 << 44) - 1;
 
-/// The access modes of the current supervisor-only leaf encoding contract.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LeafAccess {
-    ReadOnly,
-    ReadWrite,
-    ReadExecute,
-}
+use super::LeafAccess;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(u8)]

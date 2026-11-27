@@ -4,5 +4,6 @@ pub mod aclint;
 pub mod apic;
 pub mod architected;
 pub mod gic;
+pub mod sstc;
 
 pub mod supervisor;

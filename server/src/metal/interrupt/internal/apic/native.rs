@@ -42,9 +42,9 @@ fn masked() -> bool {
 
 /// Early discovery precedes installation of the ordinary Hart-local record.
 pub(crate) fn matches_madt(hart: usize, madt: Madt<'_>) -> bool {
-    base_bits()
-        .and_then(Base::decode)
-        .is_some_and(|base| native::boot_identity() == hart && base.matches(hart, madt))
+    base_bits().and_then(Base::decode).is_some_and(|base| {
+        base.major && native::boot_identity() == hart && base.matches(hart, madt)
+    })
 }
 
 fn observe() -> Option<Observation> {

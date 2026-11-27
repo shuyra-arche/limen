@@ -7,7 +7,8 @@ use core::{
 };
 
 use crate::metal::{
-    platform::firmware::psci::Psci, processor::hart::aarch64::description::AFFINITY_MASK,
+    memory::mmu::internal::aarch64::Controls, platform::firmware::psci::Psci,
+    processor::hart::aarch64::description::AFFINITY_MASK,
 };
 #[derive(Clone, Copy)]
 pub enum Startup {
@@ -41,13 +42,18 @@ pub(crate) unsafe fn wake_minor(
     hart: usize,
     Startup::Psci(service): &mut Startup,
 ) -> Result<(), StartError> {
-    let mut regs = Registers::default();
+    let translation = unsafe { Controls::current() };
+    let cpacr;
     unsafe {
-        asm!("mrs {}, mair_el1","mrs {}, tcr_el1","mrs {}, ttbr0_el1",
-            "mrs {}, ttbr1_el1","mrs {}, cpacr_el1","mrs {}, sctlr_el1",
-            out(reg) regs.mair,out(reg) regs.tcr,out(reg) regs.ttbr0,out(reg) regs.ttbr1,
-            out(reg) regs.cpacr,out(reg) regs.sctlr,options(nomem,nostack));
-        slot.context.get().write(regs);
+        asm!("mrs {}, cpacr_el1", out(reg) cpacr, options(nomem, nostack));
+        slot.context.get().write(Registers {
+            mair: translation.mair as usize,
+            tcr: translation.tcr as usize,
+            ttbr0: translation.ttbr0 as usize,
+            ttbr1: translation.ttbr1 as usize,
+            sctlr: translation.sctlr as usize,
+            cpacr,
+        });
     }
     // The release now covers the saved registers as well as Launch.
     slot.publish();

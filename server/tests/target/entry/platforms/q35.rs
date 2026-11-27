@@ -23,6 +23,14 @@ use uefi::proto::pi::mp::MpServices;
 
 #[path = "io.rs"]
 mod io;
+#[path = "serial_irq.rs"]
+mod serial_irq;
+
+#[path = "edu.rs"]
+mod edu;
+
+#[path = "vtd.rs"]
+mod vtd;
 
 static TRAMPOLINE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
 static TICKS_PER_US: AtomicU64 = AtomicU64::new(0);
@@ -65,17 +73,20 @@ fn startup(boot: &boot::Boot<'_>) -> boot::Startup {
     // page with UC attributes. This fixture owns the actual original ICR.
     let window =
         unsafe { DeviceWindow::admit(physical, InternalAddress::new(address.get())) }.unwrap();
+    let mut window = window;
+    unsafe { serial_irq::prepare_local(&mut window) };
     let probe = Probe::native();
     let (window, reason) = unsafe { LocalApic::admit(usize::MAX, madt, window, probe) }
         .err()
         .expect("wrong Hart must retain the window");
     assert_eq!(reason, apic::Failure::Scope);
-    let controller = unsafe { LocalApic::admit(boot.hart(), madt, window, probe) }
+    let mut controller = unsafe { LocalApic::admit(boot.hart(), madt, window, probe) }
         .ok()
         .expect("actual local APIC");
     assert_eq!(controller.state(), apic::State::Idle);
     assert!(!controller.can_start(boot.hart()));
     assert!(!controller.can_start(255));
+    serial_irq::check(madt, boot.hart(), &mut controller);
     boot::Startup::Xapic {
         controller,
         trampoline: NonNull::new(TRAMPOLINE.load(Ordering::Acquire))
@@ -150,6 +161,21 @@ pub(super) fn check_discovery(boot: &boot::Boot<'_>, target: usize) {
     assert!(madt.enabled_local_apic(u8::try_from(target).unwrap()));
     assert!(madt.io_apics().next().is_some());
     assert!(madt.source_overrides().next().is_some());
+    let dmar = acpi.dmar().unwrap().expect("q35 intel-iommu DMAR");
+    let mut units = dmar.units();
+    let unit = units.next().expect("q35 DRHD");
+    assert!(units.next().is_none() && unit.segment() == 0 && (unit.includes_all_pci() || unit.lists_root_endpoint(0, 6, 0)));
+    // This board fixture installs the chipset VT-d aperture at this exact
+    // identity-mapped UC page. Check firmware against the board before MMIO.
+    let address = PhysicalAddress::new(0xfed9_0000);
+    assert_eq!(
+        unit.registers(),
+        address.range(ByteLength::new(4096)).unwrap()
+    );
+    let mut registers =
+        unsafe { DeviceWindow::admit(unit.registers(), InternalAddress::new(address.get())) }
+            .unwrap();
+    vtd::check(unit, &mut registers);
     let early = boot.exclusions();
     for physical in core::iter::once(acpi.rsdp_range())
         .chain(core::iter::once(acpi.xsdt().physical()))

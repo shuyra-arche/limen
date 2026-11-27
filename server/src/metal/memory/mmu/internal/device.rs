@@ -98,4 +98,26 @@ impl DeviceWindow {
         unsafe { ptr::without_provenance_mut::<u32>(address).write_volatile(value) };
         Ok(())
     }
+
+    /// Geometry only. Does not grant access to the register.
+    pub fn supports_u64(&self, offset: usize) -> bool {
+        self.address(offset, 8).is_ok()
+    }
+
+    /// # Safety
+    /// The caller owns a naturally aligned 64-bit register read, its ordering
+    /// and any effects. Its device endianness must be interpreted by the caller.
+    pub unsafe fn read_u64(&mut self, offset: usize) -> Result<u64, Error> {
+        let address = self.address(offset, 8)?;
+        Ok(unsafe { ptr::without_provenance::<u64>(address).read_volatile() })
+    }
+
+    /// # Safety
+    /// The caller owns this naturally aligned 64-bit register write and its
+    /// effects. The device must accept this width, ordering and byte order.
+    pub unsafe fn write_u64(&mut self, offset: usize, value: u64) -> Result<(), Error> {
+        let address = self.address(offset, 8)?;
+        unsafe { ptr::without_provenance_mut::<u64>(address).write_volatile(value) };
+        Ok(())
+    }
 }

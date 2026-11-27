@@ -292,3 +292,41 @@ fn counter_and_timer_validate_only_their_own_facts() {
         27
     );
 }
+
+#[test]
+fn shared_routes_retain_their_domain_and_exclude_private_and_special_ids() {
+    use kernel::metal::interrupt::external::gic::Route;
+    for (entry, expected) in [
+        ([0, 0, 4], Ok((32, Trigger::LevelHigh))),
+        ([0, 987, 1], Ok((1019, Trigger::EdgeRising))),
+        ([1, 0, 4], Err(Error::Unsupported)),
+        ([0, 988, 4], Err(Error::Range)),
+        ([0, 0, 8], Err(Error::Unsupported)),
+    ] {
+        for extended in [false, true] {
+            let mut cells = Vec::new();
+            if extended {
+                cells.push(7);
+            }
+            cells.extend(entry);
+            let bytes = timer_with(&cells, None, extended);
+            let tree = DeviceTree::new(&bytes).unwrap();
+            let gic = GicV3::read(&tree).unwrap().unwrap();
+            let device = tree.find_path(b"/timer").unwrap().unwrap().id();
+            assert_eq!(
+                Route::read(&tree, device, gic, 0).map(|route| (route.intid(), route.trigger())),
+                expected
+            );
+            assert_eq!(
+                Route::read(&tree, device, gic, 1).unwrap_err(),
+                Error::Range
+            );
+            let other = bytes.clone();
+            let other = DeviceTree::new(&other).unwrap();
+            assert_eq!(
+                Route::read(&other, device, gic, 0).unwrap_err(),
+                Error::Missing
+            );
+        }
+    }
+}

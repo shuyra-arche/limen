@@ -1,0 +1,61 @@
+{
+  "id": "rv64-iommu",
+  "profiles": [
+    "debug",
+    "release"
+  ],
+  "sources": [
+    "server/src/lib.rs",
+    "server/src/entry/mod.rs",
+    "server/src/metal/mod.rs",
+    "server/src/metal/platform/mod.rs",
+    "server/src/metal/processor/mod.rs",
+    "server/src/metal/platform/boot/mod.rs",
+    "server/src/metal/platform/boot/major.rs",
+    "server/src/metal/platform/boot/trap.rs",
+    "server/src/metal/platform/description/mod.rs",
+    "server/src/metal/platform/firmware/mod.rs",
+    "server/src/metal/platform/firmware/uefi/map.rs",
+    "server/src/metal/platform/description/acpi/**",
+    "server/src/entry/boot/**",
+    "server/src/metal/platform/boot/riscv/**",
+    "server/src/metal/platform/firmware/sbi/**",
+    "server/link.x",
+    "server/src/metal/platform/boot/console.rs",
+    "server/src/metal/platform/boot/services.rs",
+    "server/src/metal/platform/description/devicetree/**",
+    "server/src/metal/devicetree/**",
+    "server/src/metal/platform/boot/handoff/mod.rs",
+    "server/src/metal/processor/hart/mod.rs",
+    "server/src/metal/processor/hart/local/**",
+    "server/src/metal/processor/hart/riscv/description.rs",
+    "server/src/metal/processor/hart/riscv/mod.rs",
+    "server/src/metal/processor/hart/riscv/native.rs",
+    "server/src/metal/platform/firmware/uefi/mod.rs",
+    "server/src/metal/platform/boot/handoff/sbi.rs",
+    "server/src/metal/interrupt/mod.rs",
+    "server/src/metal/interrupt/internal/mod.rs",
+    "server/src/metal/sync/**",
+    "server/src/metal/identity/**",
+    "server/src/metal/memory/mod.rs",
+    "server/src/metal/interrupt/internal/supervisor.rs",
+    "server/src/metal/memory/mmu/internal/device.rs",
+    "server/src/metal/memory/mmu/internal/mod.rs",
+    "server/src/entry/boot/handoff.rs",
+    "server/src/metal/processor/hart/riscv/status.rs",
+    "server/src/metal/memory/mmu/internal/riscv/mod.rs",
+    "server/src/metal/memory/mmu/internal/riscv/context/**",
+    "server/src/metal/memory/mmu/internal/riscv/mode.rs",
+    "server/src/metal/memory/mmu/external/riscv/**",
+    "server/src/metal/memory/mmu/external/mod.rs"
+  ],
+  "run": {
+    "kind": "qemu",
+    "kernel": "rv64-iommu",
+    "machine": "iommu",
+    "harts": 1,
+    "expects": [
+      "PASS riscv-iommu sv39=1 directory=1 replacement-rejected=1 off=1 fences=130 walk=1 fault=1"
+    ]
+  }
+}

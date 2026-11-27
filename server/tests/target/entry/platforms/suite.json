@@ -35,6 +35,7 @@
     "server/src/metal/processor/hart/local/**",
     "server/src/metal/sync/**",
     "server/tests/target/entry/synchronization.rs",
+    "server/tests/target/entry/platforms/paging/mod.rs",
     "server/tests/target/entry/memory.rs",
     "server/tests/target/entry/foundation.rs",
     "server/src/basis/**",
@@ -53,10 +54,19 @@
     "board_sources": {
       "q35": [
         "server/src/metal/platform/boot/x86_64/**",
+        "server/src/metal/memory/mmu/internal/x86_64/**",
+        "server/tests/target/entry/platforms/paging/x86_64.rs",
         "server/src/metal/interrupt/internal/apic/**",
+        "server/src/metal/interrupt/external/ioapic/**",
+        "server/src/metal/interrupt/external/mod.rs",
+        "server/tests/target/entry/platforms/serial_irq.rs",
         "server/src/metal/interrupt/mod.rs",
         "server/src/metal/interrupt/internal/mod.rs",
         "server/src/metal/memory/mmu/internal/device.rs",
+        "server/src/metal/memory/mmu/external/mod.rs",
+        "server/src/metal/memory/mmu/external/vtd.rs",
+        "server/tests/target/entry/platforms/edu.rs",
+        "server/tests/target/entry/platforms/vtd.rs",
         "server/tests/target/entry/platforms/q35.rs",
         "server/tests/target/entry/platforms/io.rs",
         "server/src/metal/processor/hart/x86_64/**",
@@ -66,6 +76,8 @@
       ],
       "virt": [
         "server/src/metal/platform/boot/aarch64/**",
+        "server/src/metal/memory/mmu/internal/aarch64/**",
+        "server/tests/target/entry/platforms/paging/aarch64.rs",
         "server/tests/target/entry/platforms/virt.rs",
         "server/tests/target/entry/platforms/devicetree.rs",
         "server/tests/target/entry/platforms/pl011.rs",
@@ -79,7 +91,13 @@
         "server/src/metal/processor/hart/aarch64/**",
         "server/src/metal/processor/execution/cooperative/aarch64/**",
         "server/tests/target/entry/platforms/cooperative/aarch64.rs",
-        "server/src/metal/processor/execution/description/aarch64.rs"
+        "server/src/metal/processor/execution/description/aarch64.rs",
+        "server/src/metal/memory/mmu/external/smmu/**",
+        "server/src/metal/memory/mmu/external/mod.rs",
+        "server/src/metal/interrupt/external/mod.rs",
+        "server/src/metal/interrupt/external/gic/**",
+        "server/src/metal/memory/mmu/internal/device.rs",
+        "server/tests/target/entry/platforms/gic.rs"
       ]
     }
   }

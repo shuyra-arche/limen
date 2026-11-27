@@ -54,12 +54,14 @@ pub enum RiscvMachine {
     #[default]
     Virt,
     AplicAclint,
+    Iommu,
 }
 
 impl RiscvMachine {
     pub fn arguments(self) -> (&'static str, &'static str) {
         match self {
             Self::Virt => ("virt", "rv64"),
+            Self::Iommu => ("virt,iommu-sys=on", "rv64"),
             Self::AplicAclint => ("virt,aia=aplic,aclint=on", "rv64,sstc=false"),
         }
     }

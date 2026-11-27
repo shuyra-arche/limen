@@ -22,6 +22,8 @@ use super::memory;
 
 #[path = "devicetree.rs"]
 mod devicetree;
+#[path = "gic.rs"]
+mod gic;
 #[path = "pl011.rs"]
 mod pl011;
 static FIRMWARE_VECTORS: AtomicUsize = AtomicUsize::new(0);
@@ -138,6 +140,7 @@ pub(super) fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) -> boot::Star
         .expect("validated UEFI virt DTB");
     assert_eq!(firmware.bytes().as_ptr().addr(), tree.start);
     assert_eq!(firmware.bytes().len(), tree.len());
+    inspect_smmu(&firmware);
     let psci = inspect_firmware(&firmware, boot.hart());
 
     let description = boot.dtb_memory().expect("decoded DTB memory");
@@ -178,6 +181,58 @@ pub(super) fn report() -> ! {
         .write_str("PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1 ram=1 reconciled=1\n")
         .expect("diagnostic output");
     boot::shutdown(true)
+}
+
+fn inspect_smmu(tree: &DeviceTree<'_>) {
+    use kernel::metal::memory::mmu::{external::smmu, internal::device::DeviceWindow};
+    use limen_treaty::model::InternalAddress;
+    let mut range = None;
+    for node in tree.nodes() {
+        if let Some(registers) = smmu::registers(node).unwrap() {
+            assert!(range.replace(registers).is_none());
+        }
+    }
+    let range = range.expect("virt SMMUv3");
+    // AAVMF retains this device mapping after ExitBootServices. The guest
+    // uses firmware's disk only before exit and submits no later PCI work.
+    let mut registers =
+        unsafe { DeviceWindow::admit(range, InternalAddress::new(range.start().get())).unwrap() };
+    let profile = unsafe { smmu::probe(&mut registers) }.unwrap();
+    assert!(profile.stage_two && profile.granule_4k && !profile.enabled);
+    fn order() {
+        unsafe { asm!("dsb sy", options(nostack, preserves_flags)) };
+    }
+    let mut change = unsafe { smmu::abort_bypass(&mut registers, order) }.unwrap();
+    fn retry<T>(mut f: impl FnMut() -> Result<T, smmu::Error>) -> T {
+        for _ in 0..100_000 {
+            match f() {
+                Ok(value) => return value,
+                Err(smmu::Error::Busy) => core::hint::spin_loop(),
+                Err(e) => panic!("SMMUv3 control failed: {e:?}"),
+            }
+        }
+        panic!("SMMUv3 acknowledgement timeout");
+    }
+    retry(|| change.observe());
+    use limen_treaty::model::PhysicalAddress;
+    use smmu::queue::{Invalidate, Queue, Ring};
+    static mut COMMANDS: Ring = Ring::EMPTY;
+    let commands = unsafe { &mut *(&raw mut COMMANDS) };
+    let physical = PhysicalAddress::new(core::ptr::from_ref(commands).addr() as u64);
+    let mut queue = unsafe { Queue::open(&mut registers, commands, physical, order) }.unwrap();
+    for operation in [
+        Invalidate::Stream(0),
+        Invalidate::StageTwo(1),
+        Invalidate::Stream(1),
+        Invalidate::StageTwo(2),
+    ] {
+        retry(|| queue.submit(operation));
+        assert_eq!(queue.submit(operation), Err(smmu::Error::Active));
+        assert_eq!(retry(|| queue.observe()), operation);
+        assert_eq!(queue.observe(), Err(smmu::Error::Active));
+    }
+    retry(|| queue.shut());
+    boot::write("\nPASS smmuv3 stage2=1 granule=4096 abort=1 sync=4\n");
 }
 
 fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) -> Psci {
@@ -226,6 +281,7 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) -> Psci {
             .covers(memory::extent(0x080a_0000, 0x080c_0000))
     );
     assert!(unsafe { GicV3::cpu_interface_available() });
+    gic::check(tree, controller, major);
     let _frequency = unsafe { counter.counter_frequency() }.expect("live generic timer frequency");
     psci
 }

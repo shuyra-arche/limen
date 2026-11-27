@@ -35,7 +35,6 @@
     "server/src/metal/platform/boot/handoff/sbi.rs",
     "server/src/metal/interrupt/mod.rs",
     "server/src/metal/interrupt/internal/mod.rs",
-    "server/src/metal/interrupt/external/**",
     "server/src/metal/interrupt/internal/aclint/mod.rs",
     "server/src/metal/interrupt/internal/aclint/timer/**",
     "server/src/metal/chrono/mod.rs",
@@ -50,7 +49,10 @@
     "server/src/metal/processor/hart/riscv/status.rs",
     "server/src/metal/memory/mmu/internal/riscv/mod.rs",
     "server/src/metal/memory/mmu/internal/riscv/context/**",
-    "server/src/metal/memory/mmu/internal/riscv/mode.rs"
+    "server/src/metal/memory/mmu/internal/riscv/mode.rs",
+    "server/tests/target/entry/reception.rs",
+    "server/src/metal/interrupt/external/aplic/**",
+    "server/src/metal/interrupt/external/mod.rs"
   ],
   "run": {
     "kind": "qemu",

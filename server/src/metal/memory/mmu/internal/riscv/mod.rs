@@ -3,4 +3,5 @@ pub mod description;
 pub mod encoder;
 mod mode;
 
-pub use mode::{LeafAccess, Mode, PAGE_BYTES, TABLE_ENTRIES};
+pub use super::LeafAccess;
+pub use mode::{Mode, PAGE_BYTES, TABLE_ENTRIES};

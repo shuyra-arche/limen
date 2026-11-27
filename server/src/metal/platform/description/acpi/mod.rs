@@ -2,7 +2,9 @@
 
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
+mod dmar;
 mod madt;
+pub use dmar::{Dmar, RemappingUnit};
 pub use madt::{IoApic, Madt, Polarity, Processor, Record, SourceOverride, Trigger};
 
 const RSDP_PREFIX: usize = 20;

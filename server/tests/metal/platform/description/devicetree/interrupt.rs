@@ -157,3 +157,52 @@ fn controller_discovery_rejects_foreign_cpu_scope() {
         Some(Error::Conflict)
     );
 }
+
+#[test]
+fn plic_supervisor_route_preserves_holes_and_rejects_ambiguous_contexts() {
+    use kernel::metal::interrupt::external::plic::Route;
+    for (targets, index) in [
+        (vec![1, u32::MAX, 1, 9], Ok(1)),
+        (vec![1, 11, 1, 9], Ok(1)),
+        (vec![1, 9, 1, 9], Err(Error::Conflict)),
+        (vec![1, 11], Err(Error::Missing)),
+        (vec![1, 9, 1], Err(Error::Format)),
+    ] {
+        let mut fixture = Fixture::root();
+        fixture.node(b"cpus");
+        fixture.cells(b"#address-cells", &[1]);
+        fixture.cells(b"#size-cells", &[0]);
+        fixture.node(b"cpu@3");
+        fixture.property(b"device_type", b"cpu\0");
+        fixture.cells(b"reg", &[3]);
+        fixture.node(b"interrupt-controller");
+        fixture.property(b"compatible", b"riscv,cpu-intc\0");
+        fixture.cells(b"#interrupt-cells", &[1]);
+        fixture.property(b"interrupt-controller", b"");
+        fixture.cells(b"phandle", &[1]);
+        fixture.end();
+        fixture.end();
+        fixture.end();
+        fixture.node(b"plic");
+        fixture.property(b"compatible", b"riscv,plic0\0");
+        fixture.property(b"interrupt-controller", b"");
+        fixture.cells(b"#interrupt-cells", &[1]);
+        fixture.cells(b"phandle", &[2]);
+        fixture.cells(b"reg", &[0x0c00_0000, 0x40_0000]);
+        fixture.cells(b"riscv,ndev", &[31]);
+        fixture.cells(b"interrupts-extended", &targets);
+        fixture.end();
+        fixture.node(b"uart");
+        fixture.cells(b"interrupt-parent", &[2]);
+        fixture.cells(b"interrupts", &[10]);
+        fixture.end();
+        let bytes = fixture.finish();
+        let tree = DeviceTree::new(&bytes).unwrap();
+        let cpus = RiscvCpus::new(tree).unwrap().unwrap();
+        let device = tree.find_path(b"/uart").unwrap().unwrap();
+        assert_eq!(
+            Route::read(&tree, &cpus, device, 3).map(|r| r.context()),
+            index
+        );
+    }
+}

@@ -194,7 +194,7 @@ impl<'a> PrivateInterrupts<'a> {
     }
 }
 
-fn interrupt_parent<'tree, 'a>(
+pub(in crate::metal::interrupt) fn interrupt_parent<'tree, 'a>(
     tree: &'tree DeviceTree<'a>,
     mut node: Node<'tree, 'a>,
 ) -> Result<Node<'tree, 'a>, Error> {
@@ -214,3 +214,6 @@ fn interrupt_parent<'tree, 'a>(
         }
     }
 }
+
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+pub mod reception;

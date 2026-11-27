@@ -16,6 +16,7 @@ mod cooperative;
 mod foundation;
 #[path = "../memory.rs"]
 mod memory;
+mod paging;
 mod ram;
 #[path = "../synchronization.rs"]
 mod synchronization;
@@ -238,6 +239,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
             descriptor.ty == uefi::mem::memory_map::MemoryType::CONVENTIONAL
         );
     }
+    paging::check(boot.hart());
     ram::check(&boot);
     let target = TARGET.load(Ordering::Acquire);
     assert_ne!(target, boot.hart());

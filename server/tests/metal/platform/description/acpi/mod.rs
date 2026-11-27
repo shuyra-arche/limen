@@ -375,3 +375,29 @@ fn validates_gicc_flags_for_the_madt_revision() {
         }
     }
 }
+
+#[test]
+fn dmar_preserves_segment_scope_and_register_aperture() {
+    let mut body = vec![0; 12];
+    body[0] = 47;
+    body.extend_from_slice(&[7, 0, 4, 0]); // Uninterpreted remapping structure.
+    body.extend_from_slice(&[0, 0, 24, 0, 1, 1, 2, 0]);
+    body.extend_from_slice(&0xfed9_0000u64.to_le_bytes());
+    let scope = [3, 8, 0, 0, 1, 0, 0x1f, 0];
+    body.extend_from_slice(&scope);
+    let firmware = Firmware::new(vec![(FIRST, table(*b"DMAR", 1, &body))]);
+    let dmar = firmware.discover().unwrap().dmar().unwrap().unwrap();
+    assert_eq!(dmar.table().physical().start().get(), FIRST);
+    let mut units = dmar.units();
+    let unit = units.next().unwrap();
+    assert!(units.next().is_none() && unit.includes_all_pci());
+    assert_eq!(unit.segment(), 2);
+    assert_eq!(unit.registers(), range(0xfed9_0000, 0xfed9_2000));
+    assert_eq!(unit.device_scopes(), scope);
+    for (offset, byte) in [(18, 0), (33, 7), (39, 8), (21, 63), (24, 1)] {
+        let mut invalid = body.clone();
+        invalid[offset] = byte;
+        let fixture = Firmware::new(vec![(FIRST, table(*b"DMAR", 1, &invalid))]);
+        assert!(fixture.discover().unwrap().dmar().is_err());
+    }
+}

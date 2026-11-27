@@ -1,4 +1,4 @@
-//! Actual local xAPIC startup control, separate from the Boot trampoline.
+//! Local xAPIC fixed-vector reception and boot CPU startup control.
 
 use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
@@ -35,8 +35,7 @@ impl Base {
     }
 
     fn matches(self, hart: usize, madt: Madt<'_>) -> bool {
-        self.major
-            && madt.local_controller_address() == Some(self.physical.start())
+        madt.local_controller_address() == Some(self.physical.start())
             && Destination::new(hart).is_some_and(|id| madt.enabled_local_apic(id.0))
     }
 }
@@ -154,7 +153,7 @@ impl Probe {
     }
 }
 
-/// The actual exclusive local ICR owner, not a firmware description.
+/// Exclusive local xAPIC register owner, including ICR and EOI.
 /// Drop neither retires a device mapping nor settles an uncertain send.
 #[must_use]
 pub struct LocalApic {
@@ -163,6 +162,7 @@ pub struct LocalApic {
     window: DeviceWindow,
     probe: Probe,
     state: State,
+    reception: Reception,
 }
 
 impl LocalApic {
@@ -198,6 +198,7 @@ impl LocalApic {
             window,
             probe,
             state: State::Idle,
+            reception: Reception::Idle,
         })
     }
 
@@ -207,7 +208,7 @@ impl LocalApic {
 
     /// Pure target geometry and original scope, not live startup authority.
     pub fn can_start(&self, hart: usize) -> bool {
-        hart != self.hart && Destination::new(hart).is_some()
+        self.base.major && hart != self.hart && Destination::new(hart).is_some()
     }
 
     /// Borrow the exact controller for the requested target and page.
@@ -298,6 +299,9 @@ impl LocalApic {
         Ok(())
     }
 }
+
+mod reception;
+pub use reception::{Claim, Reception};
 
 /// An exclusive, uncommitted startup preparation for one exact target and page.
 /// Dropping it before sending releases the borrow without a hardware effect.

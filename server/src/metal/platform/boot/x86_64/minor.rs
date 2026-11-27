@@ -3,6 +3,7 @@
 use super::Descriptor;
 use crate::metal::{
     interrupt::internal::apic::{Failure, LocalApic},
+    memory::mmu::internal::x86_64::Controls,
     platform::boot::minor::{self, Minor, StartError},
 };
 use core::{
@@ -43,11 +44,6 @@ struct Parameters {
 }
 const _: () = assert!(PARAMS + size_of::<Parameters>() <= 4096);
 
-fn rdmsr(index: u32) -> u64 {
-    let (lo, hi): (u32, u32);
-    unsafe { asm!("rdmsr", in("ecx") index,out("eax") lo,out("edx") hi,options(nostack,nomem)) };
-    u64::from(lo) | (u64::from(hi) << 32)
-}
 fn failure(error: Failure) -> StartError {
     match error {
         Failure::Scope => StartError::Rejected(-2),
@@ -71,25 +67,25 @@ pub(crate) unsafe fn wake_minor(
     // the original trampoline.
     let prepared = controller.prepare(hart, page).map_err(failure)?;
     let mut gdt = Descriptor { limit: 0, base: 0 };
-    let (cr0, cr3, cr4): (usize, usize, usize);
+    let controls = unsafe { Controls::current() };
     let cs: u16;
     unsafe {
         asm!("sgdt [{}]",in(reg) &mut gdt,options(nostack));
-        asm!("mov {},cr0","mov {},cr3","mov {},cr4","mov {:x},cs",out(reg) cr0,out(reg) cr3,out(reg) cr4,out(reg) cs,options(nomem,nostack));
+        asm!("mov {:x},cs",out(reg) cs,options(nomem,nostack));
     }
     let low = |v: usize| u32::try_from(v).map_err(|_| StartError::Rejected(-2));
     // The reset stub uses a 32-bit far pointer and four-level identity mappings.
-    if cr4 & ((1 << 12) | (1 << 17)) != 0 {
+    if !controls.four_level_untagged() {
         return Err(StartError::Rejected(-2));
     }
     let params = Parameters {
         gdt_limit: gdt.limit,
         gdt_base: low(gdt.base)?,
         // Preserve PAE, PGE, OSFXSR and OSXMMEXCPT for the first Rust frame.
-        cr4: (cr4 as u32) & 0x6a0,
-        cr3: low(cr3)?,
-        efer: (rdmsr(0xc0000080) as u32 & (1 << 11)) | (1 << 8),
-        cr0: cr0 as u32,
+        cr4: (controls.cr4 as u32) & 0x6a0,
+        cr3: low(controls.cr3)?,
+        efer: (controls.efer as u32 & (1 << 11)) | (1 << 8),
+        cr0: controls.cr0 as u32,
         slot: low(ptr::from_ref(slot).expose_provenance())?,
         destination: low(minor as *const () as usize)?,
         selector: cs,

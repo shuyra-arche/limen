@@ -16,6 +16,10 @@ use limen_treaty::model::{ByteLength, PhysicalAddress};
 #[path = "../synchronization.rs"]
 mod synchronization;
 
+#[path = "../reception.rs"]
+mod reception;
+mod plic;
+mod sstc;
 mod allocator;
 #[path = "../foundation.rs"]
 mod foundation;
@@ -102,7 +106,7 @@ fn check_discovery(boot: &Boot<'_>) {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
+extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
     let original = unsafe { (&raw const FIRMWARE_HART).read_volatile() };
     assert!(
         original < 4 && boot.hart() == original,
@@ -200,6 +204,9 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert!(magic == 0xd00d_feed, "invalid firmware tree magic");
     assert!(length == device_tree.len(), "firmware tree length mismatch");
     check_discovery(&boot);
+    let mut reception = boot.take_reception().unwrap();
+    plic::check(&boot, &mut reception);
+    sstc::check(&boot, &mut reception.timer);
 
     let memory = boot.dtb_memory().expect("OpenSBI DTB memory");
     assert!(boot.conventional_ram().is_none());
