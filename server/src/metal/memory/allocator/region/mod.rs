@@ -205,10 +205,11 @@ impl Grant {
             if source.root.overlaps(physical) {
                 return Err(Error::Overlap);
             }
-            let prepared = held
-                .access(&source.directory)
-                .expect("directory")
-                .prepare(&source.regions[..index], physical, source.config.maximum)?;
+            let prepared = held.access(&source.directory).expect("directory").prepare(
+                &source.regions[..index],
+                physical,
+                source.config.maximum,
+            )?;
             let state = held.access(&region.state).expect("new Region");
             state.initialize(geometry, source.config.edits, physical.length().get());
             // The directory owns the only write to this unpublished slot.

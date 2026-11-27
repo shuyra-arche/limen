@@ -1338,15 +1338,14 @@ fn region_address_index_preserves_identity_and_balances_real_admissions() {
                     let original = source.regions().collect::<Vec<_>>();
                     assert_eq!(original.len(), 2);
                     for offset in [a, b, c, d] {
-                        let physical = range(
-                            base + (20 + offset) * PAGE,
-                            base + (21 + offset) * PAGE,
-                        );
+                        let physical =
+                            range(base + (20 + offset) * PAGE, base + (21 + offset) * PAGE);
                         let description = RegionDescription {
                             physical,
                             origin: ATTRIBUTES,
                         };
-                        let mut grant = unsafe { retired(physical).grant(source, description) }.unwrap();
+                        let mut grant =
+                            unsafe { retired(physical).grant(source, description) }.unwrap();
                         let id = grant.admit(Fast).unwrap();
                         assert_eq!(grant.admit(Slow), Ok(id));
                         assert_eq!(source.region(id).unwrap().description().physical, physical);
@@ -1366,17 +1365,30 @@ fn region_address_index_preserves_identity_and_balances_real_admissions() {
                         .directory
                         .acquire(|directory| {
                             assert!(matches!(
-                                directory.prepare(&source.regions[..count], existing, source.config.maximum),
+                                directory.prepare(
+                                    &source.regions[..count],
+                                    existing,
+                                    source.config.maximum
+                                ),
                                 Err(Error::Overlap)
                             ));
-                            let overlapping = range(existing.start().get(), existing.end().get() + PAGE);
+                            let overlapping =
+                                range(existing.start().get(), existing.end().get() + PAGE);
                             assert!(matches!(
-                                directory.prepare(&source.regions[..count], overlapping, source.config.maximum),
+                                directory.prepare(
+                                    &source.regions[..count],
+                                    overlapping,
+                                    source.config.maximum
+                                ),
                                 Err(Error::Overlap)
                             ));
                             let outside = range(base + 30 * PAGE, base + 31 * PAGE);
                             assert!(matches!(
-                                directory.prepare(&source.regions[..count], outside, ByteLength::new(0)),
+                                directory.prepare(
+                                    &source.regions[..count],
+                                    outside,
+                                    ByteLength::new(0)
+                                ),
                                 Err(Error::Capacity)
                             ));
                             verify(directory, &source.regions[..count]);
