@@ -210,10 +210,18 @@ impl LocalApic {
         hart != self.hart && Destination::new(hart).is_some()
     }
 
-    /// Recheck the actual current native environment and retained effect
-    /// before preparing or rewriting the trampoline. This alone grants no
-    /// authority to send, and the start operation checks again.
-    pub fn preflight(&self, hart: usize, page: PhysicalAddress) -> Result<(), Failure> {
+    /// Borrow the exact controller for the requested target and page.
+    /// Preparation neither writes ICR nor establishes target arrival.
+    pub fn prepare(&mut self, hart: usize, page: PhysicalAddress) -> Result<Prepared<'_>, Failure> {
+        self.preflight(hart, page)?;
+        Ok(Prepared {
+            controller: self,
+            hart,
+            page,
+        })
+    }
+
+    fn preflight(&self, hart: usize, page: PhysicalAddress) -> Result<(), Failure> {
         if !self.can_start(hart)
             || Vector::new(page).is_none()
             || self.probe.base_for(self.hart) != Some(self.base)
@@ -256,7 +264,7 @@ impl LocalApic {
     /// and all old accesses settle. The delay keeps the trusted Hart and
     /// masked state, never reenters ICR control, and reports a full interval.
     /// An uncertain sequence must retain this owner and its mapping.
-    pub unsafe fn start(
+    unsafe fn start(
         &mut self,
         hart: usize,
         page: PhysicalAddress,
@@ -288,6 +296,27 @@ impl LocalApic {
         // continued ownership of the trampoline remain Boot responsibilities.
         self.state = State::Idle;
         Ok(())
+    }
+}
+
+/// An exclusive, uncommitted startup preparation for one exact target and page.
+/// Dropping it before sending releases the borrow without a hardware effect.
+#[must_use]
+pub struct Prepared<'a> {
+    controller: &'a mut LocalApic,
+    hart: usize,
+    page: PhysicalAddress,
+}
+
+impl Prepared<'_> {
+    /// # Safety
+    /// The original target is inactive and exclusively owned, and its
+    /// prepared trampoline and entry have been published. Preserve their
+    /// mappings and lifetimes until arrival and all old effects settle.
+    /// The delay preserves the current Hart, masked state and exclusive
+    /// ICR ownership and reports the full requested interval.
+    pub unsafe fn start(self, delay: fn(u32) -> bool) -> Result<(), Failure> {
+        unsafe { self.controller.start(self.hart, self.page, delay) }
     }
 }
 
