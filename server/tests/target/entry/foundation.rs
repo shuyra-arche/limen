@@ -11,8 +11,8 @@ use kernel::{
             RamPurpose::Metadata,
             Request, ReturnId, ReturnReceipt, Returned, Search,
             pool::{
-                Error as PoolError, GroupId, GroupReceipt, GroupSlot, Growth, Occupied, Pool, Reference,
-                Retirement, Stable, StableOwner,
+                Error as PoolError, GroupId, GroupReceipt, GroupSlot, Growth, Occupied, Pool,
+                Reference, Retirement, Stable, StableOwner,
             },
         },
         memory::mmu::internal::access::MappedRange,
@@ -60,7 +60,8 @@ static mut RECEIPT: Option<ReturnReceipt> = None;
 type Payload = [u64; 32];
 type Objects = Pool<'static, Stable<Payload>>;
 static mut OBJECT_GROUP_RECEIPT: Option<GroupReceipt> = None;
-static mut OBJECT_GROUPS: [GroupSlot<'static, Stable<Payload>>; 2] = [const { GroupSlot::EMPTY }; 2];
+static mut OBJECT_GROUPS: [GroupSlot<'static, Stable<Payload>>; 2] =
+    [const { GroupSlot::EMPTY }; 2];
 static mut OBJECTS: MaybeUninit<Objects> = MaybeUninit::uninit();
 
 pub(super) fn reference<'pool, T: Sync>(owner: &StableOwner<'pool, '_, T>) -> Reference<'pool, T> {
@@ -152,7 +153,10 @@ fn retire_group(
     let receipt = unsafe { &mut *(&raw mut OBJECT_GROUP_RECEIPT) };
     // The independent directory position exists, but this page already
     // consumes the entire physical budget through its original preparation.
-    assert_eq!(unsafe { pool.install(&mut paired, receipt) }, Err(PoolError::Directory));
+    assert_eq!(
+        unsafe { pool.install(&mut paired, receipt) },
+        Err(PoolError::Directory)
+    );
     assert!(paired.is_some() && receipt.is_none());
     let group = unsafe { pool.install_prepared(prepared, &mut paired, receipt) }.unwrap();
     assert_eq!(prepared, group);
@@ -384,28 +388,44 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     let directory = unsafe { &mut *(&raw mut OBJECT_GROUPS) };
     let objects = Pool::bounded(directory, PAGE as usize).unwrap();
     let objects = unsafe { (&mut *(&raw mut OBJECTS)).write(objects) };
-    let mut aborted = Some(unsafe { (&mut *(&raw mut ABORTED_GROUP)).write(Growth::new(physical)) });
+    let mut aborted =
+        Some(unsafe { (&mut *(&raw mut ABORTED_GROUP)).write(Growth::new(physical)) });
     let mut fresh = Some(unsafe { (&mut *(&raw mut FRESH)).write(Growth::new(physical)) });
     let (old, abandoned) = objects.prepare(&mut aborted).unwrap();
     assert!(aborted.is_none());
-    assert!(matches!(objects.prepare(&mut fresh), Err(PoolError::Directory)));
+    assert!(matches!(
+        objects.prepare(&mut fresh),
+        Err(PoolError::Directory)
+    ));
     assert!(fresh.is_some());
     assert_eq!(objects.reserve(&mut None), Err(PoolError::Full));
     assert_eq!(objects.discard_empty(old), Err(PoolError::Busy));
-    handle.reserve(search(source, PAGE, physical).unwrap(), abandoned, Fast).unwrap();
+    handle
+        .reserve(search(source, PAGE, physical).unwrap(), abandoned, Fast)
+        .unwrap();
     abandoned.shut().unwrap();
     assert_eq!(objects.discard_empty(old), Err(PoolError::Busy));
     abandoned.cancel(Fast).unwrap();
     let mut scan = 0;
-    assert_eq!(objects.retirement(&mut scan, 1), Ok(Retirement::Preparing(old)));
+    assert_eq!(
+        objects.retirement(&mut scan, 1),
+        Ok(Retirement::Preparing(old))
+    );
     objects.discard_empty(old).unwrap();
     let (prepared, original_request) = objects.prepare(&mut fresh).unwrap();
     assert_ne!(prepared, old);
     assert_eq!(objects.discard_empty(old), Err(PoolError::Stale));
     let outside = search(source, PAGE, pages(3, 4)).unwrap();
-    assert_eq!(handle.reserve(outside, original_request, Fast), Err(Error::Source(SourceError::Range)));
+    assert_eq!(
+        handle.reserve(outside, original_request, Fast),
+        Err(Error::Source(SourceError::Range))
+    );
     assert_eq!(allowance.balance(), Ok(original));
-    let first = issue(handle, search(source, PAGE, physical).unwrap(), original_request);
+    let first = issue(
+        handle,
+        search(source, PAGE, physical).unwrap(),
+        original_request,
+    );
     assert_eq!(objects.discard_empty(prepared), Err(PoolError::Busy));
     unsafe { original_request.take(material) }.unwrap();
     assert_eq!(material.as_ref().unwrap().id(), first);
