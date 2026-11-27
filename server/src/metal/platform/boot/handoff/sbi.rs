@@ -4,7 +4,7 @@
 use super::super::services::Services;
 #[cfg(limen_firmware = "sbi")]
 use super::{Descriptions, Facts};
-use crate::devicetree::{ALIGNMENT, HEADER_SIZE, MAX_BLOCK_BYTES, header_layout};
+use crate::metal::devicetree::{ALIGNMENT, HEADER_SIZE, MAX_BLOCK_BYTES, header_layout};
 use crate::metal::platform::description::devicetree::{
     DeviceTree, Error,
     memory::{self, DtbMemory},

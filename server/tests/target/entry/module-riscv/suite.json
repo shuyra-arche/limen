@@ -33,7 +33,7 @@
     "server/src/metal/platform/firmware/uefi/map.rs",
     "server/src/metal/platform/description/acpi/**",
     "server/src/metal/platform/description/devicetree/**",
-    "server/src/devicetree/**",
+    "server/src/metal/devicetree/**",
     "server/src/metal/platform/boot/handoff/mod.rs",
     "server/src/metal/platform/firmware/sbi/**",
     "server/src/metal/processor/hart/riscv/description.rs",

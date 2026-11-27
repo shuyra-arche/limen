@@ -3,7 +3,7 @@ use crate::{
     metal::{
         memory::allocator::{
             Allocation, Allocator, Allowance, Config, Error, Initial, Pending,
-            RamPurpose::Metadata, RegionDescription, RegionOrigin, Request, Retired, ReturnId,
+            RamPurpose::Metadata, RegionDescription, RegionOrigin, Request, Retired, ReturnReceipt,
             Search,
         },
         memory::mmu::internal::access::MappedRange,
@@ -116,9 +116,12 @@ fn source(initial: &mut Option<Allocation>, capacity: u64) -> (&'static Allocato
     (allowance.source(), allowance)
 }
 
-fn begin_return(source: &Allocator, material: Retired) -> ReturnId {
+fn begin_return(material: Retired) -> ReturnReceipt {
     let mut receiver = None;
-    source.begin_return(material, &mut receiver).ok().unwrap();
+    // The fixture retains the original receipt through settlement.
+    unsafe { material.begin_return(&mut receiver) }
+        .ok()
+        .unwrap();
     receiver.unwrap()
 }
 
@@ -210,18 +213,18 @@ fn only_the_original_source_can_resolve_region_and_allowance_slots() {
     allowance.shut(Some(region), Fast).unwrap();
     let (allowance, failure) = allowance.reclaim(Fast).err().unwrap();
     assert_eq!(failure, Error::Balance);
-    let receipt = begin_return(source, unsafe { original.retire() });
+    let receipt = begin_return(unsafe { original.retire() });
     let mut cursor = 0;
     assert_eq!(other.pending(region, &mut cursor, 1), Err(Error::Stale));
     assert_eq!(cursor, 0);
-    assert_eq!(other.finish_return(receipt, Fast), Err(Error::Stale));
+    assert_eq!(other.finish_return(receipt.id(), Fast), Err(Error::Stale));
     assert_eq!(
         source.pending(region, &mut cursor, 1),
-        Ok(Pending::Found(receipt))
+        Ok(Pending::Found(receipt.id()))
     );
-    source.finish_return(receipt, Fast).unwrap();
+    source.finish_return(receipt.id(), Fast).unwrap();
     allowance.reclaim(Fast).ok().unwrap();
-    source.acknowledge(receipt).unwrap();
+    receipt.acknowledge().unwrap();
     assert_eq!(
         other
             .budget(Fast)
@@ -453,6 +456,7 @@ fn initial_pend_limits_and_revalidates_the_original_spender() {
     let retired = unsafe { material.unwrap().retire() };
     unsafe { retired.begin_return(&mut receipt) }.ok().unwrap();
     let receipt = receipt.unwrap();
+    assert_eq!(receipt.acknowledge(), Err(Error::Stale));
     assert_eq!(receipt.finish(Fast).unwrap().allocation, issued_id);
     assert_eq!(receipt.finish(Fast).unwrap().allocation, issued_id);
     receipt.acknowledge().unwrap();
@@ -529,8 +533,8 @@ fn issue_and_allowance_shut_order_the_same_charge() {
             assert_eq!(id, reserved);
             let mut material = None;
             unsafe { construction.take(&mut material) }.unwrap();
-            let receipt = begin_return(source, unsafe { material.unwrap().retire() });
-            assert_eq!(source.finish_return(receipt, Slow).unwrap().allocation, id);
+            let receipt = begin_return(unsafe { material.unwrap().retire() });
+            assert_eq!(receipt.finish(Slow).unwrap().allocation, id);
         }
         Err(PendError::Source(Error::Shut)) => {
             construction.shut().unwrap();
@@ -581,8 +585,8 @@ fn issue_and_cancellation_have_one_winner() {
             assert_eq!(id, reserved);
             let mut material = None;
             unsafe { construction.take(&mut material) }.unwrap();
-            let receipt = begin_return(source, unsafe { material.unwrap().retire() });
-            assert_eq!(source.finish_return(receipt, Slow).unwrap().allocation, id);
+            let receipt = begin_return(unsafe { material.unwrap().retire() });
+            assert_eq!(receipt.finish(Slow).unwrap().allocation, id);
         }
         (Err(PendError::Source(Error::Receiver)), Ok(())) => {
             assert_eq!(construction.cancel(Slow), Ok(()));
@@ -660,12 +664,12 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
     assert_eq!(merged.physical(), pages(0, 3));
     assert_eq!(allowance.balance().unwrap().occupied().get(), 3 * PAGE);
 
-    let receipt = begin_return(source, unsafe { merged.retire() });
+    let receipt = begin_return(unsafe { merged.retire() });
     let mut cursor = 0;
     loop {
         match source.pending(region, &mut cursor, 1).unwrap() {
             Pending::Found(id) => {
-                assert_eq!(id, receipt);
+                assert_eq!(id, receipt.id());
                 break;
             }
             Pending::More => {}
@@ -673,7 +677,7 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
         }
     }
     allowance.shut(Some(credit), Fast).unwrap();
-    let done = source.finish_return(receipt, Slow).unwrap();
+    let done = source.finish_return(receipt.id(), Slow).unwrap();
     assert_eq!(done.physical, pages(0, 3));
     assert_eq!(
         source
@@ -682,9 +686,9 @@ fn independent_history_survives_new_generations_and_refunds_after_shut() {
         Ok((capacity, capacity))
     );
     allowance.reclaim(Slow).ok().unwrap();
-    assert_eq!(source.finish_return(receipt, Fast), Ok(done));
-    source.acknowledge(receipt).unwrap();
-    assert_eq!(source.finish_return(receipt, Fast), Err(Error::Stale));
+    assert_eq!(source.finish_return(receipt.id(), Fast), Ok(done));
+    receipt.acknowledge().unwrap();
+    assert_eq!(source.finish_return(receipt.id(), Fast), Err(Error::Stale));
 }
 
 #[test]
@@ -709,8 +713,8 @@ fn a_split_without_two_return_slots_keeps_the_original_material() {
         .ok()
         .unwrap();
     let [material, returned] = receivers.map(Option::unwrap);
-    let receipt = begin_return(source, unsafe { returned.retire() });
-    let result = source.finish_return(receipt, Fast).unwrap();
+    let receipt = begin_return(unsafe { returned.retire() });
+    let result = source.finish_return(receipt.id(), Fast).unwrap();
     let before = allowance.balance().unwrap();
     assert_eq!(before.occupied().get(), 2 * PAGE);
 
@@ -724,9 +728,9 @@ fn a_split_without_two_return_slots_keeps_the_original_material() {
     assert_eq!(original.physical(), pages(0, 2));
     assert!(receivers.iter().all(Option::is_none));
     assert_eq!(allowance.balance(), Ok(before));
-    assert_eq!(source.finish_return(receipt, Fast), Ok(result));
+    assert_eq!(source.finish_return(receipt.id(), Fast), Ok(result));
 
-    source.acknowledge(receipt).unwrap();
+    receipt.acknowledge().unwrap();
     unsafe { source.split(original, pages(0, 1).end(), &mut receivers, Fast) }
         .ok()
         .unwrap();
@@ -737,9 +741,9 @@ fn a_split_without_two_return_slots_keeps_the_original_material() {
     );
     allowance.shut(Some(left.region()), Fast).unwrap();
     for material in [left, right] {
-        let receipt = begin_return(source, unsafe { material.retire() });
-        source.finish_return(receipt, Fast).unwrap();
-        source.acknowledge(receipt).unwrap();
+        let receipt = begin_return(unsafe { material.retire() });
+        source.finish_return(receipt.id(), Fast).unwrap();
+        receipt.acknowledge().unwrap();
     }
     allowance.reclaim(Fast).ok().unwrap();
 }
@@ -770,8 +774,8 @@ fn negative_search_checks_both_passes_and_rejects_new_geometry() {
     // Observe the negative left Region, then make a qualifying range free.
     assert!(matches!(lookup.step(), Ok(Search::Pending)));
     let material = initial.take().unwrap();
-    let id = begin_return(source, unsafe { material.retire() });
-    source.finish_return(id, Slow).unwrap();
+    let receipt = begin_return(unsafe { material.retire() });
+    receipt.finish(Slow).unwrap();
     loop {
         match lookup.step() {
             Ok(Search::Pending) => {}
@@ -955,8 +959,8 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
 
     allowance.shut(None, Slow).unwrap();
     let material = initial.take().unwrap();
-    let receipt = begin_return(source, unsafe { material.retire() });
-    source.finish_return(receipt, Fast).unwrap();
+    let receipt = begin_return(unsafe { material.retire() });
+    source.finish_return(receipt.id(), Fast).unwrap();
     allowance.reclaim(Slow).ok().unwrap();
     let index = source.allowance_candidate().unwrap();
     let mut plan = work.plan();
@@ -994,7 +998,7 @@ fn initial_allowance_can_shut_and_reclaim_without_the_boot_result() {
     assert_eq!(second.balance().unwrap().capacity().get(), 3 * PAGE);
     assert_eq!(next.balance().unwrap().capacity().get(), 3 * PAGE);
     assert_eq!(
-        source.finish_return(receipt, Fast).unwrap().physical,
+        source.finish_return(receipt.id(), Fast).unwrap().physical,
         pages(0, 3)
     );
 }
@@ -1021,17 +1025,17 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
     let original = initial.take().unwrap();
     let original_id = original.id();
     let region = original.region();
-    let mut receipts: [Option<ReturnId>; CONFIG.returns] = [None; CONFIG.returns];
+    let mut receipts: [Option<ReturnReceipt>; CONFIG.returns] = [const { None }; CONFIG.returns];
     // The caller loses the response. Recovery discovers the Pending record
     // independently and does not read the original owner's receipt array.
-    let _lost = source.begin_return(unsafe { original.retire() }, &mut receipts[0]);
+    let _lost = unsafe { original.retire().begin_return(&mut receipts[0]) };
     let Pending::Found(pending) = source.pending(region, &mut 0, CONFIG.returns).unwrap() else {
         panic!("lost response made the return undiscoverable");
     };
     let original_return = source.finish_return(pending, Fast).unwrap();
     assert_eq!(original_return.allocation, original_id);
-    let owner_receipt = receipts[0].unwrap();
-    assert_eq!(owner_receipt, pending);
+    let owner_receipt = receipts[0].take().unwrap();
+    assert_eq!(owner_receipt.id(), pending);
     let request = Request::new(
         ByteLength::new(PAGE),
         Alignment::new(PAGE).unwrap(),
@@ -1056,17 +1060,16 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
         assert_eq!(issued.physical(), pages(0, 1));
         assert_eq!(
             source
-                .finish_return(owner_receipt, Fast)
+                .finish_return(owner_receipt.id(), Fast)
                 .unwrap()
                 .allocation,
             original_id
         );
         assert_eq!(allowance.balance().unwrap().occupied().get(), PAGE);
-        source
-            .begin_return(unsafe { issued.retire() }, receipt)
+        unsafe { issued.retire().begin_return(receipt) }
             .ok()
             .unwrap();
-        source.finish_return(receipt.unwrap(), Slow).unwrap();
+        receipt.as_ref().unwrap().finish(Slow).unwrap();
     }
 
     let Search::Candidate(candidate) = source.lookup(request, None).unwrap().step().unwrap() else {
@@ -1079,26 +1082,29 @@ fn lost_return_response_replays_after_active_slot_reuse_and_history_saturation()
     );
     assert_eq!(allowance.balance().unwrap().available().get(), 8 * PAGE);
 
-    source.acknowledge(owner_receipt).unwrap();
+    owner_receipt.acknowledge().unwrap();
     let reserved = spending.reserve(candidate, construction, Slow).unwrap();
     assert_eq!(spending.issue(construction, Slow), Ok(reserved));
-    assert_eq!(source.finish_return(owner_receipt, Fast), Err(Error::Stale));
+    assert_eq!(
+        source.finish_return(owner_receipt.id(), Fast),
+        Err(Error::Stale)
+    );
     let mut issued = None;
     unsafe { construction.take(&mut issued) }.unwrap();
     let issued = issued.unwrap();
+    let old_return = owner_receipt.id();
     let mut occupied_receiver = Some(owner_receipt);
-    let (retired, error) = source
-        .begin_return(unsafe { issued.retire() }, &mut occupied_receiver)
+    let (retired, error) = unsafe { issued.retire().begin_return(&mut occupied_receiver) }
         .err()
         .unwrap();
     assert_eq!(error, Error::Receiver);
-    assert_eq!(occupied_receiver, Some(owner_receipt));
+    assert_eq!(occupied_receiver.as_ref().unwrap().id(), old_return);
     assert_eq!(
         source.pending(region, &mut 0, CONFIG.returns),
         Ok(Pending::End)
     );
-    let new_receipt = begin_return(source, retired);
-    source.finish_return(new_receipt, Fast).unwrap();
+    let new_receipt = begin_return(retired);
+    source.finish_return(new_receipt.id(), Fast).unwrap();
     assert_eq!(allowance.balance().unwrap().available().get(), 8 * PAGE);
 }
 

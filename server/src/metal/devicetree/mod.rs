@@ -543,5 +543,5 @@ impl<'a> Cursor<'a> {
 }
 
 #[cfg(test)]
-#[path = "../../tests/devicetree/header.rs"]
+#[path = "../../../tests/metal/devicetree/header.rs"]
 mod tests;
