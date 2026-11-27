@@ -1,5 +1,5 @@
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-#[path = "../../../../../support/paging/binding.rs"]
+#[path = "../../../../../../../target/support/paging/binding.rs"]
 mod binding;
 
 use kernel::metal::memory::mmu::treaty::{BindingControl, BindingEffect, BindingRejection};

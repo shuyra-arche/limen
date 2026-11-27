@@ -204,8 +204,12 @@ impl Platform {
         }
         let mut devices = [None; DEVICE_LIMIT];
         let mut ended = false;
-        for (index, record) in bytes[HEADER..].chunks_exact(DEVICE_SIZE).enumerate() {
-            if record == [0; DEVICE_SIZE] {
+        let (records, remainder) = bytes[HEADER..].as_chunks::<DEVICE_SIZE>();
+        if !remainder.is_empty() {
+            return None;
+        }
+        for (index, record) in records.iter().enumerate() {
+            if *record == [0; DEVICE_SIZE] {
                 ended = true;
                 continue;
             }

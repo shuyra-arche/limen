@@ -1,12 +1,12 @@
 #![no_std]
 #![no_main]
 
-use kernel::entry::boot;
-use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::{entry::boot::Boot, metal::platform::boot::treaty as diagnostic};
 use uefi::prelude::*;
 use uefi_fixture as fixture;
 
-mod scenario;
+#[path = "../../../../../../metal/memory/mmu/aarch64/external/smmu/native/mod.rs"]
+mod native;
 
 #[entry]
 fn main() -> Status {
@@ -14,10 +14,9 @@ fn main() -> Status {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
-    fixture::check_handoff(&boot, None);
-    scenario::check(&boot.device_tree_description().unwrap());
-    boot_diagnostic::shutdown(true)
+extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
+    native::check(boot);
+    diagnostic::shutdown(true)
 }
 
 #[panic_handler]

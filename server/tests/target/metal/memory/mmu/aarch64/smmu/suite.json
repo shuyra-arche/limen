@@ -5,6 +5,9 @@
     "release"
   ],
   "sources": [
+    "server/tests/metal/memory/mmu/aarch64/external/smmu/native/mod.rs",
+    "server/tests/metal/memory/mmu/aarch64/external/smmu/native/scenario.rs",
+    "server/tests/metal/memory/mmu/aarch64/external/smmu/native/stream.rs",
     "server/src/entry/boot/**",
     "server/src/entry/mod.rs",
     "server/src/lib.rs",

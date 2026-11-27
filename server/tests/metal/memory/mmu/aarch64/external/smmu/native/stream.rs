@@ -44,7 +44,7 @@ pub(super) unsafe fn directory() -> (Storage<'static>, StreamTable) {
     )
 }
 
-#[path = "../../../../../support/pci/ecam.rs"]
+#[path = "../../../../../../../target/support/pci/ecam.rs"]
 mod pci;
 use pci::Edu;
 pub(super) use pci::RID;

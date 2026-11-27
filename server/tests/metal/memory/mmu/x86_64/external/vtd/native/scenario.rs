@@ -1,7 +1,7 @@
 //! Two q35 endpoints share one VT-d controller and retire exact bindings.
 
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-#[path = "../../../../../support/paging/binding.rs"]
+#[path = "../../../../../../../target/support/paging/binding.rs"]
 mod binding;
 
 use super::edu::{Endpoint, REQUESTER};
