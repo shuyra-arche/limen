@@ -76,6 +76,14 @@ Allocator validates the root layout, reserved supply and initial receivers
 before Entry consumes the mapping. A delayed region is admitted through the
 original owner's `Retirement::grant` and its unique allocator `Grant`.
 
+Boot can supply a permanent `PendSpace::for_page_tables` spending position.
+Its trusted issuer supplies the actual Allowance, request-size bound and
+alignment bound. It accepts the PageTable purpose and records a read/write
+ceiling for first access. The issued Allocation carries the original slot
+through take and return. Cell publication must revalidate the live holding
+and the actual receiver. Metadata, boot reservations and allocations
+created by conversion have an empty first-access ceiling.
+
 An owner starting with a raw pointer from the original identity mapping can
 use `MappedRange::from_identity`. It checks both machine-width endpoints,
 nonempty slice length and the base address before borrowing. It derives the

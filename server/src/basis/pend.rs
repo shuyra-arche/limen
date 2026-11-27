@@ -82,8 +82,18 @@ pub struct Initial<'receiver> {
 
 impl PendSpace {
     pub const fn new() -> Self {
+        Self::with_permit(AllocationPermitSlot::metadata())
+    }
+
+    /// Supply the permanent initial spending position for table pages.
+    /// The trusted boot issuer supplies the actual source and layout bounds.
+    pub const fn for_page_tables() -> Self {
+        Self::with_permit(AllocationPermitSlot::page_tables())
+    }
+
+    const fn with_permit(permit_slot: AllocationPermitSlot) -> Self {
         Self {
-            permit_slot: AllocationPermitSlot::metadata(),
+            permit_slot,
             state: TurnLock::new(State::Fresh),
         }
     }

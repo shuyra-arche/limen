@@ -15,6 +15,7 @@ mod search;
 pub use super::allocation::{
     Allocation, AllocationConstruction, AllocationId, Cancellation, MappedStorage,
 };
+pub use super::allowance::permit::InitialAccess;
 pub(crate) use super::allowance::permit::{AllocationPermit, AllocationPermitSlot, LayoutLimit};
 pub use super::allowance::{
     Allowance, AllowanceCandidate, AllowanceId, Balance, Budget, BudgetObservation, BudgetProgress,
