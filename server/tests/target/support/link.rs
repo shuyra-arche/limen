@@ -4,7 +4,10 @@ use std::{env, path::Path};
 
 pub fn configure(support: &Path) {
     println!("cargo::rerun-if-changed=build.rs");
-    println!("cargo::rerun-if-changed={}", support.join("link.rs").display());
+    println!(
+        "cargo::rerun-if-changed={}",
+        support.join("link.rs").display()
+    );
     // The record must survive linker garbage collection in every profile.
     let architecture = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("uefi") {

@@ -6,7 +6,7 @@ source "$(dirname "$0")/changes.sh"
 changed_paths "$root" "${2:-}"
 host=false
 runner=false
-rv64=false
+riscv64=false
 for path in "${changed[@]}"; do
     case "$path" in
         rust-toolchain.toml|Cargo.toml|Cargo.lock|treaty/*|.cargo/*|server/Cargo.toml|server/build.rs|tools/tests/checks.sh|tools/tests/changes.sh|.github/workflows/check.yml)
@@ -16,11 +16,11 @@ for path in "${changed[@]}"; do
         server/src/metal/platform/boot/handoff/uefi.rs|server/src/metal/platform/firmware/uefi/loader.rs|server/src/metal/processor/description/aarch64/*|server/src/metal/processor/description/x86_64/*|server/src/metal/processor/execution/profile/*|server/src/metal/platform/firmware/psci/mod.rs|server/src/metal/platform/firmware/treaty/psci.rs|server/src/metal/interrupt/x86_64/*|server/src/metal/interrupt/aarch64/*|server/src/metal/memory/mmu/x86_64/*|server/src/metal/memory/mmu/aarch64/*|server/src/metal/chrono/aarch64/description.rs)
             host=true ;;
         server/src/metal/platform/boot/riscv64/linker.ld)
-            rv64=true ;;
+            riscv64=true ;;
         server/src/*)
-            host=true; rv64=true ;;
+            host=true; riscv64=true ;;
         server/tests/metal/sync/contracts.*|server/tests/entry/boot/contracts.*)
-            rv64=true ;;
+            riscv64=true ;;
         server/tests/runner/*|server/tests/qemu.version|server/tests/entry/boot/fault.rs|server/tests/target/support/platform.rs)
             runner=true ;;
         server/tests/target/*)
@@ -29,6 +29,6 @@ for path in "${changed[@]}"; do
             host=true ;;
     esac
 done
-if [[ $full == true ]]; then host=true; runner=true; rv64=true; fi
-jq -cn --argjson host "$host" --argjson runner "$runner" --argjson rv64 "$rv64" '
-    {$host, $runner, $rv64}'
+if [[ $full == true ]]; then host=true; runner=true; riscv64=true; fi
+jq -cn --argjson host "$host" --argjson runner "$runner" --argjson riscv64 "$riscv64" '
+    {$host, $runner, $riscv64}'

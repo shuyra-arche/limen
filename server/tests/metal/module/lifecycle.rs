@@ -188,7 +188,7 @@ fn capacity_failure_keeps_the_layout_material_and_dependency() {
 }
 
 #[test]
-fn root_publication_keeps_custody_until_its_exact_rv64_geometry_is_bound() {
+fn root_publication_keeps_custody_until_its_exact_riscv64_geometry_is_bound() {
     let (machine, bytes) = IMAGES[0];
     let geometry = ModuleImage::read(bytes, machine, PAGE).unwrap();
     let root = ModuleImage::read(SV39_ROOT, machine, PAGE).unwrap();

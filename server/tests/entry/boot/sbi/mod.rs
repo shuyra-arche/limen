@@ -92,7 +92,7 @@ fn check_discovery(boot: &Boot<'_>) {
             && sbi.timer().unwrap().is_some()
             && sbi.ipi().unwrap().is_some()
     );
-    write("PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1\n");
+    write("PASS firmware-discovery riscv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1\n");
 }
 
 pub fn check(boot: Boot<'_>) {
