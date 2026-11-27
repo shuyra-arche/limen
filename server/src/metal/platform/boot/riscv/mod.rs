@@ -1,5 +1,8 @@
 pub(crate) use super::handoff::sbi::admit;
-use crate::metal::platform::boot::trap as diagnostic;
+use crate::metal::{
+    platform::boot::trap as diagnostic,
+    processor::hart::{local, riscv::native},
+};
 use core::arch::{asm, naked_asm};
 
 // Both entries establish supervisor state before using either stack.
@@ -37,21 +40,17 @@ pub(crate) fn established() -> bool {
             options(nomem, nostack),
         );
     }
-    status & 2 == 0 && interrupt_enable == 0 && translation == 0 && entry_installed()
+    status & 2 == 0 && interrupt_enable == 0 && translation == 0 && entry().is_some()
 }
 
-pub(crate) fn entry_installed() -> bool {
-    let (vector, scratch): (usize, usize);
-    unsafe {
-        asm!(
-            "csrr {vector}, stvec",
-            "csrr {scratch}, sscratch",
-            vector = out(reg) vector,
-            scratch = out(reg) scratch,
-            options(nomem, nostack),
-        );
-    }
-    vector == trap as *const () as usize && scratch == (&raw const diagnostic::TOP).addr()
+pub(in crate::metal) fn entry() -> Option<local::Entry> {
+    local::Entry::admit(
+        native::Entry {
+            vector: trap as *const () as usize,
+            scratch: (&raw const diagnostic::TOP).addr(),
+        },
+        diagnostic::stack_range(),
+    )
 }
 
 pub(crate) fn image() -> core::ops::Range<usize> {

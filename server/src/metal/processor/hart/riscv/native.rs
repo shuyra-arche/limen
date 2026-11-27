@@ -29,3 +29,24 @@ pub(crate) fn stack_pointer() -> usize {
     unsafe { asm!("mv {}, sp", out(reg) sp, options(nomem, nostack)) };
     sp
 }
+
+/// Native entry controls, not a software lifecycle state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::metal) struct Entry {
+    pub(in crate::metal) vector: usize,
+    pub(in crate::metal) scratch: usize,
+}
+
+pub(in crate::metal) fn entry() -> Option<Entry> {
+    let (vector, scratch): (usize, usize);
+    unsafe {
+        asm!(
+            "csrr {vector}, stvec",
+            "csrr {scratch}, sscratch",
+            vector = out(reg) vector,
+            scratch = out(reg) scratch,
+            options(nomem, nostack),
+        );
+    }
+    Some(Entry { vector, scratch })
+}

@@ -1,7 +1,7 @@
 //! A device mapping is not ordinary Rust byte storage.
 
-use core::marker::PhantomData;
-use limen_treaty::model::PhysicalRange;
+use core::{marker::PhantomData, ptr};
+use limen_treaty::model::{Alignment, InternalAddress, PhysicalRange};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -20,12 +20,14 @@ pub struct DeviceWindow {
 
 impl DeviceWindow {
     /// # Safety
-    /// The entire window maps the indicated physical bytes in order with
-    /// valid device attributes, privileged access and the actual ownership
-    /// required for all derived accesses. Keep the mapping and control live
-    /// until all users and original hardware effects have settled.
-    pub unsafe fn admit(physical: PhysicalRange, base: usize) -> Result<Self, Error> {
+    /// On successful geometry validation, the entire window must map the
+    /// indicated physical bytes in order, with valid device attributes,
+    /// privileged access and the required ownership. Keep that mapping and
+    /// control live until all users and original hardware effects settle.
+    /// A window does not itself pin a dynamically removable translation.
+    pub unsafe fn admit(physical: PhysicalRange, base: InternalAddress) -> Result<Self, Error> {
         let length = physical.length().as_usize().ok_or(Error::Range)?;
+        let base = usize::try_from(base.get()).map_err(|_| Error::Range)?;
         if base == 0 || length == 0 || base.checked_add(length).is_none() {
             return Err(Error::Range);
         }
@@ -41,13 +43,59 @@ impl DeviceWindow {
         self.physical
     }
 
-    pub fn base(&self) -> usize {
-        self.base
+    pub fn is_aligned(&self, alignment: Alignment) -> bool {
+        InternalAddress::new(self.base as u64).is_aligned(alignment)
     }
 
-    /// Validate one aligned word access, without performing hardware I/O.
-    pub fn word(&self, offset: usize) -> Option<usize> {
-        let address = self.base.checked_add(offset)?;
-        (offset.checked_add(4)? <= self.length && address.is_multiple_of(4)).then_some(address)
+    fn address(&self, offset: usize, width: usize) -> Result<usize, Error> {
+        let address = self.base.checked_add(offset).ok_or(Error::Range)?;
+        if offset.checked_add(width).ok_or(Error::Range)? > self.length
+            || !address.is_multiple_of(width)
+        {
+            return Err(Error::Range);
+        }
+        Ok(address)
+    }
+
+    /// Geometry only. Does not prove that any register permits this access.
+    pub fn supports_u32(&self, offset: usize) -> bool {
+        self.address(offset, 4).is_ok()
+    }
+
+    /// # Safety
+    /// If geometry permits the access, the actual register must accept this
+    /// width and the caller must own the read and any destructive effect.
+    /// The caller supplies the device's ordering and endianness contract.
+    pub unsafe fn read_u8(&mut self, offset: usize) -> Result<u8, Error> {
+        let address = self.address(offset, 1)?;
+        Ok(unsafe { ptr::without_provenance::<u8>(address).read_volatile() })
+    }
+
+    /// # Safety
+    /// If geometry permits the access, the caller owns the exact write and
+    /// the device must accept this width and value. Ordering is caller-owned.
+    pub unsafe fn write_u8(&mut self, offset: usize, value: u8) -> Result<(), Error> {
+        let address = self.address(offset, 1)?;
+        unsafe { ptr::without_provenance_mut::<u8>(address).write_volatile(value) };
+        Ok(())
+    }
+
+    /// # Safety
+    /// If geometry permits the access, the actual register must accept a
+    /// naturally aligned 32-bit read. The caller owns all possible effects,
+    /// ordering and interpretation of the native-endian result.
+    pub unsafe fn read_u32(&mut self, offset: usize) -> Result<u32, Error> {
+        let address = self.address(offset, 4)?;
+        Ok(unsafe { ptr::without_provenance::<u32>(address).read_volatile() })
+    }
+
+    /// # Safety
+    /// If geometry permits the access, the caller owns the exact write and
+    /// the register accepts this native-endian width/value. The caller owns
+    /// ordering, readback, and actual device completion.
+    pub unsafe fn write_u32(&mut self, offset: usize, value: u32) -> Result<(), Error> {
+        let address = self.address(offset, 4)?;
+        unsafe { ptr::without_provenance_mut::<u32>(address).write_volatile(value) };
+        Ok(())
     }
 }

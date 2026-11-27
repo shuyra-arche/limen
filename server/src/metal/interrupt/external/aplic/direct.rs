@@ -8,7 +8,8 @@ use crate::metal::{
     interrupt::internal::supervisor::{Cause, Reception as LocalReception},
     memory::mmu::internal::device::DeviceWindow,
 };
-use core::{arch::asm, ptr};
+use core::arch::asm;
+use limen_treaty::model::Alignment;
 
 const DOMAIN: usize = 0;
 const PENDING: usize = 0x1c00;
@@ -146,13 +147,13 @@ impl<'a> Direct<'a> {
     ) -> Result<Self, Failure> {
         if description.contexts() != 1
             || mapping.physical() != description.registers()
-            || !mapping.base().is_multiple_of(4096)
+            || !mapping.is_aligned(Alignment::new(4096).expect("APLIC page alignment"))
             || local.hart() != description.hart()
             || local.cause() != Cause::External
         {
             return Err(Failure::Scope);
         }
-        let instance = Self {
+        let mut instance = Self {
             description,
             mapping,
             local,
@@ -162,15 +163,15 @@ impl<'a> Direct<'a> {
             state: State::Prepared,
         };
         instance.context()?;
-        if !DomainConfiguration::shut().confirms(instance.read(DOMAIN))
-            || instance.read(instance.idc(DELIVERY)) != 0
-            || instance.read(instance.idc(FORCE)) != 0
+        if !DomainConfiguration::shut().confirms(instance.observe(DOMAIN))
+            || instance.observe(instance.idc(DELIVERY)) != 0
+            || instance.observe(instance.idc(FORCE)) != 0
             || instance.local.enabled()
         {
             return Err(Failure::Busy);
         }
         for source in 1..=description.sources() {
-            if !SourceConfiguration::Inactive.confirms(instance.read(source as usize * 4))
+            if !SourceConfiguration::Inactive.confirms(instance.observe(source as usize * 4))
                 || instance.bit(ENABLE, source)
                 || instance.bit(PENDING, source)
             {
@@ -210,32 +211,32 @@ impl<'a> Direct<'a> {
         IDC_BASE + self.description.index() * IDC_BYTES + register
     }
 
-    fn read(&self, offset: usize) -> u32 {
-        // The constructor checked the whole window; private offsets are
-        // bounded by its checked source/context geometry.
+    fn read_register(&mut self, offset: usize) -> u32 {
+        // Actual ordering belongs to the APLIC, not the generic byte window.
         unsafe {
             asm!("fence iorw, iorw", options(nostack));
-            let value = ptr::without_provenance::<u32>(
-                self.mapping.word(offset).expect("checked APLIC offset"),
-            )
-            .read_volatile();
+            let value = self.mapping.read_u32(offset).expect("checked APLIC offset");
             asm!("fence iorw, iorw", options(nostack));
             value
         }
     }
 
+    fn observe(&mut self, offset: usize) -> u32 {
+        assert_ne!(offset, self.idc(CLAIM), "claimi is not an observation");
+        self.read_register(offset)
+    }
+
     fn write(&mut self, offset: usize, value: u32) {
         unsafe {
-            ptr::without_provenance_mut::<u32>(
-                self.mapping.word(offset).expect("checked APLIC offset"),
-            )
-            .write_volatile(value);
+            self.mapping
+                .write_u32(offset, value)
+                .expect("checked APLIC offset");
             asm!("fence iorw, iorw", options(nostack));
         }
     }
 
-    fn bit(&self, register: usize, source: u32) -> bool {
-        self.read(register + (source as usize / 32) * 4) & (1 << (source % 32)) != 0
+    fn bit(&mut self, register: usize, source: u32) -> bool {
+        self.observe(register + (source as usize / 32) * 4) & (1 << (source % 32)) != 0
     }
 
     fn unconfirmed(&mut self, effect: Effect) -> Failure {
@@ -272,8 +273,8 @@ impl<'a> Direct<'a> {
         self.sources[index] = Source::Configuring(mode);
         self.write(index * 4, configuration.bits());
         self.write(TARGET + index * 4, target.bits());
-        if !configuration.confirms(self.read(index * 4))
-            || !target.confirms(self.read(TARGET + index * 4))
+        if !configuration.confirms(self.observe(index * 4))
+            || !target.confirms(self.observe(TARGET + index * 4))
         {
             return Err(self.unconfirmed(Effect::Configure(source)));
         }
@@ -324,9 +325,9 @@ impl<'a> Direct<'a> {
         self.write(self.idc(DELIVERY), 1);
         let configuration = DomainConfiguration::open();
         self.write(DOMAIN, configuration.write_bits());
-        if !configuration.confirms(self.read(DOMAIN))
-            || self.read(self.idc(DELIVERY)) != 1
-            || self.read(self.idc(THRESHOLD)) != 0
+        if !configuration.confirms(self.observe(DOMAIN))
+            || self.observe(self.idc(DELIVERY)) != 1
+            || self.observe(self.idc(THRESHOLD)) != 0
         {
             return Err(self.unconfirmed(Effect::Opening));
         }
@@ -349,7 +350,8 @@ impl<'a> Direct<'a> {
         let round = self.next;
         self.next = round.checked_add(1).ok_or(Failure::Exhausted)?;
         self.reception = Reception::Receiving(round);
-        let raw = self.read(self.idc(CLAIM));
+        // Receiving owns the destructive access before the only read.
+        let raw = self.read_register(self.idc(CLAIM));
         let (source, priority) = match Interrupt::read(raw) {
             Some(Interrupt::Empty) => {
                 self.reception = Reception::Empty;
@@ -451,8 +453,8 @@ impl<'a> Direct<'a> {
                 self.write(DOMAIN, configuration.write_bits());
                 self.write(self.idc(DELIVERY), 0);
                 if self.local.enabled()
-                    || !configuration.confirms(self.read(DOMAIN))
-                    || self.read(self.idc(DELIVERY)) != 0
+                    || !configuration.confirms(self.observe(DOMAIN))
+                    || self.observe(self.idc(DELIVERY)) != 0
                 {
                     return Err(self.unconfirmed(Effect::ShutDelivery));
                 }
@@ -491,7 +493,7 @@ impl<'a> Direct<'a> {
                 self.sources[index] = Source::Retiring(mode);
                 let configuration = SourceConfiguration::Inactive;
                 self.write(index * 4, configuration.bits());
-                if !configuration.confirms(self.read(index * 4)) {
+                if !configuration.confirms(self.observe(index * 4)) {
                     return Err(self.unconfirmed(Effect::Retire(source)));
                 }
                 self.sources[index] = Source::Vacant;
