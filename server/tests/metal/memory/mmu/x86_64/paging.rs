@@ -1,6 +1,5 @@
 #[path = "../../../../target/support/paging/mod.rs"]
 mod pages;
-use pages::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 use core::{arch::asm, ptr};
 use kernel::metal::memory::access::treaty::device::DeviceMapping;
 use kernel::metal::memory::mmu::{
@@ -8,6 +7,7 @@ use kernel::metal::memory::mmu::{
     x86_64::internal::{context::Controls, installation::admit_root},
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress, PhysicalRange};
+use pages::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 
 #[path = "../../../../target/support/paging/installation.rs"]
 mod installation;

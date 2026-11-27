@@ -149,6 +149,7 @@ pub(super) fn run(
     target: usize,
     startup: &mut Startup,
     mut started: impl FnMut(&Startup),
+    complete: fn() -> !,
 ) -> ! {
     MAJOR.store(major, Relaxed);
     let major_stack = boot.stack_range();
@@ -223,7 +224,7 @@ pub(super) fn run(
         boot_diagnostic::write(
             "PASS cooperative-execution harts=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1\n",
         );
-        boot_diagnostic::shutdown(true)
+        complete()
     };
     unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
 }

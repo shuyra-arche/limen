@@ -5,6 +5,9 @@
     "release"
   ],
   "sources": [
+    "server/tests/basis/execution/riscv64/mod.rs",
+    "server/tests/basis/execution/riscv64/buddy.rs",
+    "server/tests/basis/execution/riscv64/pool.rs",
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
     "server/src/metal/mod.rs",
@@ -73,6 +76,7 @@
   "run": {
     "kind": "qemu",
     "kernel": "kernel-execution",
+    "imports": ["basis/execution/riscv64"],
     "expects": [
       "PASS pool value-bytes=512 value-align=64 unit-stack=1",
       "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1 rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1 binding_returned=1 admission=1",

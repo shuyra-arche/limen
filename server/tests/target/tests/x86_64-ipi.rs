@@ -12,10 +12,10 @@ use kernel::entry::boot::Boot;
 use uefi::prelude::*;
 use uefi_fixture as fixture;
 
-#[path = "../support/discovery/harness.rs"]
-mod support;
 #[path = "../../metal/interrupt/x86_64/internal/apic/native_ipi.rs"]
 mod scenario;
+#[path = "../support/discovery/harness.rs"]
+mod support;
 
 #[entry]
 fn main() -> Status {

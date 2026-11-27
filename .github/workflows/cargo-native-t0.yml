@@ -4,6 +4,8 @@ on:
     paths:
       - ".github/workflows/cargo-native-t0.yml"
       - "server/tests/metal/**"
+      - "server/tests/basis/**"
+      - "server/tests/entry/**"
       - "server/tests/target/support/outcome/**"
       - "server/tests/target/support/discovery/**"
       - "server/tests/target/support/platform.rs"
@@ -72,6 +74,7 @@ jobs:
           config="target.$LIMEN_TEST_TARGET.runner=['$runner','native','--evidence-root','$evidence']"
           args=()
           if [[ "$LIMEN_T0_PROFILE" == release ]]; then args+=(--release); fi
+          if [[ "$LIMEN_TEST_TARGET" == *-uefi ]]; then args+=(--test 'uefi-*'); fi
           cargo -Z panic-abort-tests --config "$config" test --locked --manifest-path server/tests/target/Cargo.toml -p kernel-guest --test 'common-*' --test "$LIMEN_T0_ARCH-*" --target "$LIMEN_TEST_TARGET" "${args[@]}"
       - name: Preserve probe evidence
         if: always()
