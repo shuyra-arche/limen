@@ -6,8 +6,8 @@ pub use budget::{Budget, BudgetObservation, BudgetProgress};
 use limen_treaty::model::ByteLength;
 
 use crate::metal::{
-    identity::{Generation, Key, Slot},
-    sync::{TurnAccess, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
+    identity::treaty::{Generation, Key, Slot},
+    sync::treaty::{TurnAccess, TurnLock, TurnMode, TurnWorkspace},
 };
 
 use super::{Allocator, Error, RegionId, SourceId};
@@ -27,15 +27,15 @@ impl AllowanceId {
 /// An observation of the original source's current free-chain head.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AllowanceCandidate {
-    source: SourceId,
-    slot: Slot,
+    pub(super) source: SourceId,
+    pub(super) slot: Slot,
 }
 
 /// Actual Allowance close responsibility, issued once to its receiver.
 #[must_use]
 pub struct Allowance {
-    source: &'static Allocator,
-    id: AllowanceId,
+    pub(super) source: &'static Allocator,
+    pub(super) id: AllowanceId,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -172,20 +172,6 @@ impl Allowance {
         Self { source, id }
     }
 
-    pub fn source(&self) -> &'static Allocator {
-        self.source
-    }
-
-    pub fn id(&self) -> AllowanceId {
-        self.id
-    }
-
-    pub fn balance(&self) -> Result<Balance, Error> {
-        self.source
-            .slot(self.id)?
-            .acquire(|slot| slot.live(self.id).map(|pair| pair.0))?
-    }
-
     /// Close spending and immediately refund the currently unused amount to
     /// a published Region. Existing records still refund to their own Regions.
     pub fn shut(&self, credit: Option<RegionId>, mode: TurnMode) -> Result<(), Error> {
@@ -237,7 +223,7 @@ impl Allocator {
         self.allowance_slot(id.0.scope().0, id.0.slot())
     }
 
-    fn allowance_slot(
+    pub(super) fn allowance_slot(
         &self,
         source: SourceId,
         slot: Slot,
@@ -246,40 +232,6 @@ impl Allocator {
             return Err(Error::Stale);
         }
         self.allowances.get(slot.index()).ok_or(Error::Stale)
-    }
-
-    /// Observe the free-chain head before constructing the complete plan.
-    pub fn allowance_candidate(&self) -> Result<AllowanceCandidate, Error> {
-        let slot = self.free.acquire(|free| {
-            free.head.ok_or(if free.retired == self.allowances.len() {
-                Error::IdentityExhausted
-            } else {
-                Error::AllowanceCapacity
-            })
-        })??;
-        Ok(AllowanceCandidate {
-            source: self.source_id(),
-            slot,
-        })
-    }
-
-    pub fn plan_allowance<'a>(
-        &'a self,
-        plan: &mut TurnPlan<'a, '_>,
-        candidate: AllowanceCandidate,
-        debits: &[(RegionId, ByteLength)],
-    ) -> Result<(), Error> {
-        if debits.len() > self.config.regions {
-            return Err(Error::Capacity);
-        }
-        let slot = self.allowance_slot(candidate.source, candidate.slot)?;
-        plan.insert(&self.free).map_err(|_| Error::Capacity)?;
-        plan.insert(slot).map_err(|_| Error::Capacity)?;
-        for &(region, _) in debits {
-            plan.insert(&self.region(region)?.state)
-                .map_err(|_| Error::Capacity)?;
-        }
-        Ok(())
     }
 
     /// Commit source-to-Allowance assignment with a real receiver under the
@@ -341,17 +293,6 @@ impl Allocator {
             self,
             AllowanceId::new(candidate.source, candidate.slot, generation),
         ));
-        Ok(())
-    }
-
-    pub fn plan_transfer<'a>(
-        &'a self,
-        plan: &mut TurnPlan<'a, '_>,
-        from: AllowanceId,
-        to: AllowanceId,
-    ) -> Result<(), Error> {
-        plan.insert(self.slot(from)?).map_err(|_| Error::Capacity)?;
-        plan.insert(self.slot(to)?).map_err(|_| Error::Capacity)?;
         Ok(())
     }
 

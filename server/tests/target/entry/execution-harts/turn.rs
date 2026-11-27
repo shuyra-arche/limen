@@ -8,7 +8,8 @@ use core::{
 use kernel::{
     basis::execution::{Current, Error},
     metal::sync::{
-        TURN_CAPACITY, TurnAcquireError, TurnLock, TurnMode, TurnPlanError, TurnWorkspace,
+        TURN_CAPACITY,
+        treaty::{TurnAcquireError, TurnLock, TurnMode, TurnPlanError, TurnWorkspace},
     },
 };
 

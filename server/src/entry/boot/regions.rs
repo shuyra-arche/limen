@@ -2,14 +2,14 @@
 
 use super::{Boot, Exclusions, Retirement, bump::Bump};
 use crate::metal::{
-    memory::allocator::{
-        Allocator, Allowance, Config, Error, Initial, RegionDescription, RegionOrigin,
-        RootInitialization, RootStorage,
+    memory::access::treaty::ram::MappedRange,
+    memory::allocator::bootstrap::RootInitialization,
+    memory::allocator::treaty::{
+        Allocator, Allowance, Config, Error, Initial, RegionDescription, RegionOrigin, RootStorage,
     },
-    memory::mmu::access::ram::MappedRange,
     platform::{
-        description::devicetree::memory::DtbMemory,
-        firmware::uefi::map::{FirmwareMap, FirmwareRegion, PAGE_ALIGNMENT},
+        description::treaty::devicetree::memory::DtbMemory,
+        firmware::treaty::map::{FirmwareMap, FirmwareRegion, PAGE_ALIGNMENT},
     },
 };
 use core::{alloc::Layout, iter};

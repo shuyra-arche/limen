@@ -9,15 +9,15 @@ use std::vec::Vec;
 use crate::{
     entry::boot::tests::range,
     metal::{
-        memory::allocator::{
+        memory::access::treaty::ram::MappedRange,
+        memory::allocator::treaty::{
             Allocation, Allowance, Config, Initial, MappedStorage,
             pool::{
                 Capacity, Error, Geometry, GroupSlot, Pool, REFERENCE_LIMIT, ReleaseCursor,
                 ReleaseProgress, Retirement, Stable,
             },
         },
-        memory::mmu::access::ram::MappedRange,
-        sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
+        sync::treaty::{TurnLock, TurnMode::Fast, TurnWorkspace},
     },
 };
 
@@ -116,7 +116,10 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
         unsafe { MappedStorage::prepare(material.take().unwrap(), mapping) }
             .err()
             .unwrap();
-    assert_eq!(reason, crate::metal::memory::allocator::Error::Range);
+    assert_eq!(
+        reason,
+        crate::metal::memory::allocator::treaty::Error::Range
+    );
     assert_eq!(allocation.id(), first_id);
     assert_eq!(returned.physical(), short);
     assert_eq!(returned.bytes().as_mut_ptr().addr(), bytes_address);
@@ -127,7 +130,10 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
     let (allocation, mut returned, reason) = unsafe { MappedStorage::prepare(allocation, mapping) }
         .err()
         .unwrap();
-    assert_eq!(reason, crate::metal::memory::allocator::Error::Range);
+    assert_eq!(
+        reason,
+        crate::metal::memory::allocator::treaty::Error::Range
+    );
     assert_eq!(allocation.id(), first_id);
     assert_eq!(returned.physical(), second_physical);
     assert_eq!(returned.bytes().as_mut_ptr().addr(), bytes_address);
@@ -169,7 +175,7 @@ fn prepaid_position_rejects_material_from_another_construction_at_the_same_addre
     let mut bytes = Page([MaybeUninit::uninit(); PAGE]);
     let pool = Pool::bounded(&mut directory, PAGE).unwrap();
     let mut growth = Some(std::boxed::Box::leak(std::boxed::Box::new(
-        crate::metal::memory::allocator::pool::Growth::new(physical),
+        crate::metal::memory::allocator::treaty::pool::Growth::new(physical),
     )));
     let (group, receiver) = pool.prepare(&mut growth).unwrap();
     let mut paired = mapped(&mut material, &mut bytes.0);
@@ -207,7 +213,7 @@ fn the_layout_counts_alignment_state_and_zero_sized_values() {
     assert_eq!(paired.as_ref().unwrap().id(), id);
     assert!(material.is_none());
 
-    use crate::metal::memory::allocator::pool::{VALUE_ALIGNMENT, VALUE_BYTES};
+    use crate::metal::memory::allocator::treaty::pool::{VALUE_ALIGNMENT, VALUE_BYTES};
     #[repr(align(64))]
     struct Boundary([u8; VALUE_BYTES]);
     assert_eq!(size_of::<Boundary>(), VALUE_BYTES);
@@ -379,7 +385,7 @@ fn simultaneous_claims_do_not_share_a_slot() {
 
 #[test]
 fn reserve_and_publish_commit_into_the_held_consumer_record() {
-    use crate::metal::memory::allocator::Error as SourceError;
+    use crate::metal::memory::allocator::treaty::Error as SourceError;
 
     let [mut material, _] = supplies();
     let mut directory = [GroupSlot::<u64>::EMPTY];
@@ -491,12 +497,12 @@ fn all_unique_handles_transfer_a_send_value_between_workers() {
             let mut receipt = None;
             pool.reserve(&mut receipt).unwrap();
             reserve.send(receipt.unwrap()).ok().unwrap();
-            let value: crate::metal::memory::allocator::pool::Prepared<'_, '_, Cell<u64>> =
+            let value: crate::metal::memory::allocator::treaty::pool::Prepared<'_, '_, Cell<u64>> =
                 prepared.recv().unwrap();
             let mut receiver = None;
             value.publish(&mut receiver).ok().unwrap();
             occupy.send(receiver.unwrap()).ok().unwrap();
-            let destroyed: crate::metal::memory::allocator::pool::DestructionReceipt<
+            let destroyed: crate::metal::memory::allocator::treaty::pool::DestructionReceipt<
                 '_,
                 '_,
                 Cell<u64>,
@@ -504,10 +510,13 @@ fn all_unique_handles_transfer_a_send_value_between_workers() {
             destroyed.release().ok().unwrap();
         });
         let second = scope.spawn(move || {
-            let token: crate::metal::memory::allocator::pool::Reservation<'_, '_, Cell<u64>> =
-                reserved.recv().unwrap();
+            let token: crate::metal::memory::allocator::treaty::pool::Reservation<
+                '_,
+                '_,
+                Cell<u64>,
+            > = reserved.recv().unwrap();
             prepare.send(token.initialize(Cell::new(71))).ok().unwrap();
-            let object: crate::metal::memory::allocator::pool::Occupied<'_, '_, Cell<u64>> =
+            let object: crate::metal::memory::allocator::treaty::pool::Occupied<'_, '_, Cell<u64>> =
                 occupied.recv().unwrap();
             assert_eq!(object.get().get(), 71);
             object.get().set(73);
@@ -523,7 +532,7 @@ fn all_unique_handles_transfer_a_send_value_between_workers() {
 
 #[test]
 fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles() {
-    use crate::metal::memory::allocator::pool::Reclamation;
+    use crate::metal::memory::allocator::treaty::pool::Reclamation;
     use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
     use std::{sync::mpsc::sync_channel, thread};
 
@@ -825,7 +834,7 @@ fn a_destructor_with_unknown_outcome_does_not_make_the_slot_reusable() {
 
 #[test]
 fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
-    use crate::metal::memory::allocator::{Error as SourceError, Pending};
+    use crate::metal::memory::allocator::treaty::{Error as SourceError, Pending};
 
     let ([mut a, mut b], allowance) = supply();
     let region = a.as_ref().unwrap().region();
@@ -887,8 +896,10 @@ fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
         panic!("expected the handed-off group from the Pool root");
     };
     let (left, right) = std::thread::scope(|scope| {
-        let left = scope.spawn(|| pool.finish_return(a, crate::metal::sync::TurnMode::Slow));
-        let right = scope.spawn(|| pool.finish_return(a, crate::metal::sync::TurnMode::Slow));
+        let left =
+            scope.spawn(|| pool.finish_return(a, crate::metal::sync::treaty::TurnMode::Slow));
+        let right =
+            scope.spawn(|| pool.finish_return(a, crate::metal::sync::treaty::TurnMode::Slow));
         (left.join().unwrap(), right.join().unwrap())
     });
     assert_eq!(left, Ok(done));

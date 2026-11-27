@@ -6,7 +6,7 @@ use kernel::metal::interrupt::{riscv64::external::aplic, x86_64::internal::apic}
 fn controller_admission_exists_in_the_ordinary_library() {
     // Resolve the real production operations, not a test-only copy or stub.
     // No native probe, mapping, or exclusive reception is fabricated or used.
-    let _ = (apic::LocalApic::admit, aplic::Direct::admit);
+    let _ = (apic::LocalApic::admit, aplic::Domain::admit);
 }
 
 #[test]

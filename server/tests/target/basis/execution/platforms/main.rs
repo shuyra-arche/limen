@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::processor::treaty::Minor;
+
 use kernel::entry::boot;
 use uefi::prelude::*;
 use uefi_fixture as fixture;
@@ -11,7 +13,7 @@ mod scenario;
 #[path = "../../../entry/synchronization.rs"]
 mod synchronization;
 
-static MINOR: boot::Minor = boot::Minor::new();
+static MINOR: Minor = Minor::new();
 static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 fn observe_minor(hart: usize) {

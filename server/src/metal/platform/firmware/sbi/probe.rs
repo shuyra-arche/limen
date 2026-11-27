@@ -1,15 +1,12 @@
+use crate::metal::platform::firmware::treaty::sbi::{
+    HartService, IpiService, ProbeError, SbiServices, TimerService,
+};
+
 pub(super) const DEBUG_CONSOLE: usize = 0x4442_434e;
 pub(super) const SYSTEM_RESET: usize = 0x5352_5354;
-pub(super) const HART_STATE_MANAGEMENT: usize = 0x0048_534d;
-pub(super) const TIMER: usize = 0x5449_4d45;
-pub(super) const INTER_PROCESSOR_INTERRUPT: usize = 0x0073_5049;
-
-/// A failed BASE call or invalid/unsupported version is not absence.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProbeError {
-    Firmware(isize),
-    Version(usize),
-}
+pub(in crate::metal::platform::firmware) const HART_STATE_MANAGEMENT: usize = 0x0048_534d;
+pub(in crate::metal::platform::firmware) const TIMER: usize = 0x5449_4d45;
+pub(in crate::metal::platform::firmware) const INTER_PROCESSOR_INTERRUPT: usize = 0x0073_5049;
 
 pub(crate) struct Extensions {
     pub(crate) console: bool,
@@ -27,27 +24,6 @@ impl Extensions {
     }
 }
 
-/// An actual TIME call endpoint, admitted by the BASE probe. Exclusive
-/// comparator authority remains with the consumer, not this service value.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TimerService(());
-
-/// An admitted HSM call endpoint, not authority over a particular target Hart.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct HartService(());
-
-/// A native SBI software interrupt service admitted by the BASE probe.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct IpiService(());
-
-/// Services reported by the running SBI implementation's BASE extension.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SbiServices {
-    hart_state_management: Result<Option<HartService>, ProbeError>,
-    timer: Result<Option<TimerService>, ProbeError>,
-    ipi: Result<Option<IpiService>, ProbeError>,
-}
-
 impl SbiServices {
     pub(crate) fn probe(
         mut base: impl FnMut(usize, usize) -> (isize, usize),
@@ -60,18 +36,6 @@ impl SbiServices {
             ipi: supports(&mut base, INTER_PROCESSOR_INTERRUPT)
                 .map(|present| present.then_some(IpiService(()))),
         })
-    }
-
-    pub fn hart_state_management(self) -> Result<Option<HartService>, ProbeError> {
-        self.hart_state_management
-    }
-
-    pub fn timer(self) -> Result<Option<TimerService>, ProbeError> {
-        self.timer
-    }
-
-    pub fn ipi(self) -> Result<Option<IpiService>, ProbeError> {
-        self.ipi
     }
 }
 

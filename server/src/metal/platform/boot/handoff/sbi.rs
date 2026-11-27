@@ -1,20 +1,23 @@
 //! Trusted SBI boot input and service installation.
 
 #[cfg(limen_firmware = "sbi")]
-use super::super::services::Services;
+use super::super::treaty::Services;
 #[cfg(limen_firmware = "sbi")]
 use super::{Descriptions, Facts};
 use crate::metal::platform::description::devicetree::{
     ALIGNMENT, HEADER_SIZE, MAX_BLOCK_BYTES, header_layout,
 };
-use crate::metal::platform::description::devicetree::{
+use crate::metal::platform::description::treaty::devicetree::{
     DeviceTree, Error,
     memory::{self, DtbMemory},
 };
 #[cfg(limen_firmware = "sbi")]
 use crate::metal::{
-    platform::firmware::sbi::{extensions, platform_services, reset, write_byte},
-    processor::hart::riscv64::description::RiscvCpus,
+    platform::firmware::{
+        sbi::{extensions, reset, write_byte},
+        treaty::sbi::platform_services,
+    },
+    processor::description::riscv64::cpu::RiscvCpus,
 };
 use core::{ops::Range, slice};
 #[cfg(limen_firmware = "sbi")]

@@ -2,6 +2,7 @@
 #![no_main]
 
 use kernel::entry::boot;
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use uefi::prelude::*;
 use uefi_fixture as fixture;
 
@@ -25,7 +26,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         boot.hart(),
         &mut controller,
     );
-    boot::shutdown(true)
+    boot_diagnostic::shutdown(true)
 }
 
 #[panic_handler]

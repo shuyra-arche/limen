@@ -2,16 +2,16 @@
 
 use core::mem;
 
-use super::{Mode, contract, geometry};
+use super::{Format, contract, geometry};
 use crate::metal::{
-    memory::mmu::{LeafAccess, riscv64::internal::context::Context},
-    module::{Machine, Module, ModuleUse, UseError},
+    memory::mmu::{riscv64::internal::context::Context, treaty::LeafAccess},
+    module::treaty::{Machine, Module, ModuleUse, UseError},
 };
 use limen_treaty::model::PhysicalAddress;
 
 /// Bind an installed encoder to the provider that its module actually retains.
 pub fn bind<'module, Material, const DEPENDENCIES: usize>(
-    mode: Mode,
+    mode: Format,
     module: &'module Module<'_, '_, '_, Material, DEPENDENCIES>,
 ) -> Result<Encoder<'module>, UseError> {
     let geometry = geometry(module.dependencies())?;
@@ -59,7 +59,7 @@ enum Encoding {
 /// The local encoding is the independent checker, not a second page-table owner.
 #[must_use]
 pub struct Encoder<'module> {
-    mode: Mode,
+    mode: Format,
     _encoder_use: ModuleUse<'module>,
     _geometry_use: &'module ModuleUse<'module>,
     encoder: RootEncoder,
@@ -67,7 +67,11 @@ pub struct Encoder<'module> {
 }
 
 impl<'module> Encoder<'module> {
-    fn new(mode: Mode, encoder: ModuleUse<'module>, geometry: &'module ModuleUse<'module>) -> Self {
+    fn new(
+        mode: Format,
+        encoder: ModuleUse<'module>,
+        geometry: &'module ModuleUse<'module>,
+    ) -> Self {
         // Bind checked both exact declarations and the native machine.
         let query = unsafe { mem::transmute::<u64, GeometryQuery>(geometry.entry().get()) };
         let entry = unsafe { mem::transmute::<u64, RootEncoder>(encoder.entry().get()) };
@@ -101,7 +105,7 @@ impl<'module> Encoder<'module> {
     ///
     /// The call requires the same mapping and Hart eligibility as [Self::context].
     pub unsafe fn branch(&self, address: PhysicalAddress) -> Option<u64> {
-        let expected = Mode::branch(address)?;
+        let expected = Format::branch(address)?;
         (unsafe { self.encode(address, Encoding::Branch) } == expected).then_some(expected)
     }
 

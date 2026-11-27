@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 #[cfg(target_arch = "aarch64")]
 #[path = "board/aarch64.rs"]
 mod board;
@@ -15,13 +16,13 @@ mod mapping;
 mod mapping;
 
 use core::fmt::{self, Write};
-use kernel::metal::{platform::firmware::uefi::map::FirmwareMap, platform::firmware::uefi::Loader};
+use kernel::metal::{platform::firmware::treaty::map::FirmwareMap, platform::firmware::uefi::Loader};
 use kernel::{
     entry::boot,
     metal::{
-        memory::mmu::GEOMETRY,
-        memory::mmu::access::ram::MappedRange,
-        module::{Layout, ModuleImage, ModuleSlots, SegmentPermissions, UseError},
+        memory::mmu::treaty::GEOMETRY,
+        memory::access::treaty::ram::MappedRange,
+        module::treaty::{Layout, ModuleImage, ModuleSlots, SegmentPermissions, UseError},
     },
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
@@ -62,7 +63,7 @@ impl Write for Output {
     }
 }
 
-static SERVICES: boot::Services = boot::Services {
+static SERVICES: boot_diagnostic::Services = boot_diagnostic::Services {
     output: Some(board::write_byte),
     reset: Some(board::reset),
 };
@@ -240,7 +241,7 @@ fn main() -> Status {
         device_tree,
         acpi: None,
     };
-    unsafe { boot::major(board::hart(), &input, &SERVICES) }
+    unsafe { boot_diagnostic::major(board::hart(), &input, &SERVICES) }
 }
 
 #[unsafe(no_mangle)]
@@ -294,5 +295,5 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         board::NAME
     )
     .unwrap();
-    boot::shutdown(true)
+    boot_diagnostic::shutdown(true)
 }

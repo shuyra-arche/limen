@@ -1,20 +1,23 @@
 //! One stopped EDU function, one IVHD and a resident single-level table.
 
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 #[path = "../../../../../support/paging/retirement.rs"]
 mod retirement;
 
 use super::edu::{self, Endpoint, REQUESTER};
 use core::arch::x86_64::_mm_mfence;
-use kernel::entry::boot;
 use kernel::metal::{
+    memory::access::treaty::device::DeviceWindow,
     memory::mmu::{
-        Unbind,
-        access::device::DeviceWindow,
+        treaty::Unbind,
         x86_64::external::amdvi::{
-            Admissions, Binding, Completion, Context, Controller, Error, Queue, Storage, Table,
+            Controller, Error, Storage,
+            binding::{Admissions, Binding, Context},
+            directory::Table,
+            queue::{Completion, Queue},
         },
     },
-    platform::description::acpi::Ivhd,
+    platform::description::treaty::acpi::Ivhd,
 };
 use limen_treaty::model::{InternalAddress, PhysicalAddress};
 
@@ -146,7 +149,7 @@ pub(super) fn check(unit: Ivhd<'_>) {
             assert_eq!(controller.observe_retirement(&ticket), Err(Error::Stale));
         });
     }
-    boot::write(
+    boot_diagnostic::write(
         "PASS amdvi-dma requester=00:06.0 denied=1 translated=1 unbound=1 stale-rejected=1\n",
     );
 }

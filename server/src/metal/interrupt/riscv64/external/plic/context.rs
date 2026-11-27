@@ -6,12 +6,11 @@ use super::{
 };
 use crate::metal::{
     interrupt::{
-        Receive,
-        claim::Sealed,
         riscv64::internal::supervisor::{Cause, Reception},
+        treaty::{Receive, claim::Sealed},
     },
     platform::description::devicetree::{DeviceTree, Error},
-    processor::hart::riscv64::description::RiscvCpus,
+    processor::description::riscv64::cpu::RiscvCpus,
 };
 
 /// One supervisor context described by the physical controller.
@@ -445,17 +444,17 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
 #[path = "../../../../../../tests/metal/interrupt/riscv64/external/plic/context.rs"]
 mod tests;
 
-impl crate::metal::interrupt::claim::Sealed for Claim<'_, '_, '_, '_> {}
+impl crate::metal::interrupt::treaty::claim::Sealed for Claim<'_, '_, '_, '_> {}
 
-impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_, '_, '_> {
+impl crate::metal::interrupt::treaty::HardwareClaim for Claim<'_, '_, '_, '_> {
     type Error = Failure;
 
     fn source_number(&self) -> u32 {
         self.source()
     }
 
-    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::Completion, Failure> {
-        use crate::metal::interrupt::Completion;
+    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::treaty::Completion, Failure> {
+        use crate::metal::interrupt::treaty::Completion;
         unsafe { self.complete() }.map(|()| Completion::AwaitingConfirmation)
     }
 }

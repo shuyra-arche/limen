@@ -1,16 +1,15 @@
 use super::{ClearStep, Effect, Event, Failure, Prior, ProgramStep, State};
 #[cfg(limen_firmware = "sbi")]
-use crate::metal::platform::firmware::sbi::TimerService;
+use crate::metal::platform::firmware::treaty::sbi::TimerService;
 use crate::metal::{
-    chrono::{Deadline, riscv64::Counter},
+    chrono::{riscv64::time::Counter, treaty::Deadline},
     interrupt::{
-        AbsoluteTimer,
-        absolute::Sealed,
         riscv64::internal::supervisor::{Cause, Reception},
+        treaty::{AbsoluteTimer, absolute::Sealed},
     },
-    processor::{
-        execution::description::riscv64::{RiscvExtension, RiscvIsa},
-        hart::riscv64::description::RiscvCpu,
+    processor::description::riscv64::{
+        cpu::RiscvCpu,
+        isa::{RiscvExtension, RiscvIsa},
     },
 };
 use core::arch::asm;

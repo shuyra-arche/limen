@@ -9,13 +9,15 @@ use core::{
         Ordering::{Acquire, Relaxed},
     },
 };
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::metal::processor::treaty::{StartError, Startup};
 use kernel::{
     basis::{
         execution::{Current, Error, Execution, KernelBinding},
         room::{Harts, Occupancy},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
-    entry::boot::{self, Boot, StartError, Startup},
+    entry::boot::{self, Boot},
 };
 
 #[cfg(target_arch = "aarch64")]
@@ -31,6 +33,8 @@ use x86_64 as registers;
 
 static mut STACKS: Stacks = Stacks::new();
 static mut HARTS: Harts<2> = Harts::new();
+static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy, 2> =
+    kernel::metal::processor::treaty::Dispatchers::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static MAJOR: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -149,9 +153,11 @@ pub(super) fn run(
     MAJOR.store(major, Relaxed);
     let runtime = Execution::new(
         boot.take_major().expect("original native major relation"),
+        boot.terminal(),
         unsafe { &mut *(&raw mut STACKS) },
         unsafe { &mut *(&raw mut RECORDS) },
         unsafe { &mut *(&raw mut HARTS) },
+        unsafe { &mut *(&raw mut DISPATCHERS) },
     )
     .map_err(|failure| failure.reason)
     .expect("native cooperative profile");
@@ -213,10 +219,10 @@ pub(super) fn run(
         let receipt = dispatch(execution);
         finish(execution, reused, receipt, 41);
         assert_eq!(execution.enter(), Ok(None));
-        boot::write(
+        boot_diagnostic::write(
             "PASS cooperative-execution harts=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1\n",
         );
-        boot::shutdown(true)
+        boot_diagnostic::shutdown(true)
     };
     unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
 }

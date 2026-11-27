@@ -1,4 +1,4 @@
-use kernel::metal::sync::{LeafError, LeafLock, TurnAcquireError, TurnLock, turn_capacity};
+use kernel::metal::sync::treaty::{LeafError, LeafLock, TurnAcquireError, TurnLock, turn_capacity};
 
 #[test]
 fn ordinary_host_cannot_acquire_hart_protection() {

@@ -2,10 +2,11 @@
 #![no_main]
 
 use core::{arch::x86_64::__cpuid, num::NonZeroU32};
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::{
     entry::boot,
     metal::{
-        chrono::x86_64::{Failure as TscFailure, Tsc},
+        chrono::x86_64::tsc::{Failure as TscFailure, Tsc},
         interrupt::x86_64::internal::apic::{Countdown, Divider, Failure, Reception, TimerState},
     },
 };
@@ -82,10 +83,10 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     assert_eq!(entry.count(), 0);
     drop(entry);
 
-    boot::write(
+    boot_diagnostic::write(
         "PASS local-apic-timer inherited=1 one-shot=1 received=1 eoi=1 stopped=1 released=1\n",
     );
-    boot::shutdown(true)
+    boot_diagnostic::shutdown(true)
 }
 
 fn observe_tsc() {
@@ -101,7 +102,7 @@ fn observe_tsc() {
         unsafe { Tsc::admit() },
         Err(TscFailure::VariableRate)
     ));
-    boot::write("PASS q35-tsc counter=1 invariant=0 crystal=0 deadline=0 admitted=0\n");
+    boot_diagnostic::write("PASS q35-tsc counter=1 invariant=0 crystal=0 deadline=0 admitted=0\n");
 }
 
 #[panic_handler]

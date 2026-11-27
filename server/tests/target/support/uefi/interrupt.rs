@@ -5,7 +5,7 @@ use core::{
     marker::PhantomData,
     sync::atomic::{AtomicU32, Ordering},
 };
-use kernel::metal::memory::mmu::access::device::DeviceWindow;
+use kernel::metal::memory::access::treaty::device::DeviceWindow;
 
 use crate::q35::{Idtr, io};
 

@@ -24,7 +24,7 @@ runtime stack handoff, departure of its old users and translation retirement.
 
 ## Minor launch
 
-The image selects a known inactive CPU and provides a resident `Minor` record
+Through the Processor Treaty, the image selects a known inactive CPU and provides a resident `Minor` record
 with a private 32 KiB stack. The major writes the target ID, stack, entry and
 argument, publishes the record, and asks the backend to wake the target. The
 image, launch record and required mappings must stay resident.
@@ -36,28 +36,28 @@ entry. Only then does it publish `Ready` and invoke the supplied entry.
 
 A definitive rejection releases the record for retry. An unconfirmed xAPIC
 delivery keeps the record, trampoline, GDT and mappings reserved because the
-minor can still enter. [Launch state and safety contract](../server/src/metal/platform/boot/minor.rs)
+minor can still enter. [Launch state and safety contract](../server/src/metal/processor/executor/launch/mod.rs)
 
 ## Adding a backend
 
-Use `metal/boot/<arch>/major.rs` and `minor.rs` for the CPU entry instructions.
+Put major entry instructions in `metal/platform/boot/<arch>/major.rs` and the secondary launch instructions in `metal/processor/executor/launch/<arch>.rs`.
 Place each entry's instructions and operands in its Rust naked function.
 Refer to Rust-owned entries and storage with `sym`, sizes and offsets with
 `const`, and align the function when required by the CPU. Export a fixed name
 when an external consumer requires it, as the RV64 ELF linker does for `_start`.
 
-The files directly in `metal/boot/` own admission, launch state and early
-diagnostics. Fixed stack storage and local CPU reads live in `metal/hart/`;
-DTB and firmware protocols live in `metal/firmware/`. The checked bootstrap
-cursor is under `metal/allocator/` and is not a runtime allocator. Each
-function selects its own machine backend; Boot uses the firmware adapter
-for the chosen entry protocol. The platform image supplies board discovery, device
-addresses and startup resources. [Platform contracts](platforms.md) · [Early exceptions](exceptions.md)
+Boot admits the initial firmware handoff and owns the early exception entry.
+Processor owns the resident secondary launch and the local execution
+environment. The handoff carries the platform's terminal output and reset
+operations into Execution. DTB and ACPI are owned by Platform Description.
+SBI, PSCI and UEFI operations are owned by Platform Firmware. The platform
+image supplies device addresses and startup resources.
+[Platform contracts](platforms.md) · [Early exceptions](exceptions.md)
 
 ## Mapped storage
 
 A physical extent is a coordinate, not a Rust pointer or an access grant.
-The actual mapping owner supplies an exclusive `access::MappedRange` with
+The actual mapping owner supplies an exclusive `memory::access::treaty::ram::MappedRange` with
 valid storage and physical correspondence for the entire borrow.
 `MappedRange::split` takes a strictly interior `ByteLength` and consumes the
 original borrow to produce two disjoint borrows of the same backing storage.
@@ -77,7 +77,7 @@ slice from the supplied pointer. The owner must already hold the complete
 writable RAM range and preserve exclusive access, mapping and attributes
 for each derived use.
 
-For ordinary issued material, `allocator::MappedStorage::prepare` combines
+For ordinary issued material, `memory::allocator::treaty::MappedStorage::prepare` combines
 the unique Allocation and its exclusive mapping. The complete physical
 ranges must match; equal ranges or lengths alone do not prove the original
 allocation generation or the real mapping. Its unsafe boundary requires

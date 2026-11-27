@@ -1,9 +1,9 @@
 use crate::metal::{
     platform::boot::handoff::{Descriptions, Facts, uefi},
     platform::boot::trap as diagnostic,
-    processor::hart::{
-        aarch64::{native, status},
-        local,
+    processor::{
+        description::aarch64::status,
+        executor::{aarch64::native, local},
     },
 };
 mod major;
@@ -32,21 +32,9 @@ pub(in crate::metal) fn entry() -> Option<local::Entry> {
     )
 }
 
-pub(crate) fn park() -> ! {
-    loop {
-        unsafe { asm!("wfe", options(nomem, nostack)) };
-    }
-}
-
-mod minor;
-pub use minor::Startup;
-pub(crate) use minor::{MinorContext, minor_context, wake_minor};
-
-pub type DeliveryError = core::convert::Infallible;
-
 #[unsafe(naked)]
 #[rustc_align(2048)]
-unsafe extern "C" fn vectors() -> ! {
+pub(in crate::metal) unsafe extern "C" fn vectors() -> ! {
     naked_asm!(
         ".set slot, 0",
         ".rept 16",

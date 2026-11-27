@@ -3,7 +3,7 @@
 use core::sync::atomic::Ordering::Acquire;
 use limen_treaty::model::ByteLength;
 
-use crate::metal::sync::{TurnAccess, TurnPlan};
+use crate::metal::sync::treaty::{TurnAccess, TurnPlan};
 
 use super::super::{Allocator, Error, RegionId, region::Revision};
 

@@ -1,16 +1,17 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 #[path = "../../../../../support/paging/retirement.rs"]
 mod retirement;
 
 use core::{arch::asm, fmt::Write};
-use kernel::metal::memory::mmu::{Retirement, Unbind};
+use kernel::metal::memory::mmu::treaty::{Retirement, Unbind};
 use kernel::{
-    entry::boot::{self, Boot},
-    metal::memory::mmu::{
-        access::device::DeviceWindow,
-        riscv64::external::iommu::{
+    entry::boot::Boot,
+    metal::memory::{
+        access::treaty::device::DeviceWindow,
+        mmu::riscv64::external::iommu::{
             self, Context, Controller, DeviceOrder, Directory, Effect, Refresh, Sequence, Storage,
         },
     },
@@ -86,10 +87,10 @@ fn retry<T>(mut f: impl FnMut() -> Result<T, iommu::Error>) -> T {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    if let Some(mut console) = boot::console() {
+    if let Some(mut console) = boot_diagnostic::console() {
         let _ = writeln!(console, "FAIL IOMMU {info}");
     }
-    boot::shutdown(false)
+    boot_diagnostic::shutdown(false)
 }
 
 #[unsafe(no_mangle)]
@@ -103,10 +104,11 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     }
     let range = range.expect("a platform IOMMU");
     // The VM has two quiesced EDU functions, no PCI ATS, and Bare SATP.
-    let hertz = kernel::metal::chrono::riscv64::RiscvTimebase::describe(boot.riscv_cpus())
-        .unwrap()
-        .unwrap()
-        .hertz();
+    let hertz =
+        kernel::metal::chrono::riscv64::description::RiscvTimebase::describe(boot.riscv_cpus())
+            .unwrap()
+            .unwrap()
+            .hertz();
     let mut endpoints = [
         pci::Edu::open(
             &tree,
@@ -304,8 +306,8 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
         unsafe { controller.begin_install() },
         Err(iommu::Error::Mode)
     );
-    boot::write(
+    boot_diagnostic::write(
         "\nPASS riscv-iommu sv39=1 directory=1 replacement-rejected=1 off=1 fences=130 walk=1 fault=1 dma=1 downgrade=1 bindings=2 unbound=1 stale=1 recovered=1 queue-return=2\n",
     );
-    boot::shutdown(true)
+    boot_diagnostic::shutdown(true)
 }

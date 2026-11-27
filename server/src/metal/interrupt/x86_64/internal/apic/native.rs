@@ -4,10 +4,7 @@ use core::arch::{asm, x86_64::__cpuid};
 
 use crate::metal::{
     platform::description::acpi::Madt,
-    processor::hart::{
-        local,
-        x86_64::{native, status},
-    },
+    processor::{description::x86_64::status, executor::x86_64::native, treaty::try_current_hart},
 };
 
 use super::{Base, Observation, Probe};
@@ -50,7 +47,7 @@ pub(crate) fn matches_madt(hart: usize, madt: Madt<'_>) -> bool {
 fn observe() -> Option<Observation> {
     let bits = base_bits()?;
     let hart = native::boot_identity();
-    if !masked() || local::try_current_hart().is_none_or(|current| current.get() != hart) {
+    if !masked() || try_current_hart().is_none_or(|current| current.get() != hart) {
         return None;
     }
     Some(Observation { bits, hart })

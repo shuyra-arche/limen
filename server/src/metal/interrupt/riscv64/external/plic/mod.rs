@@ -2,7 +2,7 @@
 
 use crate::metal::{
     interrupt::riscv64::external::Barrier,
-    memory::mmu::access::device::DeviceWindow,
+    memory::access::treaty::device::DeviceWindow,
     platform::description::devicetree::{Error, Node, NodeId, cell},
 };
 use limen_treaty::model::{Alignment, PhysicalRange};

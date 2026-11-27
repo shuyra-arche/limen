@@ -1,6 +1,6 @@
 //! One exact binding retirement scenario over the admitted remapping unit.
 
-use kernel::metal::memory::mmu::{Retirement, Unbind};
+use kernel::metal::memory::mmu::treaty::{Retirement, Unbind};
 
 pub unsafe fn retire<C: Unbind>(
     controller: &mut C,

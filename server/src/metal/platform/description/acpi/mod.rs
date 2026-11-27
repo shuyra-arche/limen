@@ -2,8 +2,8 @@
 
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
-mod dmar;
-mod ivrs;
+pub(super) mod dmar;
+pub(super) mod ivrs;
 pub(crate) use ivrs::DeviceSelections;
 pub use ivrs::Ivhd;
 mod madt;

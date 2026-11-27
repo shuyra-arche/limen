@@ -3,7 +3,7 @@
 use core::ptr;
 use limen_treaty::model::{Alignment, ByteLength};
 
-use crate::metal::sync::{TurnAccess, TurnPlan};
+use crate::metal::sync::treaty::{TurnAccess, TurnPlan};
 
 use super::super::{Allocator, Allowance, AllowanceId, Candidate, Error, RamPurpose};
 

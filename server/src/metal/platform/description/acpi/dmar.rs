@@ -2,7 +2,7 @@
 //! A register extent permits discovery. Requester routing also needs the
 //! original device scopes, PCI topology and reserved-memory constraints.
 
-use super::{Acpi, Error, Table, field};
+use super::{Error, Table, field};
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 const HEADER: usize = 48;
@@ -107,18 +107,10 @@ fn split(bytes: &[u8]) -> Result<(&[u8], &[u8]), Error> {
     bytes.split_at_checked(length).ok_or(Error::InvalidRecord)
 }
 
-impl<'a> Acpi<'a> {
-    pub fn dmar(&self) -> Result<Option<Dmar<'a>>, Error> {
-        let mut matches = self.tables().filter(|table| table.signature() == *b"DMAR");
-        let Some(table) = matches.next() else {
-            return Ok(None);
-        };
-        if matches.next().is_some() {
-            return Err(Error::DuplicateTable);
-        }
-        if table.revision() != 1 {
-            return Err(Error::UnsupportedRevision);
-        }
+impl<'a> Dmar<'a> {
+    pub(in crate::metal::platform::description) fn validate(
+        table: Table<'a>,
+    ) -> Result<Self, Error> {
         let mut rest = table.bytes().get(HEADER..).ok_or(Error::InvalidLength)?;
         let address_bits = table.bytes()[36]
             .checked_add(1)
@@ -137,11 +129,9 @@ impl<'a> Acpi<'a> {
         if !rest.is_empty() {
             return Err(Error::Capacity);
         }
-        Ok(Some(Dmar(table)))
+        Ok(Self(table))
     }
-}
 
-impl<'a> Dmar<'a> {
     pub fn table(self) -> Table<'a> {
         self.0
     }

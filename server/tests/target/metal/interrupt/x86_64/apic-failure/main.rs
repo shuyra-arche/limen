@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::metal::processor::treaty::Minor;
+
 use kernel::entry::boot;
 use uefi::prelude::*;
 use uefi_fixture as fixture;
@@ -9,7 +12,7 @@ use fixture::q35::delay;
 
 mod scenario;
 
-static MINOR: boot::Minor = boot::Minor::new();
+static MINOR: Minor = Minor::new();
 
 #[entry]
 fn main() -> Status {
@@ -22,7 +25,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     let mut startup = fixture::inspect(&boot, &view);
     scenario::check_failure(&mut startup, fixture::target());
     // Keep the original uncertain launch resident through shutdown.
-    boot::shutdown(true)
+    boot_diagnostic::shutdown(true)
 }
 
 #[panic_handler]

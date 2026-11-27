@@ -1,13 +1,13 @@
 use super::{DeviceTree, Error, Fixture};
 
 use kernel::metal::{
-    chrono::riscv64::RiscvTimebase,
-    memory::mmu::riscv64::{
-        internal::description::{MaximumMode, RiscvMmu},
-        sv::Mode,
+    chrono::riscv64::description::RiscvTimebase,
+    memory::mmu::riscv64::internal::{
+        description::{MaximumMode, RiscvMmu},
+        format::Format,
     },
-    processor::execution::description::riscv64::{RiscvExtension, RiscvIsa},
-    processor::hart::riscv64::description::RiscvCpus,
+    processor::description::riscv64::cpu::RiscvCpus,
+    processor::description::riscv64::isa::{RiscvExtension, RiscvIsa},
 };
 
 fn cpu_scope() -> Fixture {
@@ -36,17 +36,17 @@ fn rv64_mmu_description_bounds_the_supported_paged_modes() {
         (b"riscv,none\0", MaximumMode::Bare, [false, false, false]),
         (
             b"riscv,sv39\0",
-            MaximumMode::Paged(Mode::Sv39),
+            MaximumMode::Paged(Format::Sv39),
             [true, false, false],
         ),
         (
             b"riscv,sv48\0",
-            MaximumMode::Paged(Mode::Sv48),
+            MaximumMode::Paged(Format::Sv48),
             [true, true, false],
         ),
         (
             b"riscv,sv57\0",
-            MaximumMode::Paged(Mode::Sv57),
+            MaximumMode::Paged(Format::Sv57),
             [true, true, true],
         ),
     ] {
@@ -61,7 +61,7 @@ fn rv64_mmu_description_bounds_the_supported_paged_modes() {
         let mmu = RiscvMmu::describe(&cpu).unwrap().unwrap();
         assert_eq!(mmu.maximum(), maximum);
         assert_eq!(
-            [Mode::Sv39, Mode::Sv48, Mode::Sv57].map(|mode| maximum.supports(mode)),
+            [Format::Sv39, Format::Sv48, Format::Sv57].map(|mode| maximum.supports(mode)),
             supported
         );
     }
@@ -111,7 +111,7 @@ fn preserves_sparse_hart_ids_and_allocates_no_identity_from_description() {
     assert!(scope.cpu(0).unwrap().unwrap().enabled());
     assert!(scope.cpu(sparse as u32 as u64).unwrap().is_none());
     let mmu = RiscvMmu::describe(&cpu).unwrap().unwrap();
-    assert_eq!(mmu.maximum(), MaximumMode::Paged(Mode::Sv48));
+    assert_eq!(mmu.maximum(), MaximumMode::Paged(Format::Sv48));
     assert_eq!(mmu.source(), cpu.node().id());
     let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
     assert!(isa.has(RiscvExtension::Vector));

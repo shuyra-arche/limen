@@ -2,6 +2,7 @@
 #![no_main]
 
 use kernel::entry::boot;
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use uefi::prelude::*;
 use uefi_fixture as fixture;
 
@@ -16,7 +17,7 @@ fn main() -> Status {
 extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     fixture::check_handoff(&boot, None);
     scenario::check(&boot.device_tree_description().unwrap());
-    boot::shutdown(true)
+    boot_diagnostic::shutdown(true)
 }
 
 #[panic_handler]

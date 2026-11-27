@@ -1,6 +1,6 @@
 //! Exclusive mapped storage for one ordinary issued Allocation.
 
-use crate::metal::memory::mmu::access::ram::MappedRange;
+use crate::metal::memory::access::treaty::ram::MappedRange;
 use limen_treaty::model::PhysicalRange;
 
 use super::super::{Allocation, AllocationId, Error};

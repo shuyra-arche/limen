@@ -1,5 +1,8 @@
 #![no_std]
 
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::metal::processor::treaty::Minor;
+
 use core::sync::atomic::{AtomicUsize, Ordering};
 use kernel::entry::boot;
 #[cfg(target_arch = "x86_64")]
@@ -31,7 +34,7 @@ pub fn target() -> usize {
     TARGET.load(Ordering::Acquire)
 }
 
-pub fn check_minor(minor: &boot::Minor, hart: usize) {
+pub fn check_minor(minor: &Minor, hart: usize) {
     assert_eq!(minor.stack_range().len(), boot::stack_range().len());
     assert_eq!(boot::stack_range().len(), 32 * 1024);
     assert_eq!(hart, target());
@@ -50,8 +53,8 @@ pub fn check_minor(minor: &boot::Minor, hart: usize) {
 
 pub fn load(prepare: impl FnOnce() -> Result<(), Status>) -> Status {
     assert_eq!(
-        kernel::metal::sync::LeafLock::new(()).attempt(|()| ()),
-        Err(kernel::metal::sync::LeafError::Context)
+        kernel::metal::sync::treaty::LeafLock::new(()).attempt(|()| ()),
+        Err(kernel::metal::sync::treaty::LeafError::Context)
     );
     let loaded = match uefi::boot::open_protocol_exclusive::<uefi::proto::loaded_image::LoadedImage>(
         uefi::boot::image_handle(),
@@ -126,14 +129,14 @@ pub fn load(prepare: impl FnOnce() -> Result<(), Status>) -> Status {
         #[cfg(target_arch = "aarch64")]
         acpi: None,
     };
-    unsafe { boot::major(board::hart(), &input, &board::SERVICES) }
+    unsafe { boot_diagnostic::major(board::hart(), &input, &board::SERVICES) }
 }
 
 pub fn extent(start: u64, end: u64) -> PhysicalRange {
     PhysicalRange::new(PhysicalAddress::new(start), PhysicalAddress::new(end)).unwrap()
 }
 
-pub fn check_handoff<'a>(boot: &boot::Boot<'a>, minor: Option<&boot::Minor>) -> MemoryMapRef<'a> {
+pub fn check_handoff<'a>(boot: &boot::Boot<'a>, minor: Option<&Minor>) -> MemoryMapRef<'a> {
     assert_eq!(boot.hart(), board::hart());
     let map = boot.firmware_map().expect("final UEFI map");
     let early = boot.exclusions();
@@ -181,7 +184,7 @@ pub fn check_handoff<'a>(boot: &boot::Boot<'a>, minor: Option<&boot::Minor>) -> 
 }
 
 fn check_descriptors(
-    map: kernel::metal::platform::firmware::uefi::map::FirmwareMap<'_>,
+    map: kernel::metal::platform::firmware::treaty::map::FirmwareMap<'_>,
 ) -> MemoryMapRef<'_> {
     let view = MemoryMapRef::new(
         map.descriptors(),
@@ -214,8 +217,8 @@ fn check_descriptors(
 
 pub fn report_panic(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
-    if let Some(mut console) = boot::console() {
+    if let Some(mut console) = boot_diagnostic::console() {
         let _ = writeln!(console, "FAIL UEFI platform boot: {info}");
     }
-    boot::shutdown(false)
+    boot_diagnostic::shutdown(false)
 }

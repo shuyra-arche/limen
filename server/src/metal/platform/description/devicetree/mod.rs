@@ -11,7 +11,7 @@ const MAGIC: u32 = 0xd00d_feed;
 pub(crate) const MAX_BLOCK_BYTES: usize = 256 * 1024;
 // AAVMF retains the QEMU tree with free space and an extra EFI page.
 const MAX_EXTENT_BYTES: usize = 2 * 1024 * 1024;
-const MAX_DEPTH: usize = 32;
+pub(super) const MAX_DEPTH: usize = 32;
 const MAX_NODES: usize = 4096;
 const MAX_PROPERTIES: usize = 64;
 pub(crate) const RESERVATION_LIMIT: usize = 64;
@@ -188,55 +188,6 @@ impl<'a> DeviceTree<'a> {
         }
     }
 
-    pub fn node(&self, id: NodeId<'a>) -> Option<Node<'_, 'a>> {
-        if !core::ptr::eq(self.bytes, id.source) {
-            return None;
-        }
-        self.nodes().find(|node| node.id == id)
-    }
-
-    /// Locate an absolute path in this tree. Alias interpretation belongs to the caller.
-    pub fn find_path(&self, path: &[u8]) -> Result<Option<Node<'_, 'a>>, Error> {
-        let path = path.strip_prefix(b"/").ok_or(Error::Format)?;
-        let mut node = self.nodes().next().expect("validated device tree root");
-        if path.is_empty() {
-            return Ok(Some(node));
-        }
-        for (depth, name) in path.split(|byte| *byte == b'/').enumerate() {
-            if depth + 1 >= MAX_DEPTH {
-                return Err(Error::Capacity);
-            }
-            if name.is_empty() {
-                return Err(Error::Format);
-            }
-            let mut children = self
-                .nodes()
-                .filter(|child| child.parent == Some(node.id) && child.name == name);
-            let Some(child) = children.next() else {
-                return Ok(None);
-            };
-            if children.next().is_some() {
-                return Err(Error::Conflict);
-            }
-            node = child;
-        }
-        Ok(Some(node))
-    }
-
-    /// Resolve a phandle within this source and reject ambiguous references.
-    pub fn phandle(&self, value: u32) -> Result<Option<Node<'_, 'a>>, Error> {
-        if value == 0 || value == u32::MAX {
-            return Err(Error::Format);
-        }
-        let mut found = None;
-        for node in self.nodes() {
-            if node.phandle()? == Some(value) && found.replace(node).is_some() {
-                return Err(Error::Conflict);
-            }
-        }
-        Ok(found)
-    }
-
     pub(super) fn reservations(&self) -> impl Iterator<Item = (u64, u64)> + 'a {
         self.reservations.as_chunks::<16>().0.iter().map(|entry| {
             let (base, length) = entry.split_first_chunk::<8>().expect("reservation entry");
@@ -256,6 +207,10 @@ pub struct NodeId<'a> {
 }
 
 impl NodeId<'_> {
+    pub(in crate::metal::platform::description) fn belongs_to(self, bytes: &[u8]) -> bool {
+        core::ptr::eq(self.source, bytes)
+    }
+
     pub fn offset(self) -> usize {
         self.offset
     }
@@ -353,7 +308,7 @@ impl<'a> Node<'_, 'a> {
         Ok(())
     }
 
-    fn phandle(&self) -> Result<Option<u32>, Error> {
+    pub(in crate::metal::platform::description) fn phandle(&self) -> Result<Option<u32>, Error> {
         let decode = |bytes: &[u8]| {
             let word = <[u8; 4]>::try_from(bytes).map_err(|_| Error::Format)?;
             let value = u32::from_be_bytes(word);

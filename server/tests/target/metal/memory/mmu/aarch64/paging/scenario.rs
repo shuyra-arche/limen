@@ -1,8 +1,8 @@
 use super::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 use core::arch::asm;
 use kernel::metal::memory::mmu::{
-    LeafAccess, Memory, Privilege, SwitchError,
-    aarch64::internal::{Controls, Root, admit_root},
+    aarch64::internal::{context::Controls, format::Root, installation::admit_root},
+    treaty::{LeafAccess, Memory, Privilege, SwitchError},
 };
 use limen_treaty::model::PhysicalAddress;
 
@@ -68,6 +68,10 @@ pub(crate) fn check(hart: usize) {
             disabled=in(reg) disabled, root=in(reg) original.ttbr1, tcr=in(reg) original.tcr, options(nostack));
     }
     assert_eq!(unsafe { Controls::current() }, original);
-    kernel::entry::boot::write("PASS internal paging switched=1 alias=1 restored=1\n");
-    kernel::entry::boot::write("PASS local-context original=1 installed=1 restored=1\n");
+    kernel::metal::platform::boot::treaty::write(
+        "PASS internal paging switched=1 alias=1 restored=1\n",
+    );
+    kernel::metal::platform::boot::treaty::write(
+        "PASS local-context original=1 installed=1 restored=1\n",
+    );
 }

@@ -1,0 +1,150 @@
+//! Non-secure EL1 minor startup for an identity-mapped image.
+use super::{self as launch, Minor, StartError};
+use crate::metal::platform::boot::aarch64 as boot;
+use core::{
+    arch::{asm, naked_asm},
+    cell::UnsafeCell,
+    mem::offset_of,
+};
+
+use crate::metal::{
+    memory::mmu::aarch64::internal::context::Controls, platform::firmware::treaty::psci::Psci,
+    processor::description::aarch64::cpu::AFFINITY_MASK,
+};
+#[derive(Clone, Copy)]
+pub enum Startup {
+    Psci(Psci),
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(crate) struct Registers {
+    mair: usize,
+    tcr: usize,
+    ttbr0: usize,
+    ttbr1: usize,
+    cpacr: usize,
+    sctlr: usize,
+}
+pub type DeliveryError = core::convert::Infallible;
+
+pub(super) type MinorContext = UnsafeCell<Registers>;
+pub(super) const fn minor_context() -> MinorContext {
+    UnsafeCell::new(Registers {
+        mair: 0,
+        tcr: 0,
+        ttbr0: 0,
+        ttbr1: 0,
+        cpacr: 0,
+        sctlr: 0,
+    })
+}
+
+pub(super) unsafe fn wake_minor(
+    slot: &Minor,
+    hart: usize,
+    Startup::Psci(service): &mut Startup,
+) -> Result<(), StartError> {
+    let translation = unsafe { Controls::current() };
+    let cpacr;
+    unsafe {
+        asm!("mrs {}, cpacr_el1", out(reg) cpacr, options(nomem, nostack));
+        slot.context.get().write(Registers {
+            mair: translation.mair as usize,
+            tcr: translation.tcr as usize,
+            ttbr0: translation.ttbr0 as usize,
+            ttbr1: translation.ttbr1 as usize,
+            sctlr: translation.sctlr as usize,
+            cpacr,
+        });
+    }
+    // The release now covers the saved registers as well as Launch.
+    slot.publish();
+    let ptr = core::ptr::from_ref(slot).expose_provenance();
+    // CPU_ON enters with translation off. Publish the descriptor and saved
+    // controls to the point of coherency before the target reads either.
+    let ctr: usize;
+    unsafe { asm!("mrs {}, ctr_el0",out(reg) ctr,options(nomem,nostack)) };
+    let line = 4 << ((ctr >> 16) & 15);
+    for address in ((ptr & !(line - 1))..ptr + size_of::<Minor>()).step_by(line) {
+        unsafe { asm!("dc cvac, {}", in(reg) address,options(nostack)) }
+    }
+    unsafe { service.cpu_on(hart, minor as *const (), ptr) }.map_err(StartError::Rejected)
+}
+
+#[unsafe(naked)]
+unsafe extern "C" fn minor(slot: *const Minor) -> ! {
+    naked_asm!(
+        "msr daifset, #{exceptions}",
+        "mrs x2, CurrentEL",
+        "cmp x2, #{level}",
+        "b.ne 3f",
+        "msr spsel, #{stack_select}",
+        "msr tpidr_el1, xzr",
+        "mov x1, x0",
+        "mrs x0, mpidr_el1",
+        "mov x2, #{affinity_low}",
+        "movk x2, #{affinity_high}, lsl #32",
+        "and x0, x0, x2",
+        // Acquire the publication before using the identity or saved EL1 state.
+        "add x2, x1, #{state}",
+        "ldar w3, [x2]",
+        "cmp w3, #{published}",
+        "b.ne 3f",
+        "ldr x2, [x1, #{hart}]",
+        "cmp x0, x2",
+        "b.ne 3f",
+        "mov x2, #{ctx}",
+        "add x2, x1, x2",
+        "ldp x3, x4, [x2]",
+        "msr mair_el1, x3",
+        "msr tcr_el1, x4",
+        "ldp x3, x4, [x2,#16]",
+        "msr ttbr0_el1, x3",
+        "msr ttbr1_el1, x4",
+        "ldp x3, x4, [x2,#32]",
+        "msr cpacr_el1, x3",
+        "isb",
+        "tlbi vmalle1",
+        "dsb sy",
+        "isb",
+        "msr sctlr_el1, x4",
+        "isb",
+        "add x2, x1, #{state}",
+        "2: ldaxr w3, [x2]",
+        "cmp w3, #{published}",
+        "b.ne 3f",
+        "mov w4, #{entered}",
+        "stxr w3, w4, [x2]",
+        "cbnz w3, 2b",
+        "ldr x2,[x1,#{stack}]",
+        "mov sp,x2",
+        "adrp x2,{vectors}",
+        "add x2,x2,:lo12:{vectors}",
+        "msr vbar_el1,x2",
+        "isb",
+        "b {arrive}",
+        "3: wfe",
+        "b 3b",
+        exceptions = const crate::metal::processor::description::aarch64::status::ALL_EXCEPTIONS,
+        level = const crate::metal::processor::description::aarch64::status::EL1,
+        stack_select = const crate::metal::processor::description::aarch64::status::SP_EL1,
+        affinity_low = const (AFFINITY_MASK & 0xffff_ffff),
+        affinity_high = const (AFFINITY_MASK >> 32),
+        ctx = const offset_of!(Minor,context),
+        hart = const launch::HART_OFFSET,
+        stack = const launch::STACK_OFFSET,
+        state = const launch::STATE_OFFSET,
+        published = const launch::PUBLISHED,
+        entered = const launch::ENTERED,
+        vectors = sym boot::vectors,
+        arrive = sym launch::arrive,
+    )
+}
+
+impl Minor {
+    pub(in crate::metal) fn established(&self, hart: usize) -> bool {
+        hart == crate::metal::processor::executor::aarch64::native::boot_identity()
+            && boot::established()
+    }
+}

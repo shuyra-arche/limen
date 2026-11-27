@@ -1,6 +1,6 @@
 use kernel::{
     entry::boot::Boot,
-    metal::memory::allocator::{
+    metal::memory::allocator::treaty::{
         Allocation, Allocator, Allowance, Config, Initial, MappedStorage,
         pool::{GroupId, GroupReceipt, GroupSlot, Pool},
     },

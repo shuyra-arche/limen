@@ -1,16 +1,17 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::platform::boot::treaty::{shutdown, write};
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
-use kernel::entry::boot::{Boot, shutdown, stack_range, write};
+use kernel::entry::boot::{Boot, stack_range};
 use kernel::metal::{
-    chrono::riscv64::RiscvTimebase,
+    chrono::riscv64::description::RiscvTimebase,
     memory::mmu::riscv64::internal::description::{MaximumMode, RiscvMmu},
-    platform::description::devicetree::memory::Source,
-    processor::execution::description::riscv64::RiscvExtension,
-    processor::execution::description::riscv64::RiscvIsa,
+    platform::description::treaty::devicetree::memory::Source,
+    processor::description::riscv64::isa::RiscvExtension,
+    processor::description::riscv64::isa::RiscvIsa,
 };
 use limen_treaty::model::{ByteLength, PhysicalAddress};
 
@@ -254,7 +255,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
 
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
-    if let Some(mut console) = kernel::entry::boot::console() {
+    if let Some(mut console) = kernel::metal::platform::boot::treaty::console() {
         let _ = writeln!(console, "FAIL boot-handoff: {info}");
     }
     shutdown(false)

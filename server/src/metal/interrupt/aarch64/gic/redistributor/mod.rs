@@ -1,17 +1,10 @@
 //! GICR geometry and an independently held frame for each described PE.
 use super::GicV3;
-use crate::metal::memory::mmu::access::device::DeviceWindow;
+use crate::metal::memory::access::treaty::device::DeviceWindow;
 use core::marker::PhantomData;
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
-mod private;
-mod state;
-pub use private::{PrivateInterrupt, PrivateInterrupts};
-use state::PrivateState;
-#[cfg(all(limen_target, target_arch = "aarch64"))]
-mod inputs;
-#[cfg(all(limen_target, target_arch = "aarch64"))]
-pub use inputs::{Ppi, StoppedPpi};
+pub mod input;
 
 const TYPER: usize = 8;
 const WAKER: usize = 0x14;
@@ -184,8 +177,7 @@ impl<'map> Iterator for Redistributor<'map, '_> {
             geometry,
             domain: self.domain,
             mapping,
-
-            private: [PrivateState::Vacant; 32],
+            private: [input::State::Vacant; 32],
         })
     }
 }
@@ -196,8 +188,7 @@ pub struct Frame<'map> {
     geometry: Geometry,
     domain: PhysicalRange,
     mapping: DeviceWindow<'map>,
-
-    private: [PrivateState; 32],
+    private: [input::State; 32],
 }
 
 impl<'map> Frame<'map> {
@@ -220,7 +211,6 @@ impl<'map> Frame<'map> {
             geometry: self.geometry,
             domain: self.domain,
             mapping: PhantomData,
-
             private: self.private,
         }
     }
@@ -267,8 +257,7 @@ pub struct FrameHandoff<'origin> {
     geometry: Geometry,
     domain: PhysicalRange,
     mapping: PhantomData<&'origin mut ()>,
-
-    private: [PrivateState; 32],
+    private: [input::State; 32],
 }
 
 impl<'origin> FrameHandoff<'origin> {
@@ -302,7 +291,6 @@ impl<'origin> FrameHandoff<'origin> {
             geometry,
             domain: self.domain,
             mapping,
-
             private: self.private,
         })
     }

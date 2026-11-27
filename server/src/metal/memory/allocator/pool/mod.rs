@@ -4,7 +4,7 @@ mod group;
 mod growth;
 mod slot;
 
-use crate::metal::sync::{TurnAccess, TurnAcquireError, TurnLock, TurnPlan, TurnPlanError};
+use crate::metal::sync::treaty::{TurnAcquireError, TurnLock};
 
 use super::{AllocationId, Error as SourceError, MappedStorage};
 use group::{Chain, Group, Links};
@@ -109,19 +109,19 @@ impl GroupReceipt {
 }
 
 pub struct Pool<'storage, T> {
-    state: TurnLock<Directory<'storage, T>>,
+    pub(super) state: TurnLock<Directory<'storage, T>>,
 }
 
-struct Directory<'storage, T> {
+pub(super) struct Directory<'storage, T> {
     groups: &'storage mut [GroupSlot<'storage, T>],
     extent: usize,
     free_group: Option<usize>,
-    open: usize,
-    bytes: usize,
+    pub(super) open: usize,
+    pub(super) bytes: usize,
     preparing: usize,
     limit: usize,
-    capacity: usize,
-    free: usize,
+    pub(super) capacity: usize,
+    pub(super) free: usize,
     next_completion: Completion,
     empty: Option<GroupId>,
     partial: Option<GroupId>,
@@ -272,15 +272,6 @@ impl<'storage, T> Pool<'storage, T> {
         })?
     }
 
-    pub fn capacity(&self) -> Result<Capacity, Error> {
-        Ok(self.state.acquire(|state| Capacity {
-            groups: state.open,
-            bytes: state.bytes,
-            slots: state.capacity,
-            free: state.free,
-        })?)
-    }
-
     pub fn supply(&self, id: GroupId) -> Result<Supply, Error> {
         self.state.acquire(|state| match state.entry(id)? {
             GroupRecord::Open(group) => Ok(group.supply()),
@@ -288,40 +279,7 @@ impl<'storage, T> Pool<'storage, T> {
         })?
     }
 
-    /// Include this Pool in the complete plan for a shared handoff.
-    pub fn plan<'pool>(&'pool self, plan: &mut TurnPlan<'pool, '_>) -> Result<(), TurnPlanError> {
-        plan.insert(&self.state)
-    }
-
-    /// The caller supplies the original, exclusively borrowed preparation
-    /// position. Use reserve_held when that position requires a Turn.
-    pub fn reserve<'pool>(
-        &'pool self,
-        receiver: &mut Option<Reservation<'pool, 'storage, T>>,
-    ) -> Result<(), Error> {
-        if receiver.is_some() {
-            return Err(Error::Receiver);
-        }
-        self.state
-            .acquire(|state| self.reserve_to(state, receiver))?
-    }
-
-    /// Commit a reservation and its protected preparation record together.
-    /// The caller must retain this original record through suspension or loss
-    /// of the response. The selector runs with both locks held.
-    pub fn reserve_held<'pool, R>(
-        &'pool self,
-        held: &mut TurnAccess<'_>,
-        receiver: &TurnLock<R>,
-        select: impl FnOnce(&mut R) -> &mut Option<Reservation<'pool, 'storage, T>>,
-    ) -> Result<(), Error> {
-        let (state, receiver) = held
-            .access_pair(&self.state, receiver)
-            .ok_or(SourceError::Protection)?;
-        self.reserve_to(state, select(receiver))
-    }
-
-    fn reserve_to<'pool>(
+    pub(super) fn reserve_to<'pool>(
         &'pool self,
         state: &mut Directory<'storage, T>,
         receiver: &mut Option<Reservation<'pool, 'storage, T>>,

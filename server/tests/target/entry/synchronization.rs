@@ -1,5 +1,5 @@
 use core::arch::asm;
-use kernel::metal::sync::{
+use kernel::metal::sync::treaty::{
     LeafError, LeafLock, PublishError, SnapLock, Snapshot, TurnAcquireError, TurnLock, TurnMode,
     TurnWorkspace,
 };
@@ -155,7 +155,7 @@ pub fn check_enabled() {
     assert_eq!(rejected_turn, Err(TurnAcquireError::Context));
     assert_eq!(local_interrupt_state(), 0);
     assert_eq!(turn.acquire(|()| ()), Ok(()));
-    kernel::entry::boot::write("PASS hart-entry revalidated=1 restored=1\n");
+    kernel::metal::platform::boot::treaty::write("PASS hart-entry revalidated=1 restored=1\n");
 
     // The boot fixture proved that all supervisor interrupt sources are
     // disabled, so setting the global bit cannot enter the terminal vector.

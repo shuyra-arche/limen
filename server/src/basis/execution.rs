@@ -8,12 +8,10 @@ use crate::{
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, UnitRecord, Units},
     },
     metal::{
-        platform::boot::services::Services,
-        processor::execution::cooperative::{
-            self, Hart, LeaveReceipt, LocalHart, cooperative_ready,
+        processor::treaty::{
+            self, Dispatcher, Dispatchers, HartId, LeaveReceipt, LocalExecution, Major, Terminal,
         },
-        processor::hart::{HartId, Major, local},
-        sync::{TurnAcquireError, TurnLock, TurnMode, TurnWorkspace, turn_capacity},
+        sync::treaty::{TurnAcquireError, TurnLock, TurnMode, TurnWorkspace, turn_capacity},
     },
 };
 
@@ -78,9 +76,11 @@ pub enum EstablishError {
 /// The original handoff and independent supplies, returned before ownership.
 pub struct EstablishFailure<const HARTS: usize> {
     pub major: Major,
+    pub terminal: Terminal,
     pub stacks: &'static mut Stacks,
     pub records: &'static mut [UnitRecord<KernelBinding>],
     pub harts: &'static mut Harts<HARTS>,
+    pub dispatchers: &'static mut Dispatchers<Occupancy, HARTS>,
     pub reason: EstablishError,
 }
 
@@ -92,9 +92,10 @@ pub struct KernelBinding {
 
 /// Cooperative coordination of Unit and Room on independently attached Harts.
 pub struct Execution {
+    terminal: Terminal,
     units: TurnLock<Units<KernelBinding>>,
     room: TurnLock<Room<STACK_CAPACITY>>,
-    harts: &'static [Hart<Occupancy>],
+    dispatchers: &'static [Dispatcher<Occupancy>],
 }
 
 impl Execution {
@@ -102,13 +103,15 @@ impl Execution {
     /// until its own Attach; all supplies remain independent and resident.
     pub fn new<const HARTS: usize>(
         major: Major,
+        terminal: Terminal,
         stacks: &'static mut Stacks,
         records: &'static mut [UnitRecord<KernelBinding>],
         harts: &'static mut Harts<HARTS>,
+        dispatchers: &'static mut Dispatchers<Occupancy, HARTS>,
     ) -> Result<Self, EstablishFailure<HARTS>> {
         let reason = if !major.is_current() {
             Some(EstablishError::WrongHart)
-        } else if !cooperative_ready() {
+        } else if !treaty::cooperative_ready() {
             Some(EstablishError::Unsupported)
         } else if !Units::accepts(records) || !harts.accepts() {
             Some(EstablishError::Storage)
@@ -118,17 +121,19 @@ impl Execution {
         if let Some(reason) = reason {
             return Err(EstablishFailure {
                 major,
+                terminal,
                 stacks,
                 records,
                 harts,
+                dispatchers,
                 reason,
             });
         }
-        let (room, harts) = harts.split();
         Ok(Self {
+            terminal,
             units: TurnLock::new(Units::new(stacks, records)),
-            room: TurnLock::new(room),
-            harts,
+            room: TurnLock::new(harts.room()),
+            dispatchers: dispatchers.records(),
         })
     }
 
@@ -150,32 +155,33 @@ impl Execution {
         })?
     }
 
-    fn local(&self) -> Result<(HartId, LocalHart<'_, Occupancy>), Error> {
-        local::try_current_hart().ok_or(Error::Protection)?;
-        cooperative::current(self.harts).ok_or(Error::Unsupported)
+    fn local(&self) -> Result<(HartId, LocalExecution<'_, Occupancy>), Error> {
+        treaty::try_current_hart().ok_or(Error::Protection)?;
+        treaty::current(self.dispatchers).ok_or(Error::Unsupported)
     }
 
     /// Attach this actual Hart after its trusted entry. This is independent
     /// of firmware launch; every participant takes the same path.
     pub fn attach(&self) -> Result<(), Error> {
-        let id = local::try_current_hart().ok_or(Error::Protection)?;
-        if !cooperative_ready() {
+        let id = treaty::try_current_hart().ok_or(Error::Protection)?;
+        if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
         }
-        if !local::can_switch() {
+        if !treaty::can_switch() {
             return Err(Error::Protection);
         }
         if turn_capacity().ok_or(Error::Protection)? < 2 {
             return Err(Error::Capacity);
         }
         self.room.acquire(|room| {
-            if cooperative::attached() {
+            if treaty::attached() {
                 return Err(Error::Busy);
             }
-            let participation = room.attach(id)?;
-            // All fallible admission is complete. Only this Hart uses its
-            // local binding, and Room retains this slot for the entire prefix.
-            unsafe { cooperative::bind(self.harts, participation.index()) };
+            let record = treaty::reserve(self.dispatchers).ok_or(Error::Capacity)?;
+            room.attach(id)?;
+            // The reserved machine record and Room admission now belong to
+            // this Hart. Local publication cannot interleave with reentry.
+            unsafe { record.bind() };
             Ok(())
         })?
     }
@@ -245,10 +251,10 @@ impl Execution {
     /// input and the previous stack reserved for the entire handoff.
     pub unsafe fn run<F: FnMut() -> !>(&'static self, dispatch: &mut F) -> Result<!, Error> {
         let (_, hart) = self.local()?;
-        if !cooperative_ready() {
+        if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
         }
-        if !local::can_switch() {
+        if !treaty::can_switch() {
             return Err(Error::Protection);
         }
         if hart.started() {
@@ -261,10 +267,10 @@ impl Execution {
     /// The original admission remains occupied until `vacate`.
     pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
         let (id, hart) = self.local()?;
-        if !cooperative_ready() {
+        if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
         }
-        if !local::can_switch() {
+        if !treaty::can_switch() {
             return Err(Error::Protection);
         }
         if !hart.on_dispatcher_stack() {
@@ -343,10 +349,10 @@ impl Execution {
 
     fn leave(&self, unit: UnitId, end: Option<u64>) -> Result<(), Error> {
         let (_, hart) = self.local()?;
-        if !cooperative_ready() {
+        if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
         }
-        if !local::can_switch() {
+        if !treaty::can_switch() {
             return Err(Error::Protection);
         }
         let occupancy = hart
@@ -376,7 +382,7 @@ impl Execution {
 
     fn end(&self, unit: UnitId, value: u64) -> Result<!, Error> {
         self.leave(unit, Some(value))?;
-        Services::active().reject(format_args!(
+        self.terminal.reject(format_args!(
             "FAIL Limen execution: terminal continuation resumed\n"
         ))
     }
@@ -396,7 +402,9 @@ impl Current {
 
     /// The physical Hart executing this continuation when called.
     pub fn hart(&self) -> usize {
-        local::current_hart().get()
+        treaty::try_current_hart()
+            .expect("ordinary Hart entry")
+            .get()
     }
 
     /// Yield the Hart. Success is returned after a new dispatch resumes this
@@ -422,7 +430,7 @@ extern "C" fn start(argument: *const ()) -> ! {
         local: PhantomData,
     });
     let Err(error) = execution.end(unit, value);
-    Services::active().reject(format_args!(
+    execution.terminal.reject(format_args!(
         "FAIL Limen execution: terminal leave {error:?}\n"
     ))
 }

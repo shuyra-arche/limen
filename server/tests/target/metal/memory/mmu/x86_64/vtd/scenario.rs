@@ -1,21 +1,24 @@
 //! Two q35 endpoints share one VT-d controller and retire exact bindings.
 
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 #[path = "../../../../../support/paging/retirement.rs"]
 mod retirement;
 
 use super::edu::{Endpoint, REQUESTER};
 use core::arch::x86_64::{__cpuid, _mm_clflush, _mm_mfence};
-use kernel::entry::boot;
 use kernel::metal::{
+    memory::access::treaty::device::DeviceWindow,
     memory::mmu::{
-        Unbind,
-        access::device::DeviceWindow,
+        treaty::Unbind,
         x86_64::external::vtd::{
-            Change, CommandId, Context, Controller, Error, Format, Sequence, Storage, Table,
-            Visibility,
+            Controller, Error,
+            binding::{Context, Sequence},
+            command::{Change, CommandId},
+            directory::{Storage, Table},
+            translation::{Format, Visibility},
         },
     },
-    platform::description::acpi::RemappingUnit,
+    platform::description::treaty::acpi::RemappingUnit,
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress};
 
@@ -262,7 +265,9 @@ pub(super) fn check(unit: RemappingUnit<'_>, registers: &mut DeviceWindow<'_>) {
         retirement::retire(&mut controller, first, |_| {});
     }
 
-    boot::write("PASS vtd-dma requesters=2 translated=2 downgraded=1 unbound=1 stale=1 faults=2\n");
+    boot_diagnostic::write(
+        "PASS vtd-dma requesters=2 translated=2 downgraded=1 unbound=1 stale=1 faults=2\n",
+    );
 }
 
 pub(super) fn check_firmware(boot: &kernel::entry::boot::Boot<'_>) {

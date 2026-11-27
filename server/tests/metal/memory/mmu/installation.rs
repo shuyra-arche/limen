@@ -32,17 +32,17 @@ fn uncertain_readback_retains_the_original_operation() {
 
 #[test]
 fn same_root_readback_does_not_excuse_a_changed_execution_profile() {
-    let first = x86_64::internal::Controls {
+    let first = x86_64::internal::context::Controls {
         cr0: 0x8001_0000,
         cr3: 0x2000,
         cr4: 1 << 5,
         efer: (1 << 10) | (1 << 11),
     };
-    let next = x86_64::internal::Controls {
+    let next = x86_64::internal::context::Controls {
         cr3: 0x3000,
         ..first
     };
-    let wrong = x86_64::internal::Controls {
+    let wrong = x86_64::internal::context::Controls {
         efer: 1 << 10,
         ..next
     };
@@ -56,18 +56,18 @@ fn same_root_readback_does_not_excuse_a_changed_execution_profile() {
 
 #[test]
 fn an_unrelated_arm_root_change_cannot_complete_the_original_install() {
-    let first = aarch64::internal::Controls {
+    let first = aarch64::internal::context::Controls {
         mair: 0xff,
         tcr: 0x0000_b510_b510,
         ttbr0: 0x1000,
         ttbr1: 0x2000,
         sctlr: 1,
     };
-    let next = aarch64::internal::Controls {
+    let next = aarch64::internal::context::Controls {
         ttbr1: 0x3000,
         ..first
     };
-    let wrong = aarch64::internal::Controls {
+    let wrong = aarch64::internal::context::Controls {
         ttbr0: 0x4000,
         ..next
     };
@@ -83,12 +83,12 @@ fn an_unrelated_arm_root_change_cannot_complete_the_original_install() {
 
 #[test]
 fn satp_readback_carries_its_exact_mode_even_when_the_root_is_unchanged() {
-    use riscv64::{internal::context::Context, sv::Mode};
+    use riscv64::internal::{context::Context, format::Format};
 
     let root = PhysicalAddress::new(0x2000);
-    let previous = Context::paged(Mode::Sv39, root).unwrap();
-    let requested = Context::paged(Mode::Sv48, root).unwrap();
-    let unrelated = Context::paged(Mode::Sv57, root).unwrap();
+    let previous = Context::paged(Format::Sv39, root).unwrap();
+    let requested = Context::paged(Format::Sv48, root).unwrap();
+    let unrelated = Context::paged(Format::Sv57, root).unwrap();
     let mut install = Installation::new(2, previous);
 
     install.issue(previous, previous, requested).unwrap();

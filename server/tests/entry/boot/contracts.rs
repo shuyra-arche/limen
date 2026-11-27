@@ -1,6 +1,6 @@
 #![no_std]
 
-use kernel::{basis::pend::{self, Revoker}, metal::{memory::allocator::{self, AllocationConstruction}, sync::TurnMode}};
+use kernel::{basis::pend::{self, Revoker}, metal::{memory::allocator::treaty::{self as allocator, AllocationConstruction}, sync::treaty::TurnMode}};
 
 pub fn cancel(receiver: &'static AllocationConstruction) -> Result<(), allocator::Error> {
     receiver.shut()?;
@@ -23,17 +23,17 @@ pub fn raw_space(revoker: &Revoker) {
 }
 
 #[cfg(contract = "mapping")]
-pub fn raw_mapping(mapping: &kernel::metal::memory::mmu::access::ram::MappedRange<'_>) {
+pub fn raw_mapping(mapping: &kernel::metal::memory::access::treaty::ram::MappedRange<'_>) {
     let _ = &mapping.bytes;
 }
 
 #[cfg(contract = "material")]
-pub fn raw_material(material: &kernel::metal::memory::allocator::MappedStorage<'_>) {
+pub fn raw_material(material: &kernel::metal::memory::allocator::treaty::MappedStorage<'_>) {
     let _ = &material.allocation;
 }
 
 #[cfg(contract = "mapping-move")]
-pub fn reuse_mapping(mapping: kernel::metal::memory::mmu::access::ram::MappedRange<'_>) {
+pub fn reuse_mapping(mapping: kernel::metal::memory::access::treaty::ram::MappedRange<'_>) {
     let physical = mapping.physical();
     let offset = physical.length();
     let _ = mapping.split(offset);
@@ -41,7 +41,7 @@ pub fn reuse_mapping(mapping: kernel::metal::memory::mmu::access::ram::MappedRan
 }
 
 #[cfg(contract = "material-move")]
-pub fn reuse_material(material: kernel::metal::memory::allocator::MappedStorage<'_>) {
+pub fn reuse_material(material: kernel::metal::memory::allocator::treaty::MappedStorage<'_>) {
     let _ = material.into_parts();
     let _ = material.id();
 }

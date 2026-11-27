@@ -1,5 +1,5 @@
 //! Terminal diagnostics for early exceptions on major and minor CPUs.
-use crate::metal::{platform::boot::firmware, processor::hart::local::stack::Stack};
+use crate::metal::{platform::boot::firmware, processor::executor::local::stack::Stack};
 use core::sync::atomic::AtomicPtr;
 
 const BYTES: usize = 16 * 1024;

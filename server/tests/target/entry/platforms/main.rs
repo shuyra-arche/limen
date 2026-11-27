@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::metal::processor::treaty::{Minor, StartError, Startup};
+
 use kernel::entry::boot;
 use uefi::prelude::*;
 use uefi_fixture as fixture;
@@ -19,7 +22,7 @@ mod ram;
 #[path = "../synchronization.rs"]
 mod synchronization;
 
-static MINOR: boot::Minor = boot::Minor::new();
+static MINOR: Minor = Minor::new();
 static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 fn observe_minor(hart: usize) {
@@ -46,7 +49,7 @@ fn check_retention(boot: &boot::Boot<'_>) {
             .unwrap()
             .is_none()
     );
-    let configuration = kernel::metal::memory::allocator::Config {
+    let configuration = kernel::metal::memory::allocator::treaty::Config {
         granule,
         maximum: ByteLength::new(0),
         regions: 1,
@@ -62,7 +65,7 @@ fn check_retention(boot: &boot::Boot<'_>) {
             .unwrap()
             .is_none()
     );
-    boot::write("PASS allocator retained without retirement or mapping\n");
+    boot_diagnostic::write("PASS allocator retained without retirement or mapping\n");
 }
 
 fn minor(hart: usize, _: usize) -> ! {
@@ -72,10 +75,10 @@ fn minor(hart: usize, _: usize) -> ! {
     }
 }
 
-fn start_minor(major: usize, target: usize, startup: &mut boot::Startup) -> ! {
+fn start_minor(major: usize, target: usize, startup: &mut Startup) -> ! {
     assert_eq!(
         unsafe { MINOR.start(major, minor, 0, startup) },
-        Err(boot::StartError::Busy),
+        Err(StartError::Busy),
     );
     unsafe { MINOR.start(target, minor, 0, startup) }.expect("minor startup");
     while OBSERVED.load(Ordering::Acquire) != target {
@@ -85,29 +88,31 @@ fn start_minor(major: usize, target: usize, startup: &mut boot::Startup) -> ! {
     fixture::inspect_started(startup, target);
     assert_eq!(
         unsafe { MINOR.start(target, minor, 0, startup) },
-        Err(boot::StartError::Busy),
+        Err(StartError::Busy),
     );
     finish(major)
 }
 
 fn finish(major: usize) -> ! {
     synchronization::check();
-    boot::write("PASS synchronization\n");
+    boot_diagnostic::write("PASS synchronization\n");
     writeln!(
-        boot::console().expect("console"),
+        boot_diagnostic::console().expect("console"),
         "OBSERVED major={} minor={}",
         major,
         OBSERVED.load(Ordering::Acquire)
     )
     .unwrap();
-    boot::write("PASS early physical exclusions regions=0 roots=0\n");
+    boot_diagnostic::write("PASS early physical exclusions regions=0 roots=0\n");
     #[cfg(target_arch = "x86_64")]
-    boot::write("PASS q35 major=1 minor=1 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1\n");
+    boot_diagnostic::write(
+        "PASS q35 major=1 minor=1 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1\n",
+    );
     #[cfg(target_arch = "aarch64")]
-    boot::write(
+    boot_diagnostic::write(
         "PASS virt major=1 minor=1 ebs=1 el1=1 masked=1 stack=1 vectors=1 dtb=1 ram=1 reconciled=1\n",
     );
-    boot::shutdown(true)
+    boot_diagnostic::shutdown(true)
 }
 
 #[entry]

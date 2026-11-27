@@ -1,13 +1,34 @@
 //! Single-level Device Directory Table and its requester ownership.
 
 use super::{DeviceOrder, Error, Profile};
+use core::ops::Range;
 use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 #[repr(C, align(4096))]
-pub struct Page([u64; 512]);
+pub struct Page([u64; PAGE_WORDS]);
+
+const PAGE_WORDS: usize = 512;
 
 impl Page {
-    pub const EMPTY: Self = Self([0; 512]);
+    pub const EMPTY: Self = Self([0; PAGE_WORDS]);
+
+    const fn stride(profile: Profile) -> usize {
+        if profile.extended_context { 8 } else { 4 }
+    }
+
+    const fn capacity(profile: Profile) -> usize {
+        PAGE_WORDS / Self::stride(profile)
+    }
+
+    /// Locate a device context within a single-level Device Directory Table.
+    fn context_words(profile: Profile, device: u32) -> Result<Range<usize>, Error> {
+        let index = usize::try_from(device).map_err(|_| Error::Address)?;
+        if index >= Self::capacity(profile) {
+            return Err(Error::Address);
+        }
+        let words = Self::stride(profile);
+        Ok(index * words..(index + 1) * words)
+    }
 }
 
 /// Sequence resident with the original physical register scope. The
@@ -66,6 +87,22 @@ pub struct Binding {
     pub(super) context: Context,
 }
 
+impl Context {
+    /// Encode the basic context. The directory leaves every optional MSI
+    /// field zero and publishes the valid word after the other fields.
+    fn words(self, profile: Profile) -> Result<[u64; 4], Error> {
+        if self.pscid >= 1 << 20 {
+            return Err(Error::Address);
+        }
+        Ok([
+            1,
+            0,
+            u64::from(self.pscid) << 12,
+            profile.first_stage(self.root)?,
+        ])
+    }
+}
+
 impl Binding {
     pub fn context(self) -> Context {
         self.context
@@ -81,7 +118,7 @@ pub struct Storage<'a> {
 
 impl Storage<'_> {
     pub(super) fn validate(&self, profile: Profile) -> Result<(), Error> {
-        if self.bindings.is_empty() || self.bindings.len() > profile.directory_capacity() {
+        if self.bindings.is_empty() || self.bindings.len() > Page::capacity(profile) {
             return Err(Error::Capacity);
         }
         if self.bindings.iter().any(Option::is_some) || self.page.0.iter().any(|&word| word != 0) {
@@ -110,7 +147,7 @@ impl Storage<'_> {
         profile: Profile,
         context: Context,
     ) -> Result<(usize, [u64; 4]), Error> {
-        let range = profile.context_words(context.device)?;
+        let range = Page::context_words(profile, context.device)?;
         // Only one configuration may occupy a DID. An intentional alias
         // can share a PSCID only if it reaches the exact same table root.
         if self.bindings.iter().flatten().any(|binding| {
@@ -127,7 +164,7 @@ impl Storage<'_> {
         if self.page.0[range].iter().any(|&word| word != 0) {
             return Err(Error::Unconfirmed);
         }
-        Ok((slot, profile.context(context.root, context.pscid)?))
+        Ok((slot, context.words(profile)?))
     }
 
     pub(super) fn publish(
@@ -138,8 +175,7 @@ impl Storage<'_> {
         words: [u64; 4],
         order: &DeviceOrder,
     ) {
-        let start = profile
-            .context_words(binding.context.device)
+        let start = Page::context_words(profile, binding.context.device)
             .expect("validated entry")
             .start;
         self.bindings[slot] = Some(binding);
@@ -152,8 +188,7 @@ impl Storage<'_> {
     }
 
     pub(super) fn block(&mut self, profile: Profile, binding: Binding, order: &DeviceOrder) {
-        let start = profile
-            .context_words(binding.context.device)
+        let start = Page::context_words(profile, binding.context.device)
             .expect("validated entry")
             .start;
         unsafe { (&raw mut self.page.0[start]).write_volatile(0) };
@@ -161,9 +196,7 @@ impl Storage<'_> {
     }
 
     pub(super) fn retire(&mut self, profile: Profile, binding: Binding, order: &DeviceOrder) {
-        let entry = profile
-            .context_words(binding.context.device)
-            .expect("validated entry");
+        let entry = Page::context_words(profile, binding.context.device).expect("validated entry");
         for word in entry {
             unsafe { (&raw mut self.page.0[word]).write_volatile(0) };
         }

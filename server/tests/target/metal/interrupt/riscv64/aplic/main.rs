@@ -1,7 +1,8 @@
 #![no_std]
 #![no_main]
 
-use kernel::metal::interrupt::{AbsoluteTimer, Completion};
+use kernel::metal::interrupt::treaty::{AbsoluteTimer, Completion};
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 
 #[path = "../../../../support/claim.rs"]
 mod claim_consumer;
@@ -10,13 +11,13 @@ mod consumer;
 
 use core::fmt::Write;
 use kernel::{
-    entry::boot::{self, Boot},
+    entry::boot::Boot,
     metal::{
-        chrono::riscv64::{Counter, RiscvTimebase},
+        chrono::riscv64::{description::RiscvTimebase, time::Counter},
         interrupt::riscv64::{
             external::{
                 Barrier,
-                aplic::{self, Direct, Mode},
+                aplic::{self, Domain, Mode, Source},
             },
             internal::{
                 aclint,
@@ -24,7 +25,7 @@ use kernel::{
                 timer::{self, State, Timer},
             },
         },
-        memory::mmu::access::device::DeviceWindow,
+        memory::access::treaty::device::DeviceWindow,
     },
 };
 use limen_treaty::model::InternalAddress;
@@ -35,10 +36,10 @@ const EXTERNAL: usize = INTERRUPT | 9;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    if let Some(mut console) = boot::console() {
+    if let Some(mut console) = boot_diagnostic::console() {
         let _ = writeln!(console, "FAIL rv64-interrupt {info}");
     }
-    boot::shutdown(false)
+    boot_diagnostic::shutdown(false)
 }
 
 #[path = "../../../../support/riscv64/reception.rs"]
@@ -131,7 +132,7 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     assert_eq!(timer.due(), Err(timer::Failure::Busy));
     unsafe { timer.shut() }.unwrap();
     assert_eq!(timer.state(), State::Idle);
-    boot::write("PASS sbi-timer received=2 cleared=2 states=1 rejected=1\n");
+    boot_diagnostic::write("PASS sbi-timer received=2 cleared=2 states=1 rejected=1\n");
 }
 
 fn uart_read(window: &mut DeviceWindow<'_>, register: usize) -> u8 {
@@ -153,7 +154,10 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
     let description = aplic::Description::read(&tree, cpus, boot.hart() as u64)
         .unwrap()
         .expect("supervisor direct APLIC");
-    assert_eq!(description.contexts(), 1);
+    let domain_description = description.domain();
+    let destination = description.destination();
+    assert_eq!(destination.contexts(), 1);
+    assert_eq!(destination.index(), 0);
     let uart = tree
         .find_path(b"/soc/serial@10000000")
         .unwrap()
@@ -165,7 +169,7 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
     // the register accesses, and uses no firmware console during reception.
     let mut serial =
         unsafe { DeviceWindow::admit(range, InternalAddress::new(range.start().get())) }.unwrap();
-    let route = description.route(&tree, uart).unwrap();
+    let route = domain_description.route(&tree, uart).unwrap();
     assert_eq!(route.mode(), Mode::LevelHigh);
     assert_eq!(uart_read(&mut serial, 3) & 0x80, 0, "DLAB must be clear");
     assert_eq!(
@@ -173,19 +177,19 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
         0,
         "firmware console must be polling"
     );
-    let base = InternalAddress::new(description.registers().start().get());
+    let base = InternalAddress::new(domain_description.registers().start().get());
     // The single-Hart QEMU board, initial bare mapping, quiet device and
     // supervisor domain delegated by OpenSBI establish this test's ownership.
     let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
-    let mut mapping = unsafe { DeviceWindow::admit(description.registers(), base) }.unwrap();
-    assert_eq!(mapping.physical(), description.registers());
+    let mut mapping = unsafe { DeviceWindow::admit(domain_description.registers(), base) }.unwrap();
+    assert_eq!(mapping.physical(), domain_description.registers());
     assert!(mapping.supports_u32(0));
     assert!(!mapping.supports_u32(1));
-    let end = description.registers().length().as_usize().unwrap();
+    let end = domain_description.registers().length().as_usize().unwrap();
     assert!(!mapping.supports_u32(end));
     assert!(!mapping.supports_u32(usize::MAX));
     // All of these requests fail before an actual bus access.
-    use kernel::metal::memory::mmu::access::device::Error as DeviceError;
+    use kernel::metal::memory::access::treaty::device::Error as DeviceError;
     assert_eq!(unsafe { mapping.read_u32(1) }, Err(DeviceError::Range));
     assert_eq!(
         unsafe { mapping.write_u32(end, 0) },
@@ -204,39 +208,66 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
         unsafe { serial.write_u8(usize::MAX, 0) },
         Err(DeviceError::Range)
     );
+    let mut storage = [Source::Vacant; 1023];
+    let storage = &mut storage[..domain_description.sources() as usize];
     assert!(matches!(
-        unsafe { Direct::admit(description, &mut mapping, wrong, Barrier::native()) },
+        unsafe { Domain::admit(description, &mut mapping, &mut [], local, Barrier::native()) },
+        Err(aplic::Failure::Range)
+    ));
+    assert!(matches!(
+        unsafe { Domain::admit(description, &mut mapping, storage, wrong, Barrier::native()) },
         Err(aplic::Failure::Scope)
     ));
-    let mut direct =
-        unsafe { Direct::admit(description, &mut mapping, local, Barrier::native()) }.unwrap();
+    let (mut domain, mut context) =
+        unsafe { Domain::admit(description, &mut mapping, storage, local, Barrier::native()) }
+            .unwrap();
+    assert_eq!(context.destination(), destination);
     assert_eq!(core::mem::size_of::<aplic::Source>(), 2);
-    assert_eq!(direct.state(), aplic::State::Prepared);
-    assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Vacant);
-    assert_eq!(direct.source(0), Err(aplic::Failure::Range));
-    unsafe { direct.configure(route) }.unwrap();
+    assert_eq!(domain.state(), aplic::State::Prepared);
+    assert_eq!(domain.source(route.id()).unwrap(), aplic::Source::Vacant);
+    assert_eq!(domain.source(0), Err(aplic::Failure::Range));
+    unsafe { domain.configure(&mut context, route) }.unwrap();
     assert_eq!(
-        direct.source(route.id()).unwrap(),
+        domain.source(route.id()).unwrap(),
         aplic::Source::Masked(route.mode())
     );
-    assert_eq!(direct.enable(route.id()), Err(aplic::Failure::Busy));
-    assert!(matches!(direct.claim(), Err(aplic::Failure::Busy)));
     assert_eq!(
-        unsafe { direct.configure(route) },
+        domain.enable(&mut context, route.id()),
         Err(aplic::Failure::Busy)
     );
-    unsafe { direct.open() }.unwrap();
-    assert_eq!(direct.state(), aplic::State::Open);
-    assert_eq!(unsafe { direct.open() }, Err(aplic::Failure::Busy));
-    assert!(direct.claim().unwrap().is_none());
+    assert!(matches!(
+        domain.receiver(&mut context).unwrap().claim(),
+        Err(aplic::Failure::Busy)
+    ));
+    assert_eq!(
+        unsafe { domain.configure(&mut context, route) },
+        Err(aplic::Failure::Busy)
+    );
+    unsafe { domain.open(&mut context) }.unwrap();
+    assert_eq!(domain.state(), aplic::State::Open);
+    assert_eq!(
+        unsafe { domain.open(&mut context) },
+        Err(aplic::Failure::Busy)
+    );
+    assert!(
+        domain
+            .receiver(&mut context)
+            .unwrap()
+            .claim()
+            .unwrap()
+            .is_none()
+    );
     let mut previous = 0;
     for _ in 0..2 {
-        direct.enable(route.id()).unwrap();
+        domain.enable(&mut context, route.id()).unwrap();
         assert_eq!(
-            direct.source(route.id()).unwrap(),
+            domain.source(route.id()).unwrap(),
             aplic::Source::Enabled(route.mode())
         );
-        assert_eq!(direct.enable(route.id()), Err(aplic::Failure::Busy));
+        assert_eq!(
+            domain.enable(&mut context, route.id()),
+            Err(aplic::Failure::Busy)
+        );
         // Enable the actual device's transmitter-empty interrupt; no APLIC
         // software pending injection and no SBI console calls in this window.
         uart_write(&mut serial, 1, 2);
@@ -252,7 +283,9 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
             "supervisor external trap"
         );
         {
-            let claim = claim_consumer::receive(&mut direct, route.id()).expect("real UART claim");
+            let mut receiver = domain.receiver(&mut context).unwrap();
+            let claim =
+                claim_consumer::receive(&mut receiver, route.id()).expect("real UART claim");
             assert_eq!(claim.source(), route.id());
             assert_eq!(claim.priority(), 1);
             assert!(claim.round() > previous);
@@ -260,10 +293,11 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
             // Borrow ends here, but the persistent hardware obligation remains.
         }
         assert_eq!(
-            direct.source(route.id()).unwrap(),
+            domain.source(route.id()).unwrap(),
             aplic::Source::Masked(route.mode())
         );
-        let mut claim = claim_consumer::pending(&mut direct, route.id());
+        let mut receiver = domain.receiver(&mut context).unwrap();
+        let mut claim = claim_consumer::pending(&mut receiver, route.id());
         assert_eq!(claim.round(), previous);
         assert_eq!(uart_read(&mut serial, 2) & 0x0f, 2, "UART THRE cause");
         uart_write(&mut serial, 1, 0);
@@ -271,25 +305,41 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
         // source. There is no separate software binding in this scenario.
         unsafe { consumer::finish(&mut claim, route.id(), Completion::Settled) };
     }
-    assert!(direct.current().is_none());
-    assert!(direct.claim().unwrap().is_none());
-    unsafe { direct.shut() }.unwrap();
-    assert_eq!(direct.state(), aplic::State::Shut);
-    assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Vacant);
-    assert_eq!(unsafe { direct.open() }, Err(aplic::Failure::Busy));
+    assert!(domain.receiver(&mut context).unwrap().current().is_none());
+    assert!(
+        domain
+            .receiver(&mut context)
+            .unwrap()
+            .claim()
+            .unwrap()
+            .is_none()
+    );
+    unsafe { domain.shut(&mut context) }.unwrap();
+    assert_eq!(domain.state(), aplic::State::Shut);
+    assert_eq!(domain.source(route.id()).unwrap(), aplic::Source::Vacant);
     assert_eq!(
-        unsafe { direct.configure(route) },
+        unsafe { domain.open(&mut context) },
         Err(aplic::Failure::Busy)
     );
-    assert_eq!(direct.enable(route.id()), Err(aplic::Failure::Busy));
-    assert!(matches!(direct.claim(), Err(aplic::Failure::Busy)));
-    unsafe { direct.shut() }.unwrap();
-    assert_eq!(direct.state(), aplic::State::Shut);
+    assert_eq!(
+        unsafe { domain.configure(&mut context, route) },
+        Err(aplic::Failure::Busy)
+    );
+    assert_eq!(
+        domain.enable(&mut context, route.id()),
+        Err(aplic::Failure::Busy)
+    );
+    assert!(matches!(
+        domain.receiver(&mut context).unwrap().claim(),
+        Err(aplic::Failure::Busy)
+    ));
+    unsafe { domain.shut(&mut context) }.unwrap();
+    assert_eq!(domain.state(), aplic::State::Shut);
     assert_eq!(uart_read(&mut serial, 1), 0);
     // Actual controller and device effects have settled before using the firmware console.
     drop(serial);
-    boot::write("\nPASS device-window widths=2 rejected=5\n");
-    boot::write(
+    boot_diagnostic::write("\nPASS device-window widths=2 rejected=5\n");
+    boot_diagnostic::write(
         "\nPASS aplic-direct received=2 cleared=2 stale=1 shutdown=1 states=1 rejected=1\n",
     );
 }
@@ -306,5 +356,5 @@ extern "Rust" fn limen_platform_ready(mut boot: Boot<'_>) -> ! {
         core::arch::asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem));
     }
     assert_eq!(enabled & ((1 << 5) | (1 << 9)), 0);
-    boot::shutdown(true)
+    boot_diagnostic::shutdown(true)
 }

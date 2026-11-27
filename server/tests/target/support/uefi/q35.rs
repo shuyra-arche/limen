@@ -2,9 +2,11 @@ use core::arch::asm;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use kernel::entry::boot;
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::metal::processor::treaty::Startup;
 use kernel::metal::{
     interrupt::x86_64::internal::apic::{self, LocalApic, Probe},
-    memory::mmu::access::device::DeviceWindow,
+    memory::access::treaty::device::DeviceWindow,
 };
 use limen_treaty::model::PhysicalAddress;
 use limen_treaty::model::{ByteLength, InternalAddress};
@@ -34,7 +36,7 @@ pub fn tsc_frequency() -> u64 {
         .unwrap()
 }
 
-pub(super) static SERVICES: boot::Services = boot::Services {
+pub(super) static SERVICES: boot_diagnostic::Services = boot_diagnostic::Services {
     output: Some(|byte| {
         unsafe { io::write8(0xe9, byte) };
         true
@@ -86,14 +88,14 @@ pub fn local_controller(
     let controller = unsafe { LocalApic::admit(boot.hart(), madt, window, probe) }
         .ok()
         .expect("actual local APIC");
-    assert_eq!(controller.state(), apic::State::Idle);
+    assert_eq!(controller.launch_state(), apic::launch::State::Idle);
     assert!(!controller.can_start(boot.hart()));
     assert!(!controller.can_start(255));
     controller
 }
 
-pub(super) fn startup(boot: &boot::Boot<'_>) -> boot::Startup {
-    boot::Startup::Xapic {
+pub(super) fn startup(boot: &boot::Boot<'_>) -> Startup {
+    Startup::Xapic {
         controller: local_controller(boot, local_window(boot)),
         trampoline: NonNull::new(TRAMPOLINE.load(Ordering::Acquire))
             .unwrap()
@@ -186,10 +188,10 @@ pub(super) fn check_discovery(boot: &boot::Boot<'_>, target: usize) {
         }));
     }
     assert!(boot.conventional_ram().is_none());
-    boot::write("PASS firmware-discovery q35 acpi=1 madt=1 routes=1 retained=1\n");
+    boot_diagnostic::write("PASS firmware-discovery q35 acpi=1 madt=1 routes=1 retained=1\n");
 }
 
-pub fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) -> boot::Startup {
+pub fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) -> Startup {
     assert!(boot.device_tree().is_none());
     assert!(boot.dtb_memory().is_none());
     let idtr = Idtr::read();
@@ -211,9 +213,9 @@ pub fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) -> boot::Startup {
     startup(boot)
 }
 
-pub fn inspect_started(boot::Startup::Xapic { controller, .. }: &boot::Startup, _: usize) {
+pub fn inspect_started(Startup::Xapic { controller, .. }: &Startup, _: usize) {
     // ICR completion alone would not prove the AP entered. The shared
     // fixture has already observed the actual minor Ready.
-    assert_eq!(controller.state(), apic::State::Idle);
-    boot::write("PASS local-apic startup=1 scope-rejected=1 target-rejected=1\n");
+    assert_eq!(controller.launch_state(), apic::launch::State::Idle);
+    boot_diagnostic::write("PASS local-apic startup=1 scope-rejected=1 target-rejected=1\n");
 }

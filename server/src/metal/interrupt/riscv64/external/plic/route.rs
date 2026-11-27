@@ -5,7 +5,7 @@ use super::{
     registers::{enable, priority},
     source::Priority,
 };
-use crate::metal::{interrupt::RouteControl, platform::description::devicetree::Error};
+use crate::metal::{interrupt::treaty::RouteControl, platform::description::devicetree::Error};
 
 const PENDING: usize = 0x1000;
 
@@ -71,7 +71,7 @@ struct Control<'route, 'access, 'storage, 'tree> {
     binding: &'route mut BoundRoute<'tree>,
 }
 
-impl crate::metal::interrupt::route::Sealed for Control<'_, '_, '_, '_> {}
+impl crate::metal::interrupt::treaty::route::Sealed for Control<'_, '_, '_, '_> {}
 
 impl RouteControl for Control<'_, '_, '_, '_> {
     type Failure = Failure;

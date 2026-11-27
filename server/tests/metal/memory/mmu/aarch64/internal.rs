@@ -1,8 +1,10 @@
 use kernel::metal::memory::mmu::{
-    LeafAccess::{ReadExecute, ReadOnly, ReadWrite},
-    Memory::{Device, Normal},
-    Privilege::{Kernel, User},
-    aarch64::internal::{Controls, Root},
+    aarch64::internal::{context::Controls, format::Root},
+    treaty::{
+        LeafAccess::{ReadExecute, ReadOnly, ReadWrite},
+        Memory::{Device, Normal},
+        Privilege::{Kernel, User},
+    },
 };
 use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
 

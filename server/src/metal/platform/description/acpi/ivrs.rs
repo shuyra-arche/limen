@@ -1,7 +1,7 @@
 //! A checked IVHD register description for a single physical AMD IOMMU.
 //! Device entries remain tied to the original retained firmware table.
 
-use super::{Acpi, Error, field};
+use super::{Error, field};
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,22 +59,6 @@ impl Iterator for DeviceSelections<'_> {
     }
 }
 
-impl<'a> Acpi<'a> {
-    pub fn ivhd(&self) -> Result<Option<Ivhd<'a>>, Error> {
-        let mut tables = self.tables().filter(|table| table.signature() == *b"IVRS");
-        let Some(table) = tables.next() else {
-            return Ok(None);
-        };
-        if tables.next().is_some() {
-            return Err(Error::DuplicateTable);
-        }
-        if table.revision() != 1 {
-            return Err(Error::UnsupportedRevision);
-        }
-        decode(table.bytes()).map(Some)
-    }
-}
-
 fn split_entry(bytes: &[u8]) -> Result<(&[u8], &[u8]), Error> {
     let size = match bytes.first() {
         Some(2) => 4,    // Select one PCI device.
@@ -88,7 +72,7 @@ fn split_entry(bytes: &[u8]) -> Result<(&[u8], &[u8]), Error> {
     Ok((entry, next))
 }
 
-fn decode(bytes: &[u8]) -> Result<Ivhd<'_>, Error> {
+pub(in crate::metal::platform::description) fn decode(bytes: &[u8]) -> Result<Ivhd<'_>, Error> {
     let mut rest = bytes.get(48..).ok_or(Error::InvalidLength)?;
     let mut unit = None;
     let mut kinds = 0;

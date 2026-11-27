@@ -7,8 +7,8 @@ use core::{
 };
 
 use kernel::metal::memory::mmu::{
-    LeafAccess, LocalContext,
-    riscv64::{internal::context::Context, sv::Mode},
+    riscv64::internal::{context::Context, format::Format},
+    treaty::{LeafAccess, LocalContext},
 };
 use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
 
@@ -125,14 +125,14 @@ fn check_interrupts() {
 }
 
 pub struct Root {
-    mode: Mode,
+    mode: Format,
     bank: usize,
     tables: &'static [Table; TABLE_COUNT],
     used: usize,
 }
 
 impl Root {
-    pub fn new(mode: Mode) -> Self {
+    pub fn new(mode: Format) -> Self {
         assert_eq!(Context::current(), Some(Context::BARE));
         check_interrupts();
         Self::take(0, mode)
@@ -146,7 +146,7 @@ impl Root {
         next
     }
 
-    fn take(bank: usize, mode: Mode) -> Self {
+    fn take(bank: usize, mode: Format) -> Self {
         assert!(!CLAIMED[bank].swap(true, Ordering::AcqRel));
         let tables = &TABLES[bank];
         assert!(tables.iter().all(Table::is_empty));
@@ -201,13 +201,15 @@ impl Root {
     ) {
         self.check_inactive();
         assert!(range.start < range.end && range.end <= self.low_end());
-        assert!(self.mode.is_canonical_range(
-            InternalRange::new(
-                InternalAddress::new(range.start),
-                InternalAddress::new(range.end),
+        assert!(
+            self.mode.is_canonical_range(
+                InternalRange::new(
+                    InternalAddress::new(range.start),
+                    InternalAddress::new(range.end),
+                )
+                .unwrap()
             )
-            .unwrap()
-        ));
+        );
         assert!(range.start.is_multiple_of(PAGE) && range.end.is_multiple_of(PAGE));
         for address in range.step_by(PAGE as usize) {
             let entry = self.slot(address, 0, |branch| encode(branch, None));
@@ -238,7 +240,10 @@ impl Root {
     ) -> &AtomicU64 {
         let mut table = 0;
         for level in (leaf_level + 1..self.mode.levels()).rev() {
-            let entry = &self.tables[table].0[self.mode.index(InternalAddress::new(address), level).unwrap()];
+            let entry = &self.tables[table].0[self
+                .mode
+                .index(InternalAddress::new(address), level)
+                .unwrap()];
             let pte = read(entry);
             table = if pte == 0 {
                 let next = self.used;
@@ -252,7 +257,10 @@ impl Root {
                 self.child(pte)
             };
         }
-        let entry = &self.tables[table].0[self.mode.index(InternalAddress::new(address), leaf_level).unwrap()];
+        let entry = &self.tables[table].0[self
+            .mode
+            .index(InternalAddress::new(address), leaf_level)
+            .unwrap()];
         assert_eq!(read(entry), 0);
         entry
     }

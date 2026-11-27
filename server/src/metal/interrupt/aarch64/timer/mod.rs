@@ -1,7 +1,9 @@
 //! Arm Generic Timer interrupt binding. No comparator is enabled by discovery.
 
 use crate::metal::{
-    interrupt::aarch64::gic::redistributor::{PrivateInterrupt, PrivateInterrupts},
+    interrupt::aarch64::gic::redistributor::input::description::{
+        PrivateInterrupt, PrivateInterrupts,
+    },
     platform::description::devicetree::{DeviceTree, Error, NodeId},
 };
 

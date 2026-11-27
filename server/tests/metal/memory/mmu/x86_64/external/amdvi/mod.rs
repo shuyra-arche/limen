@@ -1,9 +1,16 @@
 use super::super::test_firmware::Firmware;
 use super::{
-    Admissions, Binding, Completion, Context, Controller, DENY, Error, FEATURES, Progress, Queue,
-    RUNNING, STATUS, Scope, Storage, Table, admit_binding, binding_slot, reserve_binding_numbers,
+    Controller, Error, FEATURES, RUNNING, STATUS, Storage,
+    binding::{
+        Admissions, Binding, Context, Scope, admit_binding, binding_slot, reserve_binding_numbers,
+    },
+    directory::{DENY, Table},
+    queue::{Completion, Progress, Queue},
 };
-use crate::metal::memory::mmu::{Retirement, Unbind, access::device::DeviceWindow};
+use crate::metal::memory::{
+    access::treaty::device::DeviceWindow,
+    mmu::treaty::{Retirement, Unbind},
+};
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress};
 use std::boxed::Box;
 

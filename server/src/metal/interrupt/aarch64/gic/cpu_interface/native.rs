@@ -4,10 +4,15 @@ use core::arch::asm;
 
 use super::super::{
     reception::{Failure, Mode, State},
-    redistributor::{self, Frame, Ppi, StoppedPpi},
+    redistributor::{
+        self, Frame,
+        input::{Ppi, StoppedPpi},
+    },
     sgi::{Phase, Sgi},
 };
-use crate::metal::processor::hart::aarch64::{native::boot_identity, status};
+use crate::metal::processor::{
+    description::aarch64::status, executor::aarch64::native::boot_identity,
+};
 
 pub(in crate::metal::interrupt::aarch64::gic) fn local(affinity: usize) -> bool {
     let el: usize;
@@ -183,7 +188,7 @@ impl Claim<'_, '_> {
         if !stopped.matches(&self.owner.frame, self.id) {
             return Err(Failure::Scope);
         }
-        unsafe { crate::metal::interrupt::HardwareClaim::finish(self)? };
+        unsafe { crate::metal::interrupt::treaty::HardwareClaim::finish(self)? };
         stopped.complete();
         Ok(())
     }
@@ -240,17 +245,17 @@ impl Claim<'_, '_> {
     }
 }
 
-impl crate::metal::interrupt::claim::Sealed for Claim<'_, '_> {}
+impl crate::metal::interrupt::treaty::claim::Sealed for Claim<'_, '_> {}
 
-impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_> {
+impl crate::metal::interrupt::treaty::HardwareClaim for Claim<'_, '_> {
     type Error = Failure;
 
     fn source_number(&self) -> u32 {
         self.intid()
     }
 
-    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::Completion, Failure> {
-        use crate::metal::interrupt::Completion;
+    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::treaty::Completion, Failure> {
+        use crate::metal::interrupt::treaty::Completion;
         if self.owner.state == State::Claimed(self.id) {
             unsafe { self.drop_priority() }?;
             if self.owner.state == State::Empty {
@@ -261,9 +266,9 @@ impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_> {
     }
 }
 
-impl crate::metal::interrupt::claim::Sealed for CpuInterface<'_> {}
+impl crate::metal::interrupt::treaty::claim::Sealed for CpuInterface<'_> {}
 
-impl<'map> crate::metal::interrupt::Receive for CpuInterface<'map> {
+impl<'map> crate::metal::interrupt::treaty::Receive for CpuInterface<'map> {
     type Error = Failure;
     type Claim<'receiver>
         = Claim<'receiver, 'map>

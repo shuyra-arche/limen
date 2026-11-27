@@ -5,12 +5,12 @@ use core::{
     mem::offset_of,
 };
 
-use crate::metal::processor::{execution::description::aarch64::base_simd, hart::aarch64::native};
+use crate::metal::processor::{execution::profile::aarch64::base_simd, executor::aarch64::native};
 
 #[cfg(target_feature = "sve")]
 compile_error!("cooperative AArch64 requires the base FP/SIMD execution profile");
 
-pub(super) fn ready() -> bool {
+pub(in crate::metal::processor) fn ready() -> bool {
     if !native::masked_stack() {
         return false;
     }
@@ -20,7 +20,7 @@ pub(super) fn ready() -> bool {
 }
 
 #[repr(C, align(16))]
-pub(super) struct Saved {
+pub(in crate::metal::processor) struct Saved {
     resume: usize,
     stack: usize,
     preserved: [usize; 11],
@@ -30,7 +30,7 @@ pub(super) struct Saved {
 }
 
 impl Saved {
-    pub(super) const EMPTY: Self = Self {
+    pub(in crate::metal::processor) const EMPTY: Self = Self {
         resume: 0,
         stack: 0,
         preserved: [0; 11],
@@ -39,7 +39,10 @@ impl Saved {
         vectors: [0; 8],
     };
 
-    pub(super) fn initial(stack: usize, entry: extern "C" fn(*const ()) -> !) -> Self {
+    pub(in crate::metal::processor) fn initial(
+        stack: usize,
+        entry: extern "C" fn(*const ()) -> !,
+    ) -> Self {
         let mut saved = Self {
             resume: (first as *const ()).addr(),
             stack,
@@ -59,7 +62,7 @@ unsafe extern "C" fn first() -> ! {
 /// portions of V8-V15. Save full Q8-Q15 and FP controls. X18 and TPIDR_EL1
 /// remain part of the actual platform/Hart environment.
 #[unsafe(naked)]
-pub(super) unsafe extern "C" fn switch(
+pub(in crate::metal::processor) unsafe extern "C" fn switch(
     outgoing: *mut Saved,
     incoming: *const Saved,
     argument: *const (),
@@ -112,7 +115,7 @@ pub(super) unsafe extern "C" fn switch(
 
 /// Enter the resident dispatcher with this target's existing kernel ABI.
 #[unsafe(naked)]
-pub(super) unsafe extern "C" fn start_stack(
+pub(in crate::metal::processor) unsafe extern "C" fn start_stack(
     stack: usize,
     entry: extern "C" fn(*const ()) -> !,
     argument: *const (),

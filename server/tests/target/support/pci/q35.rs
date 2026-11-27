@@ -1,6 +1,6 @@
 //! QEMU EDU endpoints at the PCI functions wired by the q35 launcher.
 use core::arch::{asm, x86_64::_mm_mfence};
-use kernel::metal::memory::mmu::access::device::DeviceWindow;
+use kernel::metal::memory::access::treaty::device::DeviceWindow;
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress};
 use uefi_fixture::q35;
 

@@ -1,7 +1,7 @@
 //! Arm SMMUv3 non-secure stage-two control for one physical interface.
 
 use crate::metal::{
-    memory::mmu::access::device::DeviceWindow,
+    memory::access::treaty::device::DeviceWindow,
     platform::description::devicetree::{Error as TreeError, Node},
 };
 pub use directory::{Binding, Context, Sequence, Storage};
@@ -605,9 +605,9 @@ pub struct Unbinding {
     binding: Binding,
 }
 
-impl crate::metal::memory::mmu::retirement::Sealed for Controller<'_> {}
+impl crate::metal::memory::mmu::treaty::retirement::Sealed for Controller<'_> {}
 
-impl crate::metal::memory::mmu::Unbind for Controller<'_> {
+impl crate::metal::memory::mmu::treaty::Unbind for Controller<'_> {
     type Binding = Binding;
     type Ticket = Unbinding;
     type Error = Error;
@@ -624,8 +624,8 @@ impl crate::metal::memory::mmu::Unbind for Controller<'_> {
     fn observe_retirement(
         &mut self,
         ticket: &Unbinding,
-    ) -> Result<crate::metal::memory::mmu::Retirement, Error> {
-        use crate::metal::memory::mmu::Retirement;
+    ) -> Result<crate::metal::memory::mmu::treaty::Retirement, Error> {
+        use crate::metal::memory::mmu::treaty::Retirement;
         match self.observe(ticket.command) {
             Ok(Effect::Unbound(binding)) if binding == ticket.binding => Ok(Retirement::Settled),
             Ok(_) => Err(Error::Unconfirmed),

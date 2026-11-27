@@ -3,9 +3,9 @@ use crate::metal::{
     interrupt::riscv64::internal::supervisor,
     memory::mmu::riscv64::internal::context::Context,
     platform::boot::trap as diagnostic,
-    processor::hart::{
-        local,
-        riscv64::{native, status},
+    processor::{
+        description::riscv64::status,
+        executor::{local, riscv64::native},
     },
 };
 use core::arch::{asm, naked_asm};
@@ -27,10 +27,9 @@ macro_rules! establish_supervisor {
     };
 }
 
+pub(in crate::metal) use establish_supervisor;
+
 mod major;
-mod minor;
-pub use minor::Startup;
-pub(crate) use minor::{MinorContext, minor_context, wake_minor};
 
 pub(crate) fn established() -> bool {
     let status = native::status();
@@ -61,17 +60,9 @@ pub(crate) fn image() -> core::ops::Range<usize> {
     (&raw const _kernel_base).addr()..(&raw const _kernel_edge).addr()
 }
 
-pub(crate) fn park() -> ! {
-    loop {
-        unsafe { asm!("wfi", options(nomem, nostack)) };
-    }
-}
-
-pub type DeliveryError = core::convert::Infallible;
-
 #[unsafe(naked)]
 #[rustc_align(4)]
-unsafe extern "C" fn trap() -> ! {
+pub(in crate::metal) unsafe extern "C" fn trap() -> ! {
     naked_asm!(
         "csrr t0, sscratch",
         "amoswap.d.aq t0, zero, (t0)",

@@ -1,11 +1,11 @@
 mod lifecycle;
 
-use kernel::metal::memory::mmu::access::ram::MappedRange;
+use kernel::metal::memory::access::treaty::ram::MappedRange;
 use kernel::metal::memory::mmu::{
-    GEOMETRY,
-    riscv64::{internal::encoder, sv::Mode},
+    riscv64::internal::{encoder, format::Format},
+    treaty::GEOMETRY,
 };
-use kernel::metal::module::{Contract, Error, Machine, ModuleImage, SegmentPermissions};
+use kernel::metal::module::treaty::{Contract, Error, Machine, ModuleImage, SegmentPermissions};
 use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
 use std::mem::MaybeUninit;
 
@@ -26,22 +26,22 @@ const IMAGES: [(Machine, &[u8]); 3] = [
         include_bytes!(concat!(env!("OUT_DIR"), "/aarch64.elf")),
     ),
 ];
-const ROOTS: [(Mode, &[u8]); 3] = [
+const ROOTS: [(Format, &[u8]); 3] = [
     (
-        Mode::Sv39,
+        Format::Sv39,
         include_bytes!(concat!(env!("OUT_DIR"), "/sv39-root.elf")),
     ),
     (
-        Mode::Sv48,
+        Format::Sv48,
         include_bytes!(concat!(env!("OUT_DIR"), "/sv48-root.elf")),
     ),
     (
-        Mode::Sv57,
+        Format::Sv57,
         include_bytes!(concat!(env!("OUT_DIR"), "/sv57-root.elf")),
     ),
 ];
 const SV39_ROOT: &[u8] = ROOTS[0].1;
-const ROOT: Contract<'static> = encoder::contract(Mode::Sv39);
+const ROOT: Contract<'static> = encoder::contract(Format::Sv39);
 
 #[derive(Clone, Copy)]
 struct Program {
@@ -87,7 +87,7 @@ fn note_property(bytes: &[u8], path: &[u8], name: &[u8]) -> usize {
     let fdt_length =
         u32::from_le_bytes(bytes[note.offset + 4..note.offset + 8].try_into().unwrap()) as usize;
     let fdt_start = note.offset + 12 + name_length.next_multiple_of(4);
-    let description = kernel::metal::platform::description::devicetree::DeviceTree::new(
+    let description = kernel::metal::platform::description::treaty::devicetree::DeviceTree::new(
         &bytes[fdt_start..fdt_start + fdt_length],
     )
     .unwrap();
@@ -300,8 +300,8 @@ fn selects_distinct_rv64_geometry_and_root_images() {
     let contracts = [
         GEOMETRY,
         ROOT,
-        encoder::contract(Mode::Sv48),
-        encoder::contract(Mode::Sv57),
+        encoder::contract(Format::Sv48),
+        encoder::contract(Format::Sv57),
     ];
     for (bytes, own) in sources.into_iter().zip(contracts) {
         let selected = ModuleImage::select(&sources, machine, PAGE, own)

@@ -2,9 +2,9 @@ use crate::metal::{
     interrupt::x86_64::internal::apic,
     platform::boot::handoff::{Descriptions, Facts, uefi},
     platform::boot::trap as diagnostic,
-    processor::hart::{
-        local,
-        x86_64::{native, status},
+    processor::{
+        description::x86_64::status,
+        executor::{local, x86_64::native},
     },
 };
 mod major;
@@ -26,12 +26,7 @@ struct Gate {
 
 use native::Descriptor;
 
-#[unsafe(naked)]
-extern "sysv64" fn stop() -> ! {
-    naked_asm!("cli", "2: hlt", "jmp 2b");
-}
-
-fn load_idt() {
+pub(in crate::metal) fn load_idt() {
     let idtr = Descriptor {
         limit: (size_of::<[Gate; 256]>() - 1) as u16,
         base: (&raw const IDT).addr(),
@@ -73,16 +68,6 @@ pub(in crate::metal) fn entry() -> Option<local::Entry> {
         diagnostic::stack_range(),
     )
 }
-
-pub(crate) fn park() -> ! {
-    stop()
-}
-
-mod minor;
-pub use minor::Startup;
-pub(crate) use minor::{MinorContext, minor_context, wake_minor};
-
-pub type DeliveryError = isize;
 
 // A 64-bit interrupt gate saves RIP, CS, RFLAGS, RSP and SS. Normalize the
 // hardware error-code slot before entering the common register-only stub.

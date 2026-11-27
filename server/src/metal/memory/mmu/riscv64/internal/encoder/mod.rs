@@ -6,17 +6,17 @@ mod binding;
 pub use binding::{Encoder, bind};
 
 use crate::metal::{
-    memory::mmu::{GEOMETRY, riscv64::sv::Mode},
-    module::{Contract, Layout, Machine, ModuleUse, UseError},
+    memory::mmu::{riscv64::internal::format::Format, treaty::GEOMETRY},
+    module::treaty::{Contract, Layout, Machine, ModuleUse, UseError},
 };
 
 /// Each offer identifies the exact SATP mode the independently linked
 /// encoder can produce. All three use the same native v1 calling convention.
-pub const fn contract(mode: Mode) -> Contract<'static> {
+pub const fn contract(mode: Format) -> Contract<'static> {
     let name: &[u8] = match mode {
-        Mode::Sv39 => b"shuyra,sv39-root",
-        Mode::Sv48 => b"shuyra,sv48-root",
-        Mode::Sv57 => b"shuyra,sv57-root",
+        Format::Sv39 => b"shuyra,sv39-root",
+        Format::Sv48 => b"shuyra,sv48-root",
+        Format::Sv57 => b"shuyra,sv57-root",
     };
     Contract::new(name, 2, 1)
 }
@@ -24,7 +24,7 @@ pub const fn contract(mode: Mode) -> Contract<'static> {
 /// Check exact offers and held dependencies while the caller still owns all
 /// publication inputs.
 pub fn check(
-    mode: Mode,
+    mode: Format,
     layout: &Layout<'_>,
     dependencies: &[ModuleUse<'_>],
 ) -> Result<(), UseError> {

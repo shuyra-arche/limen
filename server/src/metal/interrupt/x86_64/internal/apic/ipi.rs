@@ -1,8 +1,11 @@
 //! Physical fixed-vector notifications through the original xAPIC ICR.
 
-use super::{Destination, Failure, LEVEL_ASSERT, LocalApic, State};
+use super::{
+    Failure, LocalApic,
+    registers::{Destination, Icr, LEVEL_ASSERT},
+};
 use crate::metal::{
-    interrupt::ipi::{Issuance, NotifyHart, Sealed},
+    interrupt::treaty::{Issuance, NotifyHart, ipi::Sealed},
     platform::description::acpi::Madt,
 };
 use core::sync::atomic::{Ordering, fence};
@@ -58,13 +61,13 @@ impl IpiSend<'_, '_> {
     /// Only the receiving Hart can establish actual vector receipt and EOI.
     pub fn observe(&mut self) -> Result<(), Failure> {
         self.owner.reception_context()?;
-        if self.owner.ipi != Some(self.target) {
+        if self.owner.icr != Icr::Notifying(self.target) {
             return Err(Failure::Busy);
         }
-        if !self.owner.idle() {
+        if !self.owner.wait_icr() {
             return Err(Failure::Unconfirmed);
         }
-        self.owner.ipi = None;
+        self.owner.icr = Icr::Idle;
         Ok(())
     }
 }
@@ -108,7 +111,7 @@ impl<'map> LocalApic<'map> {
     /// that path through pending issues and independent reception.
     pub unsafe fn bind_ipi(&mut self, target: IpiTarget) -> Result<IpiRoute<'_, 'map>, Failure> {
         self.check_ipi_target(target)?;
-        if self.ipi.is_some_and(|original| original != target) {
+        if self.icr != Icr::Idle && self.icr.notification() != Some(target) {
             return Err(Failure::Busy);
         }
         Ok(IpiRoute {
@@ -138,10 +141,10 @@ impl<'map> LocalApic<'map> {
     /// Keep those alive until the target independently settles the effect.
     pub unsafe fn notify(&mut self, target: IpiTarget) -> Result<IpiSend<'_, 'map>, Failure> {
         self.check_ipi_target(target)?;
-        if self.state != State::Idle || self.ipi.is_some() || !self.idle() {
+        if self.icr != Icr::Idle || !self.wait_icr() {
             return Err(Failure::Busy);
         }
-        self.ipi = Some(target);
+        self.icr = Icr::Notifying(target);
         // The ICR write is the remote notification. Order prior normal
         // mailbox publication before the write to this UC device.
         fence(Ordering::SeqCst);
@@ -154,7 +157,7 @@ impl<'map> LocalApic<'map> {
 
     /// Resume observation of a sent command without sending it again.
     pub fn pending_ipi(&mut self) -> Option<IpiSend<'_, 'map>> {
-        let target = self.ipi?;
+        let target = self.icr.notification()?;
         Some(IpiSend {
             owner: self,
             target,

@@ -1,4 +1,4 @@
-use kernel::metal::memory::mmu::{Context, LocalContext, LocalInstall, SwitchError};
+use kernel::metal::memory::mmu::treaty::{Context, LocalContext, LocalInstall, SwitchError};
 
 /// The original native owner already prepared both retained contexts.
 pub(super) unsafe fn install(

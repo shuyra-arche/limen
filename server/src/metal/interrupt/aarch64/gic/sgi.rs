@@ -1,6 +1,6 @@
 //! One Group 1 SGI admitted by the actual destination and sent to its affinity.
 
-use crate::metal::processor::hart::aarch64::description::AFFINITY_MASK;
+use crate::metal::processor::description::aarch64::cpu::AFFINITY_MASK;
 
 /// Encode ICC_SGI1R_EL1 with one destination and no Range Selector.
 pub const fn selection(affinity: u64, intid: u8) -> Option<u64> {

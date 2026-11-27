@@ -2,18 +2,20 @@ use core::arch::asm;
 use core::fmt::Write;
 use kernel::entry::boot;
 use kernel::metal::interrupt::aarch64::gic::GicV3;
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::metal::processor::treaty::Startup;
 use kernel::metal::{
-    chrono::aarch64::GenericCounter,
+    chrono::aarch64::description::GenericCounter,
     interrupt::aarch64::{
-        gic::{Trigger, cpu_interface, redistributor::PrivateInterrupts},
+        gic::{Trigger, cpu_interface, redistributor::input::description::PrivateInterrupts},
         timer::GenericTimer,
     },
-    platform::firmware::psci::Psci,
+    platform::firmware::treaty::psci::Psci,
 };
 use kernel::metal::{
-    platform::description::devicetree::{DeviceTree, Error as TreeError},
-    platform::firmware::psci::{Conduit, PsciDescription},
-    processor::hart::aarch64::description::Aarch64Cpus,
+    platform::description::treaty::devicetree::{DeviceTree, Error as TreeError},
+    platform::firmware::treaty::psci::{Conduit, PsciDescription},
+    processor::description::aarch64::cpu::Aarch64Cpus,
 };
 use uefi::Status;
 use uefi::{
@@ -40,7 +42,7 @@ fn conduit() -> Conduit {
         Conduit::Smc
     }
 }
-pub(super) static SERVICES: boot::Services = boot::Services {
+pub(super) static SERVICES: boot_diagnostic::Services = boot_diagnostic::Services {
     output: Some(|b| unsafe { pl011::write_byte(UART.load(Ordering::Acquire), b) }),
     reset: Some(|_| unsafe { conduit().system_off() }),
 };
@@ -116,7 +118,7 @@ pub(super) fn capture() -> Result<Option<&'static [u8]>, Status> {
     devicetree::copy(discover).map(Some)
 }
 
-pub fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) -> boot::Startup {
+pub fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) -> Startup {
     let (el, daif, sp, vectors, spsel): (usize, usize, usize, usize, usize);
     unsafe {
         asm!("mrs {}, CurrentEL", "mrs {}, DAIF", "mov {}, sp", "mrs {}, VBAR_EL1",
@@ -170,11 +172,11 @@ pub fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) -> boot::Startup {
                 && range.end().get() <= d.phys_start + d.page_count * PAGE_SIZE as u64
         }));
     }
-    let mut console = boot::console().expect("board console");
+    let mut console = boot_diagnostic::console().expect("board console");
     console
         .write_str("PASS firmware-discovery virt dtb=1 psci=1 affinity=1 gic=1 timer=1\n")
         .expect("firmware discovery output");
-    boot::Startup::Psci(psci)
+    Startup::Psci(psci)
 }
 
 fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) -> Psci {
@@ -225,6 +227,6 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) -> Psci {
 }
 
 /// Recheck the original PSCI target only after the minor has entered.
-pub fn inspect_started(boot::Startup::Psci(psci): &boot::Startup, target: usize) {
+pub fn inspect_started(Startup::Psci(psci): &Startup, target: usize) {
     unsafe { psci.verify_affinity(target, true) }.expect("live minor affinity");
 }

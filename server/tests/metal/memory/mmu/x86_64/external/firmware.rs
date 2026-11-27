@@ -1,4 +1,4 @@
-use crate::metal::platform::description::acpi::Acpi;
+use crate::metal::platform::description::treaty::acpi::Acpi;
 use limen_treaty::model::PhysicalAddress;
 
 pub(super) struct Firmware<const N: usize> {

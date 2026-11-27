@@ -1,9 +1,9 @@
 //! The same elapsed-time observation over the clock supplied by each board.
 
 use core::{hint::spin_loop, time::Duration};
-use kernel::metal::chrono::LocalClock;
+use kernel::metal::chrono::treaty::Clock;
 
-pub fn observe(clock: &LocalClock) {
+pub fn observe(clock: &Clock) {
     let initial = clock.sample().expect("admitted local clock");
     assert_eq!(initial.elapsed_since(initial), Some(Duration::ZERO));
     for _ in 0..200_000 {

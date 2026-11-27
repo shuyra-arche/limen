@@ -1,6 +1,7 @@
 //! QEMU virt: two physical source routes in the original supervisor context.
 
-use kernel::metal::interrupt::Completion;
+use kernel::metal::interrupt::treaty::Completion;
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 
 #[path = "../../../../support/claim.rs"]
 mod claim_consumer;
@@ -10,9 +11,9 @@ mod consumer;
 mod route_consumer;
 
 use kernel::{
-    entry::boot::{self, Boot},
+    entry::boot::Boot,
     metal::{
-        chrono::riscv64::{Counter, RiscvTimebase},
+        chrono::riscv64::{description::RiscvTimebase, time::Counter},
         interrupt::riscv64::{
             external::{
                 Barrier,
@@ -23,7 +24,7 @@ use kernel::{
             },
             internal::supervisor::Supervisor,
         },
-        memory::mmu::access::device::DeviceWindow,
+        memory::access::treaty::device::DeviceWindow,
     },
 };
 use limen_treaty::model::{InternalAddress, PhysicalRange};
@@ -276,8 +277,8 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
         unsafe { mapping.read_u32(rtc_priority) }.unwrap(),
         inherited_rtc_priority
     );
-    boot::write("\nPASS external-route published=2 repeated=0 independent=1\n");
-    boot::write(
+    boot_diagnostic::write("\nPASS external-route published=2 repeated=0 independent=1\n");
+    boot_diagnostic::write(
         "\nPASS plic uart=2 rtc=1 complete=3 contexts=2 shared-enable=1 duplicate=0 restored=1\n",
     );
 }

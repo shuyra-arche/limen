@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::metal::processor::treaty::{Minor, Startup};
+
 use core::{
     arch::asm,
     fmt::Write,
@@ -11,9 +14,9 @@ use core::{
     },
 };
 use kernel::{
-    entry::boot::{self, Boot, Minor, Startup},
+    entry::boot::Boot,
     metal::{
-        chrono::riscv64::{Counter, RiscvTimebase},
+        chrono::riscv64::{description::RiscvTimebase, time::Counter},
         interrupt::riscv64::internal::ipi::{Error, Receiver, SendState, Sender, Target},
     },
 };
@@ -101,14 +104,14 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
         MAILBOX.publish(&mut route, round, round == 1);
         MAILBOX.wait_for_recheck(round, |state, expected| wait(state, expected, hertz as u64));
     }
-    boot::write("PASS rv64-ipi original-hart=1 issued=3 rechecked=2 cleared=2 shut=1\n");
-    boot::shutdown(true)
+    boot_diagnostic::write("PASS rv64-ipi original-hart=1 issued=3 rechecked=2 cleared=2 shut=1\n");
+    boot_diagnostic::shutdown(true)
 }
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    if let Some(mut console) = boot::console() {
+    if let Some(mut console) = boot_diagnostic::console() {
         let _ = writeln!(console, "FAIL RV64 IPI: {info}");
     }
-    boot::shutdown(false)
+    boot_diagnostic::shutdown(false)
 }

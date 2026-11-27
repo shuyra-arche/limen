@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::platform::boot::treaty::{shutdown, write};
+use kernel::metal::processor::treaty::{Minor, StartError, Startup};
+
 use core::{
     arch::global_asm,
     fmt::{self, Write},
@@ -18,7 +21,7 @@ use kernel::{
         room::{Harts, Occupancy},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
-    entry::boot::{Boot, Minor, StartError, Startup, shutdown, write},
+    entry::boot::{Boot},
 };
 
 mod snapshot;
@@ -28,6 +31,8 @@ global_asm!(include_str!("register-probe.S"));
 
 static mut STACKS: Stacks = Stacks::new();
 static mut HARTS: Harts<3> = Harts::new();
+static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy, 3> =
+    kernel::metal::processor::treaty::Dispatchers::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static MINOR: Minor = Minor::new();
 static THIRD: Minor = Minor::new();
@@ -266,9 +271,11 @@ extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
         .expect("SBI HSM");
     let runtime = Execution::new(
         boot.take_major().expect("original native major relation"),
+        boot.terminal(),
         unsafe { &mut *(&raw mut STACKS) },
         unsafe { &mut *(&raw mut RECORDS) },
         unsafe { &mut *(&raw mut HARTS) },
+        unsafe { &mut *(&raw mut DISPATCHERS) },
     )
     .map_err(|failure| failure.reason)
     .expect("Bare scalar execution");

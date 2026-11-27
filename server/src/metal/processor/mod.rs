@@ -1,4 +1,6 @@
-//! Processor descriptions and execution mechanisms.
+//! Hardware facts, admitted executors and machine execution.
 
-pub mod execution;
-pub mod hart;
+pub mod description;
+mod execution;
+pub(crate) mod executor;
+pub mod treaty;

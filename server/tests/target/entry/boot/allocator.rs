@@ -1,11 +1,12 @@
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::{
-    entry::boot::{self, Boot},
+    entry::boot::{Boot},
     metal::{
-        memory::allocator::{
+        memory::allocator::treaty::{
             Allocation, Allowance, Config, Error, Initial, LookupObservation, Pending,
             RamPurpose::Metadata, Request, ReturnReceipt, Search,
         },
-        sync::TurnMode::{Fast, Slow},
+        sync::treaty::TurnMode::{Fast, Slow},
     },
 };
 
@@ -180,5 +181,5 @@ pub(super) fn check(boot: &Boot<'_>) {
     assert_eq!(receipt.finish(Fast), Ok(done));
     receipt.acknowledge().unwrap();
     assert_eq!(receipt.finish(Fast), Err(Error::Stale));
-    boot::write("PASS allocator source=1 negative=1 delayed=1 return=1\n");
+    boot_diagnostic::write("PASS allocator source=1 negative=1 delayed=1 return=1\n");
 }

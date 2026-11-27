@@ -1,11 +1,8 @@
-mod clock;
-pub use clock::{Clock, Deadline, Sample};
+//! Native counters and local time-domain rules.
 
-#[cfg(limen_target)]
-mod native;
-#[cfg(limen_target)]
-pub use native::LocalClock;
+mod counter;
 
 pub mod aarch64;
 pub mod riscv64;
+pub mod treaty;
 pub mod x86_64;

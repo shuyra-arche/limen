@@ -8,7 +8,7 @@ use core::{
         Ordering::{Acquire, Relaxed, Release},
     },
 };
-use kernel::metal::interrupt::ipi::{Issuance, NotifyHart};
+use kernel::metal::interrupt::treaty::{Issuance, NotifyHart};
 
 pub struct Mailbox {
     work: AtomicUsize,

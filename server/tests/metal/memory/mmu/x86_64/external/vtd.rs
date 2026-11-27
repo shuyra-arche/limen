@@ -1,9 +1,15 @@
 use super::super::test_firmware::Firmware;
 use super::{
-    CAPABILITY, CONTEXT, Change, CommandId, Context, Controller, EXTENDED, Error, IN_PROGRESS,
-    Operation, Sequence, State, Storage, Table, Visibility,
+    CAPABILITY, CONTEXT, Controller, EXTENDED, Error, IN_PROGRESS, State,
+    binding::{Context, Sequence},
+    command::{Change, CommandId, Operation},
+    directory::{Storage, Table},
+    translation::Visibility,
 };
-use crate::metal::memory::mmu::{Retirement, Unbind, access::device::DeviceWindow};
+use crate::metal::memory::{
+    access::treaty::device::DeviceWindow,
+    mmu::treaty::{Retirement, Unbind},
+};
 use limen_treaty::model::{InternalAddress, PhysicalAddress};
 
 #[test]

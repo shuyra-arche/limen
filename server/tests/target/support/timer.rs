@@ -1,9 +1,9 @@
 //! The same consumer of a confirmed native timer on both hardware profiles.
 
 use core::{fmt::Debug, time::Duration};
-use kernel::metal::{chrono::LocalClock, interrupt::AbsoluteTimer};
+use kernel::metal::{chrono::treaty::Clock, interrupt::treaty::AbsoluteTimer};
 
-pub fn arm<T: AbsoluteTimer>(clock: &LocalClock, timer: &mut T, delay: Duration)
+pub fn arm<T: AbsoluteTimer>(clock: &Clock, timer: &mut T, delay: Duration)
 where
     T::Failure: Debug,
 {
@@ -19,7 +19,7 @@ where
     assert!(timer.due().unwrap());
 }
 
-pub fn advance<T: AbsoluteTimer>(clock: &LocalClock, timer: &mut T, early: Duration)
+pub fn advance<T: AbsoluteTimer>(clock: &Clock, timer: &mut T, early: Duration)
 where
     T::Failure: Debug,
 {

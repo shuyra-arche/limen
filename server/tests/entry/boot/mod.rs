@@ -1,7 +1,7 @@
 use super::{Boot, Retirement, physical, regions};
 use crate::metal::platform::{
     boot::handoff::{Descriptions, uefi::describe as describe_loader},
-    description::devicetree::{self, memory::DtbMemory},
+    description::treaty::devicetree::{self, memory::DtbMemory},
     firmware::uefi::{
         AcpiInput, DeviceTree, Loader,
         map::{FirmwareMap, FirmwareRegion, MapError},

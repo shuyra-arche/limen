@@ -50,7 +50,7 @@ at the local-address and interrupt-mask edges.
 
 | Remaining profile selection | Native dependency |
 | --- | --- |
-| `chrono/native` and the Arm, RV64 and x86 counter bindings | Trusted current-Hart observation, CNTVCT/CNTFRQ, `rdtime`, or CPUID/RDTSC. |
+| `chrono/counter` and the Arm, RV64 and x86 counter bindings | Trusted current-Hart observation, CNTVCT/CNTFRQ, `rdtime`, or CPUID/RDTSC. |
 | Arm GIC CPU interface, distributor barrier, redistributor wake and private-input operations, and virtual timer | ICC and comparator registers, the current PE, ordered GIC register writes, and readback. |
 | RV64 external barrier, supervisor reception, timer and SBI software delivery | I/O fence, supervisor CSRs, comparator access and the selected SBI call. |
 | x86 local APIC native operations | Live local APIC mode, registers and current CPU observation. |

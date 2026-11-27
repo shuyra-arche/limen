@@ -1,6 +1,7 @@
 //! An EDU function on the virt PCI host with an identity requester map.
 use kernel::metal::{
-    memory::mmu::access::device::DeviceWindow, platform::description::devicetree::DeviceTree,
+    memory::access::treaty::device::DeviceWindow,
+    platform::description::treaty::devicetree::DeviceTree,
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress, PhysicalRange};
 

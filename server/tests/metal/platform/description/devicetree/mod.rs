@@ -1,4 +1,4 @@
-use kernel::metal::platform::description::devicetree::{DeviceTree, Error};
+use kernel::metal::platform::description::treaty::devicetree::{DeviceTree, Error};
 
 mod fixture;
 use fixture::Fixture;

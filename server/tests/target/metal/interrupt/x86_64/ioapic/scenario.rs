@@ -1,6 +1,6 @@
 //! The q35 guest owns COM1 and receives its actual THRE interrupt on the BSP.
 
-use kernel::metal::interrupt::Completion;
+use kernel::metal::interrupt::treaty::Completion;
 
 #[path = "../../../../support/interrupt.rs"]
 mod consumer;
@@ -8,11 +8,11 @@ mod consumer;
 use core::arch::asm;
 use kernel::metal::{
     interrupt::x86_64::{
-        external::ioapic::{Controller, State},
+        external::ioapic::{Controller, route::State},
         internal::apic::{Failure, LocalApic, Reception},
     },
-    memory::mmu::access::device::DeviceWindow,
-    platform::description::acpi::Madt,
+    memory::access::treaty::device::DeviceWindow,
+    platform::description::treaty::acpi::Madt,
 };
 use limen_treaty::model::{ByteLength, InternalAddress};
 use uefi_fixture::{interrupt::Window, q35::io};
@@ -78,5 +78,7 @@ pub(super) fn check(madt: Madt<'_>, hart: usize, local: &mut LocalApic<'_>) {
     local.release_vector(fresh).unwrap();
     assert_eq!(local.reception(), Reception::Idle);
     assert_eq!(controller.state(route.gsi), Ok(State::Vacant));
-    kernel::entry::boot::write("PASS q35 interrupt uart=1 ioapic=1 vector=1 eoi=1 masked=1\n");
+    kernel::metal::platform::boot::treaty::write(
+        "PASS q35 interrupt uart=1 ioapic=1 vector=1 eoi=1 masked=1\n",
+    );
 }

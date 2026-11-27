@@ -8,8 +8,6 @@ const ALIGNMENT: usize = 8;
 const PAGE_SIZE: PageSize = PageSize::new(4096).expect("UEFI page size");
 pub(crate) const PAGE_ALIGNMENT: Alignment =
     Alignment::new(PAGE_SIZE.get()).expect("UEFI page alignment");
-const CONVENTIONAL_MEMORY: u32 = 7;
-const RUNTIME: u64 = 1 << 63;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MapError {
@@ -89,21 +87,9 @@ impl<'a> FirmwareMap<'a> {
     pub fn version(&self) -> u32 {
         self.version
     }
-
-    pub fn regions(&self) -> impl ExactSizeIterator<Item = FirmwareRegion> + '_ {
-        // The bytes are immutable and every prefix was checked at construction.
-        self.descriptors
-            .chunks_exact(self.stride)
-            .map(|entry| decode(entry).expect("validated firmware descriptor"))
-    }
-
-    pub fn conventional(&self) -> impl Iterator<Item = FirmwareRegion> + '_ {
-        self.regions()
-            .filter(|region| region.kind == CONVENTIONAL_MEMORY && region.attributes & RUNTIME == 0)
-    }
 }
 
-fn decode(entry: &[u8]) -> Option<FirmwareRegion> {
+pub(in crate::metal::platform::firmware) fn decode(entry: &[u8]) -> Option<FirmwareRegion> {
     let kind = u32::from_le_bytes(entry[..4].try_into().unwrap());
     let start = u64::from_le_bytes(entry[8..16].try_into().unwrap());
     let pages = u64::from_le_bytes(entry[24..32].try_into().unwrap());

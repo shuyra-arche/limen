@@ -1,6 +1,6 @@
 //! Exercise the original bound physical interrupt route.
 
-use kernel::metal::interrupt::RouteControl;
+use kernel::metal::interrupt::treaty::RouteControl;
 
 pub unsafe fn publish(route: &mut impl RouteControl) {
     assert!(unsafe { route.publish() }.is_ok());

@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::platform::boot::treaty::{shutdown, write};
 mod buddy;
 #[path = "../memory.rs"]
 mod memory;
@@ -22,11 +23,13 @@ use kernel::{
         room::{Harts, Occupancy},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
-    entry::boot::{Boot, shutdown, write},
+    entry::boot::{Boot},
 };
 
 static mut STACKS: Stacks = Stacks::new();
 static mut HARTS: Harts<1> = Harts::new();
+static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy, 1> =
+    kernel::metal::processor::treaty::Dispatchers::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
@@ -116,6 +119,7 @@ extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
     let stacks = &raw mut STACKS;
     let records = (&raw mut RECORDS).cast::<UnitRecord<KernelBinding>>();
     let harts = &raw mut HARTS;
+    let dispatchers = &raw mut DISPATCHERS;
     let admitted = boot.take_major().expect("original native major relation");
     assert!(boot.take_major().is_none());
     // Individual interrupt sources remain masked. SIE makes the execution
@@ -123,9 +127,11 @@ extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
     unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
     let rejected = Execution::new(
         admitted,
+        boot.terminal(),
         unsafe { &mut *stacks },
         unsafe { &mut *(&raw mut RECORDS) },
         unsafe { &mut *harts },
+        unsafe { &mut *dispatchers },
     );
     unsafe { asm!("csrci sstatus, 2", options(nostack)) };
     let Err(failure) = rejected else {
@@ -137,11 +143,14 @@ extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
     assert!(core::ptr::eq(failure.stacks, stacks));
     assert!(core::ptr::eq(failure.records.as_ptr(), records));
     assert!(core::ptr::eq(failure.harts, harts));
+    assert!(core::ptr::eq(failure.dispatchers, dispatchers));
     let runtime = Execution::new(
         failure.major,
+        failure.terminal,
         failure.stacks,
         failure.records,
         failure.harts,
+        failure.dispatchers,
     )
     .map_err(|failure| failure.reason)
     .expect("original handoff and independent supplies can be retried");

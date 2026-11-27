@@ -1,7 +1,9 @@
 //! Single-stage Sv39 for unprivileged device requests with no process ID.
 
 use super::{Error, PhysicalAddress, Profile};
-use crate::metal::memory::mmu::riscv64::sv::{PAGE_BYTES, PageNumber};
+use crate::metal::memory::mmu::riscv64::sv::{
+    ACCESSED, DIRTY, PAGE_BYTES, PageNumber, READ, USER, WRITE,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access {
@@ -10,20 +12,6 @@ pub enum Access {
 }
 
 impl Profile {
-    pub(super) fn directory_capacity(&self) -> usize {
-        if self.extended_context { 64 } else { 128 }
-    }
-
-    /// Locate a device context within a single-level 4 KiB directory.
-    pub(super) fn context_words(&self, device: u32) -> Result<core::ops::Range<usize>, Error> {
-        let words = if self.extended_context { 8 } else { 4 };
-        let index = device as usize;
-        if index >= self.directory_capacity() {
-            return Err(Error::Address);
-        }
-        Ok(index * words..(index + 1) * words)
-    }
-
     fn page(&self, address: PhysicalAddress) -> Result<PageNumber, Error> {
         let bytes = address.get();
         if !self.sv39 || !self.little_endian_tables {
@@ -35,19 +23,9 @@ impl Profile {
         PageNumber::new(address, PAGE_BYTES).ok_or(Error::Address)
     }
 
-    /// The four common words of a device context. Use the hardware-selected
-    /// DDT stride, zero all optional MSI fields, and publish the valid word
-    /// last (or prepare the entire directory before installing its root).
-    pub(super) fn context(&self, root: PhysicalAddress, pscid: u32) -> Result<[u64; 4], Error> {
-        if pscid >= 1 << 20 {
-            return Err(Error::Address);
-        }
-        Ok([
-            1,
-            0,
-            u64::from(pscid) << 12,
-            (8 << 60) | self.page(root)?.get(),
-        ])
+    pub(super) fn first_stage(&self, root: PhysicalAddress) -> Result<u64, Error> {
+        const SV39: u64 = 8 << 60;
+        Ok(SV39 | self.page(root)?.get())
     }
 
     pub fn branch(&self, child: PhysicalAddress) -> Result<u64, Error> {
@@ -57,13 +35,11 @@ impl Profile {
     /// 4 KiB leaf, unprivileged data access, eager A/D, no executable or
     /// global translation. Sv39 cannot encode write-only access.
     pub fn leaf(&self, frame: PhysicalAddress, access: Access) -> Result<u64, Error> {
-        let valid_read_user_accessed = (1 << 6) | (1 << 4) | (1 << 1) | 1;
+        let readable = READ | USER | ACCESSED;
         let writable_dirty = match access {
             Access::Read => 0,
-            Access::ReadWrite => (1 << 7) | (1 << 2),
+            Access::ReadWrite => DIRTY | WRITE,
         };
-        Ok(self
-            .page(frame)?
-            .leaf(valid_read_user_accessed | writable_dirty))
+        Ok(self.page(frame)?.leaf(readable | writable_dirty))
     }
 }

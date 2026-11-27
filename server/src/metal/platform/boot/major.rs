@@ -3,8 +3,9 @@ use super::STACK_BYTES;
 use crate::metal::{
     platform::boot,
     platform::boot::handoff::{Descriptions, Facts},
-    processor::hart::local::{self, Storage, stack::Stack},
-    sync::TURN_CAPACITY,
+    processor::executor::local::{self, Storage, stack::Stack},
+    processor::treaty::can_switch,
+    sync::{TURN_CAPACITY, local::Supply},
 };
 use core::ops::Range;
 
@@ -12,14 +13,15 @@ use core::ops::Range;
 use crate::metal::interrupt::riscv64::internal::supervisor::Supervisor;
 
 pub(in crate::metal) static mut STACK: Stack<STACK_BYTES> = Stack::new();
-static LOCAL: Storage<TURN_CAPACITY> = Storage::new();
+static LOCAL: Storage<TURN_CAPACITY> = Storage::new(Supply::new());
 
 /// Original firmware facts alongside the hardware use admitted by Metal.
 pub(crate) struct Admission<'a> {
     pub(crate) hart: usize,
+    pub(crate) terminal: crate::metal::processor::treaty::Terminal,
     pub(crate) facts: Facts<'a>,
     #[cfg(limen_cooperative)]
-    pub(crate) major: crate::metal::processor::hart::Major,
+    pub(crate) major: crate::metal::processor::treaty::Major,
     #[cfg(target_arch = "riscv64")]
     pub(crate) reception: Supervisor,
 }
@@ -56,7 +58,7 @@ pub(crate) unsafe fn admit<'a>(
     };
     let local = unsafe { LOCAL.bind() };
     unsafe { local.install(hart, entry) };
-    if !local::can_switch() {
+    if !can_switch() {
         services.reject(format_args!(
             "FAIL Limen boot: local protection is not idle\n"
         ));
@@ -67,6 +69,7 @@ pub(crate) unsafe fn admit<'a>(
         .unwrap_or_else(|_| services.reject(format_args!("FAIL Limen boot: local reception\n")));
     Admission {
         hart,
+        terminal: services.terminal(),
         facts,
         #[cfg(limen_cooperative)]
         major: unsafe { local.major() },

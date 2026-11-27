@@ -2,14 +2,13 @@
 #![no_main]
 
 use kernel::entry::boot;
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use uefi::prelude::*;
 use uefi_fixture as fixture;
 
-use core::time::Duration;
 use kernel::metal::{
-    chrono::{Clock, aarch64::GenericCounter},
-    interrupt::aarch64::gic::GicV3,
-    processor::hart::HartId,
+    chrono::aarch64::description::GenericCounter, interrupt::aarch64::gic::GicV3,
+    processor::treaty::HartId,
 };
 
 #[path = "../../../../support/clock.rs"]
@@ -32,13 +31,6 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     let distinct = unsafe { description.bind(boot.hart()) }.unwrap();
     let hart = HartId::new(boot.hart());
     assert_eq!(local.clock().hart(), hart.get());
-    let supplied = Clock::new(hart, local.clock().frequency());
-    let deadline = supplied
-        .observe(hart, || local.clock().read().unwrap())
-        .unwrap()
-        .after(Duration::from_millis(1))
-        .unwrap();
-    assert!(local.clock().count_for(deadline).is_none());
     assert!(
         local
             .clock()
@@ -50,7 +42,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     clock::observe(local.clock());
     let controller = GicV3::read(&tree).unwrap().expect("GIC description");
     scenario::check(&tree, controller, boot.hart());
-    boot::shutdown(true)
+    boot_diagnostic::shutdown(true)
 }
 
 #[panic_handler]

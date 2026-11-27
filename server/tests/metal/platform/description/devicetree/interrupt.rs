@@ -1,9 +1,9 @@
 //! Physical target indices, source scope and machine timer geometry.
 use super::Fixture;
-use kernel::metal::processor::hart::riscv64::description::RiscvCpus;
+use kernel::metal::processor::description::riscv64::cpu::RiscvCpus;
 use kernel::metal::{
     interrupt::riscv64::{external::aplic, internal::aclint},
-    platform::description::devicetree::{DeviceTree, Error},
+    platform::description::treaty::devicetree::{DeviceTree, Error},
 };
 
 fn fixture(
@@ -73,13 +73,13 @@ fn sparse_hart_ids_follow_the_actual_controller_order() {
     let tree = DeviceTree::new(&bytes).unwrap();
     let cpus = RiscvCpus::new(tree).unwrap().unwrap();
     let aplic = aplic::Description::read(&tree, &cpus, 3).unwrap().unwrap();
-    assert_eq!(aplic.hart(), 3);
-    assert_eq!(aplic.index(), 1);
-    assert_eq!(aplic.contexts(), 2);
-    assert_eq!(aplic.registers().start().get(), 0x0d00_0000);
+    assert_eq!(aplic.destination().hart(), 3);
+    assert_eq!(aplic.destination().index(), 1);
+    assert_eq!(aplic.destination().contexts(), 2);
+    assert_eq!(aplic.domain().registers().start().get(), 0x0d00_0000);
     let device = tree.find_path(b"/device").unwrap().unwrap();
-    let route = aplic.route(&tree, device).unwrap();
-    assert_eq!(route.domain(), aplic.source());
+    let route = aplic.domain().route(&tree, device).unwrap();
+    assert_eq!(route.domain(), aplic.domain().source());
     assert_eq!(route.id(), 10);
     assert_eq!(route.mode(), aplic::Mode::LevelHigh);
     let timer = aclint::Description::read(&tree, &cpus, 3).unwrap().unwrap();
@@ -132,7 +132,7 @@ fn routes_and_windows_are_checked_before_native_access() {
         let cpus = RiscvCpus::new(tree).unwrap().unwrap();
         let description = aplic::Description::read(&tree, &cpus, 3).unwrap().unwrap();
         let device = tree.find_path(b"/device").unwrap().unwrap();
-        assert_eq!(description.route(&tree, device).err(), Some(error));
+        assert_eq!(description.domain().route(&tree, device).err(), Some(error));
     }
     let bytes = fixture(&[2, 9, 1, 9], &[2, 7, 1, 7], 10, 5, 0x4000);
     let tree = DeviceTree::new(&bytes).unwrap();

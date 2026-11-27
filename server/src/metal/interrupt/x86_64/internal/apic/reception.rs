@@ -199,17 +199,17 @@ impl<'map> LocalApic<'map> {
     }
 }
 
-impl crate::metal::interrupt::claim::Sealed for Claim<'_, '_> {}
+impl crate::metal::interrupt::treaty::claim::Sealed for Claim<'_, '_> {}
 
-impl crate::metal::interrupt::HardwareClaim for Claim<'_, '_> {
+impl crate::metal::interrupt::treaty::HardwareClaim for Claim<'_, '_> {
     type Error = Failure;
 
     fn source_number(&self) -> u32 {
         u32::from(self.vector())
     }
 
-    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::Completion, Failure> {
-        use crate::metal::interrupt::Completion;
+    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::treaty::Completion, Failure> {
+        use crate::metal::interrupt::treaty::Completion;
         match unsafe { self.complete() } {
             Ok(()) => Ok(Completion::Settled),
             Err(Failure::Unconfirmed) => Ok(Completion::AwaitingConfirmation),

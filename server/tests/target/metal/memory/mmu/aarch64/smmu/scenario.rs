@@ -1,18 +1,16 @@
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 #[path = "../../../../../support/paging/retirement.rs"]
 mod retirement;
 
-use kernel::metal::memory::mmu::{Retirement, Unbind};
-use kernel::{
-    entry::boot,
-    metal::{
-        memory::mmu::{
-            aarch64::external::smmu::{
-                self, Controller, DeviceOrder, Effect, Refresh, queue::Ring,
-            },
-            access::device::DeviceWindow,
+use kernel::metal::memory::mmu::treaty::{Retirement, Unbind};
+use kernel::metal::{
+    memory::{
+        access::treaty::device::DeviceWindow,
+        mmu::aarch64::external::smmu::{
+            self, Controller, DeviceOrder, Effect, Refresh, queue::Ring,
         },
-        platform::description::devicetree::DeviceTree,
     },
+    platform::description::treaty::devicetree::DeviceTree,
 };
 use limen_treaty::model::{InternalAddress, PhysicalAddress};
 
@@ -163,7 +161,7 @@ pub(super) fn check(tree: &DeviceTree<'_>) {
         unsafe { controller.begin_install() },
         Err(smmu::Error::Active)
     );
-    boot::write(
+    boot_diagnostic::write(
         "\nPASS smmuv3 stage2=1 granule=4096 abort=1 sync=5 dma=1 downgrade=1 bindings=2 unbound=1 stale=1 recovered=1 queue-return=2 stopped=1\n",
     );
 }

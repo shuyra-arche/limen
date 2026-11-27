@@ -6,7 +6,7 @@ use kernel::metal::{
         directory::Entry,
         translation::{Access, Format},
     },
-    platform::description::devicetree::DeviceTree,
+    platform::description::treaty::devicetree::DeviceTree,
 };
 use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 

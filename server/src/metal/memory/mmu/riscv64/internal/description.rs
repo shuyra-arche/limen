@@ -1,21 +1,21 @@
 //! Firmware's description of a Hart's maximum translation mode.
 
-use crate::metal::memory::mmu::riscv64::sv::Mode;
+use crate::metal::memory::mmu::riscv64::internal::format::Format;
 use crate::metal::{
     platform::description::devicetree::{Error, NodeId},
-    processor::hart::riscv64::description::RiscvCpu,
+    processor::description::riscv64::cpu::RiscvCpu,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MaximumMode {
     Bare,
-    Paged(Mode),
+    Paged(Format),
 }
 
 impl MaximumMode {
     /// Whether the firmware's maximum includes this paging mode. The
     /// calling Hart still has to establish the actual SATP configuration.
-    pub fn supports(self, mode: Mode) -> bool {
+    pub fn supports(self, mode: Format) -> bool {
         let maximum = match self {
             Self::Bare => return false,
             Self::Paged(mode) => mode,
@@ -41,9 +41,9 @@ impl<'a> RiscvMmu<'a> {
         };
         let maximum = match property {
             b"riscv,none" => MaximumMode::Bare,
-            b"riscv,sv39" => MaximumMode::Paged(Mode::Sv39),
-            b"riscv,sv48" => MaximumMode::Paged(Mode::Sv48),
-            b"riscv,sv57" => MaximumMode::Paged(Mode::Sv57),
+            b"riscv,sv39" => MaximumMode::Paged(Format::Sv39),
+            b"riscv,sv48" => MaximumMode::Paged(Format::Sv48),
+            b"riscv,sv57" => MaximumMode::Paged(Format::Sv57),
             _ => return Err(Error::Unsupported),
         };
         Ok(Some(Self {

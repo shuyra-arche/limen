@@ -1,6 +1,6 @@
 //! Progress actual reception using the bound receiver and retained claim.
 
-use kernel::metal::interrupt::{HardwareClaim, Receive};
+use kernel::metal::interrupt::treaty::{HardwareClaim, Receive};
 
 pub fn receive<R: Receive>(receiver: &mut R, expected: u32) -> Option<R::Claim<'_>> {
     let claim = receiver

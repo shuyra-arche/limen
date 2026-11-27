@@ -1,7 +1,7 @@
 //! Trusted UEFI admission and retained description construction.
 
 #[cfg(limen_firmware = "uefi")]
-use super::super::services::Services;
+use super::super::treaty::Services;
 use super::{Descriptions, Facts};
 use crate::metal::platform::{
     description::{acpi, devicetree},

@@ -4,11 +4,11 @@ use core::{arch::global_asm, mem::offset_of};
 
 use crate::metal::{
     interrupt::riscv64::internal::supervisor, memory::mmu::riscv64::internal::context::Context,
-    processor::hart::riscv64::native,
+    processor::executor::riscv64::native,
 };
 
 /// The native integer-only switch is valid in the verified Bare environment.
-pub(super) fn ready() -> bool {
+pub(in crate::metal::processor) fn ready() -> bool {
     let status = native::status();
     status.masked()
         && status.extensions_off()
@@ -17,20 +17,23 @@ pub(super) fn ready() -> bool {
 }
 
 #[repr(C)]
-pub(super) struct Saved {
+pub(in crate::metal::processor) struct Saved {
     resume: usize,
     stack: usize,
     preserved: [usize; 12],
 }
 
 impl Saved {
-    pub(super) const EMPTY: Self = Self {
+    pub(in crate::metal::processor) const EMPTY: Self = Self {
         resume: 0,
         stack: 0,
         preserved: [0; 12],
     };
 
-    pub(super) fn initial(stack: usize, entry: extern "C" fn(*const ()) -> !) -> Self {
+    pub(in crate::metal::processor) fn initial(
+        stack: usize,
+        entry: extern "C" fn(*const ()) -> !,
+    ) -> Self {
         Self {
             resume: (entry as *const ()).addr(),
             stack,
@@ -51,13 +54,17 @@ unsafe extern "C" {
 }
 
 /// The real psABI call boundary; gp and tp remain Hart-local.
-pub(super) unsafe fn switch(outgoing: *mut Saved, incoming: *const Saved, argument: *const ()) {
+pub(in crate::metal::processor) unsafe fn switch(
+    outgoing: *mut Saved,
+    incoming: *const Saved,
+    argument: *const (),
+) {
     unsafe { limen_switch_context(outgoing, incoming, argument) };
 }
 
 /// Enter the resident dispatcher with this target's existing kernel ABI.
 #[unsafe(naked)]
-pub(super) unsafe extern "C" fn start_stack(
+pub(in crate::metal::processor) unsafe extern "C" fn start_stack(
     stack: usize,
     entry: extern "C" fn(*const ()) -> !,
     argument: *const (),

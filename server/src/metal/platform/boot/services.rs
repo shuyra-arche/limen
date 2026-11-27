@@ -1,17 +1,10 @@
 //! Early operations supplied by firmware or the trusted image.
-use super::console::Console;
-use crate::metal::platform::boot;
+use super::treaty::Services;
+use crate::metal::processor::treaty::Terminal;
 use core::{
-    fmt::{self, Write},
-    ptr,
+    fmt, ptr,
     sync::atomic::{AtomicPtr, Ordering},
 };
-
-#[derive(Clone, Copy)]
-pub struct Services {
-    pub output: Option<fn(u8) -> bool>,
-    pub reset: Option<fn(bool)>,
-}
 
 // Before the handoff a diagnostic has no output and shutdown parks the CPU.
 static EMPTY: Services = Services {
@@ -30,21 +23,11 @@ impl Services {
         unsafe { &*ACTIVE.load(Ordering::Acquire) }
     }
 
-    pub(crate) fn console(&self) -> Option<Console> {
-        self.output.map(Console::new)
+    pub(crate) const fn terminal(&self) -> Terminal {
+        Terminal::new(self.output, self.reset)
     }
 
     pub(crate) fn reject(&self, reason: fmt::Arguments<'_>) -> ! {
-        if let Some(mut console) = self.console() {
-            let _ = console.write_fmt(reason);
-        }
-        self.shutdown(false)
-    }
-
-    pub(crate) fn shutdown(&self, success: bool) -> ! {
-        if let Some(reset) = self.reset {
-            reset(success);
-        }
-        boot::park()
+        self.terminal().reject(reason)
     }
 }

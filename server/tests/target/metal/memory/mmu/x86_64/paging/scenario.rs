@@ -1,9 +1,9 @@
 use super::{DATA, LAST, MIDDLE, NEXT, Page, TOP, physical};
 use core::{arch::asm, ptr};
+use kernel::metal::memory::access::treaty::device::DeviceMapping;
 use kernel::metal::memory::mmu::{
-    LeafAccess, Memory, Privilege, SwitchError,
-    access::device::DeviceMapping,
-    x86_64::internal::{Controls, admit_root},
+    treaty::{LeafAccess, Memory, Privilege, SwitchError},
+    x86_64::internal::{context::Controls, installation::admit_root},
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress, PhysicalRange};
 
@@ -130,7 +130,13 @@ pub(crate) fn check(hart: usize, apic: PhysicalRange, version: u32) {
         });
     }
     assert_eq!(unsafe { Controls::current() }, original);
-    kernel::entry::boot::write("PASS internal paging switched=1 alias=1 restored=1\n");
-    kernel::entry::boot::write("PASS local-context original=1 installed=1 restored=1\n");
-    kernel::entry::boot::write("PASS device mapping fixed=1 dynamic=1 split=1 restored=1\n");
+    kernel::metal::platform::boot::treaty::write(
+        "PASS internal paging switched=1 alias=1 restored=1\n",
+    );
+    kernel::metal::platform::boot::treaty::write(
+        "PASS local-context original=1 installed=1 restored=1\n",
+    );
+    kernel::metal::platform::boot::treaty::write(
+        "PASS device mapping fixed=1 dynamic=1 split=1 restored=1\n",
+    );
 }

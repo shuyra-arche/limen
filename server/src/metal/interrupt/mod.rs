@@ -1,15 +1,6 @@
 //! Actual local and external interrupt hardware mechanisms.
 
 pub mod aarch64;
-pub mod ipi;
 pub mod riscv64;
+pub mod treaty;
 pub mod x86_64;
-
-mod claim;
-pub use claim::{Completion, HardwareClaim, Receive};
-
-mod absolute;
-pub use absolute::AbsoluteTimer;
-
-mod route;
-pub use route::RouteControl;

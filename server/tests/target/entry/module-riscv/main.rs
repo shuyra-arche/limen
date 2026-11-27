@@ -1,26 +1,23 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 mod harts;
 mod mapping;
 
 use core::{arch::asm, fmt::Write, mem::MaybeUninit, ops::Range, ptr::NonNull};
 use kernel::{
-    entry::boot::{self, Boot, Occupant},
+    entry::boot::{Boot, Occupant},
     metal::{
-        memory::mmu::access::ram::MappedRange,
+        memory::access::treaty::ram::MappedRange,
         memory::mmu::{
-            GEOMETRY, LeafAccess, LocalContext,
-            riscv64::{
-                internal::{
-                    context::{Context, admit_context},
-                    description::RiscvMmu,
-                    encoder,
-                },
-                sv::Mode,
+            riscv64::internal::{
+                context::Context, description::RiscvMmu, encoder, format::Format,
+                installation::admit_context,
             },
+            treaty::{GEOMETRY, LeafAccess, LocalContext},
         },
-        module::{
+        module::treaty::{
             Contract, Layout, Machine, ModuleImage, ModuleSlots, SegmentPermissions, UseError,
         },
     },
@@ -29,7 +26,7 @@ use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress
 use mapping::PAGE;
 
 const IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/module.elf"));
-const MODES: [Mode; 3] = [Mode::Sv39, Mode::Sv48, Mode::Sv57];
+const MODES: [Format; 3] = [Format::Sv39, Format::Sv48, Format::Sv57];
 const ROOT_IMAGES: [&[u8]; 3] = [
     include_bytes!(concat!(env!("OUT_DIR"), "/sv39-root.elf")),
     include_bytes!(concat!(env!("OUT_DIR"), "/sv48-root.elf")),
@@ -61,10 +58,10 @@ unsafe extern "C" {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    if let Some(mut console) = boot::console() {
+    if let Some(mut console) = boot_diagnostic::console() {
         let _ = writeln!(console, "FAIL riscv-module-execution {info}");
     }
-    boot::shutdown(false)
+    boot_diagnostic::shutdown(false)
 }
 
 fn physical(range: Range<u64>) -> PhysicalRange {
@@ -252,12 +249,16 @@ fn prepare(
         // This reserved arena has one verified writable, nonexecuting view.
         let mut view =
             unsafe { MappedRange::from_identity(material.physical, material.storage) }.unwrap();
-        image.prepare(&mut view, InternalAddress::new(start)).unwrap()
+        image
+            .prepare(&mut view, InternalAddress::new(start))
+            .unwrap()
     };
     assert_eq!(layout.physical(), material.physical);
     assert_eq!(
         layout.internal(),
-        InternalAddress::new(start).range(ByteLength::new(length)).unwrap()
+        InternalAddress::new(start)
+            .range(ByteLength::new(length))
+            .unwrap()
     );
     let mut permissions = [None; MAX_PAGES];
     for segment in layout.segments() {
@@ -304,19 +305,27 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     let resident = Resident::from_boot(&boot, start..start + size_of::<[Storage; 2]>() as u64);
     for (mode, image) in MODES.into_iter().zip(ROOT_IMAGES) {
         prove_geometry(&mut translation, boot.hart(), mode, &resident);
-        exercise(&mut translation, mode, image, peer, service, &resident, storage);
+        exercise(
+            &mut translation,
+            mode,
+            image,
+            peer,
+            service,
+            &resident,
+            storage,
+        );
     }
-    boot::write(
+    boot_diagnostic::write(
         "PASS riscv-module-execution virt modes=sv39,sv48,sv57 high-leaves=12 geometry=4096 linked=2 roots=2 harts=2 remote-sync=1 remote-typed=2 dependency=1 retired=2 reuse=2\n",
     );
-    boot::write("PASS local-context original=1 installed=1 restored=1\n");
-    boot::shutdown(true)
+    boot_diagnostic::write("PASS local-context original=1 installed=1 restored=1\n");
+    boot_diagnostic::shutdown(true)
 }
 
 fn prove_geometry(
     translation: &mut LocalContext<'_>,
     hart: usize,
-    mode: Mode,
+    mode: Format,
     resident: &Resident,
 ) {
     static PROBE: u64 = 0x46c8_ce4b_34d7_985e;
@@ -357,10 +366,10 @@ fn prove_geometry(
 
 fn exercise(
     translation: &mut LocalContext<'_>,
-    mode: Mode,
+    mode: Format,
     image: &'static [u8],
     peer: RiscvMmu<'_>,
-    service: kernel::metal::platform::firmware::sbi::HartService,
+    service: kernel::metal::platform::firmware::treaty::sbi::HartService,
     resident: &Resident,
     storage: NonNull<Storage>,
 ) {

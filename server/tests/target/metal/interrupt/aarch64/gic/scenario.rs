@@ -1,6 +1,9 @@
 //! QEMU virt hands the guest an identity-mapped physical GIC with a single
 //! security state. Keep the PE IRQ/FIQ masks closed and poll its real IAR.
-use kernel::metal::interrupt::{AbsoluteTimer, Completion};
+
+use kernel::metal::interrupt::treaty::{AbsoluteTimer, Completion};
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::metal::processor::treaty::{Minor, Startup};
 
 #[path = "../../../../support/claim.rs"]
 mod claim_consumer;
@@ -17,28 +20,28 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
-use kernel::{
-    entry::boot,
-    metal::{
-        chrono::aarch64::GenericCounter,
-        interrupt::aarch64::{
-            gic::{
-                GicV3,
-                cpu_interface::{CpuInterface, available},
-                distributor::{Barrier, Distributor, Route, Slot, State as SpiState},
-                reception::State,
-                redistributor::{
-                    Frame, FrameHandoff, PrivateInterrupts, Redistributor, Slot as FrameSlot,
-                },
-                sgi::Sgi,
+use kernel::metal::{
+    chrono::aarch64::description::GenericCounter,
+    interrupt::aarch64::{
+        gic::{
+            GicV3,
+            cpu_interface::{CpuInterface, available},
+            distributor::{Barrier, Distributor, Route, Slot, State as SpiState},
+            reception::State,
+            redistributor::{
+                Frame, FrameHandoff, Redistributor, Slot as FrameSlot,
+                input::description::PrivateInterrupts,
             },
-            timer::{Failure as TimerFailure, GenericTimer, VirtualTimer},
+            sgi::Sgi,
         },
-        memory::mmu::access::device::DeviceWindow,
-        platform::{description::devicetree::DeviceTree, firmware::psci::PsciDescription},
-        processor::hart::aarch64::description::Aarch64Cpus,
-        sync::LeafLock,
+        timer::{Failure as TimerFailure, GenericTimer, VirtualTimer},
     },
+    memory::access::treaty::device::DeviceWindow,
+    platform::{
+        description::treaty::devicetree::DeviceTree, firmware::treaty::psci::PsciDescription,
+    },
+    processor::description::aarch64::cpu::Aarch64Cpus,
+    sync::treaty::LeafLock,
 };
 use limen_treaty::model::{InternalAddress, PhysicalRange};
 
@@ -94,7 +97,7 @@ fn wait_for_claim(receiver: &mut CpuInterface<'_>, expected: usize) {
     }
 }
 
-static MINOR: boot::Minor = boot::Minor::new();
+static MINOR: Minor = Minor::new();
 static MINOR_FRAME: LeafLock<Option<FrameHandoff<'static>>> = LeafLock::new(None);
 static MINOR_OBSERVED: AtomicBool = AtomicBool::new(false);
 static MINOR_SIGNAL: LeafLock<Option<Sgi<'static>>> = LeafLock::new(None);
@@ -187,7 +190,7 @@ fn start_minor(tree: &DeviceTree<'_>, hart: usize, frame: Frame<'static>) {
             *slot = Some(frame.handoff());
         })
         .unwrap();
-    let mut startup = boot::Startup::Psci(psci);
+    let mut startup = Startup::Psci(psci);
     unsafe { MINOR.start(hart, observe_minor, 0, &mut startup) }.unwrap();
     let start: u64;
     let frequency: u64;
@@ -236,7 +239,7 @@ fn check_signal(frame: Frame<'static>) -> Frame<'static> {
             "minor SGI completion timeout"
         );
     }
-    boot::write("PASS arm-sgi target=1 claim=1 eoi=1 retired=1\n");
+    boot_diagnostic::write("PASS arm-sgi target=1 claim=1 eoi=1 retired=1\n");
     sender
         .release()
         .unwrap_or_else(|_| panic!("major SGI interface busy"))
@@ -255,11 +258,19 @@ fn check_virtual_timer(
     let mut ppi = unsafe { frame.reserve_ppi(&bindings, role, 0x10) }.unwrap();
     let mut receiver = unsafe { CpuInterface::admit(frame) }
         .unwrap_or_else(|(_, reason)| panic!("timer PPI CPU Interface: {reason:?}"));
+    let distinct_counter = unsafe { counter.bind(major) }.unwrap();
     let counter = unsafe { counter.bind(major) }.unwrap();
     let clock = counter.clock();
     for delay in [Duration::from_secs(5), Duration::from_millis(10)] {
         receiver.prepare_ppi(&mut ppi).unwrap();
         let mut timer = unsafe { VirtualTimer::admit(timer, &counter, &mut ppi) }.unwrap();
+        if delay == Duration::from_secs(5) {
+            let foreign = distinct_counter.clock().sample().unwrap();
+            assert_eq!(
+                timer.arm_at(foreign.after(delay).unwrap()),
+                Err(TimerFailure::Scope)
+            );
+        }
         timer_consumer::arm(clock, &mut timer, delay);
         if delay == Duration::from_secs(5) {
             assert_eq!(timer.stop(), Err(TimerFailure::Busy));
@@ -295,7 +306,9 @@ fn check_virtual_timer(
     for _ in 0..4096 {
         match unsafe { frame.retire_ppi(ppi) } {
             Ok(()) => {
-                boot::write("PASS arm-virtual-timer programmed=1 ppi=1 eoi=1 retired=1 common=1\n");
+                boot_diagnostic::write(
+                    "PASS arm-virtual-timer programmed=1 ppi=1 eoi=1 retired=1 common=1\n",
+                );
                 return frame;
             }
             Err((returned, _)) => ppi = returned,
@@ -458,8 +471,8 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
     local_frame = check_virtual_timer(tree, controller, major, local_frame);
     local_frame = check_signal(local_frame);
     assert!(local_frame.awake());
-    boot::write("PASS gicr frames=2 independent=1\n");
-    boot::write("PASS external-route published=2 repeated=0 independent=1\n");
+    boot_diagnostic::write("PASS gicr frames=2 independent=1\n");
+    boot_diagnostic::write("PASS external-route published=2 repeated=0 independent=1\n");
     let bank = id / 32 * 4;
     let bit = (1 << (id % 32)) | (1 << (second_id % 32));
     assert_eq!(
@@ -479,7 +492,7 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
         asm!("msr ICC_PMR_EL1, {}", "msr ICC_IGRPEN1_EL1, {}", "isb", in(reg) old_priority, in(reg) old_group, options(nostack));
     }
     sync();
-    boot::console()
+    boot_diagnostic::console()
         .unwrap()
         .write_str("PASS virt interrupt uart-primary=2 uart-secondary=2 shared-words=1 iar=4 eoi=4 dir=2 masked=1\n")
         .unwrap();

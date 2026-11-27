@@ -4,8 +4,8 @@ use super::{GicV3, Trigger};
 
 mod route;
 use crate::metal::{
-    interrupt::RouteControl, memory::mmu::access::device::DeviceWindow,
-    processor::hart::aarch64::description::AFFINITY_MASK,
+    interrupt::treaty::RouteControl, memory::access::treaty::device::DeviceWindow,
+    processor::description::aarch64::cpu::AFFINITY_MASK,
 };
 pub use route::Route;
 
@@ -102,7 +102,7 @@ struct Control<'route, 'map, 'tree> {
     binding: &'route mut BoundRoute<'tree>,
 }
 
-impl crate::metal::interrupt::route::Sealed for Control<'_, '_, '_> {}
+impl crate::metal::interrupt::treaty::route::Sealed for Control<'_, '_, '_> {}
 
 impl RouteControl for Control<'_, '_, '_> {
     type Failure = Failure;

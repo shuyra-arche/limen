@@ -47,7 +47,7 @@ with its resident record in `a1`.
 The two UEFI test images share a loader. OVMF loads `EFI/BOOT/BOOTX64.EFI` on
 q35 and AAVMF loads `EFI/BOOT/BOOTAA64.EFI` on virt. The loader captures board
 inputs, exits Boot Services with the final memory map and calls
-`entry::boot::major`. It keeps the handoff, firmware allocations, loader stack
+`metal::platform::boot::treaty::major`. It keeps the handoff, firmware allocations, loader stack
 and identity mappings reserved. It supplies optional post-exit output and
 shutdown callbacks. The loader supplies the actual descriptor bytes, stride,
 version and a configured descriptor-count limit. After entry, the common

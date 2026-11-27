@@ -1,54 +1,6 @@
+//! Processor and device address translation mechanisms.
+
 pub mod aarch64;
-pub mod access;
-mod installation;
-pub use installation::Installation;
-#[cfg(all(
-    limen_target,
-    any(
-        target_arch = "aarch64",
-        target_arch = "riscv64",
-        target_arch = "x86_64"
-    )
-))]
-pub use installation::{Context, LocalContext, LocalInstall};
 pub mod riscv64;
+pub mod treaty;
 pub mod x86_64;
-
-/// Exact leaf access shared by CPU descriptor encoders.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LeafAccess {
-    ReadOnly,
-    ReadWrite,
-    ReadExecute,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Privilege {
-    Kernel,
-    User,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Memory {
-    Normal,
-    Device,
-}
-
-/// A control write can only become uncertain after it was issued.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SwitchError {
-    Context,
-    Scope,
-    Current,
-    Unconfirmed,
-}
-
-use crate::metal::module::Contract;
-
-/// Query the active base translation granule using the native integer ABI.
-/// The entry takes no arguments and returns the base size in bytes, or zero
-/// when the active translation configuration is unsupported.
-pub const GEOMETRY: Contract<'static> = Contract::new(b"shuyra,mmu-geometry", 1, 1);
-
-mod retirement;
-pub use retirement::{Retirement, Unbind};

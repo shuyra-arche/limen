@@ -1,10 +1,9 @@
 use core::{
-    array,
     marker::PhantomData,
     ptr,
     sync::atomic::{
         AtomicU64,
-        Ordering::{Acquire, Relaxed, Release},
+        Ordering::{Relaxed, Release},
         fence,
     },
 };
@@ -41,23 +40,17 @@ pub enum PublishError {
 /// whole object before sharing it. A snapshot cannot prove domain authority
 /// or the combined state of multiple objects.
 pub struct SnapLock<T, const WORDS: usize> {
-    writer: LeafLock<()>,
-    sequence: AtomicU64,
-    words: [AtomicU64; WORDS],
+    pub(super) writer: LeafLock<()>,
+    pub(super) sequence: AtomicU64,
+    pub(super) words: [AtomicU64; WORDS],
     value: PhantomData<fn() -> T>,
 }
 
 /// An observed copy and the particular publication against which it was read.
 pub struct Observation<'lock, T, const WORDS: usize> {
-    source: &'lock SnapLock<T, WORDS>,
-    version: u64,
-    value: T,
-}
-
-impl<T: Copy, const WORDS: usize> Observation<'_, T, WORDS> {
-    pub fn value(&self) -> T {
-        self.value
-    }
+    pub(super) source: &'lock SnapLock<T, WORDS>,
+    pub(super) version: u64,
+    pub(super) value: T,
 }
 
 impl<T: Snapshot<WORDS>, const WORDS: usize> SnapLock<T, WORDS> {
@@ -70,54 +63,7 @@ impl<T: Snapshot<WORDS>, const WORDS: usize> SnapLock<T, WORDS> {
         }
     }
 
-    /// Reads once with no retry, shared write, or lock participation.
-    pub fn observe(&self) -> Result<Observation<'_, T, WORDS>, SnapshotBusy> {
-        let first = self.sequence.load(Acquire);
-        if first & 1 != 0 {
-            return Err(SnapshotBusy);
-        }
-
-        let words = array::from_fn(|index| self.words[index].load(Relaxed));
-        // If any word came from a newer writer, the writer's release fence
-        // synchronizes through that word with this fence. The final sequence
-        // read can then observe only the writer's odd value or a later value.
-        fence(Acquire);
-        if first != self.sequence.load(Relaxed) {
-            return Err(SnapshotBusy);
-        }
-
-        Ok(Observation {
-            source: self,
-            version: first,
-            value: T::decode(words),
-        })
-    }
-
-    /// Tries once to publish if the observation is still current.
-    pub fn attempt_publish(
-        &self,
-        expected: &Observation<'_, T, WORDS>,
-        value: T,
-    ) -> Result<(), PublishError> {
-        let words = value.encode();
-        self.writer
-            .attempt(|()| self.publish_held(expected, words))
-            .map_err(PublishError::Access)?
-    }
-
-    /// Waits in ordinary context, then publishes if the observation is current.
-    pub fn publish(
-        &self,
-        expected: &Observation<'_, T, WORDS>,
-        value: T,
-    ) -> Result<(), PublishError> {
-        let words = value.encode();
-        self.writer
-            .acquire(|()| self.publish_held(expected, words))
-            .map_err(PublishError::Access)?
-    }
-
-    fn publish_held(
+    pub(super) fn publish_held(
         &self,
         expected: &Observation<'_, T, WORDS>,
         words: [u64; WORDS],

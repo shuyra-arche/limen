@@ -1,15 +1,16 @@
 //! Direct STIMECMP access granted by the QEMU/OpenSBI supervisor handoff.
 use core::time::Duration;
-use kernel::metal::interrupt::AbsoluteTimer;
+use kernel::metal::interrupt::treaty::AbsoluteTimer;
+use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::{
-    entry::boot::{self, Boot},
+    entry::boot::Boot,
     metal::{
-        chrono::riscv64::{Counter, RiscvTimebase},
+        chrono::riscv64::{description::RiscvTimebase, time::Counter},
         interrupt::riscv64::internal::{
             supervisor::Reception,
             timer::{Failure, State, Timer},
         },
-        processor::execution::description::riscv64::RiscvIsa,
+        processor::description::riscv64::isa::RiscvIsa,
     },
 };
 
@@ -62,5 +63,5 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Reception) {
         break;
     }
     assert_eq!(timer.state(), State::Idle);
-    boot::write("PASS sstc expired=2 replaced=1 shut=1 common=1\n");
+    boot_diagnostic::write("PASS sstc expired=2 replaced=1 shut=1 common=1\n");
 }

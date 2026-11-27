@@ -10,7 +10,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::metal::sync::{TurnAccess, TurnLock};
+use crate::metal::sync::treaty::{TurnAccess, TurnLock};
 
 use super::{Error, GroupId, GroupRecord, Pool, SourceError};
 
@@ -327,6 +327,9 @@ pub enum ReleaseProgress {
     End,
 }
 
+// Directory advances or slots examined per release call.
+const RELEASE_SCAN_LIMIT: usize = 64;
+
 impl<T> Pool<'_, T> {
     /// Settle at most one destroyed slot. Inspect at most `budget` directory
     /// steps or slots (capped at 64). End resets the cursor for another pass.
@@ -337,7 +340,7 @@ impl<T> Pool<'_, T> {
         budget: usize,
     ) -> Result<ReleaseProgress, Error> {
         Ok(self.state.acquire(|state| {
-            for _ in 0..budget.min(64) {
+            for _ in 0..budget.min(RELEASE_SCAN_LIMIT) {
                 if cursor.group >= state.extent {
                     *cursor = ReleaseCursor::default();
                     return ReleaseProgress::End;

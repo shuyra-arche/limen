@@ -1,6 +1,6 @@
 //! EDU register and completion protocol shared by the PCI board fixtures.
 
-use kernel::metal::memory::mmu::access::device::DeviceWindow;
+use kernel::metal::memory::access::treaty::device::DeviceWindow;
 
 const SOURCE: usize = 0x80;
 const DESTINATION: usize = 0x88;

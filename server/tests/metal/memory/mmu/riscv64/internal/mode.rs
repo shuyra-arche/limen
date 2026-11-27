@@ -1,6 +1,6 @@
 use kernel::metal::memory::mmu::{
-    LeafAccess,
-    riscv64::{internal::context::Context, sv::Mode},
+    riscv64::internal::{context::Context, format::Format},
+    treaty::LeafAccess,
 };
 use limen_treaty::model::{InternalAddress, InternalRange, PageSize, PhysicalAddress};
 
@@ -8,9 +8,9 @@ use limen_treaty::model::{InternalAddress, InternalRange, PageSize, PhysicalAddr
 fn indexes_both_canonical_ranges_at_every_supported_level() {
     let sizes = [1 << 12, 1 << 21, 1 << 30, 1 << 39, 1 << 48];
     for (mode, bits, levels) in [
-        (Mode::Sv39, 39, 3),
-        (Mode::Sv48, 48, 4),
-        (Mode::Sv57, 57, 5),
+        (Format::Sv39, 39, 3),
+        (Format::Sv48, 48, 4),
+        (Format::Sv57, 57, 5),
     ] {
         let half = 1_u64 << (bits - 1);
         let high = u64::MAX - (half - 1);
@@ -45,11 +45,11 @@ fn encodes_aligned_leaves_and_rejects_unrepresentable_inputs() {
         (LeafAccess::ReadWrite, 0xc7),
         (LeafAccess::ReadExecute, 0x4b),
     ];
-    assert_eq!(Mode::branch(physical), Some((physical.get() >> 2) | 1));
-    assert_eq!(Mode::branch(width_end), None);
-    assert_eq!(Mode::branch(unaligned), None);
+    assert_eq!(Format::branch(physical), Some((physical.get() >> 2) | 1));
+    assert_eq!(Format::branch(width_end), None);
+    assert_eq!(Format::branch(unaligned), None);
 
-    for (mode, satp) in [(Mode::Sv39, 8), (Mode::Sv48, 9), (Mode::Sv57, 10)] {
+    for (mode, satp) in [(Format::Sv39, 8), (Format::Sv48, 9), (Format::Sv57, 10)] {
         let context = Context::paged(mode, physical).unwrap();
         assert_eq!(context.bits(), (satp << 60) | physical.get() >> 12);
         assert_eq!(Context::from_bits(context.bits()), Some(context));
@@ -87,7 +87,7 @@ fn encodes_aligned_leaves_and_rejects_unrepresentable_inputs() {
 
 #[test]
 fn canonical_ranges_check_occupied_bytes_and_reject_the_hole() {
-    for mode in [Mode::Sv39, Mode::Sv48, Mode::Sv57] {
+    for mode in [Format::Sv39, Format::Sv48, Format::Sv57] {
         let half = 1_u64 << (mode.virtual_bits() - 1);
         let high = u64::MAX - (half - 1);
         let range = |first, end| {

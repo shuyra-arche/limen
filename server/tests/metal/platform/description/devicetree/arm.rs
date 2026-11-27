@@ -1,16 +1,16 @@
 //! Interpret Arm platform descriptions on the ordinary Host, without native calls.
 use super::fixture::Fixture;
 use kernel::metal::{
-    chrono::aarch64::GenericCounter,
+    chrono::aarch64::description::GenericCounter,
     interrupt::aarch64::{
-        gic::{GicV3, Trigger, redistributor::PrivateInterrupts},
+        gic::{GicV3, Trigger, redistributor::input::description::PrivateInterrupts},
         timer::GenericTimer,
     },
     platform::{
-        description::devicetree::{DeviceTree, Error},
-        firmware::psci::{Conduit, PsciDescription, PsciVersion},
+        description::treaty::devicetree::{DeviceTree, Error},
+        firmware::treaty::psci::{Conduit, PsciDescription, PsciVersion},
     },
-    processor::hart::aarch64::description::Aarch64Cpus,
+    processor::description::aarch64::cpu::Aarch64Cpus,
 };
 
 fn cpus(affinities: &[u64]) -> Vec<u8> {
