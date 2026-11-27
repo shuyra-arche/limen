@@ -9,14 +9,14 @@ use guest::platform;
 guest::entry! {
     platform: platform::Platform::native(4),
 
-    test: collected,
-    items: {
+    test: {
+        collected;
         mod contracts;
     },
 
     #[cfg(target_arch = "riscv64")]
-    bench: measurement::check,
-    items: {
+    bench: {
+        measurement::check;
         #[path = "../../../../benches/metal/sync/shared/mod.rs"]
         mod measurement;
     },

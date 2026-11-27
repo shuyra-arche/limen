@@ -5,25 +5,43 @@ macro_rules! entry {
         platform: $platform:expr,
         $(prepare: $prepare:expr,)?
         $(major: ($stack:expr, $nodes:expr),)?
-        test: collected $(=> $after:expr)?,
-        $(items: { $($test_item:item)* },)?
-        $(
-            $(#[cfg($($condition:tt)*)])? bench: $bench:expr,
-            $(items: { $($bench_item:item)* },)?
-        )?
+        test: { $($test:tt)* },
+        $(#[cfg($($condition:tt)*)])?
+        bench: { $bench:expr; $($bench_item:item)* },
     ) => {
+        #[cfg(not(all(feature = "bench" $(, $($condition)*)?)))]
         $crate::entry! {
-            @select [
+            @test [
                 platform: $platform,
                 $(prepare: $prepare,)?
                 $(major: ($stack, $nodes),)?
             ]
-            [$($($test_item)*)?]
-            $crate::run, $crate::entry!(@callback $($after)?),
-            $(
-                $(#[cfg($($condition)*)])? bench: $bench,
-                $(items: { $($bench_item)* },)?
-            )?
+            $($test)*
+        }
+        #[cfg(all(feature = "bench" $(, $($condition)*)?))]
+        $crate::entry! {
+            @emit [
+                platform: $platform,
+                $(prepare: $prepare,)?
+                $(major: ($stack, $nodes),)?
+            ]
+            [$($bench_item)*]
+            $crate::Purpose::Bench, $crate::scenario, $bench
+        }
+    };
+    (
+        platform: $platform:expr,
+        $(prepare: $prepare:expr,)?
+        $(major: ($stack:expr, $nodes:expr),)?
+        test: collected $(=> $after:expr)?,
+    ) => {
+        $crate::entry! {
+            @test [
+                platform: $platform,
+                $(prepare: $prepare,)?
+                $(major: ($stack, $nodes),)?
+            ]
+            collected $(=> $after)?;
         }
     };
     (
@@ -31,24 +49,14 @@ macro_rules! entry {
         $(prepare: $prepare:expr,)?
         $(major: ($stack:expr, $nodes:expr),)?
         test: $test:expr,
-        $(items: { $($test_item:item)* },)?
-        $(
-            $(#[cfg($($condition:tt)*)])? bench: $bench:expr,
-            $(items: { $($bench_item:item)* },)?
-        )?
     ) => {
         $crate::entry! {
-            @select [
+            @test [
                 platform: $platform,
                 $(prepare: $prepare,)?
                 $(major: ($stack, $nodes),)?
             ]
-            [$($($test_item)*)?]
-            $crate::scenario, $test,
-            $(
-                $(#[cfg($($condition)*)])? bench: $bench,
-                $(items: { $($bench_item)* },)?
-            )?
+            $test;
         }
     };
     (
@@ -56,7 +64,6 @@ macro_rules! entry {
         $(prepare: $prepare:expr,)?
         $(major: ($stack:expr, $nodes:expr),)?
         bench: $bench:expr,
-        $(items: { $($bench_item:item)* },)?
     ) => {
         $crate::entry! {
             @emit [
@@ -64,34 +71,30 @@ macro_rules! entry {
                 $(prepare: $prepare,)?
                 $(major: ($stack, $nodes),)?
             ]
-            [$($($bench_item)*)?]
+            []
             $crate::Purpose::Bench, $crate::scenario, $bench
+        }
+    };
+    (
+        @test [$($setup:tt)*]
+        collected $(=> $after:expr)?; $($item:item)*
+    ) => {
+        $crate::entry! {
+            @emit [$($setup)*] [$($item)*]
+            $crate::Purpose::Test, $crate::run, $crate::entry!(@callback $($after)?)
+        }
+    };
+    (
+        @test [$($setup:tt)*]
+        $test:expr; $($item:item)*
+    ) => {
+        $crate::entry! {
+            @emit [$($setup)*] [$($item)*]
+            $crate::Purpose::Test, $crate::scenario, $test
         }
     };
     (@callback) => { |_: $crate::Boot<'_>| {} };
     (@callback $callback:expr) => { $callback };
-    (@select [$($setup:tt)*] [$($test_item:item)*] $harness:path, $test:expr,) => {
-        $crate::entry! {
-            @emit [$($setup)*] [$($test_item)*]
-            $crate::Purpose::Test, $harness, $test
-        }
-    };
-    (
-        @select [$($setup:tt)*] [$($test_item:item)*] $harness:path, $test:expr,
-        $(#[cfg($($condition:tt)*)])? bench: $bench:expr,
-        $(items: { $($bench_item:item)* },)?
-    ) => {
-        #[cfg(not(all(feature = "bench" $(, $($condition)*)?)))]
-        $crate::entry! {
-            @emit [$($setup)*] [$($test_item)*]
-            $crate::Purpose::Test, $harness, $test
-        }
-        #[cfg(all(feature = "bench" $(, $($condition)*)?))]
-        $crate::entry! {
-            @emit [$($setup)*] [$($($bench_item)*)?]
-            $crate::Purpose::Bench, $crate::scenario, $bench
-        }
-    };
     (
         @emit [
             platform: $platform:expr,

@@ -208,31 +208,34 @@ existing target-only Guest packages supply dedicated entry points when no
 matching Test image exists. A common entry can instead declare one platform
 and distinct `test:` and `bench:` behaviors. The package's `bench` feature
 selects measurement only where the entry declares it and its optional
-`#[cfg(...)]` condition holds. The optional `items: { ... },` immediately
-after a behavior contains ordinary Rust items emitted at crate scope only
-when that behavior is selected. Collected cases are therefore compiled
-only with their own behavior, and one capability condition also governs
-its module dependencies. Sync uses this form:
+`#[cfg(...)]` condition holds. A shared entry groups each behavior's
+callback or collection declaration and its ordinary Rust items in one
+block. Only the selected block contributes items at crate scope. The
+capability condition therefore governs its dependencies as well as its
+behavior. Single-purpose entries retain the direct callback or collection
+form, with ordinary module declarations at crate scope. Sync uses:
+
 ```rust
 guest::entry! {
     platform: platform::Platform::native(4),
 
-    test: collected,
-    items: {
+    test: {
+        collected;
         mod contracts;
     },
 
     #[cfg(target_arch = "riscv64")]
-    bench: measurement::check,
-    items: {
+    bench: {
+        measurement::check;
         #[path = "../../../../benches/metal/sync/shared/mod.rs"]
         mod measurement;
     },
 }
 ```
+
 On other architectures the same entry continues to declare and compile
-its Test behavior. Both use the same linker, startup, machine preparation, process
-settlement and completion contract. They execute in separate boots.
+its Test behavior. Both use the same linker, startup, machine preparation,
+process settlement and completion contract. They execute in separate boots.
 No separate benchmark workspace or lockfile is required.
 The first target, `riscv64-guest:clock`, establishes a measurement transport
 over the admitted RISC-V timebase. The Sync owner uses two machine topologies:
