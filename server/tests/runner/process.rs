@@ -1,4 +1,4 @@
-use crate::{Result, json, require};
+use crate::{Result, evidence, require};
 use serde::Serialize;
 use std::{
     fs,
@@ -151,7 +151,7 @@ pub fn run_with_stdio(
 
 /// The executor writes only observations; callers decide what they prove.
 fn record(directory: &Path, outcome: Outcome) -> Result<Outcome> {
-    json(&directory.join("process.json"), &outcome)?;
+    evidence::json(&directory.join("process.json"), &outcome)?;
     Ok(outcome)
 }
 

@@ -3,8 +3,7 @@ use crate::process;
 use std::{fs, path::PathBuf, process::Command, time::Duration};
 
 fn scratch(name: &str) -> PathBuf {
-    let root =
-        std::env::temp_dir().join(format!("kernel-native-{name}-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("kernel-native-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir(&root).unwrap();
     root
@@ -13,11 +12,7 @@ fn scratch(name: &str) -> PathBuf {
 #[test]
 fn verdict_is_separate_from_process_termination() {
     let root = scratch("verdict");
-    for (code, expected) in [
-        (97, Verdict::Pass),
-        (99, Verdict::Fail),
-        (0, Verdict::Fail),
-    ] {
+    for (code, expected) in [(97, Verdict::Pass), (99, Verdict::Fail), (0, Verdict::Fail)] {
         let outcome = process::run(
             Command::new("sh").args(["-c", &format!("echo PASS; exit {code}")]),
             &root.join(code.to_string()),

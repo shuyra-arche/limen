@@ -1,4 +1,4 @@
-use crate::{Result, process};
+use crate::{Result, evidence, process};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -35,7 +35,7 @@ pub fn run_isolated(
     let transcript = File::create(directory.join("qmp.jsonl"))?;
     let stdout = File::create(directory.join("stdout.log"))?;
     let listener = UnixListener::bind(&socket)?;
-    let result = (|| {
+    let result: Result<(process::Outcome, io::Result<Shutdown>)> = (|| {
         listener.set_nonblocking(true)?;
         command
             .args(["-S", "-qmp"])
@@ -89,7 +89,12 @@ pub fn run_isolated(
         })
     })();
     fs::remove_file(socket)?;
-    result
+    let (outcome, shutdown) = result?;
+    match &shutdown {
+        Ok(shutdown) => evidence::json(&directory.join("shutdown.json"), shutdown)?,
+        Err(error) => fs::write(directory.join("qmp-error.txt"), error.to_string())?,
+    }
+    Ok((outcome, shutdown))
 }
 
 #[cfg(not(unix))]

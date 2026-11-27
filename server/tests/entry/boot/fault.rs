@@ -1,7 +1,7 @@
 //! Observe an actual terminal fault during the production BSS clear.
 //! The linked ELF is never modified. GDB changes only the running guest.
 
-use kernel_verification::{native, platform, qmp};
+use kernel_verification::{evidence, machine, native, platform, qmp};
 use object::{Architecture, Object, ObjectSection, ObjectSymbol};
 use serde_json::Value;
 use std::{
@@ -284,9 +284,9 @@ fn bss_clear_traps_on_the_original_major_stack() {
         .canonicalize()
         .unwrap();
     let evidence = root.join(".integration/boot-fault");
-    kernel_verification::fresh(&evidence).unwrap();
+    evidence::fresh(&evidence).unwrap();
     let image = linked_guest(&root, &evidence);
-    let hash = kernel_verification::digest(&image).unwrap();
+    let hash = evidence::digest(&image).unwrap();
     let platform = platform::read(&image).unwrap();
     assert_eq!(platform.architecture, "riscv64");
     assert_eq!(platform.platform.harts, 4);
@@ -305,9 +305,9 @@ fn bss_clear_traps_on_the_original_major_stack() {
 
     let layout = Layout::read(&image);
     let fault = evidence.join("fault");
-    kernel_verification::fresh(&fault).unwrap();
+    evidence::fresh(&fault).unwrap();
     fs::set_permissions(&fault, fs::Permissions::from_mode(0o700)).unwrap();
-    let mut machine = native::prepare(&image, &fault, true).unwrap();
+    let mut machine = machine::prepare(&image, &fault, true).unwrap();
     machine.current_dir(&fault).args([
         "-chardev",
         "socket,path=gdb.sock,server=on,wait=off,id=debugger",
@@ -326,7 +326,6 @@ fn bss_clear_traps_on_the_original_major_stack() {
         qmp::run_isolated(machine, &fault, Duration::from_secs(45), Some(controller))
             .unwrap_or_else(|error| fault_observation_error(&fault, error));
     let shutdown = shutdown.unwrap_or_else(|error| fault_observation_error(&fault, error));
-    kernel_verification::json(&fault.join("shutdown.json"), &shutdown).unwrap();
     assert!(result.success(), "{result:?}");
     assert!(shutdown.guest);
     assert_eq!(shutdown.reason, "guest-shutdown");
@@ -363,8 +362,8 @@ fn bss_clear_traps_on_the_original_major_stack() {
         saved_stack,
         status,
     );
-    assert_eq!(kernel_verification::digest(&image).unwrap(), hash);
-    kernel_verification::json(
+    assert_eq!(evidence::digest(&image).unwrap(), hash);
+    evidence::json(
         &fault.join("observation.json"),
         &serde_json::json!({
             "image_sha256": hash,

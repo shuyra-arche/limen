@@ -19,9 +19,22 @@ execution or retirement evidence cannot become a pass. A reached deadline is
 recorded as a timeout even if cleanup remains uncertain; inspect the process
 receipt separately. Missing or malformed receipts are not successful runs.
 Host observers own their assertions; a successful process exit alone is not
-a guest verdict. UEFI variable files are copied before use. CI records the checked-out
-source revision and compiler. No test changes the checked-out source.
+a guest verdict. UEFI variable files are copied before use. CI records the
+checked-out source revision and compiler. No test changes the checked-out source.
 Use a fresh evidence root for a repeated run.
+
+## Responsibilities
+
+- `platform` decodes and admits the executable's machine declaration without
+  preparing firmware or starting a process.
+- `machine` prepares the admitted QEMU command and its per-run boot material;
+  ordinary native tests and Host-controlled observers use the same preparation.
+  Its boot module owns SBI and UEFI launch differences.
+- `process` owns the deadline, child lifecycle and retirement receipt.
+- `qmp` owns the control connection and its shutdown receipt or observation error.
+- `native` interprets the ordinary guest completion contract. Host observers
+  interpret their own contracts, not a generic exit status.
+- `evidence` supplies shared storage operations without deciding receipt meaning.
 
 `--observe` additionally records QMP over an isolated Unix socket. This does
 not turn an unexpected exit into success; a Host test may explicitly inspect
