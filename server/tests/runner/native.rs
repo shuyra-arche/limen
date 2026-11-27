@@ -11,7 +11,12 @@ fn variable(name: &str, default: &str) -> String {
     env::var(name).unwrap_or_else(|_| default.into())
 }
 
-fn command(architecture: &str, image: &Path, directory: &Path) -> Result<Command> {
+fn command(
+    architecture: &str,
+    image: &Path,
+    directory: &Path,
+    observe: bool,
+) -> Result<Command> {
     let mut command = Command::new(match architecture {
         "riscv64" => variable("QEMU_RISCV64", "qemu-system-riscv64"),
         "aarch64" => variable("QEMU_AARCH64", "qemu-system-aarch64"),
@@ -19,8 +24,17 @@ fn command(architecture: &str, image: &Path, directory: &Path) -> Result<Command
         _ => return Err("unsupported architecture".into()),
     });
     command.args([
-        "-accel", "tcg", "-smp", "4", "-display", "none", "-monitor", "none", "-nic",
-        "none", "-no-reboot",
+        "-accel",
+        "tcg",
+        "-smp",
+        "4",
+        "-display",
+        "none",
+        "-monitor",
+        "none",
+        "-nic",
+        "none",
+        "-no-reboot",
     ]);
     let semihost = [
         "-semihosting-config",
@@ -29,7 +43,7 @@ fn command(architecture: &str, image: &Path, directory: &Path) -> Result<Command
     if architecture == "riscv64" {
         command
             .args([
-                "-machine", "virt", "-cpu", "rv64", "-m", "128M", "-serial", "stdio", "-bios",
+                "-machine", "virt", "-cpu", "rv64", "-m", "128M", "-bios",
             ])
             .arg(variable(
                 "QEMU_OPENSBI",
@@ -38,6 +52,9 @@ fn command(architecture: &str, image: &Path, directory: &Path) -> Result<Command
             .arg("-kernel")
             .arg(image)
             .args(semihost);
+        if !observe {
+            command.args(["-serial", "stdio"]);
+        }
         return Ok(command);
     }
 
@@ -70,17 +87,21 @@ fn command(architecture: &str, image: &Path, directory: &Path) -> Result<Command
             firmware.join(code).display()
         ))
         .arg("-drive")
-        .arg(format!("if=pflash,format=raw,file={}", private_vars.display()));
+        .arg(format!(
+            "if=pflash,format=raw,file={}",
+            private_vars.display()
+        ));
     if architecture == "x86_64" {
         command
             .args(["-machine", "q35", "-m", "128M", "-drive"])
             .arg(format!("format=raw,file=fat:rw:{}", esp.display()))
-            .args([
-                "-debugcon",
-                "stdio",
-                "-device",
-                "isa-debug-exit,iobase=0xf4,iosize=4",
-            ]);
+            .arg("-debugcon")
+            .arg(if observe {
+                format!("file:{}", directory.join("debugcon.log").display())
+            } else {
+                "stdio".into()
+            })
+            .args(["-device", "isa-debug-exit,iobase=0xf4,iosize=4"]);
     } else {
         command
             .args([
@@ -92,19 +113,25 @@ fn command(architecture: &str, image: &Path, directory: &Path) -> Result<Command
                 "256M",
                 "-drive",
             ])
-            .arg(format!("if=none,id=esp,format=raw,file=fat:rw:{}", esp.display()))
-            .args(["-device", "virtio-blk-pci,drive=esp", "-serial", "stdio"])
+            .arg(format!(
+                "if=none,id=esp,format=raw,file=fat:rw:{}",
+                esp.display()
+            ))
+            .args(["-device", "virtio-blk-pci,drive=esp"])
             .args(semihost);
+        if !observe {
+            command.args(["-serial", "stdio"]);
+        }
     }
     Ok(command)
 }
 
-pub fn run(architecture: &str, image: &Path) -> Result<()> {
+pub fn run(architecture: &str, image: &Path, observe: bool) -> Result<()> {
     let image = image.canonicalize()?;
     let evidence = PathBuf::from(env::var_os("LIMEN_T0_EVIDENCE").ok_or("missing evidence path")?);
     kernel_verification::fresh(&evidence)?;
     let directory = evidence.canonicalize()?;
-    let mut command = command(architecture, &image, &directory)?;
+    let mut command = command(architecture, &image, &directory, observe)?;
     let version = output(Command::new(command.get_program()).arg("--version"))?;
     require(
         version
@@ -114,9 +141,20 @@ pub fn run(architecture: &str, image: &Path) -> Result<()> {
             == Some(include_str!("../qemu.version").trim()),
         "unexpected QEMU version",
     )?;
-    let outcome = process::run(&mut command, &directory, Duration::from_secs(45))?;
+    let timeout = Duration::from_secs(45);
+    let mut outcome = if observe {
+        // External observation is optional; ordinary Cargo tests need only
+        // the dedicated completion status.
+        let (outcome, shutdown) = crate::qmp::run(command, &directory, timeout)?;
+        kernel_verification::json(&directory.join("shutdown.json"), &shutdown?)?;
+        outcome
+    } else {
+        process::run(&mut command, &directory, timeout)?
+    };
+    outcome.passed = outcome.exited() && outcome.code == Some(97);
+    kernel_verification::json(&directory.join("result.json"), &outcome)?;
     require(
-        outcome.exited() && outcome.code == Some(97),
+        outcome.passed,
         format!("no explicit test success: {outcome:?}"),
     )
 }

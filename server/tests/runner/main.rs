@@ -21,6 +21,8 @@ struct Cli {
 enum Commands {
     Run(scenario::Inputs),
     Native {
+        #[arg(long)]
+        observe: bool,
         architecture: String,
         image: PathBuf,
     },
@@ -39,7 +41,11 @@ enum Commands {
 fn main() {
     let result: Result<()> = match Cli::parse().command {
         Commands::Run(inputs) => scenario::run(inputs),
-        Commands::Native { architecture, image } => native::run(&architecture, &image),
+        Commands::Native {
+            observe,
+            architecture,
+            image,
+        } => native::run(&architecture, &image, observe),
         Commands::Observe { elf, output } => scenario::observe(elf, output),
         Commands::Symbolize {
             elf,

@@ -57,25 +57,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          runner="$PWD/server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify native $ARCH"
+          runner="$PWD/server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify native"
           case "$ARCH" in
             riscv64)
               target=riscv64gc-unknown-none-elf
               manifest=server/tests/target/metal/interrupt/riscv64/ipi/Cargo.toml
               ordinary=0
-              export CARGO_TARGET_RISCV64GC_UNKNOWN_NONE_ELF_RUNNER="$runner"
+              runner_variable=CARGO_TARGET_RISCV64GC_UNKNOWN_NONE_ELF_RUNNER
               ;;
             aarch64)
               target=aarch64-unknown-uefi
               manifest=server/tests/target/entry/platforms/Cargo.toml
               ordinary=0
-              export CARGO_TARGET_AARCH64_UNKNOWN_UEFI_RUNNER="$runner"
+              runner_variable=CARGO_TARGET_AARCH64_UNKNOWN_UEFI_RUNNER
               ;;
             x86_64)
               target=x86_64-unknown-uefi
               manifest=server/tests/target/entry/platforms/Cargo.toml
               ordinary=33
-              export CARGO_TARGET_X86_64_UNKNOWN_UEFI_RUNNER="$runner"
+              runner_variable=CARGO_TARGET_X86_64_UNKNOWN_UEFI_RUNNER
               ;;
           esac
           args=(--locked --manifest-path "$manifest" --test outcome-probe --target "$target")
@@ -83,21 +83,38 @@ jobs:
           mkdir -p .integration/t0
           # No production assertions are interpreted by the launcher. These
           # checks validate the transport itself, not the guest's business logic.
-          for case in pass panic shutdown fake-log trap timeout; do
+          for case in pass panic shutdown fake-log trap timeout minor-pass minor-panic reset; do
+            if [[ "$case" == reset ]]; then
+              export "$runner_variable=$runner --observe $ARCH"
+            else
+              export "$runner_variable=$runner $ARCH"
+            fi
             export LIMEN_T0_CASE=$case
             export LIMEN_T0_EVIDENCE="$PWD/.integration/t0/$case"
             cargo test "${args[@]}" --no-run
             status=0
             cargo test "${args[@]}" || status=$?
             receipt="$LIMEN_T0_EVIDENCE/result.json"
-            if [[ "$case" == pass ]]; then
+            if [[ "$case" == pass || "$case" == minor-pass ]]; then
               [[ "$status" == 0 ]]
-              jq -e '.status == "exited" and .code == 97' "$receipt"
+              jq -e '.status == "exited" and .code == 97 and .passed == true' "$receipt"
               continue
             fi
             [[ "$status" != 0 ]]
+            jq -e '.passed == false' "$receipt"
             case "$case" in
-              panic) jq -e '.status == "exited" and .code == 99' "$receipt" ;;
+              panic|minor-panic)
+                jq -e '.status == "exited" and .code == 99' "$receipt"
+                if [[ "$case" == panic ]]; then
+                  grep -Fq 'T0 intentional assertion failure' "$LIMEN_T0_EVIDENCE/serial.log"
+                else
+                  grep -Fq 'T0 intentional minor assertion failure' "$LIMEN_T0_EVIDENCE/serial.log"
+                fi
+                ;;
+              reset)
+                jq -e '.status == "exited" and .code == 0' "$receipt"
+                jq -e '.guest == true and .reason == "guest-reset"' "$LIMEN_T0_EVIDENCE/shutdown.json"
+                ;;
               shutdown|fake-log) jq -e --argjson code "$ordinary" '.status == "exited" and .code == $code' "$receipt" ;;
               trap)
                 jq -e '.status == "exited" and .code != 97 and .code != 99' "$receipt"
