@@ -46,7 +46,10 @@ impl Mailbox {
     {
         let mut state = sender.notify().unwrap();
         if matches!(state, Issuance::Pending) {
-            assert!(sender.notify().is_err(), "an original issue remains pending");
+            assert!(
+                sender.notify().is_err(),
+                "an original issue remains pending"
+            );
             for _ in 0..4096 {
                 state = sender.pending().unwrap().expect("retained issue");
                 if !matches!(state, Issuance::Pending) {
