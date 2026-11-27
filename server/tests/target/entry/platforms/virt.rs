@@ -227,7 +227,7 @@ fn inspect_smmu(tree: &DeviceTree<'_>) {
     let physical = PhysicalAddress::new(core::ptr::from_ref(commands).addr() as u64);
     let mut queue = unsafe { Queue::open(&mut registers, commands, physical, order) }.unwrap();
     for operation in [
-        Invalidate::Stream(0),
+        Invalidate::Stream(stream::RID),
         Invalidate::StageTwo(1),
         Invalidate::Stream(1),
         Invalidate::StageTwo(2),

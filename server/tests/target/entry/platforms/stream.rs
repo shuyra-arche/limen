@@ -30,7 +30,8 @@ fn address(p: *mut Page) -> PhysicalAddress {
 }
 #[path = "../pci/edu.rs"]
 mod pci;
-use pci::{Edu, RID};
+use pci::Edu;
+pub(super) use pci::RID;
 
 pub(super) struct Endpoint {
     edu: Edu,
