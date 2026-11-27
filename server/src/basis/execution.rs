@@ -12,7 +12,7 @@ use crate::{
             self, Hart, LeaveReceipt, LocalHart, cooperative_ready,
         },
         processor::hart::local::{self, HartId},
-        sync::{TurnAcquireError, TurnLock},
+        sync::{TURN_CAPACITY, TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
     },
 };
 
@@ -91,14 +91,10 @@ pub struct KernelBinding {
     affinity: Option<HartId>,
 }
 
-struct Dispatch {
-    units: Units<KernelBinding>,
-    room: Room<STACK_CAPACITY>,
-}
-
 /// Cooperative coordination of Unit and Room on independently attached Harts.
 pub struct Execution {
-    dispatch: TurnLock<Dispatch>,
+    units: TurnLock<Units<KernelBinding>>,
+    room: TurnLock<Room<STACK_CAPACITY>>,
     harts: &'static [Hart<Occupancy>],
 }
 
@@ -131,19 +127,29 @@ impl Execution {
         }
         let (room, harts) = harts.split();
         Ok(Self {
-            dispatch: TurnLock::new(Dispatch {
-                units: Units::new(stacks, records),
-                room,
-            }),
+            units: TurnLock::new(Units::new(stacks, records)),
+            room: TurnLock::new(room),
             harts,
         })
     }
 
-    fn dispatch<R>(
+    fn with_unit_room<R>(
         &self,
-        operation: impl FnOnce(&mut Dispatch) -> Result<R, Error>,
+        operation: impl FnOnce(&mut Units<KernelBinding>, &mut Room<STACK_CAPACITY>) -> Result<R, Error>,
     ) -> Result<R, Error> {
-        self.dispatch.acquire(operation)?
+        const { assert!(TURN_CAPACITY >= 2) };
+        let mut workspace = TurnWorkspace::<2>::new();
+        let mut plan = workspace.plan();
+        plan.insert(&self.units).expect("Unit owner");
+        plan.insert(&self.room).expect("Room owner");
+        // Returning from a Unit must be able to commit its terminal leave
+        // under contention. Queue in canonical order before changing either owner.
+        plan.acquire(TurnMode::Slow, |held| {
+            let (units, room) = held
+                .access_pair(&self.units, &self.room)
+                .expect("complete Unit and Room plan");
+            operation(units, room)
+        })?
     }
 
     fn local(&self) -> Result<(HartId, LocalHart<'_, Occupancy>), Error> {
@@ -161,16 +167,16 @@ impl Execution {
         if !local::can_switch() {
             return Err(Error::Protection);
         }
-        self.dispatch(|dispatch| {
+        self.room.acquire(|room| {
             if cooperative::attached() {
                 return Err(Error::Busy);
             }
-            let participation = dispatch.room.attach(id)?;
+            let participation = room.attach(id)?;
             // All fallible admission is complete. Only this Hart uses its
             // local binding, and Room retains this slot for the entire prefix.
             unsafe { cooperative::bind(self.harts, participation.index()) };
             Ok(())
-        })
+        })?
     }
 
     /// Construct a dormant Kernel Unit. Its entry's return value is its End.
@@ -201,20 +207,18 @@ impl Execution {
     }
 
     fn create_unit(&self, entry: Entry, affinity: Option<HartId>) -> Result<UnitId, Error> {
-        self.dispatch(|dispatch| {
-            let unit = dispatch.units.vacant()?;
-            dispatch
-                .units
-                .publish(unit, KernelBinding { entry, affinity }, start)?;
+        self.units.acquire(|units| {
+            let unit = units.vacant()?;
+            units.publish(unit, KernelBinding { entry, affinity }, start)?;
             Ok(unit)
-        })
+        })?
     }
 
     pub fn submit(&self, unit: UnitId) -> Result<AdmissionId, Error> {
         self.local()?;
-        self.dispatch(|dispatch| {
-            let affinity = dispatch.units.live(unit)?.0.affinity;
-            dispatch.room.submit(unit, affinity).map_err(Error::from)
+        self.with_unit_room(|units, room| {
+            let affinity = units.live(unit)?.0.affinity;
+            room.submit(unit, affinity).map_err(Error::from)
         })
     }
 
@@ -223,14 +227,11 @@ impl Execution {
     /// cancellation, use `finish_end` and `reap` to release the slot.
     pub fn stop_dormant(&self, unit: UnitId) -> Result<(), Error> {
         self.local()?;
-        self.dispatch(|dispatch| {
-            if dispatch.room.admitted(unit) {
+        self.with_unit_room(|units, room| {
+            if room.admitted(unit) {
                 return Err(Error::Busy);
             }
-            dispatch
-                .units
-                .begin_end(unit, End::Cancelled)
-                .map_err(Error::from)
+            units.begin_end(unit, End::Cancelled).map_err(Error::from)
         })
     }
 
@@ -244,13 +245,13 @@ impl Execution {
         if !local::can_switch() {
             return Err(Error::Protection);
         }
-        let Some((occupancy, context, entry)) = self.dispatch(|dispatch| {
-            let Some(unit) = dispatch.room.candidate(id)? else {
+        let Some((occupancy, context, entry)) = self.with_unit_room(|units, room| {
+            let Some(unit) = room.candidate(id)? else {
                 return Ok(None);
             };
-            let (binding, context) = dispatch.units.live(unit)?;
+            let (binding, context) = units.live(unit)?;
             let entry = binding.entry;
-            Ok(Some((dispatch.room.occupy(id, unit)?, context, entry)))
+            Ok(Some((room.occupy(id, unit)?, context, entry)))
         })?
         else {
             return Ok(None);
@@ -271,40 +272,44 @@ impl Execution {
 
     pub fn vacate(&self, occupancy: Occupancy) -> Result<(), Error> {
         let (_, hart) = self.local()?;
-        self.dispatch(|dispatch| {
-            dispatch.room.on_hart(occupancy)?;
+        self.room.acquire(|room| {
+            room.on_hart(occupancy)?;
             let receipt = hart
                 .stopped()
                 .filter(|receipt| receipt.occupancy() == occupancy)
                 .ok_or(Error::Busy)?;
-            dispatch.room.vacate(receipt)?;
+            room.vacate(receipt)?;
             hart.settle(receipt);
             Ok(())
-        })
+        })?
     }
 
     pub fn lifecycle(&self, unit: UnitId) -> Result<Lifecycle, Error> {
         self.local()?;
-        self.dispatch(|dispatch| dispatch.units.lifecycle(unit).map_err(Error::from))
+        self.units
+            .acquire(|units| units.lifecycle(unit))?
+            .map_err(Error::from)
     }
 
     pub fn finish_end(&self, unit: UnitId) -> Result<(), Error> {
         self.local()?;
-        self.dispatch(|dispatch| {
-            dispatch.units.lifecycle(unit)?;
-            if dispatch.room.admitted(unit) {
+        self.with_unit_room(|units, room| {
+            units.lifecycle(unit)?;
+            if room.admitted(unit) {
                 return Err(Error::Busy);
             }
             // Released admission proves either no entry occurred or the exact
             // machine leave receipt was settled by Room.
-            unsafe { dispatch.units.finish_end(unit) }?;
+            unsafe { units.finish_end(unit) }?;
             Ok(())
         })
     }
 
     pub fn reap(&self, unit: UnitId) -> Result<End, Error> {
         self.local()?;
-        self.dispatch(|dispatch| dispatch.units.reap(unit).map_err(Error::from))
+        self.units
+            .acquire(|units| units.reap(unit))?
+            .map_err(Error::from)
     }
 
     fn leave(&self, unit: UnitId, end: Option<u64>) -> Result<(), Error> {
@@ -319,17 +324,16 @@ impl Execution {
             .running()
             .filter(|active| active.unit() == unit)
             .ok_or(Error::Gone)?;
-        let context = self.dispatch(|dispatch| {
-            let (_, context) = dispatch.units.live(unit)?;
+        let context = self.with_unit_room(|units, room| {
+            let (_, context) = units.live(unit)?;
             let destination = if end.is_some() {
                 LeaveDestination::Release
             } else {
                 LeaveDestination::Ready
             };
-            dispatch.room.request_leave(occupancy, destination)?;
+            room.request_leave(occupancy, destination)?;
             if let Some(value) = end {
-                dispatch
-                    .units
+                units
                     .begin_end(unit, End::Returned { value })
                     .expect("validated live Unit");
             }
