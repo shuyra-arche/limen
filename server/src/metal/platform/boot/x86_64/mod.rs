@@ -50,7 +50,7 @@ pub(crate) unsafe fn admit<'a>(
 ) -> Option<Facts<'a>> {
     let facts = unsafe { uefi::admit(hart, x86_64::boot_identity(), input, descriptions) }?;
     if let Some(acpi) = descriptions.acpi.as_ref()
-        && !apic::matches_madt(hart, acpi.madt()?)
+        && !apic::native::matches_madt(hart, acpi.madt()?)
     {
         return None;
     }
