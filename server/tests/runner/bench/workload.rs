@@ -100,7 +100,10 @@ impl Workload {
             )?;
             owner |= path.starts_with("server/benches");
             entry |= path.starts_with("server/tests/target")
-                && path.components().any(|part| part.as_os_str() == "benches");
+                && path
+                    .strip_prefix("server/tests/target")?
+                    .components()
+                    .any(|part| matches!(part.as_os_str().to_str(), Some("tests" | "benches")));
         }
         require(owner && entry, "missing benchmark entry or owner inputs")
     }

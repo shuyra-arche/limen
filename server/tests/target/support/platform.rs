@@ -153,8 +153,38 @@ impl Platform {
         }
         panic!("test platform device capacity exceeded");
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum Purpose {
+    Test = 1,
+    Bench = 2,
+}
+
+impl Purpose {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Test => "test",
+            Self::Bench => "bench",
+        }
+    }
+}
+
+/// The image's selected use and independent machine configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Declaration {
+    pub platform: Platform,
+    pub purpose: Purpose,
+}
+
+impl Declaration {
+    pub const fn new(platform: Platform, purpose: Purpose) -> Self {
+        Self { platform, purpose }
+    }
 
     pub const fn encode(self) -> [u8; SIZE] {
+        let platform = self.platform;
         let header = [
             b'L',
             b'I',
@@ -164,16 +194,16 @@ impl Platform {
             b'P',
             b'L',
             b'T',
-            2,
-            self.board as u8,
-            self.firmware as u8,
-            self.interrupt as u8,
-            self.harts,
-            self.aclint as u8,
-            self.sstc as u8,
-            self.iommu as u8,
-            self.serial as u8,
-            0,
+            3,
+            platform.board as u8,
+            platform.firmware as u8,
+            platform.interrupt as u8,
+            platform.harts,
+            platform.aclint as u8,
+            platform.sstc as u8,
+            platform.iommu as u8,
+            platform.serial as u8,
+            self.purpose as u8,
             0,
             0,
         ];
@@ -185,7 +215,7 @@ impl Platform {
         }
         let mut index = 0;
         while index < DEVICE_LIMIT {
-            if let Some(device) = self.devices[index] {
+            if let Some(device) = platform.devices[index] {
                 let record = device.encode();
                 let start = HEADER + index * DEVICE_SIZE;
                 let mut offset = 0;
@@ -201,7 +231,7 @@ impl Platform {
 
     pub fn decode(bytes: &[u8]) -> Option<Self> {
         let bytes: &[u8; SIZE] = bytes.try_into().ok()?;
-        if &bytes[..8] != b"LIMENPLT" || bytes[8] != 2 || bytes[17..HEADER] != [0; 3] {
+        if &bytes[..8] != b"LIMENPLT" || bytes[8] != 3 || bytes[18..HEADER] != [0; 2] {
             return None;
         }
         let mut devices = [None; DEVICE_LIMIT];
@@ -220,7 +250,12 @@ impl Platform {
             }
             devices[index] = Some(Device::decode(record)?);
         }
-        Some(Self {
+        let purpose = match bytes[17] {
+            1 => Purpose::Test,
+            2 => Purpose::Bench,
+            _ => return None,
+        };
+        let platform = Platform {
             board: match bytes[9] {
                 1 => Board::Virt,
                 2 => Board::Q35,
@@ -268,7 +303,8 @@ impl Platform {
                 _ => return None,
             },
             devices,
-        })
+        };
+        Some(Self { platform, purpose })
     }
 }
 
@@ -276,9 +312,13 @@ impl Platform {
 #[macro_export]
 macro_rules! declare {
     ($platform:expr) => {
+        $crate::declare!($platform, $crate::Purpose::Test);
+    };
+    ($platform:expr, $purpose:expr) => {
         #[used]
         #[unsafe(no_mangle)]
         #[unsafe(link_section = ".testenv")]
-        static LIMEN_TEST_PLATFORM: [u8; $crate::platform::SIZE] = ($platform).encode();
+        static LIMEN_TEST_PLATFORM: [u8; $crate::platform::SIZE] =
+            $crate::platform::Declaration::new($platform, $purpose).encode();
     };
 }

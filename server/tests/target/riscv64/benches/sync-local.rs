@@ -12,6 +12,7 @@ mod sync;
 
 guest::entry! {
     platform: platform::Platform::native(1),
+    purpose: guest::Purpose::Bench,
     run: |boot| {
         sync::check(boot);
         guest::finish()

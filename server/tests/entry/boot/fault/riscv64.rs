@@ -217,12 +217,18 @@ fn bss_clear_traps_on_the_original_major_stack() {
     evidence::fresh(&evidence).unwrap();
     let image = linked_guest(&root, &evidence);
     let hash = evidence::digest(&image).unwrap();
-    let platform = platform::read(&image).unwrap();
+    let platform = platform::read(&image, platform::Purpose::Test).unwrap();
     assert_eq!(platform.architecture, "riscv64");
     assert_eq!(platform.platform.harts, 4);
 
     // The normal run and the fault run use the same actual Cargo artifact.
-    let normal = native::run(&image, false, Some(&evidence.join("normal"))).unwrap();
+    let normal = native::run(
+        &image,
+        platform::Purpose::Test,
+        false,
+        Some(&evidence.join("normal")),
+    )
+    .unwrap();
     let result = receipt(&normal.join("result.json"));
     assert_eq!(result["verdict"], "pass");
     let process = receipt(&normal.join("process.json"));
@@ -236,7 +242,7 @@ fn bss_clear_traps_on_the_original_major_stack() {
     let fault = evidence.join("fault");
     evidence::fresh(&fault).unwrap();
     fs::set_permissions(&fault, fs::Permissions::from_mode(0o700)).unwrap();
-    let mut machine = machine::prepare(&image, &fault, true).unwrap();
+    let mut machine = machine::prepare(&image, platform::Purpose::Test, &fault, true).unwrap();
     machine.current_dir(&fault).args([
         "-chardev",
         "socket,path=gdb.sock,server=on,wait=off,id=debugger",

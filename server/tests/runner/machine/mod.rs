@@ -1,5 +1,5 @@
 //! Prepare an admitted QEMU machine and its run-specific boot material.
-use crate::platform::{self, Machine};
+use crate::platform::{self, Machine, Purpose};
 use crate::{Result, evidence, require};
 use std::{env, path::Path, process::Command};
 
@@ -82,12 +82,18 @@ fn transport(command: &mut Command, machine: &Machine, directory: &Path, observe
 }
 
 /// Construct and record the selected machine without starting it.
-pub fn prepare(image: &Path, directory: &Path, observe: bool) -> Result<Command> {
-    let machine = platform::read(image)?;
+pub fn prepare(
+    image: &Path,
+    purpose: Purpose,
+    directory: &Path,
+    observe: bool,
+) -> Result<Command> {
+    let machine = platform::read(image, purpose)?;
     evidence::json(
         &directory.join("platform.json"),
         &serde_json::json!({
             "architecture": machine.architecture,
+            "purpose": purpose.name(),
             "firmware": format!("{:?}", machine.platform.firmware),
             "interrupt": format!("{:?}", machine.platform.interrupt),
             "harts": machine.platform.harts,

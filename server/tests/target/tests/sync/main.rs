@@ -1,44 +1,25 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
-#![test_runner(guest::run)]
+#![cfg_attr(not(feature = "bench"), test_runner(guest::run))]
+#![cfg_attr(feature = "bench", test_runner(guest::scenario))]
 #![reexport_test_harness_main = "collected"]
 
 use guest::platform;
 
-mod leaf;
-#[path = "../../../metal/sync/native.rs"]
-mod native;
+#[cfg(not(feature = "bench"))]
+mod contracts;
 
-use kernel::metal::sync::treaty::TurnLock;
+#[cfg(all(feature = "bench", not(target_arch = "riscv64")))]
+compile_error!("Sync measurement currently requires riscv64");
+#[cfg(all(feature = "bench", target_arch = "riscv64"))]
+#[path = "../../../../benches/metal/sync/shared/mod.rs"]
+mod measurement;
 
 guest::entry! {
     platform: platform::Platform::native(4),
-    run: |_boot| {
-        guest::finish()
+    test: |_boot| {},
+    bench: |boot| {
+        measurement::check(boot);
     }
-}
-
-#[test_case]
-fn turn_releases_the_original_value() {
-    let lock = TurnLock::new(0_u64);
-    assert_eq!(
-        lock.acquire(|value| {
-            *value += 1;
-            *value
-        }),
-        Ok(1)
-    );
-    assert_eq!(lock.acquire(|value| *value), Ok(1));
-}
-
-#[test_case]
-fn original_synchronization_contract() {
-    native::check();
-}
-
-#[cfg(target_arch = "riscv64")]
-#[test_case]
-fn original_enabled_interrupt_contract() {
-    native::check_enabled();
 }

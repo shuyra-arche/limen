@@ -67,10 +67,12 @@ Cargo's benchmark invocation selects `verify bench --evidence-root <fresh-root>
 benchmark invocation, not a usable timing result. The raw serial transcript
 and the native execution receipt remain available for investigation.
 
-The independent Bench workflow selects `--benches --no-fail-fast` for the
-currently supported riscv64 benchmark package. Target CI selects
-`--tests` only. The workflows share environment preparation but retain
-separate run receipts and artifacts.
+The independent Bench workflow selects `--benches --no-fail-fast` for
+dedicated riscv64 benchmark images and `--features bench --test sync`
+for the shared-entry pilot. Target CI selects ordinary `--tests` only.
+The Runner requires the requested purpose to match the compiled image's
+declaration before preparing a machine. The workflows share environment
+preparation but retain separate run receipts and artifacts.
 
 Benchmark CI runs automatically for changes to benchmark implementation or
 shared execution infrastructure, not ordinary Kernel source changes or

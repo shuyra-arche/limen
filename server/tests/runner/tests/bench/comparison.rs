@@ -16,6 +16,7 @@ fn artifact(root: &Path, source: char, sample: u64) {
         "runner",
         "context",
         "bench",
+        "shared",
     ] {
         outcomes.insert(stage.into(), json!("success"));
     }
@@ -55,7 +56,7 @@ fn artifact(root: &Path, source: char, sample: u64) {
     .unwrap();
     evidence::json(
         &image.join("platform.json"),
-        &json!({"architecture": "riscv64", "harts": 1,
+        &json!({"architecture": "riscv64", "purpose": "bench", "harts": 1,
             "image_sha256": source.to_string().repeat(64)}),
     )
     .unwrap();

@@ -1,7 +1,8 @@
 //! Read and validate a completed artifact independently of comparison.
 use super::{
     measurement::{Series, decode},
-    statistics, workload::Workload,
+    statistics,
+    workload::Workload,
 };
 use crate::{Result, require};
 use serde_json::{Value, json};
@@ -49,6 +50,7 @@ impl Artifact {
             "runner",
             "context",
             "bench",
+            "shared",
         ] {
             require(
                 outcomes[stage] == "success",
@@ -122,6 +124,7 @@ impl Artifact {
             )?;
 
             let mut platform = read(&directory.join("platform.json"))?;
+            require(platform["purpose"] == "bench", "not a benchmark image")?;
             let image_sha256 = field(&platform, "image_sha256")?.to_owned();
             hash(&image_sha256, 64)?;
             platform.as_object_mut().unwrap().remove("image_sha256");

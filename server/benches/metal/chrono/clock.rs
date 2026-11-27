@@ -24,11 +24,14 @@ pub fn check(boot: Boot<'_>) {
         });
     }
 
-    bench::report(clock, &[bench::Series {
-        name: "clock-sample",
-        participants: 1,
-        warmup_iterations: WARMUP,
-        iterations: ITERATIONS,
-        elapsed_ns: &elapsed,
-    }]);
+    bench::report(
+        clock,
+        &[bench::Series {
+            name: "clock-sample",
+            participants: 1,
+            warmup_iterations: WARMUP,
+            iterations: ITERATIONS,
+            elapsed_ns: &elapsed,
+        }],
+    );
 }

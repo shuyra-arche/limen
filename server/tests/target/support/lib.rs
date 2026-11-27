@@ -12,6 +12,7 @@ pub use uefi_fixture::load;
 pub mod bench;
 mod outcome;
 pub mod platform;
+pub use platform::Purpose;
 
 /// A stateful image has one explicit scenario, not independently collected cases.
 pub fn scenario(tests: &[&dyn Fn()]) {

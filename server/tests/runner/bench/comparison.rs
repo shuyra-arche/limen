@@ -9,7 +9,11 @@ fn report(baseline: &Artifact, candidate: &Artifact) -> Result<Value> {
         baseline.context == candidate.context,
         "different recorded execution contexts; comparison refused",
     )?;
-    let names: BTreeSet<_> = baseline.cases.keys().chain(candidate.cases.keys()).collect();
+    let names: BTreeSet<_> = baseline
+        .cases
+        .keys()
+        .chain(candidate.cases.keys())
+        .collect();
     let mut series = Vec::new();
     let mut uncompared = Vec::new();
     for name in names {

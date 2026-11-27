@@ -1,5 +1,5 @@
 //! Interpret the ordinary guest completion contract.
-use crate::{Result, evidence, machine, process, require};
+use crate::{Result, evidence, machine, platform::Purpose, process, require};
 use serde::Serialize;
 use std::{
     env,
@@ -53,8 +53,8 @@ fn judge(outcome: &process::Outcome, observation_complete: bool) -> Report {
     }
 }
 
-fn execute(image: &Path, directory: &Path, observe: bool) -> Result<Report> {
-    let mut command = machine::prepare(image, directory, observe)?;
+fn execute(image: &Path, purpose: Purpose, directory: &Path, observe: bool) -> Result<Report> {
+    let mut command = machine::prepare(image, purpose, directory, observe)?;
     let timeout = Duration::from_secs(45);
     if observe {
         let (outcome, shutdown) = crate::qmp::run_isolated(command, directory, timeout, None)?;
@@ -70,7 +70,12 @@ fn execute(image: &Path, directory: &Path, observe: bool) -> Result<Report> {
     }
 }
 
-pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<PathBuf> {
+pub fn run(
+    image: &Path,
+    purpose: Purpose,
+    observe: bool,
+    evidence_root: Option<&Path>,
+) -> Result<PathBuf> {
     let image = image.canonicalize()?;
     let evidence = match evidence_root {
         Some(root) => root.join(image.file_name().ok_or("missing executable name")?),
@@ -84,7 +89,7 @@ pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<
         &path,
         &Report::new(Verdict::Inconclusive, "execution incomplete"),
     )?;
-    let report = execute(&image, &directory, observe)
+    let report = execute(&image, purpose, &directory, observe)
         .unwrap_or_else(|error| Report::new(Verdict::Inconclusive, error.to_string()));
     evidence::json(&path, &report)?;
     require(

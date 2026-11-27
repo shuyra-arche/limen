@@ -6,9 +6,41 @@ macro_rules! entry {
         platform: $platform:expr,
         $(prepare: $prepare:expr,)?
         $(major: ($stack:expr, $nodes:expr),)?
+        test: |$test_boot:ident| $test_body:block,
+        bench: |$bench_boot:ident| $bench_body:block $(,)?
+    ) => {
+        $crate::entry! {
+            platform: $platform,
+            $(prepare: $prepare,)?
+            $(major: ($stack, $nodes),)?
+            purpose: if cfg!(feature = "bench") {
+                $crate::Purpose::Bench
+            } else {
+                $crate::Purpose::Test
+            },
+            run: |boot| {
+                #[cfg(not(feature = "bench"))]
+                {
+                    let $test_boot = boot;
+                    $test_body
+                }
+                #[cfg(feature = "bench")]
+                {
+                    let $bench_boot = boot;
+                    $bench_body
+                }
+                $crate::finish()
+            }
+        }
+    };
+    (
+        platform: $platform:expr,
+        $(prepare: $prepare:expr,)?
+        $(major: ($stack:expr, $nodes:expr),)?
+        $(purpose: $purpose:expr,)?
         run: $($run:tt)+
     ) => {
-        $crate::declare!($platform);
+        $crate::declare!($platform $(, $purpose)?);
 
         #[cfg(target_arch = "riscv64")]
         $crate::entry!(@major $($stack, $nodes)?);

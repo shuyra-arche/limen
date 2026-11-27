@@ -1,5 +1,5 @@
 //! Execute the benchmark contract and retain its measurements.
-use crate::{Result, evidence, native};
+use crate::{Result, evidence, native, platform::Purpose};
 use std::{fs, path::Path};
 
 mod artifact;
@@ -11,7 +11,7 @@ mod workload;
 pub use comparison::compare;
 
 pub fn run(image: &Path, evidence_root: &Path) -> Result<()> {
-    let directory = native::run(image, false, Some(evidence_root))?;
+    let directory = native::run(image, Purpose::Bench, false, Some(evidence_root))?;
     let result = (|| {
         let log = fs::read_to_string(directory.join("serial.log"))?;
         let measurement = measurement::decode(&log)?;

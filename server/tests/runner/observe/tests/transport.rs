@@ -182,3 +182,61 @@ fn rejects_collected_panic() {
     let serial = fs::read_to_string(evidence.join("serial.log")).unwrap();
     assert!(serial.contains("intentional nested collected test failure"));
 }
+
+#[test]
+fn rejects_test_image_as_benchmark_before_launch() {
+    use kernel_verification::{native, platform::Purpose};
+
+    let target = env::var("LIMEN_TEST_TARGET").unwrap();
+    let profile = env::var("LIMEN_TEST_PROFILE").unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../..")
+        .canonicalize()
+        .unwrap();
+    let evidence = root.join(".integration/transport/wrong-purpose");
+    let mut command = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    command.current_dir(&root).args([
+        "-Z",
+        "panic-abort-tests",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "server/tests/target/Cargo.toml",
+        "-p",
+        "kernel-guest",
+        "--test",
+        "outcome",
+        "--target",
+        &target,
+        "--no-run",
+        "--message-format=json",
+    ]);
+    if profile == "release" {
+        command.arg("--release");
+    } else {
+        assert_eq!(profile, "debug");
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let images: Vec<_> = stdout
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| {
+            record["reason"] == "compiler-artifact" && record["target"]["name"] == "outcome"
+        })
+        .filter_map(|record| record["executable"].as_str().map(PathBuf::from))
+        .collect();
+    assert_eq!(images.len(), 1);
+    let image = images[0].canonicalize().unwrap();
+    assert!(native::run(&image, Purpose::Bench, false, Some(&evidence)).is_err());
+    let directory = evidence.join(image.file_name().unwrap());
+    let verdict = receipt(&directory.join("result.json"));
+    assert_eq!(verdict["verdict"], "inconclusive");
+    assert_eq!(verdict["reason"], "image purpose is test, requested bench");
+    assert!(!directory.join("process.json").exists());
+}

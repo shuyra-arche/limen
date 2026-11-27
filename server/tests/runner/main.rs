@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use kernel_verification::{Result, bench, native, utilities};
+use kernel_verification::{Result, bench, native, platform::Purpose, utilities};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -44,7 +44,7 @@ fn main() {
             observe,
             evidence_root,
             image,
-        } => native::run(&image, observe, evidence_root.as_deref()).map(|_| ()),
+        } => native::run(&image, Purpose::Test, observe, evidence_root.as_deref()).map(|_| ()),
         Commands::Bench {
             evidence_root,
             image,

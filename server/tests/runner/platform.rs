@@ -6,7 +6,8 @@ use std::{fs, path::Path};
 #[path = "../target/support/platform.rs"]
 mod declaration;
 pub use declaration::{
-    Board, Device, DmaMask, Firmware, Interrupt, Iommu, Platform, Serial, Setting,
+    Board, Declaration, Device, DmaMask, Firmware, Interrupt, Iommu, Platform, Purpose, Serial,
+    Setting,
 };
 
 #[derive(Debug)]
@@ -151,7 +152,7 @@ impl Machine {
     }
 }
 
-pub fn read(image: &Path) -> Result<Machine> {
+pub fn read(image: &Path, purpose: Purpose) -> Result<Machine> {
     let bytes = fs::read(image)?;
     let file = object::File::parse(bytes.as_slice())?;
     require(
@@ -168,11 +169,17 @@ pub fn read(image: &Path) -> Result<Machine> {
             section.size() == declaration::SIZE as u64,
             "invalid platform section size",
         )?;
-        platform = Some(Platform::decode(section.data()?).ok_or("invalid test platform record")?);
+        platform =
+            Some(Declaration::decode(section.data()?).ok_or("invalid guest declaration")?);
     }
-    Machine::admit(
-        file.architecture(),
-        file.format(),
-        platform.ok_or("missing test platform section")?,
-    )
+    let declaration = platform.ok_or("missing guest declaration")?;
+    require(
+        declaration.purpose == purpose,
+        format!(
+            "image purpose is {}, requested {}",
+            declaration.purpose.name(),
+            purpose.name()
+        ),
+    )?;
+    Machine::admit(file.architecture(), file.format(), declaration.platform)
 }

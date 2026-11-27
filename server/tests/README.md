@@ -70,9 +70,11 @@ The strict-NX Module retention case owns such a loader. Owner-local
 assertions remain in Entry, Basis and Metal. One explicit path to an
 owner's test implementation is preferable to a registry of scenarios.
 
-The linked `.testenv` record selects firmware, interrupt controller, Hart
-count, serial topology, IOMMU and PCI devices. The Runner rejects a missing,
-malformed or unsupported declaration. The kernel still discovers real hardware
+The linked `.testenv` record describes the selected execution purpose
+independently of the machine configuration (firmware, interrupt controller,
+Hart count, serial topology, IOMMU and PCI devices). The Runner rejects a
+missing, malformed or unsupported declaration, including a mismatch between
+the requested purpose and the compiled callback, before starting QEMU. The kernel still discovers real hardware
 through the original firmware inputs. Debug and Release use the same rules.
 
 Install the exact QEMU version from [qemu.version](qemu.version), the required
@@ -198,18 +200,20 @@ outcome prevents in-guest completion.
 ## Native benchmarks
 
 Benchmark bodies live in the owning domain under `server/benches/`. The
-existing target-only Guest packages provide the Cargo benchmark entry points
-under their own `benches/` directories. They share the normal guest entry,
-linker, machine preparation, process settlement and completion contract.
-No separate benchmark workspace or lockfile is required. The first target, `riscv64-guest:clock`, establishes
-a measurement transport over the admitted RISC-V timebase. The Sync owner
-also provides two independent images, selected by their machine topology:
+existing target-only Guest packages supply dedicated entry points when no
+matching Test image exists. A common entry can instead declare one platform
+and distinct `test:` and `bench:` callbacks; the `bench` feature selects the
+latter. Both use the same linker, startup, machine preparation, process
+settlement and completion contract. They execute in separate boots.
+No separate benchmark workspace or lockfile is required.
+The first target, `riscv64-guest:clock`, establishes a measurement transport
+over the admitted RISC-V timebase. The Sync owner uses two machine topologies:
 
 | Image | Active Harts | Measurement series |
 | --- | --- | --- |
 | `sync-local` | 1 | `leaf-local`, `turn-local` |
-| `sync-shared` | 4 | `leaf-shared`, `turn-shared` |
-| `sync-shared` | 2 of 4 | `atomic-alternating`, `leaf-alternating`, `turn-alternating` |
+| `kernel-guest:sync` | 4 | `leaf-shared`, `turn-shared` |
+| `kernel-guest:sync` | 2 of 4 | `atomic-alternating`, `leaf-alternating`, `turn-alternating` |
 
 The local workload increments a protected word on a one-Hart machine.
 The shared workload starts three actual minor Harts, then measures batches
@@ -229,8 +233,23 @@ cargo -Z panic-abort-tests --config "$config" bench --locked \
     --target "$target" --bench clock
 ```
 
-Use a fresh evidence root. Replace `--bench clock` with `--bench sync-local`,
-`--bench sync-shared`, or `--benches` to select other targets.
+Use a fresh evidence root. Replace `--bench clock` with `--bench sync-local`
+or `--benches` to select dedicated measurement targets.
+
+The shared four-Hart Sync entry retains its ordinary Test contract. To
+select its measurement callback on riscv64, use:
+
+```sh
+cargo -Z panic-abort-tests --config "$config" bench --locked \
+    --manifest-path server/tests/target/Cargo.toml -p kernel-guest \
+    --features bench --target "$target" --test sync
+```
+
+The feature is necessary because Cargo's custom harness does not supply
+a separate compile-time benchmark configuration. Selecting a Test image
+through the bench runner, or the reverse, is a purpose mismatch.
+The pilot names this shared target explicitly; automatic selection of
+all benchmark-capable Test targets is not yet implemented.
 
 The clock and local Sync benchmarks use 1,024 warmup iterations and nine
 batches of 16,384 operations. Each shared Sync series uses 512 warmup
@@ -253,8 +272,8 @@ Only then is `measurement.json` written. Missing or malformed measurements
 fail the benchmark invocation even if the guest completion verdict is pass.
 QEMU data are emulator observations, not physical hardware results; no
 performance threshold is a correctness criterion. The independent Bench
-workflow runs the discovered benchmark targets with Cargo's optimized bench
-profile on riscv64; it has separate triggers, concurrency, job results and
+workflow runs the dedicated benchmark targets and the shared Sync pilot
+with Cargo's optimized bench profile on riscv64; it has separate triggers, concurrency, job results and
 evidence artifacts. It runs automatically only on pull requests changing
 benchmark code or its shared build and execution facilities. Ordinary kernel
 changes and pushes do not automatically run measurements; select a revision

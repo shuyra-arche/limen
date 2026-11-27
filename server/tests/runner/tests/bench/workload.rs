@@ -25,7 +25,7 @@ fn unrelated_workloads_do_not_change_local_identity() {
         fs::create_dir(&root).unwrap();
         root.canonicalize().unwrap()
     };
-    let entry = "server/tests/target/riscv64/benches/clock.rs";
+    let entry = "server/tests/target/tests/sync/main.rs";
     let owner = "server/benches/metal/chrono/clock.rs";
     let unrelated = "server/benches/metal/sync/local.rs";
     for name in [entry, owner, unrelated] {

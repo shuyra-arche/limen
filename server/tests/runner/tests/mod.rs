@@ -1,4 +1,9 @@
 use kernel_verification::{platform, utilities};
+use platform::{Declaration, Platform, Purpose};
+
+fn declaration(platform: Platform) -> Declaration {
+    Declaration::new(platform, Purpose::Test)
+}
 
 #[cfg(unix)]
 #[test]
@@ -43,12 +48,15 @@ fn platform_record_is_bounded_and_rejects_unsupported_combinations() {
         serial: Serial::Default,
         devices: [None; 4],
     };
-    let bytes = original.encode();
-    assert_eq!(Platform::decode(&bytes), Some(original));
-    assert!(Platform::decode(&bytes[..15]).is_none());
+    let bytes = declaration(original).encode();
+    assert_eq!(Declaration::decode(&bytes), Some(declaration(original)));
+    let benchmark = Declaration::new(original, Purpose::Bench);
+    assert_eq!(Declaration::decode(&benchmark.encode()), Some(benchmark));
+    assert_eq!(benchmark.platform, original);
+    assert!(Declaration::decode(&bytes[..15]).is_none());
     for (index, value) in [
         (0, 0),
-        (8, 1),
+        (8, 2),
         (9, 0),
         (10, 0),
         (11, 0),
@@ -56,12 +64,13 @@ fn platform_record_is_bounded_and_rejects_unsupported_combinations() {
         (14, 3),
         (15, 5),
         (16, 3),
-        (17, 1),
+        (17, 0),
+        (18, 1),
         (20, 2),
     ] {
         let mut invalid = bytes;
         invalid[index] = value;
-        assert!(Platform::decode(&invalid).is_none());
+        assert!(Declaration::decode(&invalid).is_none());
     }
 
     let machine = Machine::admit(Architecture::Riscv64, BinaryFormat::Elf, original).unwrap();
@@ -121,7 +130,10 @@ fn platform_device_topology_is_composed_without_test_identity() {
     }
     .device(device(6))
     .device(device(7));
-    assert_eq!(Platform::decode(&original.encode()), Some(original));
+    assert_eq!(
+        Declaration::decode(&declaration(original).encode()),
+        Some(declaration(original))
+    );
     let machine = Machine::admit(Architecture::Riscv64, BinaryFormat::Elf, original).unwrap();
     assert_eq!(machine.board, "virt,aia=none,aclint=off,iommu-sys=on");
     assert_eq!(
@@ -145,9 +157,9 @@ fn platform_device_topology_is_composed_without_test_identity() {
     ] {
         assert!(Machine::admit(Architecture::Riscv64, BinaryFormat::Elf, invalid).is_err());
     }
-    let mut missing = original.encode();
+    let mut missing = declaration(original).encode();
     missing[20..24].fill(0);
-    assert!(Platform::decode(&missing).is_none());
+    assert!(Declaration::decode(&missing).is_none());
 
     let arm = Platform {
         firmware: Firmware::Aavmf,
@@ -198,7 +210,10 @@ fn strict_nx_firmware_is_selected_by_the_guest() {
         serial: Serial::Default,
         devices: [None; 4],
     };
-    assert_eq!(Platform::decode(&arm.encode()), Some(arm));
+    assert_eq!(
+        Declaration::decode(&declaration(arm).encode()),
+        Some(declaration(arm))
+    );
     assert!(Machine::admit(Architecture::Aarch64, BinaryFormat::Pe, arm).is_ok());
     assert!(Machine::admit(Architecture::Riscv64, BinaryFormat::Elf, arm).is_err());
     let x86 = Platform {
@@ -207,7 +222,10 @@ fn strict_nx_firmware_is_selected_by_the_guest() {
         interrupt: Interrupt::Apic,
         ..arm
     };
-    assert_eq!(Platform::decode(&x86.encode()), Some(x86));
+    assert_eq!(
+        Declaration::decode(&declaration(x86).encode()),
+        Some(declaration(x86))
+    );
     let machine = Machine::admit(Architecture::X86_64, BinaryFormat::Pe, x86).unwrap();
     assert_eq!(machine.board, "q35,smm=on");
     assert!(Machine::admit(Architecture::Aarch64, BinaryFormat::Pe, x86).is_err());
