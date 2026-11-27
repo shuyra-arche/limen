@@ -1,7 +1,7 @@
 //! Read and validate a completed artifact independently of comparison.
 use super::{
     measurement::{Series, decode},
-    statistics,
+    selection, statistics,
     workload::Workload,
 };
 use crate::{Result, require};
@@ -49,8 +49,8 @@ impl Artifact {
             "source",
             "runner",
             "context",
+            "build",
             "bench",
-            "shared",
         ] {
             require(
                 outcomes[stage] == "success",
@@ -87,6 +87,7 @@ impl Artifact {
             )?;
         }
 
+        let mut expected = selection::expected(&root.join("selection.json"))?;
         let mut cases = BTreeMap::new();
         for entry in fs::read_dir(root.join("bench"))? {
             let entry = entry?;
@@ -127,6 +128,12 @@ impl Artifact {
             require(platform["purpose"] == "bench", "not a benchmark image")?;
             let image_sha256 = field(&platform, "image_sha256")?.to_owned();
             hash(&image_sha256, 64)?;
+            let name = entry.file_name();
+            let name = name.to_str().ok_or("invalid image evidence name")?;
+            require(
+                expected.remove(name).as_deref() == Some(image_sha256.as_str()),
+                "image evidence does not match selection",
+            )?;
             platform.as_object_mut().unwrap().remove("image_sha256");
             let harts = platform["harts"].as_u64().ok_or("missing Hart count")?;
             require(harts != 0, "invalid Hart count")?;
@@ -170,6 +177,7 @@ impl Artifact {
                 )?;
             }
         }
+        require(expected.is_empty(), "missing selected benchmark evidence")?;
         require(!cases.is_empty(), "no complete benchmark images")?;
         Ok(Self {
             source,

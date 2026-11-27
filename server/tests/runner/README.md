@@ -67,16 +67,21 @@ Cargo's benchmark invocation selects `verify bench --evidence-root <fresh-root>
 benchmark invocation, not a usable timing result. The raw serial transcript
 and the native execution receipt remain available for investigation.
 
-The independent Bench workflow selects `--benches --no-fail-fast` for
-dedicated riscv64 benchmark images and `--features bench --test sync`
-for the shared-entry pilot. Target CI selects ordinary `--tests` only.
-The Runner requires the requested purpose to match the compiled image's
-declaration before preparing a machine. The workflows share environment
-preparation but retain separate run receipts and artifacts.
+The independent Bench workflow uses Cargo's `--tests --benches --no-run
+--message-format=json` to discover candidate executables, then invokes
+`verify bench-set` on the successful artifact stream. Only images declaring
+benchmark purpose are selected. Test-only integration images receive no
+execution verdict; malformed declarations, incompatible dedicated benchmark
+targets and empty selections fail. The exact selected set is recorded in
+`selection.json`, and individual failures do not stop other selected images.
+Target CI selects ordinary `--tests` only. The Runner requires the requested
+purpose to match the compiled declaration before preparing a machine.
+The workflows share environment preparation but retain separate run receipts
+and artifacts.
 
-Benchmark CI runs automatically for changes to benchmark implementation or
-shared execution infrastructure, not ordinary Kernel source changes or
-pushes. Select a revision manually to collect a performance baseline.
+Benchmark CI runs automatically for changes to benchmark implementation,
+candidate guest integration entries, or shared execution infrastructure,
+not ordinary Kernel source changes or pushes. Select a revision manually to collect a performance baseline.
 
 `summary.json` records descriptive statistics derived from the raw samples:
 minimum, median, maximum, median absolute deviation, median normalized time

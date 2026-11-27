@@ -152,7 +152,8 @@ impl Machine {
     }
 }
 
-pub fn read(image: &Path, purpose: Purpose) -> Result<Machine> {
+/// Inspect the actual compiled image, without selecting an execution purpose.
+pub(crate) fn inspect(image: &Path) -> Result<(Machine, Purpose)> {
     let bytes = fs::read(image)?;
     let file = object::File::parse(bytes.as_slice())?;
     require(
@@ -169,17 +170,22 @@ pub fn read(image: &Path, purpose: Purpose) -> Result<Machine> {
             section.size() == declaration::SIZE as u64,
             "invalid platform section size",
         )?;
-        platform =
-            Some(Declaration::decode(section.data()?).ok_or("invalid guest declaration")?);
+        platform = Some(Declaration::decode(section.data()?).ok_or("invalid guest declaration")?);
     }
     let declaration = platform.ok_or("missing guest declaration")?;
+    let machine = Machine::admit(file.architecture(), file.format(), declaration.platform)?;
+    Ok((machine, declaration.purpose))
+}
+
+pub fn read(image: &Path, purpose: Purpose) -> Result<Machine> {
+    let (machine, actual) = inspect(image)?;
     require(
-        declaration.purpose == purpose,
+        actual == purpose,
         format!(
             "image purpose is {}, requested {}",
-            declaration.purpose.name(),
+            actual.name(),
             purpose.name()
         ),
     )?;
-    Machine::admit(file.architecture(), file.format(), declaration.platform)
+    Ok(machine)
 }

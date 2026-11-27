@@ -23,7 +23,8 @@ on:
       - 'server/tests/target/**/Cargo.toml'
       - 'server/tests/target/**/build.rs'
       - 'server/tests/target/**/benches/**'
-      - 'server/tests/target/tests/sync/**'
+      # An integration entry may provide either or both purposes.
+      - 'server/tests/target/**/tests/**'
       - 'server/benches/**'
       - '!**/*.md'
       - '!**/*.mdx'
@@ -87,31 +88,26 @@ jobs:
         shell: bash
         run: bash server/tests/runner/ci/benchmark-context.sh
 
-      - name: Run dedicated benchmark images
+      - name: Build candidate guest images
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo -Z panic-abort-tests bench --locked --no-run --message-format=json \
+            --manifest-path server/tests/target/Cargo.toml \
+            -p kernel-guest -p "$LIMEN_TEST_ARCH-guest" --features "kernel-guest/bench,$LIMEN_TEST_ARCH-guest/bench" \
+            --target "$LIMEN_TEST_TARGET" --tests --benches \
+            > .integration/stages/artifacts.jsonl
+
+      - name: Run selected benchmark images
         id: bench
         shell: bash
         run: |
           set -euo pipefail
-          evidence="$PWD/.integration/bench"
-          config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','bench','--evidence-root','$evidence']"
-          cargo -Z panic-abort-tests --config "$config" bench --locked \
-            --manifest-path server/tests/target/Cargo.toml -p riscv64-guest \
-            --target "$LIMEN_TEST_TARGET" --benches --no-fail-fast \
+          "$LIMEN_TEST_RUNNER" bench-set \
+            --artifacts .integration/stages/artifacts.jsonl \
+            --evidence-root .integration \
             2>&1 | tee .integration/stages/bench.log
-
-      # The shared-entry pilot uses Cargo's named integration target selection.
-      - name: Run shared Sync measurement
-        id: shared
-        if: ${{ !cancelled() && steps.context.outcome == 'success' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          evidence="$PWD/.integration/bench"
-          config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','bench','--evidence-root','$evidence']"
-          cargo -Z panic-abort-tests --config "$config" bench --locked \
-            --manifest-path server/tests/target/Cargo.toml -p kernel-guest \
-            --features bench --target "$LIMEN_TEST_TARGET" --test sync \
-            2>&1 | tee .integration/stages/shared.log
       - name: Record stage outcomes
         if: ${{ !cancelled() }}
         shell: bash
@@ -122,13 +118,13 @@ jobs:
           SOURCE: ${{ steps.source.outcome }}
           RUNNER: ${{ steps.runner.outcome }}
           CONTEXT: ${{ steps.context.outcome }}
+          BUILD: ${{ steps.build.outcome }}
           BENCH: ${{ steps.bench.outcome }}
-          SHARED: ${{ steps.shared.outcome }}
         run: |
           set -euo pipefail
           mkdir -p .integration/stages
-          printf '{"base_tools":"%s","tools":"%s","toolchain":"%s","source":"%s","runner":"%s","context":"%s","bench":"%s","shared":"%s"}\n' \
-            "$BASE_TOOLS" "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$CONTEXT" "$BENCH" "$SHARED" \
+          printf '{"base_tools":"%s","tools":"%s","toolchain":"%s","source":"%s","runner":"%s","context":"%s","build":"%s","bench":"%s"}\n' \
+            "$BASE_TOOLS" "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$CONTEXT" "$BUILD" "$BENCH" \
             > .integration/stages/outcomes.json
       - name: Preserve benchmark evidence
         if: always()

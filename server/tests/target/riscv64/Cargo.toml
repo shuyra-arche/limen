@@ -5,6 +5,9 @@ edition = "2024"
 publish = false
 autobins = false
 
+[features]
+bench = []
+
 [dependencies]
 guest.workspace = true
 kernel.workspace = true

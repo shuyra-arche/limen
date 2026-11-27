@@ -75,7 +75,13 @@ fn preparation_error_records_inconclusive_without_a_process_receipt() {
     fs::write(&image, b"not a guest executable").unwrap();
     let evidence = root.join("evidence");
     assert!(
-        super::run(&image, crate::platform::Purpose::Test, false, Some(&evidence)).is_err()
+        super::run(
+            &image,
+            crate::platform::Purpose::Test,
+            false,
+            Some(&evidence)
+        )
+        .is_err()
     );
     let directory = evidence.join("invalid-image");
     let result: serde_json::Value =

@@ -82,12 +82,7 @@ fn transport(command: &mut Command, machine: &Machine, directory: &Path, observe
 }
 
 /// Construct and record the selected machine without starting it.
-pub fn prepare(
-    image: &Path,
-    purpose: Purpose,
-    directory: &Path,
-    observe: bool,
-) -> Result<Command> {
+pub fn prepare(image: &Path, purpose: Purpose, directory: &Path, observe: bool) -> Result<Command> {
     let machine = platform::read(image, purpose)?;
     evidence::json(
         &directory.join("platform.json"),

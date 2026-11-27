@@ -248,8 +248,29 @@ cargo -Z panic-abort-tests --config "$config" bench --locked \
 The feature is necessary because Cargo's custom harness does not supply
 a separate compile-time benchmark configuration. Selecting a Test image
 through the bench runner, or the reverse, is a purpose mismatch.
-The pilot names this shared target explicitly; automatic selection of
-all benchmark-capable Test targets is not yet implemented.
+For the complete selected architecture, Cargo discovers and compiles both
+integration and dedicated benchmark targets. The runner selects only images
+whose compiled declaration specifies the benchmark purpose:
+
+```sh
+mkdir -p /tmp/limen-set
+cargo -Z panic-abort-tests bench --locked --no-run --message-format=json \
+    --manifest-path server/tests/target/Cargo.toml \
+    -p kernel-guest -p riscv64-guest \
+    --features kernel-guest/bench,riscv64-guest/bench \
+    --target "$target" --tests --benches > /tmp/limen-set/artifacts.jsonl
+"$runner" bench-set --artifacts /tmp/limen-set/artifacts.jsonl \
+    --evidence-root /tmp/limen-set
+```
+
+The runner records the exact candidate set and image digests in
+`selection.json` before starting any machine. Test-purpose integration
+images are not selected, and produce no verdict. A dedicated benchmark
+target declaring test purpose, an incomplete Cargo build, or an empty
+benchmark selection is an error. All selected benchmarks are attempted
+even if an earlier measurement fails. This discovery costs compilation of
+the candidate Test images, but requires neither a target-name list nor
+an additional source declaration.
 
 The clock and local Sync benchmarks use 1,024 warmup iterations and nine
 batches of 16,384 operations. Each shared Sync series uses 512 warmup
@@ -272,11 +293,13 @@ Only then is `measurement.json` written. Missing or malformed measurements
 fail the benchmark invocation even if the guest completion verdict is pass.
 QEMU data are emulator observations, not physical hardware results; no
 performance threshold is a correctness criterion. The independent Bench
-workflow runs the dedicated benchmark targets and the shared Sync pilot
-with Cargo's optimized bench profile on riscv64; it has separate triggers, concurrency, job results and
-evidence artifacts. It runs automatically only on pull requests changing
-benchmark code or its shared build and execution facilities. Ordinary kernel
-changes and pushes do not automatically run measurements; select a revision
+workflow builds both kinds of Cargo targets and executes the discovered
+benchmark-purpose images with Cargo's optimized bench profile on riscv64.
+It has separate triggers, concurrency, job results and evidence artifacts.
+It runs automatically on pull requests changing benchmark code, guest
+integration entries (which can provide either purpose), or shared build
+and execution facilities. Ordinary kernel changes and pushes do not
+automatically run measurements; select a revision
 with workflow dispatch once the workflow is on the default branch.
 Target CI runs correctness tests only. Both workflows
 share the pinned QEMU and Rust preparation scripts in `runner/ci/`, but
@@ -302,7 +325,8 @@ Extract two successful Bench artifacts and run:
 "$runner" compare /path/to/baseline /path/to/candidate
 ```
 
-Comparison first requires complete artifact evidence and compatible shared
+Comparison first requires complete artifact evidence for the exact selected
+image set, including matching image digests, and compatible shared
 execution context. It compares only matching series with equal local
 workload inputs, firmware, platform, sample count and other series
 definitions. Added, removed or changed workloads appear under

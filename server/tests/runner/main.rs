@@ -26,6 +26,12 @@ enum Commands {
         #[arg(long)]
         bench: bool,
     },
+    BenchSet {
+        #[arg(long)]
+        artifacts: PathBuf,
+        #[arg(long)]
+        evidence_root: PathBuf,
+    },
     Compare {
         baseline: PathBuf,
         candidate: PathBuf,
@@ -51,6 +57,10 @@ fn main() {
             bench: true,
         } => bench::run(&image, &evidence_root),
         Commands::Bench { .. } => Err("expected Cargo benchmark invocation (--bench)".into()),
+        Commands::BenchSet {
+            artifacts,
+            evidence_root,
+        } => bench::run_set(&artifacts, &evidence_root),
         Commands::Compare {
             baseline,
             candidate,

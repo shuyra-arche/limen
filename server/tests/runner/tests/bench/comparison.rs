@@ -15,8 +15,8 @@ fn artifact(root: &Path, source: char, sample: u64) {
         "source",
         "runner",
         "context",
+        "build",
         "bench",
-        "shared",
     ] {
         outcomes.insert(stage.into(), json!("success"));
     }
@@ -25,6 +25,16 @@ fn artifact(root: &Path, source: char, sample: u64) {
     fs::write(root.join("rustc.txt"), "rustc fixture\n").unwrap();
     fs::write(root.join("cargo.txt"), "cargo fixture\n").unwrap();
     let digest = "a".repeat(64);
+    evidence::json(
+        &root.join("selection.json"),
+        &json!({"schema": 1, "candidates": [{
+            "package": "fixture", "target": "fixture", "kind": "bench",
+            "manifest": "/compiled/Cargo.toml", "image": "/compiled/image",
+            "image_sha256": source.to_string().repeat(64),
+            "architecture": "riscv64", "purpose": "bench",
+        }]}),
+    )
+    .unwrap();
     evidence::json(
         &root.join("benchmark-context.json"),
         &json!({
@@ -151,5 +161,34 @@ fn unrelated_series_remains_comparable_when_another_workload_changes() {
     assert_eq!(result["series"].as_array().unwrap().len(), 1);
     assert_eq!(result["series"][0]["name"], "unchanged");
     assert_eq!(result["uncompared"][0]["name"], "fixture");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn artifact_requires_every_selected_image_and_no_unselected_evidence() {
+    let root = std::env::temp_dir().join(format!("kernel-selection-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    artifact(&root, 'a', 100);
+    assert!(Artifact::read(&root).is_ok());
+
+    let path = root.join("selection.json");
+    let mut selection: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    selection["candidates"].as_array_mut().unwrap().push(json!({
+        "package": "fixture", "target": "missing", "kind": "test",
+        "manifest": "/compiled/Cargo.toml", "image": "/compiled/missing",
+        "image_sha256": "b".repeat(64),
+        "architecture": "riscv64", "purpose": "bench",
+    }));
+    evidence::json(&path, &selection).unwrap();
+    assert!(Artifact::read(&root).is_err());
+
+    selection["candidates"][1]["purpose"] = json!("test");
+    evidence::json(&path, &selection).unwrap();
+    assert!(Artifact::read(&root).is_ok());
+
+    selection["candidates"][0]["image_sha256"] = json!("c".repeat(64));
+    evidence::json(&path, &selection).unwrap();
+    assert!(Artifact::read(&root).is_err());
     fs::remove_dir_all(root).unwrap();
 }

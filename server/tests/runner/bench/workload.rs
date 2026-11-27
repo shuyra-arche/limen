@@ -3,7 +3,7 @@ use crate::{Result, evidence, require};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env, fs,
+    fs,
     path::{Component, Path, PathBuf},
 };
 
@@ -115,14 +115,13 @@ impl Workload {
     }
 }
 
-pub(super) fn capture(image: &Path) -> Result<Workload> {
+pub(super) fn capture(image: &Path, working: &Path) -> Result<Workload> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .canonicalize()?;
-    let working = env::current_dir()?;
     let dep_info = image.canonicalize()?.with_extension("d");
     let contents = fs::read_to_string(&dep_info)?;
-    Workload::collect(&root, &working, &contents)
+    Workload::collect(&root, working, &contents)
 }
 
 #[cfg(test)]
