@@ -3,6 +3,8 @@
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 mod dmar;
+mod ivrs;
+pub use ivrs::Ivhd;
 mod madt;
 pub use dmar::{Dmar, RemappingUnit};
 pub use madt::{IoApic, Madt, Polarity, Processor, Record, SourceOverride, Trigger};

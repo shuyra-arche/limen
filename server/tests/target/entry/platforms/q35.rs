@@ -26,6 +26,9 @@ mod io;
 #[path = "serial_irq.rs"]
 mod serial_irq;
 
+#[path = "amdvi.rs"]
+mod amdvi;
+
 #[path = "edu.rs"]
 mod edu;
 
@@ -161,21 +164,33 @@ pub(super) fn check_discovery(boot: &boot::Boot<'_>, target: usize) {
     assert!(madt.enabled_local_apic(u8::try_from(target).unwrap()));
     assert!(madt.io_apics().next().is_some());
     assert!(madt.source_overrides().next().is_some());
-    let dmar = acpi.dmar().unwrap().expect("q35 intel-iommu DMAR");
-    let mut units = dmar.units();
-    let unit = units.next().expect("q35 DRHD");
-    assert!(units.next().is_none() && unit.segment() == 0 && (unit.includes_all_pci() || unit.lists_root_endpoint(0, 6, 0)));
-    // This board fixture installs the chipset VT-d aperture at this exact
-    // identity-mapped UC page. Check firmware against the board before MMIO.
-    let address = PhysicalAddress::new(0xfed9_0000);
-    assert_eq!(
-        unit.registers(),
-        address.range(ByteLength::new(4096)).unwrap()
-    );
-    let mut registers =
-        unsafe { DeviceWindow::admit(unit.registers(), InternalAddress::new(address.get())) }
-            .unwrap();
-    vtd::check(unit, &mut registers);
+    if cfg!(feature = "apic-failure") {
+        amdvi::check(
+            acpi.ivhd()
+                .expect("valid IVRS")
+                .expect("AMD remapping hardware"),
+        );
+    } else {
+        let dmar = acpi.dmar().unwrap().expect("q35 intel-iommu DMAR");
+        let mut units = dmar.units();
+        let unit = units.next().expect("q35 DRHD");
+        assert!(
+            units.next().is_none()
+                && unit.segment() == 0
+                && (unit.includes_all_pci() || unit.lists_root_endpoint(0, 6, 0))
+        );
+        // This board fixture installs the chipset VT-d aperture at this exact
+        // identity-mapped UC page. Check firmware against the board before MMIO.
+        let address = PhysicalAddress::new(0xfed9_0000);
+        assert_eq!(
+            unit.registers(),
+            address.range(ByteLength::new(4096)).unwrap()
+        );
+        let mut registers =
+            unsafe { DeviceWindow::admit(unit.registers(), InternalAddress::new(address.get())) }
+                .unwrap();
+        vtd::check(unit, &mut registers);
+    }
     let early = boot.exclusions();
     for physical in core::iter::once(acpi.rsdp_range())
         .chain(core::iter::once(acpi.xsdt().physical()))

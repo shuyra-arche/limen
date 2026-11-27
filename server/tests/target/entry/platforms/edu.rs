@@ -8,17 +8,17 @@ pub(super) const REQUESTER: u16 = 6 << 3;
 const EDU_BUFFER: u32 = 0x40000;
 const DMA_MASK: u32 = 0x0fff_ffff;
 
-fn select(offset: u16) {
+fn select(device: u16, offset: u16) {
     unsafe {
         super::io::write32(
             0xcf8,
-            0x8000_0000 | (u32::from(REQUESTER) << 8) | u32::from(offset),
+            0x8000_0000 | (u32::from(device) << 8) | u32::from(offset),
         )
     };
 }
 
-fn config(offset: u16) -> u32 {
-    select(offset);
+pub(super) fn config(device: u16, offset: u16) -> u32 {
+    select(device, offset);
     let value;
     unsafe { asm!("in eax, dx", in("dx") 0xcfcu16, out("eax") value, options(nostack)) };
     value
@@ -28,15 +28,15 @@ pub(super) struct Endpoint(DeviceWindow);
 
 impl Endpoint {
     pub(super) fn open() -> Self {
-        assert_eq!(config(0), 0x11e8_1234);
-        let bar = config(0x10);
+        assert_eq!(config(REQUESTER, 0), 0x11e8_1234);
+        let bar = config(REQUESTER, 0x10);
         assert_eq!(bar & 15, 0, "EDU requires a non-prefetchable 32-bit BAR");
         assert!(bar >= 128 * 1024 * 1024 && bar.is_multiple_of(1024 * 1024));
-        let command = config(4) as u16 | 6;
+        let command = config(REQUESTER, 4) as u16 | 6;
         // Address selection is still for the command register. Only change the low
         // half, since writing the PCI status half could acknowledge unrelated bits.
         unsafe { asm!("out dx, ax", in("dx") 0xcfcu16, in("ax") command, options(nostack)) };
-        assert_eq!(config(4) & 6, 6);
+        assert_eq!(config(REQUESTER, 4) & 6, 6);
         let bar = u64::from(bar);
         let range = PhysicalAddress::new(bar)
             .range(ByteLength::new(0x10_0000))

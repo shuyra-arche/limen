@@ -44,11 +44,14 @@ impl Controls {
         const WP_PG: usize = (1 << 16) | (1 << 31);
         const PAE: usize = 1 << 5;
         const PGE: usize = 1 << 7;
+        const PKE: usize = 1 << 22;
+        const CET: usize = 1 << 23;
+        const PKS: usize = 1 << 24;
         const LMA_NXE: u64 = (1 << 10) | (1 << 11);
         (self.four_level_untagged()
             && self.cr0 & WP_PG == WP_PG
             && self.efer & LMA_NXE == LMA_NXE
-            && self.cr4 & (PAE | PGE) == PAE
+            && self.cr4 & (PAE | PGE | PKE | CET | PKS) == PAE
             && (32..=52).contains(&physical_bits)
             && (self.cr3 as u64) < (1u64 << physical_bits))
             .then_some(Format {

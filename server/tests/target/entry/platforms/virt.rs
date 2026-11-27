@@ -26,6 +26,8 @@ mod devicetree;
 mod gic;
 #[path = "pl011.rs"]
 mod pl011;
+#[path = "stream.rs"]
+mod stream;
 static FIRMWARE_VECTORS: AtomicUsize = AtomicUsize::new(0);
 static UART: AtomicUsize = AtomicUsize::new(0);
 static USE_HVC: AtomicBool = AtomicBool::new(false);
@@ -194,7 +196,7 @@ fn inspect_smmu(tree: &DeviceTree<'_>) {
     }
     let range = range.expect("virt SMMUv3");
     // AAVMF retains this device mapping after ExitBootServices. The guest
-    // uses firmware's disk only before exit and submits no later PCI work.
+    // owns the test endpoint and keeps the firmware disk quiescent after exit.
     let mut registers =
         unsafe { DeviceWindow::admit(range, InternalAddress::new(range.start().get())).unwrap() };
     let profile = unsafe { smmu::probe(&mut registers) }.unwrap();
@@ -202,6 +204,8 @@ fn inspect_smmu(tree: &DeviceTree<'_>) {
     fn order() {
         unsafe { asm!("dsb sy", options(nostack, preserves_flags)) };
     }
+    let mut endpoint = stream::Endpoint::open(tree, range);
+    endpoint.prime();
     let mut change = unsafe { smmu::abort_bypass(&mut registers, order) }.unwrap();
     fn retry<T>(mut f: impl FnMut() -> Result<T, smmu::Error>) -> T {
         for _ in 0..100_000 {
@@ -214,6 +218,8 @@ fn inspect_smmu(tree: &DeviceTree<'_>) {
         panic!("SMMUv3 acknowledgement timeout");
     }
     retry(|| change.observe());
+    endpoint.verify_abort();
+    endpoint.install(&mut registers, order);
     use limen_treaty::model::PhysicalAddress;
     use smmu::queue::{Invalidate, Queue, Ring};
     static mut COMMANDS: Ring = Ring::EMPTY;
@@ -231,8 +237,14 @@ fn inspect_smmu(tree: &DeviceTree<'_>) {
         assert_eq!(retry(|| queue.observe()), operation);
         assert_eq!(queue.observe(), Err(smmu::Error::Active));
     }
+    endpoint.verify_translation();
+    endpoint.downgrade();
+    let invalidate = Invalidate::StageTwo(1);
+    retry(|| queue.submit(invalidate));
+    assert_eq!(retry(|| queue.observe()), invalidate);
+    endpoint.verify_downgrade();
     retry(|| queue.shut());
-    boot::write("\nPASS smmuv3 stage2=1 granule=4096 abort=1 sync=4\n");
+    boot::write("\nPASS smmuv3 stage2=1 granule=4096 abort=1 sync=5 dma=1 downgrade=1\n");
 }
 
 fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) -> Psci {

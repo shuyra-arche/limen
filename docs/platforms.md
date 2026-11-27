@@ -120,10 +120,25 @@ PSCI `CPU_ON` with a launch record as context, restores the major's EL1
 translation controls and installs its stack and vectors. QEMU verifies the
 HVC conduit. [AArch64 entry](../server/src/metal/platform/boot/aarch64/) · [PSCI](../server/src/metal/platform/firmware/psci.rs)
 
-The verified scope on x86 and Arm covers major and minor boot, and on Arm
-also the DTB and UEFI memory cross-check. CPU hotplug,
-general topology admission, interrupt routing and Unit scheduling on these
-targets require separate implementation and verification.
+## Interrupt and translation profiles
+
+| QEMU platform | Internal interrupt | External interrupt | Internal MMU | External MMU |
+| --- | --- | --- | --- | --- |
+| RV64 virt | Supervisor timer through SBI TIME or Sstc | PLIC claim/complete and APLIC direct delivery | Sv39, Sv48, Sv57 | RISC-V IOMMU with a one-level device directory and Sv39 first-stage translation |
+| x86_64 q35 | xAPIC in-service vector and EOI | I/O APIC delivery from a UART | Four-level IA-32e paging with 4 KiB leaves and qualified large pages | Intel VT-d legacy translation or AMD-Vi with an IVHD-selected requester |
+| AArch64 virt | GICv3 CPU interface acknowledge, priority drop and deactivate | GICv3 Distributor SPI from PL011 | EL1 stage 1, 48-bit VA and 4 KiB granule | SMMUv3 stage 2, linear stream table and 4 KiB granule |
+
+The x86 and Arm guests switch the active CPU root, exercise an alias and
+restore the firmware root. Their external MMU tests issue writes from a PCI
+EDU function at a nonidentity IOVA. VT-d and SMMUv3 revoke write permission
+and repeat that write after invalidation. AMD-Vi removes the device binding
+and repeats it after the matching completion store. The RV64 IOMMU guest
+uses the controller's debug translation interface and checks completion
+across command queue wrap. Endpoint DMA on RV64 remains unverified.
+
+These tests exercise individual controller and translation backends.
+Delivery to a waiting Unit, system-wide retirement of mappings and physical
+boards require separate integration and verification.
 
 ## Early physical exclusions
 

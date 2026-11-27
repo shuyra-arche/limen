@@ -18,7 +18,7 @@ fn controls() -> Controls {
 #[test]
 fn rejects_uncovered_control_modes_and_width() {
     let active = controls();
-    for bit in [7, 12, 17] {
+    for bit in [7, 12, 17, 22, 23, 24] {
         assert!(
             Controls {
                 cr4: active.cr4 | 1 << bit,

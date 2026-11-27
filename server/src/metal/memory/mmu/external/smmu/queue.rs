@@ -40,13 +40,14 @@ pub struct Queue<'a> {
     window: &'a mut DeviceWindow,
     ring: &'static mut Ring,
     order: fn(),
+    retained_control: u32,
     sid_bits: u32,
     producer: u32,
     state: State,
 }
 
 impl<'a> Queue<'a> {
-    /// Configure a fresh command queue only on a fully disabled SMMU with
+    /// Configure a fresh command queue on a stopped queue with
     /// GBPA.ABORT acknowledged and no previous producer to resume.
     ///
     /// # Safety
@@ -70,7 +71,10 @@ impl<'a> Queue<'a> {
         if idr1 & (1 << 29) != 0 || ((idr1 >> 21) & 31) < LOG_ENTRIES {
             return Err(Error::Rejected);
         }
-        if unsafe { read(window, CR0)? } != 0 || unsafe { read(window, CR0_ACK)? } != 0 {
+        let retained_control = unsafe { read(window, CR0)? };
+        if retained_control & !super::SMMU_ENABLE != 0
+            || unsafe { read(window, CR0_ACK)? } != retained_control
+        {
             return Err(Error::Active);
         }
         if unsafe { read(window, GBPA)? } & (ABORT | UPDATE) != ABORT {
@@ -91,11 +95,13 @@ impl<'a> Queue<'a> {
         unsafe { window.write_u32(PRODUCER, 0) }.map_err(|_| Error::Window)?;
         unsafe { window.write_u32(CONSUMER, 0) }.map_err(|_| Error::Window)?;
         order();
-        unsafe { window.write_u32(CR0, QUEUE_ENABLE.to_le()) }.map_err(|_| Error::Window)?;
+        unsafe { window.write_u32(CR0, (retained_control | QUEUE_ENABLE).to_le()) }
+            .map_err(|_| Error::Window)?;
         Ok(Self {
             window,
             ring,
             order,
+            retained_control,
             sid_bits: idr1 & 63,
             producer: 0,
             state: State::Starting,
@@ -164,13 +170,14 @@ impl<'a> Queue<'a> {
         if matches!(self.state, State::Starting | State::Ready) {
             self.healthy()?;
             self.state = State::Shutting;
-            unsafe { self.window.write_u32(CR0, 0) }.map_err(|_| Error::Window)?;
+            unsafe { self.window.write_u32(CR0, self.retained_control.to_le()) }
+                .map_err(|_| Error::Window)?;
         }
         if self.state != State::Shutting {
             return Err(Error::Active);
         }
         (self.order)();
-        if unsafe { read(self.window, CR0_ACK)? } != 0 {
+        if unsafe { read(self.window, CR0_ACK)? } != self.retained_control {
             return Err(Error::Busy);
         }
         self.state = State::Shut;
