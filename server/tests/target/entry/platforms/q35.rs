@@ -2,7 +2,7 @@ use core::arch::asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use kernel::entry::boot;
 use kernel::metal::{
-    interrupt::internal::apic::{self, LocalApic},
+    interrupt::internal::apic::{self, LocalApic, Probe},
     memory::mmu::internal::device::DeviceWindow,
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress};
@@ -65,11 +65,12 @@ fn startup(boot: &boot::Boot<'_>) -> boot::Startup {
     // page with UC attributes. This fixture owns the actual original ICR.
     let window =
         unsafe { DeviceWindow::admit(physical, InternalAddress::new(address.get())) }.unwrap();
-    let (window, reason) = unsafe { LocalApic::admit(usize::MAX, madt, window) }
+    let probe = Probe::native();
+    let (window, reason) = unsafe { LocalApic::admit(usize::MAX, madt, window, probe) }
         .err()
         .expect("wrong Hart must retain the window");
     assert_eq!(reason, apic::Failure::Scope);
-    let controller = unsafe { LocalApic::admit(boot.hart(), madt, window) }
+    let controller = unsafe { LocalApic::admit(boot.hart(), madt, window, probe) }
         .ok()
         .expect("actual local APIC");
     assert_eq!(controller.state(), apic::State::Idle);

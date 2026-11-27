@@ -11,7 +11,7 @@ const XS_MASK: usize = FIELD << XS_SHIFT;
 pub(in crate::metal) const WRITABLE_EXTENSIONS: usize = (FIELD << FS_SHIFT) | (FIELD << VS_SHIFT);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Extension {
+pub enum Extension {
     Off,
     Initial,
     Clean,
@@ -29,35 +29,39 @@ impl Extension {
     }
 }
 
-/// One actual sstatus observation. Not an execution admission or saved context.
+/// Interprets the SIE, FS, VS and XS fields of a supplied sstatus value.
+/// Neither the value's provenance nor any live Hart authority is established.
 #[derive(Clone, Copy)]
-pub(in crate::metal) struct Status(usize);
+pub struct Status(usize);
 
 impl Status {
-    pub(in crate::metal) const fn from_bits(bits: usize) -> Self {
+    pub const fn from_bits(bits: usize) -> Self {
         Self(bits)
     }
 
-    pub(in crate::metal) const fn masked(self) -> bool {
+    pub const fn masked(self) -> bool {
         self.0 & SIE == 0
     }
 
-    fn floating(self) -> Extension {
+    /// The supplied value's floating-point state, not an ISA capability.
+    pub fn floating(self) -> Extension {
         Extension::from_bits(self.0 >> FS_SHIFT)
     }
 
-    fn vector(self) -> Extension {
+    /// The supplied value's vector state, not an ISA capability.
+    pub fn vector(self) -> Extension {
         Extension::from_bits(self.0 >> VS_SHIFT)
     }
 
-    fn additional_off(self) -> bool {
+    /// Whether the read-only summary reports all additional state Off.
+    pub fn additional_off(self) -> bool {
         self.0 & XS_MASK == 0
     }
 
-    pub(in crate::metal) fn extensions_off(self) -> bool {
-        self.floating() == Extension::Off
-            && self.vector() == Extension::Off
-            && self.additional_off()
+    pub fn extensions_off(self) -> bool {
+        // All writable extension fields must be Off, and the independent
+        // read-only summary must also be Off. No write is authorized here.
+        self.0 & WRITABLE_EXTENSIONS == 0 && self.additional_off()
     }
 }
 

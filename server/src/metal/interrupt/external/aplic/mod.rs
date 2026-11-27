@@ -10,13 +10,9 @@ const SOURCE_LIMIT: u32 = 1023;
 const IDC_BASE: usize = 0x4000;
 const IDC_BYTES: usize = 32;
 
-#[cfg(any(test, all(limen_target, target_arch = "riscv64")))]
-mod encoding;
-
-#[cfg(all(limen_target, target_arch = "riscv64"))]
 mod direct;
-#[cfg(all(limen_target, target_arch = "riscv64"))]
-pub use direct::{Claim, Direct, Effect, Failure, Source, State};
+mod encoding;
+pub use direct::{Barrier, Claim, Direct, Effect, Failure, Source, State};
 
 /// The checked physical domain and exact direct-delivery target, not authority.
 #[derive(Clone, Copy, Debug)]

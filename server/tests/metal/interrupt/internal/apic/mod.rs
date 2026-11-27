@@ -29,3 +29,35 @@ fn startup_command_and_observation_are_not_the_same_encoding() {
     assert!(idle(0x4500));
     assert!(!idle(0x5500));
 }
+
+#[test]
+fn native_observation_source_is_read_again_for_each_scope_check() {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static READS: AtomicUsize = AtomicUsize::new(0);
+    fn observe() -> Option<Observation> {
+        match READS.fetch_add(1, Ordering::Relaxed) {
+            0 => Some(Observation {
+                bits: 0xfee0_0900,
+                hart: 7,
+            }),
+            1 => Some(Observation {
+                bits: 0xfee0_0900,
+                hart: 8,
+            }),
+            2 => Some(Observation {
+                bits: 0xfee0_0d00,
+                hart: 7,
+            }),
+            _ => None,
+        }
+    }
+
+    // Only native observation data is controlled; no device access is made.
+    let probe = Probe { read: observe };
+    assert!(probe.base_for(7).is_some());
+    assert!(probe.base_for(7).is_none());
+    assert!(probe.base_for(7).is_none());
+    assert!(probe.base_for(7).is_none());
+    assert_eq!(READS.load(Ordering::Relaxed), 4);
+}

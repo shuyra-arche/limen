@@ -69,7 +69,7 @@ pub(crate) unsafe fn wake_minor(
     let page = PhysicalAddress::new(trampoline.addr().get() as u64);
     // Reject conflicting or uncertain old ICR effects before rewriting
     // the original trampoline.
-    controller.preflight(hart, page).map_err(failure)?;
+    let prepared = controller.prepare(hart, page).map_err(failure)?;
     let mut gdt = Descriptor { limit: 0, base: 0 };
     let (cr0, cr3, cr4): (usize, usize, usize);
     let cs: u16;
@@ -106,7 +106,7 @@ pub(crate) unsafe fn wake_minor(
     slot.publish();
     // The original caller keeps the trampoline and qualified APIC alive.
     // Identity mapping of the trampoline is this boot profile's premise.
-    unsafe { controller.start(hart, page, *delay) }.map_err(failure)
+    unsafe { prepared.start(*delay) }.map_err(failure)
 }
 
 // Position-independent reset code: DS addresses the SIPI page. The two
