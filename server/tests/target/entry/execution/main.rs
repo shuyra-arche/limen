@@ -145,132 +145,139 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     assert_eq!(execution.enter(), Err(Error::Unsupported));
     execution.attach().expect("attach actual boot Hart");
     assert_eq!(execution.attach(), Err(Error::Busy));
-    let a = unsafe { execution.create(first) }.expect("first unit");
-    let dormant = unsafe { execution.create(abandoned) }.expect("dormant unit");
-    assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
-    assert_eq!(execution.enter(), Ok(None));
+    assert_eq!(execution.enter(), Err(Error::Protection));
+    let mut schedule = || {
+        let mark = core::hint::black_box(0u8);
+        let address = core::hint::black_box(&mark) as *const u8 as usize;
+        assert!(!kernel::entry::boot::stack_range().contains(&address));
+        let a = unsafe { execution.create(first) }.expect("first unit");
+        let dormant = unsafe { execution.create(abandoned) }.expect("dormant unit");
+        assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
+        assert_eq!(execution.enter(), Ok(None));
 
-    execution
-        .stop_dormant(dormant)
-        .expect("stop before admission");
-    assert_eq!(execution.lifecycle(dormant), Ok(Lifecycle::Ending));
-    assert_eq!(execution.stop_dormant(dormant), Ok(()));
-    assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
-    assert_eq!(execution.reap(dormant), Err(Error::UnitNotEnded));
-    assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
-    assert_eq!(execution.enter(), Ok(None));
-    execution
-        .finish_end(dormant)
-        .expect("finish without admission");
-    assert_eq!(
-        execution.lifecycle(dormant),
-        Ok(Lifecycle::Ended(End::Cancelled))
-    );
-    // The original result remains live, but its stack is already reusable.
-    let b = unsafe { execution.create(second) }.expect("reuse stack before Reap");
-    assert_eq!(
-        execution.lifecycle(dormant),
-        Ok(Lifecycle::Ended(End::Cancelled))
-    );
-    assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
-    assert_ne!(dormant, b);
-    assert_eq!(execution.stop_dormant(dormant), Err(Error::Gone));
-    assert_eq!(execution.submit(dormant), Err(Error::Gone));
-    let a_admission = execution.submit(a).expect("submit first");
-    let b_admission = execution.submit(b).expect("submit second");
-    assert_ne!(a_admission, b_admission);
-    assert_eq!(execution.submit(a), Err(Error::Busy));
-    assert_eq!(execution.stop_dormant(a), Err(Error::Busy));
-
-    // The firmware handoff left every interrupt source masked. Change only
-    // SIE to make the trusted entry reject this attempt before Occupy.
-    unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-    let rejected = execution.enter();
-    unsafe { asm!("csrci sstatus, 2", options(nostack)) };
-    assert_eq!(rejected, Err(Error::Unsupported));
-    assert_eq!(execution.pending_leave(), Ok(None));
-
-    // Change only the actual FS field: the integer-only kernel target
-    // executes no FP instructions, so no extended state is consumed.
-    let mut observed: usize;
-    unsafe {
-        asm!(
-            "csrs sstatus, {initial}",
-            "csrr {observed}, sstatus",
-            initial = in(reg) 1usize << 13,
-            observed = out(reg) observed,
-            options(nostack),
+        execution
+            .stop_dormant(dormant)
+            .expect("stop before admission");
+        assert_eq!(execution.lifecycle(dormant), Ok(Lifecycle::Ending));
+        assert_eq!(execution.stop_dormant(dormant), Ok(()));
+        assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
+        assert_eq!(execution.reap(dormant), Err(Error::UnitNotEnded));
+        assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
+        assert_eq!(execution.enter(), Ok(None));
+        execution
+            .finish_end(dormant)
+            .expect("finish without admission");
+        assert_eq!(
+            execution.lifecycle(dormant),
+            Ok(Lifecycle::Ended(End::Cancelled))
         );
-    }
-    let rejected = execution.enter();
-    unsafe { asm!("csrc sstatus, {}", in(reg) 3usize << 13, options(nostack)) };
-    assert_ne!(observed & (3 << 13), 0, "QEMU exposes the actual FS field");
-    assert_eq!(rejected, Err(Error::Unsupported));
-    assert_eq!(execution.pending_leave(), Ok(None));
-
-    // Global SIE is still off. A single locally enabled source is a
-    // different admission failure and must not be mistaken for global SIE.
-    unsafe {
-        asm!(
-            "csrs sie, {timer}",
-            "csrr {observed}, sie",
-            timer = in(reg) 1usize << 5,
-            observed = out(reg) observed,
-            options(nostack),
+        // The original result remains live, but its stack is already reusable.
+        let b = unsafe { execution.create(second) }.expect("reuse stack before Reap");
+        assert_eq!(
+            execution.lifecycle(dormant),
+            Ok(Lifecycle::Ended(End::Cancelled))
         );
-    }
-    let rejected = execution.enter();
-    unsafe { asm!("csrc sie, {}", in(reg) 1usize << 5, options(nostack)) };
-    assert_ne!(observed & (1 << 5), 0);
-    assert_eq!(rejected, Err(Error::Unsupported));
-    assert_eq!(execution.pending_leave(), Ok(None));
-    write("PASS native-control fs=1 source-mask=1 restored=1\n");
+        assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
+        assert_ne!(dormant, b);
+        assert_eq!(execution.stop_dormant(dormant), Err(Error::Gone));
+        assert_eq!(execution.submit(dormant), Err(Error::Gone));
+        let a_admission = execution.submit(a).expect("submit first");
+        let b_admission = execution.submit(b).expect("submit second");
+        assert_ne!(a_admission, b_admission);
+        assert_eq!(execution.submit(a), Err(Error::Busy));
+        assert_eq!(execution.stop_dormant(a), Err(Error::Busy));
 
-    let initial = dispatch(a);
-    assert_eq!(initial.admission(), a_admission);
-    assert_eq!(execution.lifecycle(a), Ok(Lifecycle::Live));
-    execution.vacate(initial).expect("return to ready");
+        // The firmware handoff left every interrupt source masked. Change only
+        // SIE to make the trusted entry reject this attempt before Occupy.
+        unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
+        let rejected = execution.enter();
+        unsafe { asm!("csrci sstatus, 2", options(nostack)) };
+        assert_eq!(rejected, Err(Error::Unsupported));
+        assert_eq!(execution.pending_leave(), Ok(None));
 
-    let leaving = dispatch(b);
-    assert_eq!(leaving.admission(), b_admission);
-    assert_eq!(execution.vacate(initial), Err(Error::Gone));
-    assert_eq!(execution.pending_leave(), Ok(Some(leaving)));
-    finish(b, leaving, 41);
+        // Change only the actual FS field: the integer-only kernel target
+        // executes no FP instructions, so no extended state is consumed.
+        let mut observed: usize;
+        unsafe {
+            asm!(
+                "csrs sstatus, {initial}",
+                "csrr {observed}, sstatus",
+                initial = in(reg) 1usize << 13,
+                observed = out(reg) observed,
+                options(nostack),
+            );
+        }
+        let rejected = execution.enter();
+        unsafe { asm!("csrc sstatus, {}", in(reg) 3usize << 13, options(nostack)) };
+        assert_ne!(observed & (3 << 13), 0, "QEMU exposes the actual FS field");
+        assert_eq!(rejected, Err(Error::Unsupported));
+        assert_eq!(execution.pending_leave(), Ok(None));
 
-    let resumed = dispatch(a);
-    assert_ne!(resumed, initial);
-    assert_eq!(resumed.admission(), a_admission);
-    assert_eq!(execution.vacate(initial), Err(Error::Gone));
-    finish(a, resumed, 0x1234_5678);
-    assert_eq!(execution.reap(b), Ok(End::Returned { value: 41 }));
-    assert_eq!(execution.reap(b), Err(Error::Gone));
-    assert_eq!(execution.submit(b), Err(Error::Gone));
+        // Global SIE is still off. A single locally enabled source is a
+        // different admission failure and must not be mistaken for global SIE.
+        unsafe {
+            asm!(
+                "csrs sie, {timer}",
+                "csrr {observed}, sie",
+                timer = in(reg) 1usize << 5,
+                observed = out(reg) observed,
+                options(nostack),
+            );
+        }
+        let rejected = execution.enter();
+        unsafe { asm!("csrc sie, {}", in(reg) 1usize << 5, options(nostack)) };
+        assert_ne!(observed & (1 << 5), 0);
+        assert_eq!(rejected, Err(Error::Unsupported));
+        assert_eq!(execution.pending_leave(), Ok(None));
+        write("PASS native-control fs=1 source-mask=1 restored=1\n");
 
-    // Only b's Unit slot is vacant. a's End remains observable while its
-    // returned stack is selected for the replacement.
-    let replacement = unsafe { execution.create(run_replacement) }.expect("reuse returned stack");
-    assert_ne!(replacement, b);
-    let replacement_admission = execution.submit(replacement).expect("submit replacement");
-    assert_ne!(replacement_admission, a_admission);
-    assert_ne!(replacement_admission, b_admission);
-    let replaced = dispatch(replacement);
-    assert_eq!(replaced.admission(), replacement_admission);
-    assert_eq!(execution.vacate(leaving), Err(Error::Gone));
-    assert_eq!(
-        execution.lifecycle(a),
-        Ok(Lifecycle::Ended(End::Returned { value: 0x1234_5678 }))
-    );
-    finish(replacement, replaced, 43);
-    assert_eq!(execution.reap(a), Ok(End::Returned { value: 0x1234_5678 }));
-    assert_eq!(execution.reap(replacement), Ok(End::Returned { value: 43 }));
-    assert_eq!(execution.enter(), Ok(None));
-    assert_eq!(SEQUENCE.load(Relaxed), 4);
+        let initial = dispatch(a);
+        assert_eq!(initial.admission(), a_admission);
+        assert_eq!(execution.lifecycle(a), Ok(Lifecycle::Live));
+        execution.vacate(initial).expect("return to ready");
 
-    write(concat!(
-        "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1",
-        " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1 binding_returned=1 admission=1\n",
-    ));
-    shutdown(true)
+        let leaving = dispatch(b);
+        assert_eq!(leaving.admission(), b_admission);
+        assert_eq!(execution.vacate(initial), Err(Error::Gone));
+        assert_eq!(execution.pending_leave(), Ok(Some(leaving)));
+        finish(b, leaving, 41);
+
+        let resumed = dispatch(a);
+        assert_ne!(resumed, initial);
+        assert_eq!(resumed.admission(), a_admission);
+        assert_eq!(execution.vacate(initial), Err(Error::Gone));
+        finish(a, resumed, 0x1234_5678);
+        assert_eq!(execution.reap(b), Ok(End::Returned { value: 41 }));
+        assert_eq!(execution.reap(b), Err(Error::Gone));
+        assert_eq!(execution.submit(b), Err(Error::Gone));
+
+        // Only b's Unit slot is vacant. a's End remains observable while its
+        // returned stack is selected for the replacement.
+        let replacement = unsafe { execution.create(run_replacement) }.expect("reuse returned stack");
+        assert_ne!(replacement, b);
+        let replacement_admission = execution.submit(replacement).expect("submit replacement");
+        assert_ne!(replacement_admission, a_admission);
+        assert_ne!(replacement_admission, b_admission);
+        let replaced = dispatch(replacement);
+        assert_eq!(replaced.admission(), replacement_admission);
+        assert_eq!(execution.vacate(leaving), Err(Error::Gone));
+        assert_eq!(
+            execution.lifecycle(a),
+            Ok(Lifecycle::Ended(End::Returned { value: 0x1234_5678 }))
+        );
+        finish(replacement, replaced, 43);
+        assert_eq!(execution.reap(a), Ok(End::Returned { value: 0x1234_5678 }));
+        assert_eq!(execution.reap(replacement), Ok(End::Returned { value: 43 }));
+        assert_eq!(execution.enter(), Ok(None));
+        assert_eq!(SEQUENCE.load(Relaxed), 4);
+
+        write(concat!(
+            "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1",
+            " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1 binding_returned=1 admission=1\n",
+        ));
+        shutdown(true)
+    };
+    unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
 }
 
 #[panic_handler]

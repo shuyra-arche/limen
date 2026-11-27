@@ -141,3 +141,13 @@ pub(super) unsafe extern "win64" fn switch(
         floating = const offset_of!(Saved, floating),
     )
 }
+
+/// Enter the resident dispatcher with this target's existing kernel ABI.
+#[unsafe(naked)]
+pub(super) unsafe extern "win64" fn start_stack(
+    stack: usize,
+    entry: extern "C" fn(*const ()) -> !,
+    argument: *const (),
+) -> ! {
+    core::arch::naked_asm!("mov rsp, rcx", "sub rsp, 32", "mov rcx, r8", "call {launch}", "ud2", launch = sym launch);
+}

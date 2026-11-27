@@ -5,7 +5,7 @@ use core::{
     marker::PhantomData,
 };
 
-use crate::metal::processor::hart::local::{self, HartId};
+use crate::metal::processor::hart::local::{self, HartId, stack::Stack};
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
@@ -89,7 +89,11 @@ enum State<Occupancy> {
     Stopped(LeaveReceipt<Occupancy>),
 }
 
+const DISPATCH_BYTES: usize = 32 * 1024;
+
 pub(crate) struct Hart<Occupancy> {
+    stack: Stack<DISPATCH_BYTES>,
+    started: Cell<bool>,
     dispatcher: Context,
     state: Cell<State<Occupancy>>,
 }
@@ -106,6 +110,8 @@ pub(crate) struct LocalHart<'a, Occupancy> {
 impl<Occupancy> Hart<Occupancy> {
     pub(crate) const fn new() -> Self {
         Self {
+            stack: Stack::new(),
+            started: Cell::new(false),
             dispatcher: Context::new(),
             state: Cell::new(State::Idle),
         }
@@ -121,6 +127,28 @@ impl<Occupancy> Hart<Occupancy> {
 }
 
 impl<Occupancy: Copy + Eq> LocalHart<'_, Occupancy> {
+    pub(crate) fn started(&self) -> bool {
+        self.hart.started.get()
+    }
+
+    pub(crate) fn on_dispatcher_stack(&self) -> bool {
+        let top = self.hart.stack.top();
+        self.started() && (top - DISPATCH_BYTES..top).contains(&local::stack_pointer())
+    }
+
+    /// The caller has excluded every previous entry and checked this Hart's
+    /// ordinary profile. The previous frame stays resident with the borrowed
+    /// dispatch input; this path never makes that stack reclaimable.
+    pub(crate) unsafe fn start<F: FnMut() -> !>(&self, dispatch: &mut F) -> ! {
+        extern "C" fn enter<F: FnMut() -> !>(argument: *const ()) -> ! {
+            let dispatch = unsafe { &mut *argument.cast_mut().cast::<F>() };
+            dispatch()
+        }
+
+        assert!(!self.hart.started.replace(true));
+        unsafe { native::start_stack(self.hart.stack.top(), enter::<F>, core::ptr::from_mut(dispatch).cast()) }
+    }
+
     pub(crate) fn running(&self) -> Option<Occupancy> {
         match self.hart.state.get() {
             State::Running(occupancy) => Some(occupancy),

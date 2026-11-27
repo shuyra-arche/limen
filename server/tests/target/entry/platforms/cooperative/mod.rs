@@ -102,20 +102,27 @@ fn minor(_: usize, argument: usize) -> ! {
     execution.attach().expect("attach actual minor Hart");
     assert_eq!(execution.attach(), Err(Error::Busy));
     super::observe_minor(super::board::hart());
-    wait(1);
-    // The original Hart has not returned its occupation yet.
-    assert_eq!(execution.enter(), Ok(None));
-    PHASE.store(2, Relaxed);
-    wait(3);
-    let control = registers::control();
-    let receipt = dispatch(execution);
-    assert_eq!(receipt.hart(), super::TARGET.load(Relaxed));
-    assert_eq!(registers::control(), control);
-    execution.vacate(receipt).expect("minor departure");
-    PHASE.store(4, Relaxed);
-    loop {
-        spin_loop();
-    }
+    assert_eq!(execution.enter(), Err(Error::Protection));
+    let mut schedule = || {
+        let mark = core::hint::black_box(0u8);
+        let address = core::hint::black_box(&mark) as *const u8 as usize;
+        assert!(!super::MINOR.stack_range().contains(&address));
+        wait(1);
+        // The original Hart has not returned its occupation yet.
+        assert_eq!(execution.enter(), Ok(None));
+        PHASE.store(2, Relaxed);
+        wait(3);
+        let control = registers::control();
+        let receipt = dispatch(execution);
+        assert_eq!(receipt.hart(), super::TARGET.load(Relaxed));
+        assert_eq!(registers::control(), control);
+        execution.vacate(receipt).expect("minor departure");
+        PHASE.store(4, Relaxed);
+        loop {
+            spin_loop();
+        }
+    };
+    unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
 }
 
 fn finish(execution: &Execution, unit: UnitId, receipt: Occupancy, value: u64) {
@@ -135,8 +142,8 @@ pub(super) fn run(
     major: usize,
     target: usize,
     startup: &mut Startup,
-    started: impl FnOnce(&Startup),
-) {
+    mut started: impl FnMut(&Startup),
+) -> ! {
     MAJOR.store(major, Relaxed);
     let runtime = Execution::new(
         boot,
@@ -149,57 +156,65 @@ pub(super) fn run(
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     execution.attach().expect("attach actual boot Hart");
     assert_eq!(execution.attach(), Err(Error::Busy));
-    let argument = ptr::from_ref(execution).expose_provenance();
+    assert_eq!(execution.enter(), Err(Error::Protection));
+    let mut schedule = || {
+        let mark = core::hint::black_box(0u8);
+        let address = core::hint::black_box(&mark) as *const u8 as usize;
+        assert!(!boot::stack_range().contains(&address));
+        let argument = ptr::from_ref(execution).expose_provenance();
 
-    assert_eq!(
-        unsafe { super::MINOR.start(major, minor, argument, startup) },
-        Err(StartError::Busy)
-    );
-    unsafe { super::MINOR.start(target, minor, argument, startup) }.expect("minor startup");
-    while super::OBSERVED.load(Acquire) != target {
-        spin_loop();
-    }
-    assert!(super::MINOR.ready());
-    started(startup);
-    assert_eq!(
-        unsafe { super::MINOR.start(target, minor, argument, startup) },
-        Err(StartError::Busy)
-    );
+        assert_eq!(
+            unsafe { super::MINOR.start(major, minor, argument, startup) },
+            Err(StartError::Busy)
+        );
+        unsafe { super::MINOR.start(target, minor, argument, startup) }.expect("minor startup");
+        while super::OBSERVED.load(Acquire) != target {
+            spin_loop();
+        }
+        assert!(super::MINOR.ready());
+        started(startup);
+        assert_eq!(
+            unsafe { super::MINOR.start(target, minor, argument, startup) },
+            Err(StartError::Busy)
+        );
 
-    let unit = unsafe { execution.create_migratable(migratable) }.expect("migratable Unit");
-    let dormant = unsafe { execution.create(never) }.expect("dormant Unit");
-    execution
-        .stop_dormant(dormant)
-        .expect("cancel before admission");
-    assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
-    execution.finish_end(dormant).unwrap();
-    assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
-    execution.submit(unit).unwrap();
+        let unit = unsafe { execution.create_migratable(migratable) }.expect("migratable Unit");
+        let dormant = unsafe { execution.create(never) }.expect("dormant Unit");
+        execution
+            .stop_dormant(dormant)
+            .expect("cancel before admission");
+        assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
+        execution.finish_end(dormant).unwrap();
+        assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
+        execution.submit(unit).unwrap();
 
-    let control = registers::control();
-    let first = dispatch(execution);
-    assert_eq!(first.unit(), unit);
-    assert_eq!(first.hart(), major);
-    assert_eq!(registers::control(), control);
-    PHASE.store(1, Relaxed);
-    wait(2);
-    execution.vacate(first).expect("major departure");
-    PHASE.store(3, Relaxed);
-    wait(4);
-    let last = dispatch(execution);
-    assert_eq!(last.hart(), major);
-    assert_eq!(registers::control(), control);
-    assert_eq!(execution.vacate(first), Err(Error::Gone));
-    finish(execution, unit, last, 0x1234_5678);
-    assert_eq!(STEP.load(Relaxed), 3);
+        let control = registers::control();
+        let first = dispatch(execution);
+        assert_eq!(first.unit(), unit);
+        assert_eq!(first.hart(), major);
+        assert_eq!(registers::control(), control);
+        PHASE.store(1, Relaxed);
+        wait(2);
+        execution.vacate(first).expect("major departure");
+        PHASE.store(3, Relaxed);
+        wait(4);
+        let last = dispatch(execution);
+        assert_eq!(last.hart(), major);
+        assert_eq!(registers::control(), control);
+        assert_eq!(execution.vacate(first), Err(Error::Gone));
+        finish(execution, unit, last, 0x1234_5678);
+        assert_eq!(STEP.load(Relaxed), 3);
 
-    let reused = unsafe { execution.create(replacement) }.expect("returned stack");
-    assert_ne!(reused, unit);
-    execution.submit(reused).unwrap();
-    let receipt = dispatch(execution);
-    finish(execution, reused, receipt, 41);
-    assert_eq!(execution.enter(), Ok(None));
-    boot::write(
-        "PASS cooperative-execution harts=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1\n",
-    );
+        let reused = unsafe { execution.create(replacement) }.expect("returned stack");
+        assert_ne!(reused, unit);
+        execution.submit(reused).unwrap();
+        let receipt = dispatch(execution);
+        finish(execution, reused, receipt, 41);
+        assert_eq!(execution.enter(), Ok(None));
+        boot::write(
+            "PASS cooperative-execution harts=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1\n",
+        );
+        super::finish(major)
+    };
+    unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
 }

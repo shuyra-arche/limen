@@ -237,6 +237,27 @@ impl Execution {
         })
     }
 
+    /// Transfer once to this attached Hart's resident 32 KiB dispatcher stack.
+    /// The input and all older frames remain live; success never returns.
+    ///
+    /// # Safety
+    /// The trusted dispatch loop and its callees must fit the supplied stack
+    /// and preserve the native profile and local entry. Keep every borrowed
+    /// input and the previous stack reserved for the entire handoff.
+    pub unsafe fn run<F: FnMut() -> !>(&'static self, dispatch: &mut F) -> Result<!, Error> {
+        let (_, hart) = self.local()?;
+        if !cooperative_ready() {
+            return Err(Error::Unsupported);
+        }
+        if !local::can_switch() {
+            return Err(Error::Protection);
+        }
+        if hart.started() {
+            return Err(Error::Busy);
+        }
+        unsafe { hart.start(dispatch) }
+    }
+
     /// Run one ready Unit until it yields or returns on its own stack.
     /// The original admission remains occupied until `vacate`.
     pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
@@ -246,6 +267,9 @@ impl Execution {
         }
         if !local::can_switch() {
             return Err(Error::Protection);
+        }
+        if !hart.on_dispatcher_stack() {
+            return Err(if hart.running().is_some() { Error::Busy } else { Error::Protection });
         }
         let Some((occupancy, context, entry)) = self.with_unit_room(|units, room| {
             let Some(unit) = room.candidate(id)? else {
