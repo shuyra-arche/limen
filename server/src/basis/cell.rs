@@ -7,7 +7,7 @@ use limen_treaty::model::PhysicalRange;
 use crate::metal::{
     identity::treaty::Generation,
     memory::{
-        allocator::treaty::{MappedStorage, Retired},
+        allocator::treaty::{AllocationId, MappedStorage, Retired},
         mmu::treaty::TableId,
     },
     sync::treaty::{TurnAccess, TurnLock, TurnPlan},
@@ -80,6 +80,7 @@ impl CellSlot {
         }
         let generation = Generation::next(state.generation).ok_or(Error::Exhausted)?;
         let material = material.take().expect("original issued material");
+        let allocation = material.id();
         let physical = material.physical();
         state.cell = Some(Record {
             material,
@@ -95,6 +96,7 @@ impl CellSlot {
             Cell {
                 slot: self,
                 id,
+                allocation,
                 physical,
             },
             CellPermit { cell: id, owner },
@@ -121,6 +123,7 @@ pub enum Error {
 pub(crate) struct Cell {
     slot: &'static CellSlot,
     id: CellId,
+    allocation: AllocationId,
     physical: PhysicalRange,
 }
 
@@ -142,6 +145,10 @@ impl Cell {
 
     pub(crate) fn id(&self) -> CellId {
         self.id
+    }
+
+    pub(crate) fn allocation(&self) -> AllocationId {
+        self.allocation
     }
 
     pub(crate) fn physical(&self) -> PhysicalRange {

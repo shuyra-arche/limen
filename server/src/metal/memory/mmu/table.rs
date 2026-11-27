@@ -11,7 +11,7 @@ use crate::{
     },
     metal::{
         identity::treaty::Generation,
-        memory::allocator::treaty::{InitialAccess, MappedStorage, Retired},
+        memory::allocator::treaty::{AllocationId, InitialAccess, MappedStorage, Retired},
         sync::treaty::{TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
     },
 };
@@ -270,6 +270,18 @@ impl TableStore {
             let cell = state.root.cell()?;
             Ok((cell.id(), cell.physical()))
         })?
+    }
+
+    /// Recover the original node decision from the exact issued allocation.
+    /// A later generation at the same address is a separate material.
+    pub fn locate(&self, allocation: AllocationId) -> Result<Option<TableId>, TableError> {
+        Ok(self.state.acquire(|state| {
+            let cell = state.root.cell().ok()?;
+            (cell.allocation() == allocation).then(|| TableId {
+                store: ptr::from_ref(self).addr(),
+                generation: state.generation.expect("live root generation"),
+            })
+        })?)
     }
 
     /// Initialize an original private root to the native invalid descriptors.

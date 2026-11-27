@@ -166,6 +166,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, allowance: &Allowance, range: Physic
                 .unwrap()
         };
         let (cell, physical) = table.cell(node).unwrap();
+        assert_eq!(table.locate(id), Ok(Some(node)));
         assert_eq!(physical, range);
         assert_eq!(table.initialize(node, Fast), Err(TableError::State));
         assert_eq!(table.accept(node, Fast), Err(TableError::State));
@@ -175,6 +176,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, allowance: &Allowance, range: Physic
             assert_ne!(node, old_node);
             assert_ne!(cell, old_cell);
             assert_ne!(id, old_allocation);
+            assert_eq!(table.locate(old_allocation), Ok(None));
             assert_eq!(table.accept(old_node, Fast), Err(TableError::Scope));
             table.shut(node).unwrap();
             assert_eq!(
@@ -194,6 +196,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, allowance: &Allowance, range: Physic
         }
         unsafe { table.retire_private(node, retired, Fast) }.unwrap();
         assert_eq!(table.cell(node), Err(TableError::State));
+        assert_eq!(table.locate(id), Ok(None));
         let material = retired.take().unwrap();
         unsafe { material.begin_return(receipt) }.ok().unwrap();
         let original_receipt = receipt.take().unwrap();
