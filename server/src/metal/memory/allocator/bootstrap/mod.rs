@@ -12,14 +12,14 @@ use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 use crate::metal::{
     identity::{Entry, Generation, Slot},
     memory::mmu::internal::access::MappedRange,
-    sync::{TURN_CAPACITY, TurnLock},
+    sync::TurnLock,
 };
 
 use super::{
-    Allocator, AllowanceId, Error, REGION_LIMIT, Region, RegionDescription, RegionId, RegionOrigin,
+    Allocator, AllowanceId, Error, Region, RegionDescription, RegionId, RegionOrigin,
     SourceId,
     allocation::{Allocation, AllocationId, AllocationRecord, Phase},
-    allowance::{ASSIGNMENT_LOCKS, Allowance, AllowanceSlot, Balance, Free},
+    allowance::{Allowance, AllowanceSlot, Balance, Free},
     region::{
         Backing,
         buddy::{Geometry, Root},
@@ -49,11 +49,9 @@ impl Config {
         if !alignment.is_aligned(self.maximum) {
             return Err(Error::Layout);
         }
-        // No authorization ancestors are traversed here. Opening an
-        // Allowance takes at most Q Region locks, the slot and the free
-        // index. Source inspection takes Q Region locks and the directory.
-        if !(1..=REGION_LIMIT).contains(&self.regions)
-            || self.regions + ASSIGNMENT_LOCKS > TURN_CAPACITY
+        // Directory capacity follows actual root storage and identity geometry.
+        if self.regions == 0
+            || Slot::new(self.regions - 1).is_none()
             || self.roots == 0
             || self.grains == 0
             || self.allocations == 0
@@ -178,19 +176,21 @@ impl<'a> Initial<'a> {
 
 /// Exact root input and initial receiving positions checked before Entry
 /// consumes the permanent mapped storage.
-pub(crate) struct RootInitialization<'r, 'a> {
+pub(crate) struct RootInitialization<'r, 'a, Descriptions> {
     config: Config,
-    descriptions: [Option<RegionDescription>; REGION_LIMIT],
+    descriptions: Descriptions,
     capacity: u64,
     committed: u64,
     allowance_receiver: &'r mut Option<Allowance>,
     initial: &'r mut [Initial<'a>],
 }
 
-impl<'r, 'a> RootInitialization<'r, 'a> {
+impl<'r, 'a, Descriptions: Iterator<Item = RegionDescription> + Clone>
+    RootInitialization<'r, 'a, Descriptions>
+{
     pub(crate) fn prepare(
         config: Config,
-        descriptions: impl Iterator<Item = RegionDescription>,
+        descriptions: Descriptions,
         capacity: u64,
         allowance_receiver: &'r mut Option<Allowance>,
         initial: &'r mut [Initial<'a>],
@@ -205,14 +205,12 @@ impl<'r, 'a> RootInitialization<'r, 'a> {
         {
             return Err(Error::Capacity);
         }
-        let mut prepared = [None; REGION_LIMIT];
         let mut committed = 0u64;
         let mut total = ByteLength::new(0);
-        for (index, description) in descriptions.enumerate() {
+        for (index, description) in descriptions.clone().enumerate() {
             if index >= config.regions {
                 return Err(Error::Capacity);
             }
-            prepared[index] = Some(description);
             config.geometry(description)?;
             total = total
                 .checked_add(description.physical.length())
@@ -247,9 +245,8 @@ impl<'r, 'a> RootInitialization<'r, 'a> {
             return Err(Error::Balance);
         }
         if initial.iter().any(|item| {
-            !prepared
-                .iter()
-                .flatten()
+            !descriptions
+                .clone()
                 .any(|region| region.physical.covers(item.physical))
         }) {
             return Err(Error::Range);
@@ -257,7 +254,7 @@ impl<'r, 'a> RootInitialization<'r, 'a> {
 
         Ok(Self {
             config,
-            descriptions: prepared,
+            descriptions,
             capacity,
             committed,
             allowance_receiver,
@@ -274,7 +271,7 @@ impl<'r, 'a> RootInitialization<'r, 'a> {
         initialize(
             storage,
             self.config,
-            self.descriptions.into_iter().flatten(),
+            self.descriptions,
             self.capacity,
             self.committed,
             self.allowance_receiver,
@@ -366,8 +363,8 @@ fn initialize(
         let geometry = config.geometry(description).expect("preflighted Region");
         region.initialize(description, geometry, config.edits);
         let state = region.state.get_mut();
-        let amount = charged.min(state.unassigned);
-        state.unassigned -= amount;
+        let amount = charged.min(state.unassigned());
+        state.set_unassigned(state.unassigned() - amount);
         charged -= amount;
         for item in initial
             .iter_mut()

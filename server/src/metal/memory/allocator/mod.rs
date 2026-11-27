@@ -21,12 +21,12 @@ mod search;
 
 pub use allocation::{Allocation, AllocationConstruction, AllocationId, MappedStorage};
 pub(crate) use allowance::permit::{AllocationPermit, AllocationPermitSlot, LayoutLimit};
-pub use allowance::{Allowance, AllowanceCandidate, AllowanceId, Balance};
+pub use allowance::{Allowance, AllowanceCandidate, AllowanceId, Balance, Budget, BudgetObservation, BudgetProgress};
 pub(crate) use bootstrap::RootInitialization;
 pub use bootstrap::{Config, Initial, RootStorage};
 pub use region::{Grant, RegionDescription, RegionOrigin};
 pub use returns::{Pending, Retired, ReturnId, ReturnReceipt, Returned};
-pub use search::{Candidate, Lookup, RamPurpose, Request, Search};
+pub use search::{Candidate, Lookup, LookupObservation, RamPurpose, Request, Search};
 
 use allowance::{AllowanceSlot, Free};
 use region::Region;
@@ -61,10 +61,6 @@ impl From<TurnAcquireError> for Error {
         }
     }
 }
-
-/// Maximum Region count, including delayed admission positions. Exact source
-/// inspection needs this many nodes plus the directory node.
-pub const REGION_LIMIT: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SourceId(usize);

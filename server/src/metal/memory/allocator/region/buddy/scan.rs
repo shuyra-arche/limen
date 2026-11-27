@@ -3,7 +3,7 @@
 use core::ptr;
 use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
-use super::{Buddy, Error, Root, State, geometry::Block};
+use super::{Buddy, Error, Revision, Root, State, geometry::Block};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Request {
@@ -61,26 +61,6 @@ impl Request {
             .align_up(self.alignment.max(granule))?;
         let candidate = start.range(self.length)?;
         (candidate.end() <= stop.min(window.end())).then_some(candidate)
-    }
-}
-
-/// A scan revision never wraps. Exhaustion prevents stitched observations.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Revision {
-    Current(u64),
-    Exhausted,
-}
-
-impl Revision {
-    pub(crate) fn next(self) -> Self {
-        match self {
-            Self::Current(version) if version != u64::MAX => Self::Current(version + 1),
-            _ => Self::Exhausted,
-        }
-    }
-
-    pub(crate) fn preserves(self, observed: Self) -> bool {
-        matches!((self, observed), (Self::Current(now), Self::Current(before)) if now == before)
     }
 }
 

@@ -281,13 +281,13 @@ impl Allocator {
         }
         let amount = record.physical.length().get();
         let credit = if open { 0 } else { amount };
-        let unassigned = state.unassigned.checked_add(credit).ok_or(Error::Balance)?;
+        let unassigned = state.unassigned().checked_add(credit).ok_or(Error::Balance)?;
         state
             .buddy()
             .release(record.physical)
             .expect("reserved physical range");
         state.settle_reserved(reservation.id, record);
-        state.unassigned = unassigned;
+        state.set_unassigned(unassigned);
         let refund = held.access(slot).expect("Allowance").refund(amount, false);
         debug_assert_eq!(refund, credit);
         *held.access(&construction.state).expect("receiver") = Preparation::Shut(None);

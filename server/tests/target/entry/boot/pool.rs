@@ -15,7 +15,7 @@ use kernel::{
 };
 
 use super::{
-    foundation::reference,
+    foundation::{inspect_budget, reference},
     pool_material::{PAGE, group_extent, install},
 };
 
@@ -104,8 +104,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     }
     assert_eq!(pool.capacity().unwrap().free, geometry.slots);
     assert_eq!(
-        source
-            .budget(Fast)
+        inspect_budget(source)
             .map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((PAGE as u64, 0))
     );
