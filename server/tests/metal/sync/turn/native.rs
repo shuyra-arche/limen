@@ -1,4 +1,3 @@
-use super::{MAJOR_NODES, MINOR_NODES};
 use core::{
     hint::spin_loop,
     sync::atomic::{
@@ -6,17 +5,13 @@ use core::{
         Ordering::{Acquire, Release},
     },
 };
-use kernel::{
-    basis::execution::{Current, Error},
-    metal::sync::treaty::{
-        TurnAcquireError, TurnLock, TurnMode, TurnPlanError, TurnWorkspace, turn_capacity,
-    },
+use kernel::metal::sync::treaty::{
+    TurnAcquireError, TurnLock, TurnMode, TurnPlanError, TurnWorkspace, turn_capacity,
 };
 
 static TRANSFER: TurnLock<u64> = TurnLock::new(0);
 static COUNT: TurnLock<u64> = TurnLock::new(0);
 static PAIR: TurnLock<[u64; 2]> = TurnLock::new([0, !0]);
-static LEAVE: TurnLock<()> = TurnLock::new(());
 static PHASE: AtomicU8 = AtomicU8::new(0);
 
 const VALUE: u64 = 0x47f2_e36a_591c_8bd0;
@@ -40,8 +35,8 @@ fn wait(phase: Phase) {
     }
 }
 
-pub(super) fn major() {
-    check_capacity(MAJOR_NODES);
+pub fn major<const N: usize, const EXCESS: usize>() {
+    check_capacity::<N, EXCESS>();
 
     let mut work = TurnWorkspace::<1>::new();
     let mut plan = work.plan();
@@ -87,12 +82,13 @@ pub(super) fn major() {
     .expect("both Harts returned their nodes");
 }
 
-fn check_capacity(expected: usize) {
-    assert_eq!(turn_capacity(), Some(expected));
-    let locks = [const { TurnLock::new(()) }; MAJOR_NODES + 1];
-    let mut work = TurnWorkspace::<{ MAJOR_NODES + 1 }>::new();
+fn check_capacity<const N: usize, const EXCESS: usize>() {
+    assert_eq!(EXCESS, N + 1);
+    assert_eq!(turn_capacity(), Some(N));
+    let locks = [const { TurnLock::new(()) }; EXCESS];
+    let mut work = TurnWorkspace::<EXCESS>::new();
     let mut plan = work.plan();
-    for lock in &locks[..=expected] {
+    for lock in &locks {
         plan.insert(lock).unwrap();
     }
     assert_eq!(
@@ -101,7 +97,7 @@ fn check_capacity(expected: usize) {
     );
 
     let mut plan = work.plan();
-    for lock in &locks[..expected] {
+    for lock in &locks[..N] {
         plan.insert(lock).unwrap();
         plan.insert(lock).expect("duplicate roles share the original node");
     }
@@ -109,11 +105,12 @@ fn check_capacity(expected: usize) {
         .expect("capacity failure left the admitted node supply available");
 }
 
-pub(super) fn minor() {
-    check_capacity(MINOR_NODES);
+pub fn minor<const N: usize, const EXCESS: usize, const PREFIX: usize>() {
+    check_capacity::<N, EXCESS>();
+    assert_eq!(PREFIX + 1, N);
     wait(Phase::Held);
-    let prefix = [const { TurnLock::new(()) }; MINOR_NODES - 1];
-    let mut work = TurnWorkspace::<MINOR_NODES>::new();
+    let prefix = [const { TurnLock::new(()) }; PREFIX];
+    let mut work = TurnWorkspace::<N>::new();
     for count in 1..=prefix.len() {
         let mut plan = work.plan();
         for lock in &prefix[..count] {
@@ -155,13 +152,6 @@ impl Drop for Retry<'_> {
             .acquire(|_| ())
             .expect("callback capture is dropped after the Busy prefix is released");
     }
-}
-
-pub(super) fn check_leave(current: &mut Current) {
-    let result = LEAVE
-        .acquire(|_| current.yield_now())
-        .expect("occupied Unit can acquire an ordinary Turn");
-    assert_eq!(result, Err(Error::Protection));
 }
 
 fn increment(reverse: bool) {

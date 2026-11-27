@@ -33,6 +33,11 @@ use aarch64 as registers;
 mod x86_64;
 #[cfg(target_arch = "x86_64")]
 use x86_64 as registers;
+#[cfg(target_arch = "riscv64")]
+#[path = "../../metal/processor/execution/registers/riscv64/mod.rs"]
+mod riscv64;
+#[cfg(target_arch = "riscv64")]
+use riscv64 as registers;
 
 static mut STACKS: Stacks = Stacks::new();
 static mut HARTS: Harts<2> = Harts::new();
@@ -78,21 +83,28 @@ fn migratable(current: &mut Current) -> u64 {
     assert_eq!(current.hart(), MAJOR.load(Relaxed));
     assert_eq!(STEP.fetch_add(1, Relaxed), 0);
     let original = registers::control();
-    let changed = registers::rounding(original);
-    registers::install(changed);
-    assert_eq!(registers::control(), changed);
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    let expected = {
+        let changed = registers::rounding(original);
+        registers::install(changed);
+        assert_eq!(registers::control(), changed);
+        changed
+    };
+    #[cfg(target_arch = "riscv64")]
+    let expected = original;
 
     registers::verify(current);
     assert_eq!(current.hart(), PEER.load(Relaxed));
     assert_eq!(STEP.fetch_add(1, Relaxed), 1);
     assert_eq!(stack_address(&value), address);
-    assert_eq!(registers::control(), changed);
+    assert_eq!(registers::control(), expected);
 
     registers::verify(current);
     assert_eq!(current.hart(), MAJOR.load(Relaxed));
     assert_eq!(STEP.fetch_add(1, Relaxed), 2);
     assert_eq!(stack_address(&value), address);
-    assert_eq!(registers::control(), changed);
+    assert_eq!(registers::control(), expected);
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     registers::install(original);
     black_box(value) as u64
 }
@@ -234,6 +246,9 @@ pub fn run(
         PHASE.store(3, Relaxed);
         wait(4);
         let last = dispatch(execution);
+        assert_eq!(last.unit(), unit);
+        assert_ne!(last, first);
+        assert_eq!(last.admission(), first.admission());
         assert_eq!(last.hart(), major);
         assert_eq!(registers::control(), control);
         assert_eq!(execution.vacate(first), Err(Error::Gone));

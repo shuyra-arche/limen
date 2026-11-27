@@ -220,7 +220,8 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
 
         // Only b's Unit slot is vacant. a's End remains observable while its
         // returned stack is selected for the replacement.
-        let replacement = unsafe { execution.create(run_replacement) }.expect("reuse returned stack");
+        let replacement =
+            unsafe { execution.create(run_replacement) }.expect("reuse returned stack");
         assert_ne!(replacement, b);
         let replacement_admission = execution.submit(replacement).expect("submit replacement");
         assert_ne!(replacement_admission, a_admission);

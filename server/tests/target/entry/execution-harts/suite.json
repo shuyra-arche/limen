@@ -5,6 +5,11 @@
     "release"
   ],
   "sources": [
+    "server/tests/basis/execution/participation.rs",
+    "server/tests/metal/sync/turn/native.rs",
+    "server/tests/metal/sync/native_snapshot.rs",
+    "server/tests/metal/processor/execution/registers/riscv64/switch.rs",
+    "server/tests/metal/processor/execution/registers/riscv64/switch.S",
     "server/src/lib.rs",
     "server/src/entry/mod.rs",
     "server/src/metal/mod.rs",
@@ -70,6 +75,13 @@
   "run": {
     "kind": "qemu",
     "kernel": "kernel-execution-harts",
+    "imports": [
+      "basis/execution/participation.rs",
+      "metal/sync/turn/native.rs",
+      "metal/sync/native_snapshot.rs",
+      "metal/processor/execution/registers/riscv64/switch.rs",
+      "metal/processor/execution/registers/riscv64/switch.S"
+    ],
     "expects": [
       "PASS kernel-execution-harts active=2 turn=1 snap=1 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1 participants=3 capacity=1"
     ],

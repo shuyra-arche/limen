@@ -100,5 +100,7 @@ pub(super) fn reject_dispatch(execution: &'static Execution) {
     assert_ne!(observed & (1 << 5), 0);
     assert_eq!(rejected, Err(Error::Unsupported));
     assert_eq!(execution.pending_leave(), Ok(None));
-    kernel::metal::platform::boot::treaty::write("PASS native-control fs=1 source-mask=1 restored=1\n");
+    kernel::metal::platform::boot::treaty::write(
+        "PASS native-control fs=1 source-mask=1 restored=1\n",
+    );
 }
