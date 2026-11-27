@@ -2,6 +2,8 @@
 
 use super::{Failure, LocalApic};
 use crate::metal::interrupt::treaty::{ClaimConfirmation, ClaimId, Completion, HardwareClaim};
+#[cfg(all(limen_target, target_arch = "x86_64"))]
+use crate::metal::processor::treaty::Irq;
 
 const ISR: usize = 0x100;
 const EOI: usize = 0xb0;
@@ -59,6 +61,8 @@ impl VectorLease {
 #[must_use]
 pub struct Claim<'a, 'map> {
     owner: &'a mut LocalApic<'map>,
+    #[cfg(all(limen_target, target_arch = "x86_64"))]
+    irq: Option<&'a Irq<'a>>,
     vector: u8,
 }
 
@@ -72,12 +76,21 @@ impl Claim<'_, '_> {
     /// device has been cleared or masked and the receiving processor remains
     /// exclusive with ordinary interrupts masked.
     pub unsafe fn complete(&mut self) -> Result<(), Failure> {
+        self.check_context()?;
         self.owner.complete(self.vector)
     }
 
     /// Check whether this claim's original EOI cleared its ISR bit.
     pub fn confirm(&mut self) -> Result<(), Failure> {
+        self.check_context()?;
         self.owner.confirm_reception(self.vector)
+    }
+    fn check_context(&self) -> Result<(), Failure> {
+        #[cfg(all(limen_target, target_arch = "x86_64"))]
+        if let Some(irq) = self.irq {
+            return self.owner.interrupt_context(irq);
+        }
+        self.owner.reception_context()
     }
 }
 
@@ -122,6 +135,8 @@ impl<'map> LocalApic<'map> {
         };
         Some(Claim {
             owner: self,
+            #[cfg(all(limen_target, target_arch = "x86_64"))]
+            irq: None,
             vector,
         })
     }
@@ -155,6 +170,37 @@ impl<'map> LocalApic<'map> {
     /// No other context manipulates the ISR, EOI or spurious-vector register.
     pub unsafe fn receive(&mut self, vector: u8) -> Result<Claim<'_, 'map>, Failure> {
         self.reception_context()?;
+        self.record_reception(vector)?;
+        Ok(Claim {
+            owner: self,
+            #[cfg(all(limen_target, target_arch = "x86_64"))]
+            irq: None,
+            vector,
+        })
+    }
+
+    /// Record the fixed vector on its original trusted interrupt frame.
+    ///
+    /// # Safety
+    /// The callback retains the original binding and has reserved reception
+    /// capacity for this non-nested IRQ. No other context may manipulate ISR,
+    /// EOI or SVR while the original reception is outstanding.
+    #[cfg(all(limen_target, target_arch = "x86_64"))]
+    pub unsafe fn receive_irq<'claim>(
+        &'claim mut self,
+        irq: &'claim mut Irq<'_>,
+    ) -> Result<Claim<'claim, 'map>, Failure> {
+        self.interrupt_context(irq)?;
+        let vector = irq.vector();
+        self.record_reception(vector)?;
+        Ok(Claim {
+            owner: self,
+            irq: Some(irq),
+            vector,
+        })
+    }
+
+    fn record_reception(&mut self, vector: u8) -> Result<(), Failure> {
         if self.reception != Reception::Idle {
             return Err(Failure::Busy);
         }
@@ -169,11 +215,7 @@ impl<'map> LocalApic<'map> {
         {
             return Err(Failure::Scope);
         }
-        self.reception.record(&mut self.reception_round, vector)?;
-        Ok(Claim {
-            owner: self,
-            vector,
-        })
+        self.reception.record(&mut self.reception_round, vector)
     }
 
     /// # Safety
@@ -181,7 +223,6 @@ impl<'map> LocalApic<'map> {
     /// been cleared or masked to permit the corresponding EOI. Ordinary
     /// interrupts stay masked; no competing EOI can pop another ISR bit.
     fn complete(&mut self, vector: u8) -> Result<(), Failure> {
-        self.reception_context()?;
         if self.reception != Reception::Received(vector) || self.top() != Some(vector) {
             return Err(Failure::Busy);
         }
@@ -193,7 +234,6 @@ impl<'map> LocalApic<'map> {
     /// Observe the same outstanding EOI without issuing another write.
     /// Retain the original route until the original ISR bit clears.
     fn confirm_reception(&mut self, vector: u8) -> Result<(), Failure> {
-        self.reception_context()?;
         if self.reception != Reception::Unconfirmed(vector) {
             return Err(Failure::Busy);
         }

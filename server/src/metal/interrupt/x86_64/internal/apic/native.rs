@@ -5,11 +5,13 @@ use core::arch::{asm, x86_64::__cpuid};
 use crate::metal::{
     platform::description::acpi::Madt,
     processor::{
-        description::x86_64::status, executor::x86_64::native, treaty::try_current_processor,
+        description::x86_64::status,
+        executor::x86_64::native,
+        treaty::{Irq, try_current_processor},
     },
 };
 
-use super::{Base, Observation, Probe};
+use super::{Base, Failure, LocalApic, Observation, Probe};
 
 const APIC_BASE: u32 = 0x1b;
 const FEATURE_MSR: u32 = 1 << 5;
@@ -60,5 +62,19 @@ impl Probe {
     /// asserted until the source is read in the current ordinary environment.
     pub const fn native() -> Self {
         Self { read: observe }
+    }
+}
+
+impl LocalApic<'_> {
+    /// The actual captured interrupt grants the local protected borrow. The
+    /// ordinary Probe stays unavailable while the Trap frame is authoritative.
+    pub(super) fn interrupt_context(&self, irq: &Irq<'_>) -> Result<(), Failure> {
+        if !irq.is_current()
+            || irq.processor().get() != self.processor
+            || base_bits().and_then(Base::decode) != Some(self.base)
+        {
+            return Err(Failure::Scope);
+        }
+        Ok(())
     }
 }

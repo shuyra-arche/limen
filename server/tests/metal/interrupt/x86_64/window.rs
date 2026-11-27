@@ -5,25 +5,15 @@ use core::{
     marker::PhantomData,
     sync::atomic::{AtomicU32, Ordering},
 };
-use kernel::metal::memory::access::treaty::device::DeviceWindow;
 
-use uefi_fixture::q35::{Idtr, io};
+use uefi_fixture::q35::Idtr;
+
+#[path = "prepare.rs"]
+mod hardware;
+pub use hardware::prepare;
 
 static RECEIVED: AtomicU32 = AtomicU32::new(0);
 static mut GATES: [[u8; 16]; 256] = [[0; 16]; 256];
-
-/// Prepare the exclusive local APIC window for an IRQ in priority class 15.
-///
-/// # Safety
-/// The guest owns both legacy PICs and its original processor's UC xAPIC mapping.
-pub unsafe fn prepare(window: &mut DeviceWindow<'_>) {
-    unsafe {
-        io::write8(0x21, 0xff);
-        io::write8(0xa1, 0xff);
-        window.write_u32(0x80, 0xe0).unwrap();
-        window.write_u32(0xf0, 0x1ff).unwrap();
-    }
-}
 
 #[unsafe(naked)]
 unsafe extern "C" fn receive() -> ! {

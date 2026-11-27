@@ -182,6 +182,16 @@ claim and completion, refuses ordinary Turn with idle Sync, and observes
 the interrupted stack, IRQ mask, GPR and full-width SIMD continuation after
 hardware return. Other GIC scenarios retain their polling reception checks.
 
+The x86_64 IPI guest installs the runtime table before launching the minor.
+Its physical ICR sends exercise the receiving vector's IST stack and exact
+xAPIC lease and EOI, including coalescing and a later accepted delivery.
+The guest observes restored RSP, RFLAGS, GPR and XMM state and verifies that
+Turn rejects the IRQ path while the local Sync supply is idle.
+The x86_64 Host observer uses the same native guest for two separate terminal
+runs. It checks a remote xAPIC NMI with an unusable interrupted RSP, and a
+processor-generated #DF after the #GP delivery itself faults. Each run records
+its own native terminal evidence and process settlement.
+
 ## Host-assisted observations
 
 The `machine-observer` package in `runner/observe/` uses ordinary Host

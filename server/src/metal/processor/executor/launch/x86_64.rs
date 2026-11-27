@@ -1,7 +1,7 @@
 //! Legacy xAPIC startup. The loader reserves one executable SIPI page
 //! below 1 MiB. Its contents and the BSP's identity mappings stay resident.
 use super::{self as launch, Minor, StartError};
-use crate::metal::processor::executor::x86_64::native::Descriptor;
+use crate::metal::processor::executor::{local, x86_64::native::Descriptor};
 use crate::metal::{
     interrupt::x86_64::internal::apic::{Failure, LocalApic},
     memory::mmu::x86_64::internal::context::Controls,
@@ -69,13 +69,21 @@ pub(super) unsafe fn wake_minor(
     // Reject conflicting or uncertain old ICR effects before rewriting
     // the original trampoline.
     let prepared = controller.prepare(processor, page).map_err(failure)?;
-    let mut gdt = Descriptor { limit: 0, base: 0 };
     let controls = unsafe { Controls::current() };
-    let cs: u16;
-    unsafe {
-        asm!("sgdt [{}]",in(reg) &mut gdt,options(nostack));
-        asm!("mov {:x},cs",out(reg) cs,options(nomem,nostack));
-    }
+    let current = local::ordinary_local().ok_or(StartError::Rejected(-2))?;
+    let (gdt, cs) = if let Some(runtime) = current.runtime() {
+        // Runtime tables may be above the legacy reset stub's 32-bit
+        // addressing limit. The admitted original GDT remains resident.
+        runtime.original_launch().ok_or(StartError::Rejected(-2))?
+    } else {
+        let mut gdt = Descriptor { limit: 0, base: 0 };
+        let cs: u16;
+        unsafe {
+            asm!("sgdt [{}]", in(reg) &mut gdt, options(nostack));
+            asm!("mov {:x}, cs", out(reg) cs, options(nomem, nostack));
+        }
+        (gdt, cs)
+    };
     let low = |v: usize| u32::try_from(v).map_err(|_| StartError::Rejected(-2));
     // The reset stub uses a 32-bit far pointer and four-level identity mappings.
     if !controls.four_level_untagged() {
