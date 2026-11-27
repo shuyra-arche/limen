@@ -108,6 +108,11 @@ mod ipi;
 pub use ipi::{IpiIssue, IpiRoute, IpiTarget};
 
 #[cfg(all(limen_target, target_arch = "x86_64"))]
+mod wake;
+#[cfg(all(limen_target, target_arch = "x86_64"))]
+pub use wake::{Idle, Wake, WakeReceiver};
+
+#[cfg(all(limen_target, target_arch = "x86_64"))]
 pub(in crate::metal) mod native;
 
 #[cfg(test)]

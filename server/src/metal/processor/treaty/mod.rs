@@ -65,6 +65,8 @@ pub use super::execution::runtime::{SoftwareInterrupt, TimerInterrupt};
 
 #[cfg(all(limen_target, target_arch = "riscv64", limen_firmware = "sbi"))]
 pub(in crate::metal) use super::executor::riscv64::native::wait_for_interrupt;
+#[cfg(all(limen_target, target_arch = "x86_64"))]
+pub(in crate::metal) use super::executor::x86_64::native::wait_for_interrupt;
 
 pub use super::execution::terminal::Console;
 #[cfg(limen_target)]

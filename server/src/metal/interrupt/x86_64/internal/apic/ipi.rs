@@ -38,6 +38,11 @@ impl IpiTarget {
         self.vector
     }
 
+    #[cfg(all(limen_target, target_arch = "x86_64"))]
+    pub(super) fn controller(self) -> PhysicalAddress {
+        self.controller
+    }
+
     fn command(self) -> u32 {
         // Fixed, physical destination, edge trigger and no shorthand.
         LEVEL_ASSERT | u32::from(self.vector)
