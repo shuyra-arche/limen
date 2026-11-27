@@ -97,7 +97,7 @@ impl Minor {
         hart: usize,
         entry: fn(usize, usize) -> !,
         argument: usize,
-        method: boot::Startup,
+        method: &mut boot::Startup,
     ) -> Result<(), StartError> {
         if hart == local::current_hart().get() {
             return Err(StartError::Busy);

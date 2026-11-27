@@ -204,7 +204,7 @@ impl Execution {
         &'static self,
         hart: usize,
         entry: fn(&'static Execution) -> !,
-        method: boot::Startup,
+        method: &mut boot::Startup,
     ) -> Result<(), Error> {
         let minor = self.minor_boot.ok_or(Error::Unsupported)?;
         if local::current_hart() != self.major_id || !cooperative_ready() {
