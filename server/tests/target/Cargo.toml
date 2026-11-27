@@ -1,3 +1,17 @@
+[package]
+name = "kernel-guest"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autobins = false
+
+[dependencies]
+kernel.workspace = true
+
+[target.'cfg(target_os = "uefi")'.dependencies]
+uefi.workspace = true
+uefi-fixture.workspace = true
+
 [workspace]
 resolver = "3"
 members = [

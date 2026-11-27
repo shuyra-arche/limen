@@ -58,6 +58,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-guest"
+version = "0.0.0"
+dependencies = [
+ "kernel",
+ "uefi",
+ "uefi-fixture",
+]
+
+[[package]]
 name = "limen-treaty"
 version = "0.0.1"
 

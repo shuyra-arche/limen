@@ -26,7 +26,7 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
         .join("../../..")
         .canonicalize()
         .unwrap();
-    let (target, manifest) = match architecture.as_str() {
+    let (target, mut manifest) = match architecture.as_str() {
         "riscv64" => (
             "riscv64gc-unknown-none-elf",
             "server/tests/target/metal/interrupt/riscv64/ipi/Cargo.toml",
@@ -41,6 +41,10 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
         ),
         _ => panic!("unsupported T0 architecture: {architecture}"),
     };
+    let discovery = case == "discovery-panic";
+    if discovery {
+        manifest = "server/tests/target/Cargo.toml";
+    }
     let evidence = root.join(".integration/t0").join(case);
     let logs = root.join(".integration/t0/cargo").join(case);
     fs::create_dir_all(&logs).unwrap();
@@ -56,13 +60,21 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
     );
     let command = || {
         let mut cargo = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+        cargo.current_dir(&root).args(["--config", &config]);
+        if discovery {
+            cargo.args(["-Z", "panic-abort-tests"]);
+        }
         cargo
-            .current_dir(&root)
-            .args(["--config", &config, "test", "--locked", "--manifest-path"])
+            .args(["test", "--locked", "--manifest-path"])
             .arg(root.join(manifest))
-            .args(["--test", "outcome-probe", "--target", target])
+            .args(["--target", target])
             .env("LIMEN_T0_CASE", case)
             .env("LIMEN_T0_EVIDENCE", &evidence);
+        if discovery {
+            cargo.args(["-p", "kernel-guest", "--test", "sync"]);
+        } else {
+            cargo.args(["--test", "outcome-probe"]);
+        }
         match profile.as_str() {
             "debug" => {}
             "release" => {
@@ -181,4 +193,13 @@ fn rejects_guest_reset() {
     let shutdown = receipt(&evidence.join("shutdown.json"));
     assert_eq!(shutdown["guest"], true);
     assert_eq!(shutdown["reason"], "guest-reset");
+}
+
+#[test]
+#[ignore = "requires the pinned target toolchain and QEMU"]
+fn rejects_collected_panic() {
+    let (result, evidence, _) = run("discovery-panic", false);
+    exited(&result, 99);
+    let serial = fs::read_to_string(evidence.join("serial.log")).unwrap();
+    assert!(serial.contains("T1 intentional collected test failure"));
 }

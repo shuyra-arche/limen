@@ -125,9 +125,17 @@ fn command(architecture: &str, image: &Path, directory: &Path, observe: bool) ->
     Ok(command)
 }
 
-pub fn run(architecture: &str, image: &Path, observe: bool) -> Result<()> {
+pub fn run(
+    architecture: &str,
+    image: &Path,
+    observe: bool,
+    evidence_root: Option<&Path>,
+) -> Result<()> {
     let image = image.canonicalize()?;
-    let evidence = PathBuf::from(env::var_os("LIMEN_T0_EVIDENCE").ok_or("missing evidence path")?);
+    let evidence = match evidence_root {
+        Some(root) => root.join(image.file_name().ok_or("missing executable name")?),
+        None => PathBuf::from(env::var_os("LIMEN_T0_EVIDENCE").ok_or("missing evidence path")?),
+    };
     kernel_verification::fresh(&evidence)?;
     let directory = evidence.canonicalize()?;
     let mut command = command(architecture, &image, &directory, observe)?;

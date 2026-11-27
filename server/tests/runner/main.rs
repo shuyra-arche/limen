@@ -23,6 +23,8 @@ enum Commands {
     Native {
         #[arg(long)]
         observe: bool,
+        #[arg(long)]
+        evidence_root: Option<PathBuf>,
         architecture: String,
         image: PathBuf,
     },
@@ -43,9 +45,10 @@ fn main() {
         Commands::Run(inputs) => scenario::run(inputs),
         Commands::Native {
             observe,
+            evidence_root,
             architecture,
             image,
-        } => native::run(&architecture, &image, observe),
+        } => native::run(&architecture, &image, observe, evidence_root.as_deref()),
         Commands::Observe { elf, output } => scenario::observe(elf, output),
         Commands::Symbolize {
             elf,
