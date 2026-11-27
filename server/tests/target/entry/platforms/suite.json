@@ -100,7 +100,8 @@
         "server/src/metal/interrupt/external/mod.rs",
         "server/src/metal/interrupt/external/gic/**",
         "server/src/metal/memory/mmu/internal/device.rs",
-        "server/tests/target/entry/platforms/gic.rs"
+        "server/tests/target/entry/platforms/gic.rs",
+        "server/tests/target/entry/pci/**"
       ]
     }
   }

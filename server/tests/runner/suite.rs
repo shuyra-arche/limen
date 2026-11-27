@@ -58,6 +58,13 @@ pub enum RiscvMachine {
 }
 
 impl RiscvMachine {
+    pub fn devices(self) -> &'static [&'static str] {
+        match self {
+            Self::Iommu => &["-device", "edu,addr=06.0,dma_mask=0xffffffff"],
+            _ => &[],
+        }
+    }
+
     pub fn arguments(self) -> (&'static str, &'static str) {
         match self {
             Self::Virt => ("virt", "rv64"),

@@ -9,6 +9,16 @@ pub enum Access {
 }
 
 impl Profile {
+    /// Locate a device context within a single-level 4 KiB directory.
+    pub fn context_words(&self, device: u32) -> Result<core::ops::Range<usize>, Error> {
+        let words = if self.extended_context { 8 } else { 4 };
+        let index = device as usize;
+        if index >= 512 / words {
+            return Err(Error::Address);
+        }
+        Ok(index * words..(index + 1) * words)
+    }
+
     fn page(&self, address: PhysicalAddress) -> Result<u64, Error> {
         let bytes = address.get();
         if !self.sv39 || !self.little_endian_tables {

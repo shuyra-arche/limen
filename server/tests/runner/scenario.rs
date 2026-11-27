@@ -111,6 +111,7 @@ fn prepare(args: &Inputs, suite: &Suite, relative: &Path, root: &Path) -> Result
         "harts": harts,
         "machine": machine,
         "machine_arguments": machine.arguments(),
+        "device_arguments": machine.devices(),
         "tools": tools(&provider, &qemu, &firmware)?,
         "suite_sha256": composition::hashes(&owner.join(relative))?,
         "builds": [format!("{command:?}")],
@@ -151,6 +152,7 @@ fn run_image(
     let firmware = Path::new(&std::env::var("QEMU_OPENSBI")?).canonicalize()?;
     let qemu = std::env::var("QEMU_RISCV64").unwrap_or("qemu-system-riscv64".into());
     let mut command = Command::new(qemu);
+    command.args(machine.devices());
     let (machine, cpu) = machine.arguments();
     command
         .args([

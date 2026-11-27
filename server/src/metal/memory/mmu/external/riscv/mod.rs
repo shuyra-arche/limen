@@ -58,6 +58,7 @@ impl Directory {
 pub struct Profile {
     pub sv39: bool,
     pub debug_translation: bool,
+    extended_context: bool,
     pub little_endian_tables: bool,
     pub address_bits: u32,
     pub directory: Directory,
@@ -72,6 +73,7 @@ pub unsafe fn probe(window: &mut DeviceWindow) -> Result<Profile, Error> {
     }
     let value = unsafe { directory(window) }?;
     Ok(Profile {
+        extended_context: caps & (1 << 22) != 0,
         debug_translation: caps & (1 << 31) != 0,
         little_endian_tables: u32::from_le(
             unsafe { window.read_u32(8) }.map_err(|_| Error::Window)?,

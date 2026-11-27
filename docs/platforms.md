@@ -129,12 +129,13 @@ HVC conduit. [AArch64 entry](../server/src/metal/platform/boot/aarch64/) · [PSC
 | AArch64 virt | GICv3 CPU interface acknowledge, priority drop and deactivate | GICv3 Distributor SPI from PL011 | EL1 stage 1, 48-bit VA and 4 KiB granule | SMMUv3 stage 2, linear stream table and 4 KiB granule |
 
 The x86 and Arm guests switch the active CPU root, exercise an alias and
-restore the firmware root. Their external MMU tests issue writes from a PCI
-EDU function at a nonidentity IOVA. VT-d and SMMUv3 revoke write permission
-and repeat that write after invalidation. AMD-Vi removes the device binding
-and repeats it after the matching completion store. The RV64 IOMMU guest
-uses the controller's debug translation interface and checks completion
-across command queue wrap. Endpoint DMA on RV64 remains unverified.
+restore the firmware root. On all three architectures a PCI EDU function
+issues writes at a nonidentity IOVA. The RISC-V IOMMU, VT-d and SMMUv3
+guests revoke write permission, invalidate the old translation and repeat
+the write to the same address. The AMD-Vi guest removes the device binding
+and repeats the write after its matching completion store. The RV64 guest
+also checks the controller's debug translation interface and completion
+across command queue wrap.
 
 These tests exercise individual controller and translation backends.
 Delivery to a waiting Unit, system-wide retirement of mappings and physical

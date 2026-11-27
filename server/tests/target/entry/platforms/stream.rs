@@ -10,9 +10,8 @@ use kernel::metal::{
     },
     platform::description::devicetree::DeviceTree,
 };
-use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress, PhysicalRange};
+use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
-const RID: u32 = 6 << 3;
 const IOVA: u32 = 0x0020_0000;
 const PATTERN: u32 = 0x9e55_e71c;
 #[repr(C, align(4096))]
@@ -29,95 +28,27 @@ fn order() {
 fn address(p: *mut Page) -> PhysicalAddress {
     PhysicalAddress::new(p.addr() as u64)
 }
-fn cell(bytes: &[u8], index: usize) -> u32 {
-    u32::from_be_bytes(bytes[index * 4..index * 4 + 4].try_into().unwrap())
-}
+#[path = "../pci/edu.rs"]
+mod pci;
+use pci::{Edu, RID};
 
 pub(super) struct Endpoint {
-    bar: DeviceWindow,
+    edu: Edu,
     format: Option<Format>,
 }
 
 impl Endpoint {
     pub(super) fn open(tree: &DeviceTree<'_>, expected: PhysicalRange) -> Self {
-        let mut hosts = tree.nodes().filter(|node| {
-            node.compatible(b"pci-host-ecam-generic").unwrap() && node.enabled().unwrap()
-        });
-        let host = hosts.next().unwrap();
-        assert!(hosts.next().is_none());
-        let map = host.property(b"iommu-map").unwrap().unwrap();
-        assert!(map.len() == 16 && cell(map, 0) == 0 && cell(map, 2) == 0 && cell(map, 3) > RID);
-        assert!(host.property(b"iommu-map-mask").unwrap().is_none());
-        assert_eq!(
-            tree.phandle(cell(map, 1))
-                .unwrap()
-                .unwrap()
-                .register(0)
-                .unwrap(),
-            expected
-        );
-        let ecam = host.register(0).unwrap();
-        let reg = ecam.start().get() + u64::from(RID) * 4096;
-        let cfg = PhysicalAddress::new(reg)
-            .range(ByteLength::new(4096))
-            .unwrap();
-        assert!(ecam.covers(cfg));
-        let mut cfg = unsafe { DeviceWindow::admit(cfg, InternalAddress::new(reg)).unwrap() };
-        assert_eq!(unsafe { cfg.read_u32(0) }.unwrap(), 0x11e8_1234);
-        let bar = u64::from(unsafe { cfg.read_u32(0x10) }.unwrap());
-        assert_ne!(bar, 0);
-        assert_eq!(bar % (1 << 20), 0);
-        // Require the complete BAR to fall in an identity-translated 32-bit
-        // PCI memory aperture in this exact virt host's seven-cell ranges.
-        let ranges = host.property(b"ranges").unwrap().unwrap();
-        assert!(ranges.len().is_multiple_of(28));
-        assert!(ranges.chunks_exact(28).any(|range| {
-            cell(range, 0) == 0x0200_0000
-                && cell(range, 1) == 0
-                && cell(range, 3) == 0
-                && cell(range, 2) == cell(range, 4)
-                && cell(range, 5) == 0
-                && u64::from(cell(range, 2)) <= bar
-                && bar + (1 << 20) <= u64::from(cell(range, 2)) + u64::from(cell(range, 6))
-        }));
-        let cmd = unsafe { cfg.read_u8(4).unwrap() };
-        unsafe { cfg.write_u8(4, cmd | 6).unwrap() };
-        order();
-        assert_eq!(unsafe { cfg.read_u8(4).unwrap() } & 6, 6);
-        let extent = PhysicalAddress::new(bar)
-            .range(ByteLength::new(1 << 20))
-            .unwrap();
-        let mut bar = unsafe { DeviceWindow::admit(extent, InternalAddress::new(bar)).unwrap() };
-        assert_eq!(unsafe { bar.read_u32(0).unwrap() } & 0xffff, 0xed);
-        Self { bar, format: None }
-    }
-
-    fn transfer(&mut self, iova: u32, write: bool) {
-        let (src, dst, cmd) = if write {
-            (0x40000, iova, 3)
-        } else {
-            (iova, 0x40000, 1)
-        };
-        unsafe {
-            assert_eq!(self.bar.read_u32(0x98).unwrap() & 1, 0);
-            self.bar.write_u32(0x80, src).unwrap();
-            self.bar.write_u32(0x88, dst).unwrap();
-            self.bar.write_u32(0x90, 4).unwrap();
-            order();
-            self.bar.write_u32(0x98, cmd).unwrap();
-            order();
-            let now = || {
-                let n: u64;
-                asm!("mrs {}, cntvct_el0",out(reg)n,options(nostack));
-                n
-            };
-            let freq: u64;
-            asm!("mrs {}, cntfrq_el0",out(reg)freq,options(nostack));
-            let start = now();
-            while self.bar.read_u32(0x98).unwrap() & 1 != 0 {
-                assert!(now().wrapping_sub(start) < 2 * freq, "EDU timeout");
-            }
-            order();
+        fn now() -> u64 {
+            let value: u64;
+            unsafe { asm!("mrs {}, cntvct_el0", out(reg) value, options(nostack)) };
+            value
+        }
+        let hertz: u64;
+        unsafe { asm!("mrs {}, cntfrq_el0", out(reg) hertz, options(nostack)) };
+        Self {
+            edu: Edu::open(tree, expected, false, order, now, hertz),
+            format: None,
         }
     }
     fn word() -> *mut u32 {
@@ -126,7 +57,7 @@ impl Endpoint {
     fn destination(&mut self, iova: u32, expected: u32) {
         unsafe { Self::word().write_volatile(!PATTERN) };
         order();
-        self.transfer(iova, true);
+        self.edu.transfer(iova, true);
         assert_eq!(unsafe { Self::word().read_volatile() }, expected);
     }
     pub(super) fn prime(&mut self) {
@@ -134,7 +65,7 @@ impl Endpoint {
         assert_ne!(pa, IOVA);
         unsafe { Self::word().write_volatile(PATTERN) };
         order();
-        self.transfer(pa, false);
+        self.edu.transfer(pa, false);
         self.destination(pa, PATTERN);
     }
     pub(super) fn verify_abort(&mut self) {

@@ -47,7 +47,10 @@
     "server/src/metal/memory/mmu/internal/riscv/context/**",
     "server/src/metal/memory/mmu/internal/riscv/mode.rs",
     "server/src/metal/memory/mmu/external/riscv/**",
-    "server/src/metal/memory/mmu/external/mod.rs"
+    "server/src/metal/memory/mmu/external/mod.rs",
+    "server/tests/target/entry/pci/**",
+    "server/src/metal/chrono/riscv/**",
+    "server/src/metal/chrono/mod.rs"
   ],
   "run": {
     "kind": "qemu",
@@ -55,7 +58,10 @@
     "machine": "iommu",
     "harts": 1,
     "expects": [
-      "PASS riscv-iommu sv39=1 directory=1 replacement-rejected=1 off=1 fences=130 walk=1 fault=1"
+      "PASS riscv-iommu sv39=1 directory=1 replacement-rejected=1 off=1 fences=130 walk=1 fault=1 dma=1 downgrade=1"
+    ],
+    "imports": [
+      "target/entry/pci"
     ]
   }
 }

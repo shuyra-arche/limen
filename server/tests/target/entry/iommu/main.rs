@@ -16,7 +16,15 @@ struct Page([u64; 512]);
 static mut COMMANDS: riscv::queue::Page = riscv::queue::Page::EMPTY;
 static mut DIRECTORY: Page = Page([0; 512]);
 static mut TABLES: [Page; 3] = [const { Page([0; 512]) }; 3];
-static PAYLOAD: Page = Page([0; 512]);
+static mut PAYLOAD: Page = Page([0; 512]);
+#[path = "../pci/edu.rs"]
+mod pci;
+
+fn ticks() -> u64 {
+    let value: u64;
+    unsafe { asm!("rdtime {}", out(reg) value, options(nostack)) };
+    value
+}
 fn physical<T>(value: *const T) -> PhysicalAddress {
     PhysicalAddress::new(value.addr() as u64)
 }
@@ -98,8 +106,12 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
         }
     }
     let range = range.expect("a platform IOMMU");
-    // The VM has one IOMMU, no endpoints, no PCI ATS, and Bare SATP. Its
-    // coherent RAM contains a permanent zeroed DDT with every context invalid.
+    // The VM has one quiesced EDU function, no PCI ATS, and Bare SATP.
+    let hertz = kernel::metal::chrono::riscv::RiscvTimebase::describe(boot.riscv_cpus())
+        .unwrap()
+        .unwrap()
+        .hertz();
+    let mut edu = pci::Edu::open(&tree, range, true, order, ticks, u64::from(hertz));
     let mut window =
         unsafe { DeviceWindow::admit(range, InternalAddress::new(range.start().get())).unwrap() };
     let profile = unsafe { riscv::probe(&mut window) }.unwrap();
@@ -108,15 +120,25 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
         &mut unsafe { riscv::shut(&mut window, order) }.unwrap(),
         Directory::Off,
     );
-    // First stage maps IOVA 0x1000 read-only to a different physical page.
+    // Give DID 0 and the firmware-selected EDU requester access to one page.
+    const IOVA: u32 = 0x1000;
+    const PATTERN: u32 = 0xbe71_6a29;
+    let payload = &raw mut PAYLOAD;
+    let data = payload.cast::<u32>();
+    assert_ne!(u64::from(IOVA), physical(payload).get());
     let tables = unsafe { &mut *(&raw mut TABLES) };
     tables[0].0[0] = profile.branch(physical(&tables[1])).unwrap();
     tables[1].0[0] = profile.branch(physical(&tables[2])).unwrap();
     tables[2].0[1] = profile
-        .leaf(physical(&PAYLOAD), riscv::translation::Access::Read)
+        .leaf(physical(payload), riscv::translation::Access::ReadWrite)
         .unwrap();
     let directory = unsafe { &mut *(&raw mut DIRECTORY) };
-    directory.0[..4].copy_from_slice(&profile.context(physical(&tables[0]), 1).unwrap());
+    let context = profile.context(physical(&tables[0]), 1).unwrap();
+    for did in [0, pci::RID] {
+        let slot = profile.context_words(did).unwrap();
+        directory.0[slot][..4].copy_from_slice(&context);
+    }
+    assert!(profile.context_words(128).is_err());
     let root = physical(directory);
     confirm(
         &mut unsafe { riscv::install(&mut window, root, order) }.unwrap(),
@@ -124,19 +146,25 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     );
     assert_eq!(
         translate(&mut window, 0x1000, true),
-        Some(physical(&PAYLOAD).get())
+        Some(physical(payload).get())
     );
     assert_eq!(translate(&mut window, 0x2000, true), None);
     assert!(matches!(
         unsafe { riscv::install(&mut window, root, order) },
         Err(riscv::Error::Mode)
     ));
-    confirm(
-        &mut unsafe { riscv::shut(&mut window, order) }.unwrap(),
-        Directory::Off,
-    );
-    // Even Off can retain cached DDT entries and translations. Invalidate
-    // both on the same controller and consume each batch's own fence.
+    unsafe { data.write_volatile(PATTERN) };
+    order();
+    edu.transfer(IOVA, false);
+    unsafe { data.write_volatile(!PATTERN) };
+    order();
+    edu.transfer(IOVA, true);
+    assert_eq!(unsafe { data.read_volatile() }, PATTERN);
+    let leaf = profile
+        .leaf(physical(payload), riscv::translation::Access::Read)
+        .unwrap();
+    unsafe { core::ptr::addr_of_mut!(tables[2].0[1]).write_volatile(leaf) };
+    order();
     use riscv::queue::{Invalidate, Queue};
     let commands = unsafe { &mut *(&raw mut COMMANDS) };
     let address = PhysicalAddress::new(core::ptr::from_ref(commands).addr() as u64);
@@ -147,7 +175,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     );
     for i in 0..130 {
         let operation = if i % 2 == 0 {
-            Invalidate::Device(0)
+            Invalidate::Device(pci::RID)
         } else {
             Invalidate::FirstStage
         };
@@ -156,9 +184,17 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
         assert_eq!(retry(|| queue.observe()), operation);
         assert_eq!(queue.observe(), Err(riscv::Error::Mode));
     }
+    unsafe { data.write_volatile(!PATTERN) };
+    order();
+    edu.transfer(IOVA, true);
+    assert_eq!(unsafe { data.read_volatile() }, !PATTERN);
     retry(|| queue.shut());
+    confirm(
+        &mut unsafe { riscv::shut(&mut window, order) }.unwrap(),
+        Directory::Off,
+    );
     boot::write(
-        "\nPASS riscv-iommu sv39=1 directory=1 replacement-rejected=1 off=1 fences=130 walk=1 fault=1\n",
+        "\nPASS riscv-iommu sv39=1 directory=1 replacement-rejected=1 off=1 fences=130 walk=1 fault=1 dma=1 downgrade=1\n",
     );
     boot::shutdown(true)
 }
