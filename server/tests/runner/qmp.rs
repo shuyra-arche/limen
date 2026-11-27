@@ -63,12 +63,9 @@ pub fn run_isolated(
                 let commands = stream.try_clone()?;
                 let control = controller.map(|mut controller| {
                     move || {
-                        let result = process::run(
-                            &mut controller,
-                            &directory.join("controller"),
-                            timeout,
-                        )
-                        .map_err(|error| io::Error::other(error.to_string()))?;
+                        let result =
+                            process::run(&mut controller, &directory.join("controller"), timeout)
+                                .map_err(|error| io::Error::other(error.to_string()))?;
                         if !result.success() {
                             return Err(io::Error::other(format!(
                                 "external controller failed: {result:?}"

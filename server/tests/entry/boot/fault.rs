@@ -137,7 +137,8 @@ set architecture riscv:rv64
 target remote ./gdb.sock
 hbreak *{entry:#x}
 continue
-if $pc != {entry:#x}
+if (unsigned long)$pc != {entry:#x}
+  echo unexpected boot entry\n
   quit 1
 end
 delete breakpoints
@@ -150,27 +151,38 @@ if *(unsigned long long *){bss_start:#x} == {WITNESS:#x}
   stepi
 end
 if *(unsigned long long *){bss_start:#x} != 0 || *(unsigned long long *){last:#x} != {WITNESS:#x}
+  echo BSS witnesses do not establish a partial clear\n
   quit 1
 end
-if $pc < {text_start:#x} || $pc + 2 > {text_end:#x} || ($pc & 1) != 0 || $sp != {major_top:#x}
+# GDB exposes PC and SP as pointer values. Normalize every address before
+# arithmetic, so these checks do not depend on a debugger's register types.
+set $fault_pc = (unsigned long)$pc
+set $saved_sp = (unsigned long)$sp
+set $trap_vector = (unsigned long)$stvec
+set $claim = (unsigned long)$sscratch
+if $fault_pc < {text_start:#x} || $fault_pc + 2 > {text_end:#x} || ($fault_pc & 1) != 0 || $saved_sp != {major_top:#x}
+  echo unexpected interrupted PC or stack\n
   quit 1
 end
-if $stvec < {text_start:#x} || $stvec >= {text_end:#x} || ($stvec & 3) != 0
+if $trap_vector < {text_start:#x} || $trap_vector >= {text_end:#x} || ($trap_vector & 3) != 0
+  echo invalid early trap vector\n
   quit 1
 end
-if $sscratch < {image_start:#x} || $sscratch + 8 > {image_end:#x} || ($sscratch & 7) != 0
+if $claim < {image_start:#x} || $claim + 8 > {image_end:#x} || ($claim & 7) != 0
+  echo invalid emergency stack claim address\n
   quit 1
 end
-if $sscratch < {bss_end:#x} && $sscratch + 8 > {bss_start:#x}
+if $claim < {bss_end:#x} && $claim + 8 > {bss_start:#x}
+  echo emergency stack claim overlaps BSS\n
   quit 1
 end
-printf "LIMEN_CLEAR %lx %lx %lx %lx %lx %lx %lx\n", (unsigned long)$pc, (unsigned long)$sp, (unsigned long)$stvec, (unsigned long)$sscratch, *(unsigned long *)$sscratch, *(unsigned long *){bss_start:#x}, *(unsigned long *){last:#x}
-set $fault_pc = $pc
+printf "LIMEN_CLEAR %lx %lx %lx %lx %lx %lx %lx\n", $fault_pc, $saved_sp, $trap_vector, $claim, *(unsigned long *)$claim, *(unsigned long *){bss_start:#x}, *(unsigned long *){last:#x}
 set {{unsigned short}}$fault_pc = 0
 if *(unsigned short *)$fault_pc != 0
+  echo fault injection did not reach guest memory\n
   quit 1
 end
-hbreak *$stvec
+hbreak *$trap_vector
 continue
 delete breakpoints
 printf "LIMEN_TRAP %lx %lx %lx %lx %lx %lx\n", (unsigned long)$pc, (unsigned long)$scause, (unsigned long)$sepc, (unsigned long)$stval, (unsigned long)$sp, (unsigned long)$sstatus
@@ -204,17 +216,64 @@ fn register_observations_are_exact_and_complete() {
     );
 }
 
-fn diagnostic(log: &str, cause: u64, pc: u64, value: u64, stack: u64, status: u64) {
-    assert!(log.ends_with('\n'), "truncated diagnostic");
+fn diagnostic(logs: &[&str], cause: u64, pc: u64, value: u64, stack: u64, status: u64) {
     let expected = format!(
         "FAIL Limen boot trap: cause={cause:#x} pc={pc:#x} value={value:#x} stack={stack:#x} status={status:#x}"
     );
-    let failures: Vec<_> = log
-        .lines()
-        .filter(|line| *line == "FAIL" || line.starts_with("FAIL "))
-        .collect();
-    assert_eq!(failures, [expected.as_str()], "{log}");
-    assert!(!log.contains("PASS boot-handoff"));
+    let mut failures = Vec::new();
+    // The actual firmware may deliver its console output through any of
+    // these recorded channels. Require one complete diagnostic across them.
+    for log in logs {
+        assert!(!log.contains("PASS boot-handoff"));
+        for line in log.split_inclusive('\n') {
+            let record = line.trim_end_matches(['\r', '\n']);
+            if record == "FAIL" || record.starts_with("FAIL ") {
+                assert!(line.ends_with('\n'), "truncated diagnostic: {line}");
+                failures.push(record);
+            }
+        }
+    }
+    assert_eq!(failures, [expected.as_str()], "{logs:?}");
+}
+
+#[test]
+fn terminal_diagnostic_is_unique_across_the_recorded_channels() {
+    let record = "FAIL Limen boot trap: cause=0x2 pc=0x100 value=0x0 stack=0x200 status=0x300\r\n";
+    for index in 0..3 {
+        let mut logs = [""; 3];
+        logs[index] = record;
+        diagnostic(&logs, 2, 0x100, 0, 0x200, 0x300);
+    }
+    for logs in [
+        [record, record, ""],
+        ["", "", ""],
+        [record.trim_end(), "", ""],
+        [record, "PASS boot-handoff\n", ""],
+        [record, "FAIL unrelated\n", ""],
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| diagnostic(&logs, 2, 0x100, 0, 0x200, 0x300)).is_err()
+        );
+    }
+}
+
+#[test]
+fn terminal_diagnostic_must_match_the_observed_registers() {
+    let record = "FAIL Limen boot trap: cause=0x2 pc=0x100 value=0x0 stack=0x200 status=0x300\n";
+    assert!(
+        std::panic::catch_unwind(|| diagnostic(&[record], 2, 0x102, 0, 0x200, 0x300)).is_err()
+    );
+}
+
+fn fault_observation_error(directory: &Path, error: impl std::fmt::Display) -> ! {
+    let read = |name: &str| fs::read_to_string(directory.join(name)).unwrap_or_default();
+    panic!(
+        "{error}\nGDB stdout:\n{}\nGDB stderr:\n{}\nQMP:\n{}\nMachine result:\n{}",
+        read("controller/serial.log"),
+        read("controller/stderr.log"),
+        read("qmp.jsonl"),
+        read("result.json"),
+    )
 }
 
 #[cfg(unix)]
@@ -259,15 +318,13 @@ fn bss_clear_traps_on_the_original_major_stack() {
         Command::new(env::var_os("GDB_MULTIARCH").unwrap_or_else(|| "gdb-multiarch".into()));
     controller
         .current_dir(&fault)
-        .args(["-nx", "-batch", "-x", "control.gdb"]);
-    let (result, shutdown) = crate::qmp::run_isolated(
-        machine,
-        &fault,
-        Duration::from_secs(45),
-        Some(controller),
-    )
-    .unwrap();
-    let shutdown = shutdown.unwrap();
+        .args(["-nx", "-batch", "-se"])
+        .arg(&image)
+        .args(["-x", "control.gdb"]);
+    let (result, shutdown) =
+        crate::qmp::run_isolated(machine, &fault, Duration::from_secs(45), Some(controller))
+            .unwrap_or_else(|error| fault_observation_error(&fault, error));
+    let shutdown = shutdown.unwrap_or_else(|error| fault_observation_error(&fault, error));
     kernel_verification::json(&fault.join("shutdown.json"), &shutdown).unwrap();
     assert!(result.success(), "{result:?}");
     assert!(shutdown.guest);
@@ -295,8 +352,10 @@ fn bss_clear_traps_on_the_original_major_stack() {
     assert_eq!(interrupted, pc);
     assert_eq!(value, 0);
     assert_eq!(saved_stack, stack);
+    let channels = ["serial.log", "semihost.log", "stdout.log"]
+        .map(|name| fs::read_to_string(fault.join(name)).unwrap());
     diagnostic(
-        &fs::read_to_string(fault.join("serial.log")).unwrap(),
+        &channels.each_ref().map(String::as_str),
         cause,
         interrupted,
         value,
