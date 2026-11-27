@@ -7,7 +7,7 @@ use core::{
 };
 
 use crate::metal::{
-    identity::{Entry, GenerationTable},
+    identity::{Entry, GenerationTable, Slot},
     sync::{TurnLock, TurnMode, TurnWorkspace},
 };
 use limen_treaty::model::PhysicalRange;
@@ -202,26 +202,21 @@ impl Grant {
             if source.published.load(Acquire) != index {
                 return Err(Error::Changed);
             }
-            if source.root.overlaps(physical)
-                || source
-                    .regions()
-                    .any(|(_, current)| current.physical.overlaps(physical))
-            {
+            if source.root.overlaps(physical) {
                 return Err(Error::Overlap);
             }
-            let total = source
-                .regions()
-                .try_fold(physical.length(), |sum, (_, current)| {
-                    sum.checked_add(current.physical.length())
-                        .ok_or(Error::Capacity)
-                })?;
-            if total > source.config.maximum {
-                return Err(Error::Capacity);
-            }
+            let prepared = held.access(&source.directory).expect("directory").prepare(
+                &source.regions[..index],
+                physical,
+                source.config.maximum,
+            )?;
             let state = held.access(&region.state).expect("new Region");
             state.initialize(geometry, source.config.edits, physical.length().get());
             // The directory owns the only write to this unpublished slot.
             unsafe { (*region.description.get()).write(description) };
+            held.access(&source.directory)
+                .expect("directory")
+                .insert(Slot::new(index).expect("checked Region slot"), prepared);
             let id = RegionId::new(source.source_id(), index);
             self.admitted = Some(id);
             source.published.store(index + 1, Release);

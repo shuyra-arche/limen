@@ -14,6 +14,7 @@ use limen_treaty::model::PhysicalRange;
 mod allocation;
 mod allowance;
 pub(crate) mod bootstrap;
+mod directory;
 pub mod pool;
 pub mod region;
 mod returns;
@@ -31,6 +32,7 @@ pub use returns::{Pending, Retired, ReturnId, ReturnReceipt, Returned};
 pub use search::{Candidate, Lookup, LookupObservation, RamPurpose, Request, Search};
 
 use allowance::{AllowanceSlot, Free};
+use directory::Directory;
 use region::Region;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,7 +93,7 @@ impl RegionId {
 pub struct Allocator {
     config: Config,
     root: PhysicalRange,
-    directory: TurnLock<()>,
+    directory: TurnLock<Directory>,
     published: AtomicUsize,
     regions: &'static [Region],
     allowances: &'static [TurnLock<AllowanceSlot>],

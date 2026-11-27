@@ -1309,3 +1309,100 @@ fn source_directory_scale_is_independent_of_joint_lock_capacity() {
         }
     }
 }
+
+#[test]
+fn region_address_index_preserves_identity_and_balances_real_admissions() {
+    use crate::metal::memory::allocator::directory::tests::verify;
+
+    // All permutations of four delayed Regions, after two initial Regions.
+    // Each fixture has its own exclusive root and disjoint physical scope.
+    let mut case = 0u64;
+    for a in 0..4 {
+        for b in 0..4 {
+            for c in 0..4 {
+                for d in 0..4 {
+                    if a == b || a == c || a == d || b == c || b == d || c == d {
+                        continue;
+                    }
+                    case += 1;
+                    let base = BASE + case * 0x100000;
+                    let mut receiver = None;
+                    bootstrap_at(base, |regions, mapping| {
+                        let config = Config {
+                            regions: 6,
+                            maximum: ByteLength::new(32 * PAGE),
+                            allocations: 1,
+                            returns: 1,
+                            ..CONFIG
+                        };
+                        unsafe { regions.allocator(mapping, config, 0, &mut receiver, &mut []) }
+                            .unwrap()
+                            .unwrap();
+                    });
+                    let allowance = receiver.take().unwrap();
+                    let source = allowance.source();
+                    let original = source.regions().collect::<Vec<_>>();
+                    assert_eq!(original.len(), 2);
+                    for offset in [a, b, c, d] {
+                        let physical =
+                            range(base + (20 + offset) * PAGE, base + (21 + offset) * PAGE);
+                        let description = RegionDescription {
+                            physical,
+                            origin: ATTRIBUTES,
+                        };
+                        let mut grant =
+                            unsafe { retired(physical).grant(source, description) }.unwrap();
+                        let id = grant.admit(Fast).unwrap();
+                        assert_eq!(grant.admit(Slow), Ok(id));
+                        assert_eq!(source.region(id).unwrap().description().physical, physical);
+                        let count = source.regions().count();
+                        source
+                            .directory
+                            .acquire(|directory| verify(directory, &source.regions[..count]))
+                            .unwrap();
+                    }
+                    assert_eq!(source.regions().count(), 6);
+                    for (id, description) in original {
+                        assert_eq!(source.region(id).unwrap().description(), description);
+                    }
+                    let existing = source.regions().nth(3).unwrap().1.physical;
+                    let count = source.regions().count();
+                    source
+                        .directory
+                        .acquire(|directory| {
+                            assert!(matches!(
+                                directory.prepare(
+                                    &source.regions[..count],
+                                    existing,
+                                    source.config.maximum
+                                ),
+                                Err(Error::Overlap)
+                            ));
+                            let overlapping =
+                                range(existing.start().get(), existing.end().get() + PAGE);
+                            assert!(matches!(
+                                directory.prepare(
+                                    &source.regions[..count],
+                                    overlapping,
+                                    source.config.maximum
+                                ),
+                                Err(Error::Overlap)
+                            ));
+                            let outside = range(base + 30 * PAGE, base + 31 * PAGE);
+                            assert!(matches!(
+                                directory.prepare(
+                                    &source.regions[..count],
+                                    outside,
+                                    ByteLength::new(0)
+                                ),
+                                Err(Error::Capacity)
+                            ));
+                            verify(directory, &source.regions[..count]);
+                        })
+                        .unwrap();
+                }
+            }
+        }
+    }
+    assert_eq!(case, 24);
+}

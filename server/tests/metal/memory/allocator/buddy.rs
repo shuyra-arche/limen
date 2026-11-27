@@ -394,3 +394,41 @@ fn both_search_paths_return_an_occupiable_grain_inside_a_clipped_window() {
         buddy.occupy(scanned).unwrap();
     });
 }
+
+#[test]
+fn delayed_initialization_touches_only_actual_roots() {
+    const PAGE: u64 = 4096;
+    const INACTIVE: u8 = 0xa5;
+    let geometry = Geometry::new(physical(3 * PAGE..515 * PAGE), ByteLength::new(PAGE)).unwrap();
+    let count = geometry.root_count();
+    assert!(geometry.node_count() > 32 * count);
+    let mut roots = [const { MaybeUninit::<Root>::uninit() }; 128];
+    let mut nodes = [INACTIVE; 1024];
+
+    {
+        // The real Allocator path supplies initialized storage. Inactive
+        // descendants have no semantic state until a parent is split.
+        let buddy = Buddy::initialize(
+            geometry.clone(),
+            &mut roots,
+            &mut nodes,
+            geometry.edit_bound(),
+        )
+        .unwrap();
+        assert!(buddy.fast(request(PAGE, PAGE)).unwrap().is_some());
+    }
+    assert_eq!(
+        nodes.iter().filter(|&&byte| byte != INACTIVE).count(),
+        count
+    );
+    assert_eq!(nodes.iter().filter(|&&byte| byte == 1).count(), count);
+
+    // A near-full address-space geometry does not need a backing forest
+    // for this pure bound check.
+    let wide = Geometry::new(
+        physical(PAGE..(u64::MAX & !(PAGE - 1))),
+        ByteLength::new(PAGE),
+    )
+    .unwrap();
+    assert!(wide.root_count() <= 2 * u64::BITS as usize);
+}
