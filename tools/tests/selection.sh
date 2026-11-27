@@ -267,7 +267,7 @@ expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc
 change server/src/metal/interrupt/claim.rs
 expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc x86-64-ioapic
 change server/src/metal/memory/mmu/retirement.rs
-expect_suites aarch64-smmu rv64-iommu
+expect_suites aarch64-smmu rv64-iommu x86-64-amdvi x86-64-vtd
 change server/tests/target/support/pci/edu.rs
 expect_suites aarch64-smmu rv64-iommu x86-64-amdvi x86-64-vtd
 change server/tests/target/support/pci/q35.rs
