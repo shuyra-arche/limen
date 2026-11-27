@@ -22,9 +22,9 @@ impl Access {
     }
 }
 
-/// Observed permission required by the current save shape, not proof that
-/// the PE implements extensions or can preserve an arbitrary vector state.
-pub(in crate::metal) fn base_simd(bits: usize) -> bool {
+/// Interpret the supplied CPACR_EL1 value for the base FP/SIMD save shape.
+/// Neither an observation of the current PE nor proof of its capabilities.
+pub fn base_simd(bits: usize) -> bool {
     matches!(
         Access::from_bits(bits >> FPEN_SHIFT),
         Access::Privileged | Access::Open
