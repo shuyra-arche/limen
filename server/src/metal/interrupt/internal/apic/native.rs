@@ -4,7 +4,10 @@ use core::arch::{asm, x86_64::__cpuid};
 
 use crate::metal::{
     platform::description::acpi::Madt,
-    processor::hart::{local, x86_64::{native, status}},
+    processor::hart::{
+        local,
+        x86_64::{native, status},
+    },
 };
 
 use super::{Base, Observation, Probe};
