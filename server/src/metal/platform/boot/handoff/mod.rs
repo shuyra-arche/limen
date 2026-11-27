@@ -31,7 +31,7 @@ pub(crate) struct Facts<'a> {
 /// Retained firmware descriptions prepared in the startup caller's frame.
 pub(crate) struct Descriptions<'a> {
     #[cfg(limen_firmware = "sbi")]
-    pub(crate) cpus: Option<crate::metal::processor::description::riscv64::cpu::RiscvCpus<'a>>,
+    pub(crate) cpus: Option<crate::metal::processor::treaty::RiscvCpus<'a>>,
     #[cfg(limen_firmware = "sbi")]
     pub(crate) sbi: Option<crate::metal::platform::firmware::treaty::sbi::SbiServices>,
     pub(crate) device_tree: Option<devicetree::DeviceTree<'a>>,

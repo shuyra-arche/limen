@@ -5,12 +5,13 @@ use crate::metal::platform::boot::treaty::Admission;
 use crate::metal::platform::boot::treaty::Descriptions;
 #[cfg(limen_cooperative)]
 use crate::metal::processor::treaty::Major;
+use crate::metal::processor::treaty::ProcessorId;
 use core::ops::Range;
 use limen_treaty::model::PhysicalRange;
 
 /// Facts admitted on the major CPU. These carry no allocation authority.
 pub struct Boot<'a> {
-    processor: usize,
+    processor: ProcessorId,
     image: PhysicalRange,
     descriptions: &'a Descriptions<'a>,
     firmware_map: Option<FirmwareMap<'a>>,
@@ -24,12 +25,12 @@ pub struct Boot<'a> {
     #[cfg(limen_cooperative)]
     major: Option<Major>,
     #[cfg(all(limen_target, target_arch = "riscv64"))]
-    reception: Option<crate::metal::interrupt::riscv64::internal::supervisor::Supervisor>,
+    reception: Option<crate::metal::interrupt::treaty::Supervisor>,
 }
 
 impl<'a> Boot<'a> {
     pub fn processor(&self) -> usize {
-        self.processor
+        self.processor.get()
     }
 
     pub fn image(&self) -> PhysicalRange {
@@ -92,7 +93,7 @@ impl<'a> Boot<'a> {
 
     /// CPU scope already checked at the SBI handoff.
     #[cfg(limen_firmware = "sbi")]
-    pub fn riscv_cpus(&self) -> &crate::metal::processor::description::riscv64::cpu::RiscvCpus<'a> {
+    pub fn riscv_cpus(&self) -> &crate::metal::processor::treaty::RiscvCpus<'a> {
         self.descriptions
             .cpus
             .as_ref()
@@ -106,9 +107,7 @@ impl<'a> Boot<'a> {
 
     /// Move the major hart's exclusive RISC-V reception lines out of the handoff.
     #[cfg(all(limen_target, target_arch = "riscv64"))]
-    pub fn take_reception(
-        &mut self,
-    ) -> Option<crate::metal::interrupt::riscv64::internal::supervisor::Supervisor> {
+    pub fn take_reception(&mut self) -> Option<crate::metal::interrupt::treaty::Supervisor> {
         self.reception.take()
     }
 
@@ -166,7 +165,7 @@ impl<'a> Boot<'a> {
         descriptions: &'a Descriptions<'a>,
     ) -> Self {
         Self {
-            processor,
+            processor: ProcessorId::new(processor),
             image,
             firmware_map,
             descriptions,

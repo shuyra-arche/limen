@@ -8,18 +8,18 @@ use crate::metal::{
     processor::{
         execution::terminal::trap,
         executor::entry,
-        treaty::{Terminal, can_switch},
+        treaty::{ProcessorId, Terminal, can_switch},
     },
 };
 use core::ops::Range;
 use limen_treaty::model::PhysicalRange;
 
 #[cfg(target_arch = "riscv64")]
-use crate::metal::interrupt::riscv64::internal::supervisor::Supervisor;
+use crate::metal::interrupt::treaty::Supervisor;
 
 /// Original firmware facts alongside the hardware use admitted by Metal.
 pub(crate) struct Admission<'a> {
-    pub(crate) processor: usize,
+    pub(crate) processor: ProcessorId,
     pub(crate) terminal: Terminal,
     pub(crate) stack: Range<usize>,
     pub(crate) facts: Facts<'a>,
@@ -94,7 +94,7 @@ pub(super) unsafe extern "C" fn start(
     let reception = unsafe { Supervisor::admit(processor as u64) }
         .unwrap_or_else(|_| terminal.reject(format_args!("FAIL Limen boot: local reception\n")));
     treaty::deliver(Admission {
-        processor,
+        processor: ProcessorId::new(processor),
         terminal,
         stack,
         facts,
