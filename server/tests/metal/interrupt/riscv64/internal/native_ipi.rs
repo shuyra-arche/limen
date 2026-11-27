@@ -78,6 +78,9 @@ fn minor(hart: usize, hertz: usize) -> ! {
 
 pub fn check(boot: Boot<'_>) {
     let cpus = boot.riscv_cpus();
+    assert!(cpus.cpu(0).unwrap().unwrap().enabled());
+    assert!(cpus.cpu(1).unwrap().unwrap().enabled());
+    assert!(cpus.cpu(2).unwrap().is_none());
     let source = boot.hart();
     let peer = (0..2).find(|hart| *hart != source).unwrap();
     let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();

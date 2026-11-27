@@ -6,6 +6,7 @@ on:
       - "server/tests/metal/**"
       - "server/tests/target/support/outcome/**"
       - "server/tests/target/support/discovery/**"
+      - "server/tests/target/support/platform.rs"
       - "server/tests/target/tests/**"
       - "server/tests/target/Cargo.toml"
       - "server/tests/target/Cargo.lock"
@@ -68,21 +69,10 @@ jobs:
           set -euo pipefail
           runner="$PWD/server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify"
           evidence="$PWD/.integration/t1"
-          config="target.$LIMEN_TEST_TARGET.runner=['$runner','native','--evidence-root','$evidence','$LIMEN_T0_ARCH']"
+          config="target.$LIMEN_TEST_TARGET.runner=['$runner','native','--evidence-root','$evidence']"
           args=()
           if [[ "$LIMEN_T0_PROFILE" == release ]]; then args+=(--release); fi
-          cargo -Z panic-abort-tests --config "$config" test --locked --manifest-path server/tests/target/Cargo.toml -p kernel-guest --test 'common-*' --test "$LIMEN_T0_ARCH-base-*" --target "$LIMEN_TEST_TARGET" "${args[@]}"
-      - name: Test dual-Hart guests
-        if: matrix.arch == 'riscv64' || matrix.arch == 'x86_64'
-        shell: bash
-        run: |
-          set -euo pipefail
-          runner="$PWD/server/tests/runner/target/x86_64-unknown-linux-gnu/debug/verify"
-          evidence="$PWD/.integration/t1/dual"
-          config="target.$LIMEN_TEST_TARGET.runner=['$runner','native','--evidence-root','$evidence','--harts','2','$LIMEN_T0_ARCH']"
-          args=()
-          if [[ "$LIMEN_T0_PROFILE" == release ]]; then args+=(--release); fi
-          cargo -Z panic-abort-tests --config "$config" test --locked --manifest-path server/tests/target/Cargo.toml -p kernel-guest --test "$LIMEN_T0_ARCH-dual-*" --target "$LIMEN_TEST_TARGET" "${args[@]}"
+          cargo -Z panic-abort-tests --config "$config" test --locked --manifest-path server/tests/target/Cargo.toml -p kernel-guest --test 'common-*' --test "$LIMEN_T0_ARCH-*" --target "$LIMEN_TEST_TARGET" "${args[@]}"
       - name: Preserve probe evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

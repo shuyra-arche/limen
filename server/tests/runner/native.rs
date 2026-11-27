@@ -1,4 +1,5 @@
 //! Experimental Cargo runner. Only the dedicated machine exit code is success.
+use crate::platform::{self, Firmware, Machine};
 use kernel_verification::{Result, output, process, require};
 use std::{
     env, fs,
@@ -11,20 +12,15 @@ fn variable(name: &str, default: &str) -> String {
     env::var(name).unwrap_or_else(|_| default.into())
 }
 
-fn command(
-    architecture: &str,
-    image: &Path,
-    directory: &Path,
-    observe: bool,
-    harts: u8,
-) -> Result<Command> {
+fn command(machine: &Machine, image: &Path, directory: &Path, observe: bool) -> Result<Command> {
+    let architecture = machine.architecture;
     let mut command = Command::new(match architecture {
         "riscv64" => variable("QEMU_RISCV64", "qemu-system-riscv64"),
         "aarch64" => variable("QEMU_AARCH64", "qemu-system-aarch64"),
         "x86_64" => variable("QEMU_X86_64", "qemu-system-x86_64"),
         _ => return Err("unsupported architecture".into()),
     });
-    let count = harts.to_string();
+    let count = machine.platform.harts.to_string();
     let accel = if architecture == "riscv64" {
         "tcg,thread=multi"
     } else {
@@ -43,6 +39,10 @@ fn command(
         "none",
         "-no-reboot",
     ]);
+    command.args(["-machine", &machine.board]);
+    if let Some(cpu) = machine.cpu {
+        command.args(["-cpu", cpu]);
+    }
     // Semihosting diagnostics must not share the QMP control stream.
     let semihost = if observe && architecture != "x86_64" {
         command.arg("-chardev").arg(format!(
@@ -53,9 +53,9 @@ fn command(
     } else {
         "enable=on,target=native,userspace=off"
     };
-    if architecture == "riscv64" {
+    if machine.platform.firmware == Firmware::OpenSbi {
         command
-            .args(["-machine", "virt", "-cpu", "rv64", "-m", "128M", "-bios"])
+            .args(["-m", "128M", "-bios"])
             .arg(variable(
                 "QEMU_OPENSBI",
                 "/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin",
@@ -69,20 +69,20 @@ fn command(
         return Ok(command);
     }
 
-    let (firmware, code, variables, boot) = if architecture == "x86_64" {
-        (
+    let (firmware, code, variables, boot) = match machine.platform.firmware {
+        Firmware::Ovmf => (
             variable("OVMF_DIR", "/usr/share/OVMF"),
             "OVMF_CODE_4M.fd",
             "OVMF_VARS_4M.fd",
             "BOOTX64.EFI",
-        )
-    } else {
-        (
+        ),
+        Firmware::Aavmf => (
             variable("AAVMF_DIR", "/usr/share/AAVMF"),
             "AAVMF_CODE.fd",
             "AAVMF_VARS.fd",
             "BOOTAA64.EFI",
-        )
+        ),
+        Firmware::OpenSbi => unreachable!(),
     };
     let firmware = Path::new(&firmware);
     let esp = directory.join("esp");
@@ -104,7 +104,7 @@ fn command(
         ));
     if architecture == "x86_64" {
         command
-            .args(["-machine", "q35", "-m", "128M", "-drive"])
+            .args(["-m", "128M", "-drive"])
             .arg(format!("format=raw,file=fat:rw:{}", esp.display()))
             .arg("-debugcon")
             .arg(if observe {
@@ -115,15 +115,7 @@ fn command(
             .args(["-device", "isa-debug-exit,iobase=0xf4,iosize=4"]);
     } else {
         command
-            .args([
-                "-machine",
-                "virt,gic-version=3,secure=off,virtualization=off,acpi=off",
-                "-cpu",
-                "cortex-a57",
-                "-m",
-                "256M",
-                "-drive",
-            ])
+            .args(["-m", "256M", "-drive"])
             .arg(format!(
                 "if=none,id=esp,format=raw,file=fat:rw:{}",
                 esp.display()
@@ -137,14 +129,7 @@ fn command(
     Ok(command)
 }
 
-pub fn run(
-    architecture: &str,
-    image: &Path,
-    observe: bool,
-    evidence_root: Option<&Path>,
-    harts: u8,
-) -> Result<()> {
-    require(harts != 0, "a guest requires at least one Hart")?;
+pub fn run(image: &Path, observe: bool, evidence_root: Option<&Path>) -> Result<()> {
     let image = image.canonicalize()?;
     let evidence = match evidence_root {
         Some(root) => root.join(image.file_name().ok_or("missing executable name")?),
@@ -152,7 +137,20 @@ pub fn run(
     };
     kernel_verification::fresh(&evidence)?;
     let directory = evidence.canonicalize()?;
-    let mut command = command(architecture, &image, &directory, observe, harts)?;
+    let machine = platform::read(&image)?;
+    kernel_verification::json(
+        &directory.join("platform.json"),
+        &serde_json::json!({
+            "architecture": machine.architecture,
+            "firmware": format!("{:?}", machine.platform.firmware),
+            "interrupt": format!("{:?}", machine.platform.interrupt),
+            "harts": machine.platform.harts,
+            "machine": machine.board,
+            "cpu": machine.cpu,
+            "image_sha256": kernel_verification::digest(&image)?,
+        }),
+    )?;
+    let mut command = command(&machine, &image, &directory, observe)?;
     let version = output(Command::new(command.get_program()).arg("--version"))?;
     require(
         version

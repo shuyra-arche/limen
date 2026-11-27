@@ -4,6 +4,10 @@
 #![test_runner(support::run)]
 #![reexport_test_harness_main = "collected"]
 
+#[path = "../support/platform.rs"]
+mod platform;
+platform::declare!(platform::Platform::native(4));
+
 #[path = "../support/discovery/mod.rs"]
 mod support;
 

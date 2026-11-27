@@ -67,6 +67,7 @@
     "server/src/metal/memory/mmu/riscv64/internal/installation.rs",
     "server/src/metal/memory/mmu/riscv64/sv/**",
     "server/src/metal/memory/mmu/riscv64/internal/format.rs",
+    "server/tests/metal/interrupt/riscv64/external/native_aplic.rs",
     "server/tests/target/support/riscv64/reception.rs",
     "server/src/metal/interrupt/riscv64/external/aplic/**",
     "server/src/metal/interrupt/riscv64/external/mod.rs",
@@ -102,6 +103,7 @@
       }
     },
     "imports": [
+      "metal/interrupt/riscv64/external/native_aplic.rs",
       "target/support/riscv64"
     ]
   }

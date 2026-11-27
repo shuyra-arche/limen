@@ -4,6 +4,10 @@
 #![test_runner(collection::run)]
 #![reexport_test_harness_main = "collected"]
 
+#[path = "../support/platform.rs"]
+mod platform;
+platform::declare!(platform::Platform::native(2));
+
 use core::fmt::Write;
 use kernel::{entry::boot::Boot, metal::platform::boot::treaty as diagnostic};
 use uefi::prelude::*;

@@ -4,17 +4,27 @@
 #![test_runner(support::run)]
 #![reexport_test_harness_main = "collected"]
 
+#[path = "../support/platform.rs"]
+mod platform;
+platform::declare!(platform::Platform::native(4));
+
 #[path = "../support/discovery/mod.rs"]
 mod support;
 
 use kernel::entry::boot::Boot;
 
-#[path = "../../metal/interrupt/riscv64/internal/native_ipi.rs"]
-mod scenario;
+#[path = "../../metal/interrupt/x86_64/internal/apic/native_timer.rs"]
+mod timer;
 
 #[unsafe(no_mangle)]
 extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
+    uefi_fixture::check_handoff(&boot, None);
     collected();
-    scenario::check(boot);
+    timer::check(&boot);
     support::finish()
+}
+
+#[test_case]
+fn tsc_requires_stable_frequency() {
+    timer::observe_tsc();
 }

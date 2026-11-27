@@ -2,6 +2,8 @@
 
 #[path = "../composition/mod.rs"]
 mod composition;
+#[path = "../platform.rs"]
+mod platform;
 #[path = "../qmp.rs"]
 mod qmp;
 #[path = "../scenario.rs"]
@@ -203,3 +205,66 @@ fn rv64_hardware_is_declared_by_the_scenario() {
 
 mod execution;
 mod transport;
+
+#[test]
+fn platform_record_is_bounded_and_rejects_unsupported_combinations() {
+    use object::{Architecture, BinaryFormat};
+    use platform::{Board, Firmware, Interrupt, Machine, Platform, Setting};
+
+    let original = Platform {
+        board: Board::Virt,
+        firmware: Firmware::OpenSbi,
+        interrupt: Interrupt::Aplic,
+        harts: 1,
+        aclint: true,
+        sstc: Setting::Off,
+    };
+    let bytes = original.encode();
+    assert_eq!(Platform::decode(&bytes), Some(original));
+    assert!(Platform::decode(&bytes[..15]).is_none());
+    for (index, value) in [
+        (0, 0),
+        (8, 2),
+        (9, 0),
+        (10, 0),
+        (11, 0),
+        (13, 2),
+        (14, 3),
+        (15, 1),
+    ] {
+        let mut invalid = bytes;
+        invalid[index] = value;
+        assert!(Platform::decode(&invalid).is_none());
+    }
+
+    let machine = Machine::admit(Architecture::Riscv64, BinaryFormat::Elf, original).unwrap();
+    assert_eq!(machine.board, "virt,aia=aplic,aclint=on");
+    assert_eq!(machine.cpu, Some("rv64,sstc=false"));
+    assert_eq!(machine.platform.harts, 1);
+    for invalid in [
+        Platform {
+            harts: 0,
+            ..original
+        },
+        Platform {
+            harts: 65,
+            ..original
+        },
+        Platform {
+            firmware: Firmware::Aavmf,
+            ..original
+        },
+        Platform {
+            interrupt: Interrupt::GicV3,
+            ..original
+        },
+        Platform {
+            board: Board::Q35,
+            ..original
+        },
+    ] {
+        assert!(Machine::admit(Architecture::Riscv64, BinaryFormat::Elf, invalid).is_err());
+    }
+    assert!(Machine::admit(Architecture::Riscv64, BinaryFormat::Pe, original).is_err());
+    assert!(Machine::admit(Architecture::X86_64, BinaryFormat::Elf, original).is_err());
+}

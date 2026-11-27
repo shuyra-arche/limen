@@ -45,7 +45,6 @@ fn run(case: &str, passed: bool) -> (Value, PathBuf, String) {
     if case == "reset" {
         runner.push("--observe");
     }
-    runner.push(&architecture);
     let config = format!(
         "target.{target}.runner={}",
         serde_json::to_string(&runner).unwrap()

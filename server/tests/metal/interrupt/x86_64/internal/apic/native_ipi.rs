@@ -116,6 +116,7 @@ pub fn check(boot: boot::Boot<'_>) {
     let view = fixture::check_handoff(&boot, Some(&MINOR));
     let mut startup = fixture::inspect(&boot, &view);
     let madt = boot.acpi().unwrap().madt().unwrap();
+    assert_eq!(madt.processors().filter(|cpu| cpu.enabled()).count(), 2);
     let destination = fixture::target();
     let target = IpiTarget::describe(madt, destination, VECTOR).unwrap();
     let original = IpiTarget::describe(madt, boot.hart(), VECTOR).unwrap();
