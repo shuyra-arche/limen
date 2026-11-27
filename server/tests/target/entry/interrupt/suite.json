@@ -24,7 +24,7 @@
     "server/src/metal/platform/boot/console.rs",
     "server/src/metal/platform/boot/services.rs",
     "server/src/metal/platform/description/devicetree/**",
-    "server/src/devicetree/**",
+    "server/src/metal/devicetree/**",
     "server/src/metal/platform/boot/handoff/mod.rs",
     "server/src/metal/processor/hart/mod.rs",
     "server/src/metal/processor/hart/local/**",
@@ -59,6 +59,7 @@
     "harts": 1,
     "expects": [
       "PASS aclint-timer received=2 cleared=2 states=1 rejected=1",
+      "PASS device-window widths=2 rejected=5",
       "PASS aplic-direct received=2 cleared=2 stale=1 shutdown=1 states=1 rejected=1"
     ]
   }

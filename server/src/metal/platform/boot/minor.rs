@@ -73,6 +73,13 @@ impl Minor {
         }
     }
 
+    /// Publish the complete launch, including all inputs the target may read.
+    /// Called by the native startup owner before any wake command.
+    pub(in crate::metal) fn publish(&self) {
+        assert_eq!(self.state.load(Ordering::Relaxed), State::Preparing as u32);
+        self.state.store(PUBLISHED, Ordering::Release);
+    }
+
     /// Returns whether the target CPU has installed and verified its startup state.
     pub fn ready(&self) -> bool {
         self.state.load(Ordering::Acquire) == State::Ready as u32
@@ -97,7 +104,7 @@ impl Minor {
         hart: usize,
         entry: fn(usize, usize) -> !,
         argument: usize,
-        method: boot::Startup,
+        method: &mut boot::Startup,
     ) -> Result<(), StartError> {
         if hart == local::current_hart().get() {
             return Err(StartError::Busy);
@@ -118,8 +125,7 @@ impl Minor {
                 argument,
             }));
         }
-        self.state.store(PUBLISHED, Ordering::Release);
-
+        // Each native path completes its actual machine inputs before publishing.
         let result = unsafe { boot::wake_minor(self, hart, method) };
         if matches!(result, Err(StartError::Rejected(_))) {
             self.state.store(State::Idle as u32, Ordering::Release);

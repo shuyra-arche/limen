@@ -14,8 +14,9 @@ pub(crate) const fn minor_context() -> MinorContext {
 pub(crate) unsafe fn wake_minor(
     slot: &Minor,
     hart: usize,
-    Startup::Sbi(service): Startup,
+    Startup::Sbi(service): &mut Startup,
 ) -> Result<(), StartError> {
+    slot.publish();
     service
         .start(
             hart,

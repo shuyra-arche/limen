@@ -29,7 +29,7 @@
     "server/src/metal/platform/boot/console.rs",
     "server/src/metal/platform/boot/services.rs",
     "server/src/metal/platform/description/devicetree/**",
-    "server/src/devicetree/**",
+    "server/src/metal/devicetree/**",
     "server/src/metal/platform/boot/handoff/mod.rs",
     "server/src/metal/processor/hart/mod.rs",
     "server/src/metal/processor/hart/local/**",
@@ -53,6 +53,10 @@
     "board_sources": {
       "q35": [
         "server/src/metal/platform/boot/x86_64/**",
+        "server/src/metal/interrupt/internal/apic/**",
+        "server/src/metal/interrupt/mod.rs",
+        "server/src/metal/interrupt/internal/mod.rs",
+        "server/src/metal/memory/mmu/internal/device.rs",
         "server/tests/target/entry/platforms/q35.rs",
         "server/tests/target/entry/platforms/io.rs",
         "server/src/metal/processor/hart/x86_64.rs",

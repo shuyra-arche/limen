@@ -37,7 +37,7 @@
     "server/src/metal/platform/boot/console.rs",
     "server/src/metal/platform/boot/services.rs",
     "server/src/metal/platform/description/devicetree/**",
-    "server/src/devicetree/**",
+    "server/src/metal/devicetree/**",
     "server/src/metal/platform/boot/handoff/mod.rs",
     "server/src/metal/processor/hart/mod.rs",
     "server/src/metal/processor/hart/local/**",

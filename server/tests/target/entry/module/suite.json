@@ -26,7 +26,7 @@
     "server/src/metal/platform/firmware/uefi/map.rs",
     "server/src/metal/platform/description/acpi/**",
     "server/src/metal/platform/description/devicetree/**",
-    "server/src/devicetree/**",
+    "server/src/metal/devicetree/**",
     "server/src/metal/platform/boot/handoff/mod.rs",
     "server/src/metal/platform/firmware/uefi/**",
     "server/src/metal/processor/hart/mod.rs",
@@ -48,6 +48,9 @@
       "q35": [
         "server/src/metal/platform/boot/x86_64/major.rs",
         "server/src/metal/platform/boot/x86_64/mod.rs",
+        "server/src/metal/interrupt/mod.rs",
+        "server/src/metal/interrupt/internal/mod.rs",
+        "server/src/metal/interrupt/internal/apic/**",
         "server/src/metal/processor/hart/x86_64.rs",
         "server/tests/target/entry/module/board/x86_64.rs",
         "server/tests/target/entry/module/x86_mapping.rs"

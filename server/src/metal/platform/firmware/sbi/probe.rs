@@ -4,6 +4,13 @@ pub(super) const HART_STATE_MANAGEMENT: usize = 0x0048_534d;
 pub(super) const TIMER: usize = 0x5449_4d45;
 const INTER_PROCESSOR_INTERRUPT: usize = 0x0073_5049;
 
+/// A failed BASE call or invalid/unsupported version is not absence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeError {
+    Firmware(isize),
+    Version(usize),
+}
+
 pub(crate) struct Extensions {
     pub(crate) console: bool,
     pub(crate) reset: bool,
@@ -11,10 +18,11 @@ pub(crate) struct Extensions {
 
 impl Extensions {
     pub(crate) fn probe(mut base: impl FnMut(usize, usize) -> (isize, usize)) -> Self {
-        let modern = modern(&mut base);
+        // Terminal diagnostics may only select positively confirmed services.
+        let modern = modern(&mut base).is_ok();
         Self {
-            console: modern && supports(&mut base, DEBUG_CONSOLE),
-            reset: modern && supports(&mut base, SYSTEM_RESET),
+            console: modern && supports(&mut base, DEBUG_CONSOLE) == Ok(true),
+            reset: modern && supports(&mut base, SYSTEM_RESET) == Ok(true),
         }
     }
 }
@@ -31,43 +39,57 @@ pub struct HartService(());
 /// Services reported by the running SBI implementation's BASE extension.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SbiServices {
-    hart_state_management: Option<HartService>,
-    timer: Option<TimerService>,
-    inter_processor_interrupt: bool,
+    hart_state_management: Result<Option<HartService>, ProbeError>,
+    timer: Result<Option<TimerService>, ProbeError>,
+    inter_processor_interrupt: Result<bool, ProbeError>,
 }
 
 impl SbiServices {
-    pub(crate) fn probe(mut base: impl FnMut(usize, usize) -> (isize, usize)) -> Self {
-        let modern = modern(&mut base);
-        Self {
-            hart_state_management: (modern && supports(&mut base, HART_STATE_MANAGEMENT))
-                .then_some(HartService(())),
-            timer: (modern && supports(&mut base, TIMER)).then_some(TimerService(())),
-            inter_processor_interrupt: modern && supports(&mut base, INTER_PROCESSOR_INTERRUPT),
-        }
+    pub(crate) fn probe(
+        mut base: impl FnMut(usize, usize) -> (isize, usize),
+    ) -> Result<Self, ProbeError> {
+        modern(&mut base)?;
+        Ok(Self {
+            hart_state_management: supports(&mut base, HART_STATE_MANAGEMENT)
+                .map(|present| present.then_some(HartService(()))),
+            timer: supports(&mut base, TIMER).map(|present| present.then_some(TimerService(()))),
+            inter_processor_interrupt: supports(&mut base, INTER_PROCESSOR_INTERRUPT),
+        })
     }
 
-    pub fn hart_state_management(self) -> Option<HartService> {
+    pub fn hart_state_management(self) -> Result<Option<HartService>, ProbeError> {
         self.hart_state_management
     }
 
-    pub fn timer(self) -> Option<TimerService> {
+    pub fn timer(self) -> Result<Option<TimerService>, ProbeError> {
         self.timer
     }
 
-    pub fn inter_processor_interrupt(self) -> bool {
+    pub fn inter_processor_interrupt(self) -> Result<bool, ProbeError> {
         self.inter_processor_interrupt
     }
 }
 
-fn modern(base: &mut impl FnMut(usize, usize) -> (isize, usize)) -> bool {
+fn modern(base: &mut impl FnMut(usize, usize) -> (isize, usize)) -> Result<(), ProbeError> {
     let (error, version) = base(0, 0);
-    error == 0 && (2..(1 << 31)).contains(&version)
+    if error != 0 {
+        return Err(ProbeError::Firmware(error));
+    }
+    if !(2..(1 << 31)).contains(&version) {
+        return Err(ProbeError::Version(version));
+    }
+    Ok(())
 }
 
-fn supports(base: &mut impl FnMut(usize, usize) -> (isize, usize), extension: usize) -> bool {
+fn supports(
+    base: &mut impl FnMut(usize, usize) -> (isize, usize),
+    extension: usize,
+) -> Result<bool, ProbeError> {
     let (error, value) = base(3, extension);
-    error == 0 && value != 0
+    if error != 0 {
+        return Err(ProbeError::Firmware(error));
+    }
+    Ok(value != 0)
 }
 
 #[cfg(test)]

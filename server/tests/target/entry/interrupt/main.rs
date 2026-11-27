@@ -1,7 +1,8 @@
 #![no_std]
 #![no_main]
 
-use core::{arch::naked_asm, fmt::Write, ptr};
+use core::{arch::naked_asm, fmt::Write};
+use limen_treaty::model::InternalAddress;
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
@@ -74,7 +75,7 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     assert_eq!(description.hart(), boot.hart() as u64);
     // The runner's exact machine configuration has ACLINT and disables Sstc.
     // OpenSBI owns the machine comparator; the guest never maps or writes it.
-    let service = boot.sbi_services().timer().expect("SBI TIME");
+    let service = boot.sbi_services().timer().unwrap().expect("SBI TIME");
     assert!(unsafe { Counter::admit(timebase, u64::MAX) }.is_none());
     let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
     assert!(matches!(
@@ -127,14 +128,14 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     boot::write("PASS aclint-timer received=2 cleared=2 states=1 rejected=1\n");
 }
 
-fn uart_read(base: usize, register: usize) -> u8 {
+fn uart_read(window: &mut DeviceWindow, register: usize) -> u8 {
     // The test owns the QEMU ns16550a byte register window during this step.
-    unsafe { ptr::without_provenance::<u8>(base + register).read_volatile() }
+    unsafe { window.read_u8(register) }.unwrap()
 }
 
-fn uart_write(base: usize, register: usize, value: u8) {
+fn uart_write(window: &mut DeviceWindow, register: usize, value: u8) {
     unsafe {
-        ptr::without_provenance_mut::<u8>(base + register).write_volatile(value);
+        window.write_u8(register, value).unwrap();
         core::arch::asm!("fence iorw, iorw", options(nostack));
     }
 }
@@ -154,21 +155,33 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
     assert!(uart.compatible(b"ns16550a").unwrap());
     let range = uart.register(0).unwrap();
     assert!(range.length().get() >= 8);
-    let serial = usize::try_from(range.start().get()).unwrap();
+    // Bare QEMU virt supplies this exact device mapping; the fixture owns
+    // the register accesses, and uses no firmware console during reception.
+    let mut serial =
+        unsafe { DeviceWindow::admit(range, InternalAddress::new(range.start().get())) }.unwrap();
     let route = description.route(&tree, uart).unwrap();
     assert_eq!(route.mode(), Mode::LevelHigh);
-    assert_eq!(uart_read(serial, 3) & 0x80, 0, "DLAB must be clear");
-    assert_eq!(uart_read(serial, 1), 0, "firmware console must be polling");
-    let base = usize::try_from(description.registers().start().get()).unwrap();
+    assert_eq!(uart_read(&mut serial, 3) & 0x80, 0, "DLAB must be clear");
+    assert_eq!(uart_read(&mut serial, 1), 0, "firmware console must be polling");
+    let base = InternalAddress::new(description.registers().start().get());
     // The single-Hart QEMU board, initial bare mapping, quiet device and
     // supervisor domain delegated by OpenSBI establish this test's ownership.
     let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
     let mut mapping = unsafe { DeviceWindow::admit(description.registers(), base) }.unwrap();
     assert_eq!(mapping.physical(), description.registers());
-    assert_eq!(mapping.word(0), Some(base));
-    assert_eq!(mapping.word(1), None);
-    assert_eq!(mapping.word(description.registers().length().as_usize().unwrap()), None);
-    assert_eq!(mapping.word(usize::MAX), None);
+    assert!(mapping.supports_u32(0));
+    assert!(!mapping.supports_u32(1));
+    let end = description.registers().length().as_usize().unwrap();
+    assert!(!mapping.supports_u32(end));
+    assert!(!mapping.supports_u32(usize::MAX));
+    // All of these requests fail before an actual bus access.
+    use kernel::metal::memory::mmu::internal::device::Error as DeviceError;
+    assert_eq!(unsafe { mapping.read_u32(1) }, Err(DeviceError::Range));
+    assert_eq!(unsafe { mapping.write_u32(end, 0) }, Err(DeviceError::Range));
+    assert_eq!(unsafe { mapping.read_u32(usize::MAX) }, Err(DeviceError::Range));
+    let serial_end = range.length().as_usize().unwrap();
+    assert_eq!(unsafe { serial.read_u8(serial_end) }, Err(DeviceError::Range));
+    assert_eq!(unsafe { serial.write_u8(usize::MAX, 0) }, Err(DeviceError::Range));
     assert!(matches!(
         unsafe { Direct::admit(description, &mut mapping, wrong) },
         Err(aplic::Failure::Scope)
@@ -194,8 +207,8 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
         assert_eq!(direct.enable(route.id()), Err(aplic::Failure::Busy));
         // Enable the actual device's transmitter-empty interrupt; no APLIC
         // software pending injection and no SBI console calls in this window.
-        uart_write(serial, 1, 2);
-        uart_write(serial, 0, b' ');
+        uart_write(&mut serial, 1, 2);
+        uart_write(&mut serial, 0, b' ');
         let limit = counter.read().unwrap()
             .checked_add(u64::from(counter.hertz()) * 2)
             .unwrap();
@@ -212,8 +225,8 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
         assert_eq!(direct.source(route.id()).unwrap(), aplic::Source::Masked(route.mode()));
         let mut claim = direct.current().expect("retained original claim");
         assert_eq!(claim.round(), previous);
-        assert_eq!(uart_read(serial, 2) & 0x0f, 2, "UART THRE cause");
-        uart_write(serial, 1, 0);
+        assert_eq!(uart_read(&mut serial, 2) & 0x0f, 2, "UART THRE cause");
+        uart_write(&mut serial, 1, 0);
         // The test has consumed this notification and disabled the actual
         // source. There is no separate software binding in this scenario.
         unsafe { claim.settle() }.unwrap();
@@ -230,7 +243,10 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
     assert!(matches!(direct.claim(), Err(aplic::Failure::Busy)));
     unsafe { direct.shut() }.unwrap();
     assert_eq!(direct.state(), aplic::State::Shut);
-    assert_eq!(uart_read(serial, 1), 0);
+    assert_eq!(uart_read(&mut serial, 1), 0);
+    // Actual controller and device effects have settled before using the firmware console.
+    drop(serial);
+    boot::write("\nPASS device-window widths=2 rejected=5\n");
     boot::write("\nPASS aplic-direct received=2 cleared=2 stale=1 shutdown=1 states=1 rejected=1\n");
 }
 

@@ -20,6 +20,26 @@ use super::{
 
 use buddy::{Buddy, Geometry, Root};
 
+/// A local observation revision never wraps. Exhaustion prevents stitched observations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Revision {
+    Current(u64),
+    Exhausted,
+}
+
+impl Revision {
+    pub(crate) fn next(self) -> Self {
+        match self {
+            Self::Current(version) if version != u64::MAX => Self::Current(version + 1),
+            _ => Self::Exhausted,
+        }
+    }
+
+    pub(crate) fn preserves(self, observed: Self) -> bool {
+        matches!((self, observed), (Self::Current(now), Self::Current(before)) if now == before)
+    }
+}
+
 /// Provenance and raw attributes of the accepted RAM description.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegionOrigin {
@@ -56,12 +76,28 @@ enum GeometryState {
 
 pub(super) struct State {
     geometry: Option<GeometryState>,
-    pub(super) unassigned: u64,
+    unassigned: u64,
+    budget_revision: Revision,
     pub(super) allocations: GenerationTable<'static, AllocationScope, AllocationRecord>,
     pub(super) returns: GenerationTable<'static, ReturnScope, ReturnRecord>,
 }
 
 impl State {
+    pub(super) fn unassigned(&self) -> u64 {
+        self.unassigned
+    }
+
+    pub(super) fn budget(&self) -> (u64, Revision) {
+        (self.unassigned, self.budget_revision)
+    }
+
+    pub(super) fn set_unassigned(&mut self, amount: u64) {
+        if amount != self.unassigned {
+            self.unassigned = amount;
+            self.budget_revision = self.budget_revision.next();
+        }
+    }
+
     pub(super) fn buddy(&mut self) -> &mut Buddy<'static> {
         let Some(GeometryState::Admitted(buddy)) = self.geometry.as_mut() else {
             unreachable!("only published Regions have Buddy geometry");
@@ -77,7 +113,7 @@ impl State {
             Buddy::initialize(geometry, storage.roots, storage.nodes, edits)
                 .expect("geometry fits checked prepaid storage"),
         ));
-        self.unassigned = amount;
+        self.set_unassigned(amount);
     }
 }
 
@@ -93,6 +129,7 @@ impl Region {
             state: TurnLock::new(State {
                 geometry: Some(GeometryState::Prepaid(backing)),
                 unassigned: 0,
+                budget_revision: Revision::Current(0),
                 allocations: GenerationTable::new(AllocationScope(id), allocations)
                     .expect("checked fresh Allocation slots"),
                 returns: GenerationTable::new(ReturnScope(id), returns)

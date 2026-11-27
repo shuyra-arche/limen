@@ -14,9 +14,9 @@ use core::{
 };
 use kernel::{
     basis::{
-        execution::{Current, Error, Execution},
+        execution::{Current, Error, Execution, KernelBinding},
         room::Occupancy,
-        unit::{End, Lifecycle, Stacks, UnitId},
+        unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::{Boot, Minor, Startup, shutdown, write},
 };
@@ -27,6 +27,7 @@ mod turn;
 global_asm!(include_str!("register-probe.S"));
 
 static mut STACKS: Stacks = Stacks::new();
+static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static MINOR: Minor = Minor::new();
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
 static mut SCENARIO: MaybeUninit<Scenario> = MaybeUninit::uninit();
@@ -199,8 +200,17 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let major = boot.hart();
     let minor_hart = usize::from(major == 0);
     assert!(major < 4, "unexpected QEMU Boot Hart");
-    let service = boot.sbi_services().hart_state_management().expect("SBI HSM");
-    let runtime = Execution::with_minor(boot, unsafe { &mut *(&raw mut STACKS) }, &MINOR)
+    let service = boot
+        .sbi_services()
+        .hart_state_management()
+        .unwrap()
+        .expect("SBI HSM");
+    let runtime = Execution::with_minor(
+        boot,
+        unsafe { &mut *(&raw mut STACKS) },
+        unsafe { &mut *(&raw mut RECORDS) },
+        &MINOR,
+    )
         .map_err(|failure| failure.reason)
         .expect("Bare scalar execution");
     // The platform owns the resident objects and initializes them once.
@@ -211,7 +221,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let pinned = unsafe { execution.create(pinned) }.expect("create on major");
     execution.submit(pinned).expect("admit pinned Unit");
     assert!(matches!(
-        unsafe { execution.start_minor(8, run_minor, Startup::Sbi(service)) },
+        unsafe { execution.start_minor(8, run_minor, &mut Startup::Sbi(service)) },
         Err(Error::Firmware(_))
     ));
     unsafe {
@@ -221,7 +231,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
             minor: minor_hart,
         });
         execution
-            .start_minor(minor_hart, run_minor, Startup::Sbi(service))
+            .start_minor(minor_hart, run_minor, &mut Startup::Sbi(service))
             .expect("start actual minor Hart");
     }
     turn::major();

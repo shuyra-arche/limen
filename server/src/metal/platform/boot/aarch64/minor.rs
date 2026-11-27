@@ -39,7 +39,7 @@ pub(crate) const fn minor_context() -> MinorContext {
 pub(crate) unsafe fn wake_minor(
     slot: &Minor,
     hart: usize,
-    Startup::Psci(service): Startup,
+    Startup::Psci(service): &mut Startup,
 ) -> Result<(), StartError> {
     let mut regs = Registers::default();
     unsafe {
@@ -49,6 +49,8 @@ pub(crate) unsafe fn wake_minor(
             out(reg) regs.cpacr,out(reg) regs.sctlr,options(nomem,nostack));
         slot.context.get().write(regs);
     }
+    // The release now covers the saved registers as well as Launch.
+    slot.publish();
     let ptr = core::ptr::from_ref(slot).expose_provenance();
     // CPU_ON enters with translation off. Publish the descriptor and saved
     // controls to the point of coherency before the target reads either.

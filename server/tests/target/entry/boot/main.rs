@@ -93,7 +93,11 @@ fn check_discovery(boot: &Boot<'_>) {
     assert_eq!(timebase.hertz(), 10_000_000);
     assert!(boot.acpi().is_none(), "SBI supplied a DTB, not ACPI");
     let sbi = boot.sbi_services();
-    assert!(sbi.hart_state_management().is_some() && sbi.timer().is_some() && sbi.inter_processor_interrupt());
+    assert!(
+        sbi.hart_state_management().unwrap().is_some()
+            && sbi.timer().unwrap().is_some()
+            && sbi.inter_processor_interrupt().unwrap()
+    );
     write("PASS firmware-discovery rv64 hart=1 mmu=1 isa=1 timebase=1 sbi=1\n");
 }
 

@@ -13,7 +13,7 @@ use core::{
 use crate::{
     basis::{
         room::{self, AdmissionId, LeaveDestination, Occupancy, Room},
-        unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, Units},
+        unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, UnitRecord, Units},
     },
     metal::{
         processor::execution::cooperative::{Hart, LeaveReceipt, LocalHart, cooperative_ready},
@@ -82,22 +82,25 @@ impl From<TurnAcquireError> for Error {
 pub enum EstablishError {
     WrongHart,
     Unsupported,
+    Storage,
 }
 
-/// The original handoff and stack supply, returned before execution takes ownership.
+/// The original handoff and both supplies, returned before execution takes ownership.
 pub struct EstablishFailure<'a> {
     pub boot: Boot<'a>,
     pub stacks: &'static mut Stacks,
+    pub records: &'static mut [UnitRecord<KernelBinding>],
     pub reason: EstablishError,
 }
 
-struct ExecutionBinding {
+/// The trusted cooperative Unit entry and its actual placement constraint.
+pub struct KernelBinding {
     entry: Entry,
     affinity: Option<HartId>,
 }
 
 struct Dispatch {
-    units: Units<ExecutionBinding>,
+    units: Units<KernelBinding>,
     room: Room<STACK_CAPACITY>,
 }
 
@@ -123,28 +126,32 @@ impl Execution {
     pub fn new<'a>(
         boot: Boot<'a>,
         stacks: &'static mut Stacks,
+        records: &'static mut [UnitRecord<KernelBinding>],
     ) -> Result<Self, EstablishFailure<'a>> {
-        Self::establish(boot, stacks, None)
+        Self::establish(boot, stacks, records, None)
     }
 
     /// Provision cooperative execution with an optional firmware-started Hart.
     pub fn with_minor<'a>(
         boot: Boot<'a>,
         stacks: &'static mut Stacks,
+        records: &'static mut [UnitRecord<KernelBinding>],
         minor: &'static Minor,
     ) -> Result<Self, EstablishFailure<'a>> {
-        Self::establish(boot, stacks, Some(minor))
+        Self::establish(boot, stacks, records, Some(minor))
     }
 
     fn establish<'a>(
         boot: Boot<'a>,
         stacks: &'static mut Stacks,
+        records: &'static mut [UnitRecord<KernelBinding>],
         minor: Option<&'static Minor>,
     ) -> Result<Self, EstablishFailure<'a>> {
         if local::current_hart() != HartId::new(boot.hart()) {
             return Err(EstablishFailure {
                 boot,
                 stacks,
+                records,
                 reason: EstablishError::WrongHart,
             });
         }
@@ -152,12 +159,21 @@ impl Execution {
             return Err(EstablishFailure {
                 boot,
                 stacks,
+                records,
                 reason: EstablishError::Unsupported,
+            });
+        }
+        if !Units::accepts(records) {
+            return Err(EstablishFailure {
+                boot,
+                stacks,
+                records,
+                reason: EstablishError::Storage,
             });
         }
         Ok(Self {
             dispatch: TurnLock::new(Dispatch {
-                units: Units::new(stacks),
+                units: Units::new(stacks, records),
                 room: Room::new(HartId::new(boot.hart())),
             }),
             launch: TurnLock::new(None),
@@ -204,7 +220,7 @@ impl Execution {
         &'static self,
         hart: usize,
         entry: fn(&'static Execution) -> !,
-        method: boot::Startup,
+        method: &mut boot::Startup,
     ) -> Result<(), Error> {
         let minor = self.minor_boot.ok_or(Error::Unsupported)?;
         if local::current_hart() != self.major_id || !cooperative_ready() {
@@ -269,7 +285,7 @@ impl Execution {
             let unit = dispatch.units.vacant()?;
             dispatch
                 .units
-                .publish(unit, ExecutionBinding { entry, affinity }, start)?;
+                .publish(unit, KernelBinding { entry, affinity }, start)?;
             Ok(unit)
         })
     }
