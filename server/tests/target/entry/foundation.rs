@@ -91,7 +91,9 @@ fn search(source: &'static Allocator, length: u64, physical: PhysicalRange) -> O
     )
     .unwrap();
     let mut lookup_observations = [LookupObservation::EMPTY; 3];
-    let mut lookup = source.lookup(request, None, &mut lookup_observations).unwrap();
+    let mut lookup = source
+        .lookup(request, None, &mut lookup_observations)
+        .unwrap();
     loop {
         match lookup.step().unwrap() {
             Search::Candidate(candidate) => return Some(candidate),
@@ -412,8 +414,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     assert_eq!(remaining.occupied().get(), PAGE);
     assert_eq!(remaining.available().get(), 0);
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((managed, managed - PAGE))
     );
     boot::write(

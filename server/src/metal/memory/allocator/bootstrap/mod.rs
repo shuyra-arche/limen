@@ -266,6 +266,9 @@ impl<'r, 'a, Descriptions: Iterator<Item = RegionDescription> + Clone>
     /// Entry must supply the exact root from its preflight, with this
     /// configuration's layout and exclusive permanent storage. It must
     /// have removed the entire reservation from the prepared regions.
+    /// The retained description iterator and every preflight clone must
+    /// enumerate the same immutable regions in the same order. Clone alone
+    /// does not guarantee this; entry retains the borrowed list and root plan.
     pub(crate) unsafe fn install(self, storage: RootStorage<'static>) -> &'static Allocator {
         initialize(
             storage,
