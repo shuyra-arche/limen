@@ -47,15 +47,47 @@ impl From<TurnAcquireError> for Error {
 }
 
 /// A fixed directory position qualified by its original Allocation.
-/// A returned position is not reused in this fixed pool.
+/// The exact source AllocationId distinguishes every later group at this position.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GroupId(usize, AllocationId);
 
 /// Storage supplied by the actual consumer outside its reclaimable pages.
-pub struct GroupSlot<'storage, T>(Option<GroupRecord<'storage, T>>);
+pub struct GroupSlot<'storage, T> {
+    record: Option<GroupRecord<'storage, T>>,
+    next: Option<usize>,
+}
 
 impl<T> GroupSlot<'_, T> {
-    pub const EMPTY: Self = Self(None);
+    pub const EMPTY: Self = Self {
+        record: None,
+        next: None,
+    };
+}
+
+/// Unique history acknowledgement authority for the exact installed group.
+#[must_use]
+pub struct GroupReceipt {
+    id: GroupId,
+}
+
+impl GroupReceipt {
+    pub fn id(&self) -> GroupId {
+        self.id
+    }
+
+    /// End the retained result only after the original refund has settled.
+    pub fn acknowledge<T>(&self, pool: &Pool<'_, T>) -> Result<(), Error> {
+        pool.state.acquire(|state| {
+            if !matches!(state.entry(self.id)?, GroupRecord::Retired(_)) {
+                return Err(Error::Busy);
+            }
+            let slot = &mut state.groups[self.id.0];
+            slot.record = None;
+            slot.next = state.free_group;
+            state.free_group = Some(self.id.0);
+            Ok(())
+        })?
+    }
 }
 
 pub struct Pool<'storage, T> {
@@ -64,7 +96,8 @@ pub struct Pool<'storage, T> {
 
 struct Directory<'storage, T> {
     groups: &'storage mut [GroupSlot<'storage, T>],
-    count: usize,
+    extent: usize,
+    free_group: Option<usize>,
     open: usize,
     bytes: usize,
     capacity: usize,
@@ -85,16 +118,25 @@ pub struct Capacity {
 }
 
 impl<'storage, T> Pool<'storage, T> {
-    /// Install groups through the unique root before publishing the Pool. The
-    /// directory and root live outside all supplied group mappings.
+    /// Establish the fixed group directory outside all supplied group mappings.
     pub fn new(groups: &'storage mut [GroupSlot<'storage, T>]) -> Result<Self, Error> {
-        if groups.is_empty() || groups.iter().any(|entry| entry.0.is_some()) {
+        if groups.is_empty()
+            || groups
+                .iter()
+                .any(|entry| entry.record.is_some() || entry.next.is_some())
+        {
             return Err(Error::Directory);
+        }
+        let mut free_group = None;
+        for (index, slot) in groups.iter_mut().enumerate().rev() {
+            slot.next = free_group;
+            free_group = Some(index);
         }
         Ok(Self {
             state: TurnLock::new(Directory {
                 groups,
-                count: 0,
+                extent: 0,
+                free_group,
                 open: 0,
                 bytes: 0,
                 capacity: 0,
@@ -106,25 +148,24 @@ impl<'storage, T> Pool<'storage, T> {
         })
     }
 
-    /// Install the actual paired material. Every rejection preserves the
-    /// original pair and directory. The successful group retains its source,
-    /// exact mapping and independent retirement position.
+    /// Accept already acquired mapped material. The caller keeps the exact
+    /// pair during private initialization; only final publication consumes it.
+    /// A failure retains the pair and original receipt position.
     ///
     /// # Safety
-    /// Keep the independent directory and root valid outside all supplied
-    /// group mappings until all upstream return and receipt work has ended.
-    /// The actual mapped storage owner must preserve its mapping/exclusivity
-    /// obligations through the group's last use, including typed references.
+    /// The original owner retains the pair and its mapping/exclusivity through
+    /// preparation, every use and retirement. The receipt position belongs to
+    /// the actual consumer and remains durable until history acknowledgement.
+    /// The Pool directory and root stay outside every supplied group.
     pub unsafe fn install(
-        &mut self,
+        &self,
         material: &mut Option<MappedStorage<'storage>>,
+        receipt: &mut Option<GroupReceipt>,
     ) -> Result<GroupId, Error> {
-        let state = self.state.get_mut();
-        if state.count == state.groups.len() {
-            return Err(Error::Directory);
+        if receipt.is_some() {
+            return Err(Error::Receiver);
         }
         let supplied = material.as_ref().ok_or(Error::Material)?;
-        let id = GroupId(state.count, supplied.id());
         let mapping = supplied.mapping();
         let geometry = Geometry::of::<T>(mapping.length())?;
         if !mapping.address().is_multiple_of(geometry.alignment)
@@ -136,18 +177,11 @@ impl<'storage, T> Pool<'storage, T> {
         {
             return Err(Error::Layout);
         }
-        let capacity = state
-            .capacity
-            .checked_add(geometry.slots)
-            .ok_or(Error::Directory)?;
-        let bytes = state
-            .bytes
-            .checked_add(mapping.length())
-            .ok_or(Error::Directory)?;
         let retirement = supplied.allocation().return_position()?;
+        self.state
+            .acquire(|state| state.free_group.ok_or(Error::Directory).map(|_| ()))??;
 
-        // The original owner keeps the complete pair throughout the slot
-        // walk. Only the short directory publication consumes it.
+        // No Pool protection is held during the full private slot walk.
         Group::<T>::prepare(
             geometry,
             material
@@ -156,16 +190,32 @@ impl<'storage, T> Pool<'storage, T> {
                 .mapping_mut()
                 .bytes(),
         );
-        let (allocation, mapping) = material.take().expect("checked material").into_parts();
-        let group = Group::new(allocation, retirement, geometry, mapping.into_bytes());
-        state.groups[id.0].0 = Some(GroupRecord::Open(group));
-        state.count += 1;
-        state.open += 1;
-        state.capacity = capacity;
-        state.free += geometry.slots;
-        state.bytes = bytes;
-        state.link(id, Chain::Empty);
-        Ok(id)
+        self.state.acquire(|state| {
+            let index = state.free_group.ok_or(Error::Directory)?;
+            let capacity = state
+                .capacity
+                .checked_add(geometry.slots)
+                .ok_or(Error::Directory)?;
+            let bytes = state
+                .bytes
+                .checked_add(geometry.bytes)
+                .ok_or(Error::Directory)?;
+            let (allocation, mapping) = material.take().expect("checked material").into_parts();
+            let id = GroupId(index, allocation.id());
+            let group = Group::new(allocation, retirement, geometry, mapping.into_bytes());
+            let slot = &mut state.groups[index];
+            assert!(slot.record.is_none());
+            state.free_group = slot.next.take();
+            slot.record = Some(GroupRecord::Open(group));
+            state.extent = state.extent.max(index + 1);
+            state.open += 1;
+            state.capacity = capacity;
+            state.free += geometry.slots;
+            state.bytes = bytes;
+            state.link(id, Chain::Empty);
+            *receipt = Some(GroupReceipt { id });
+            Ok(id)
+        })?
     }
 
     pub fn capacity(&self) -> Result<Capacity, Error> {
@@ -272,7 +322,7 @@ impl<'storage, T> Directory<'storage, T> {
     fn entry(&mut self, id: GroupId) -> Result<&mut GroupRecord<'storage, T>, Error> {
         self.groups
             .get_mut(id.0)
-            .and_then(|entry| entry.0.as_mut())
+            .and_then(|entry| entry.record.as_mut())
             .filter(|entry| entry.allocation() == id.1)
             .ok_or(Error::Stale)
     }

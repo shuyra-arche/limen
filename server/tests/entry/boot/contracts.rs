@@ -50,3 +50,18 @@ pub fn reuse_material(material: kernel::metal::memory::allocator::MappedStorage<
 pub fn raw_grant(source: &'static allocator::Allocator, description: allocator::RegionDescription) {
     let _ = unsafe { allocator::Grant::from_retired(source, description) };
 }
+
+#[cfg(contract = "return-authority")]
+pub fn acknowledge_discovered_return(source: &allocator::Allocator, id: allocator::ReturnId) {
+    let _ = source.acknowledge(id);
+}
+
+#[cfg(contract = "return-clone")]
+pub fn duplicate_receipt(receipt: &allocator::ReturnReceipt) {
+    let _ = Clone::clone(receipt);
+}
+
+#[cfg(contract = "return-construction")]
+pub fn manufacture_receipt(source: &'static allocator::Allocator, id: allocator::ReturnId) {
+    let _ = allocator::ReturnReceipt { source, id };
+}

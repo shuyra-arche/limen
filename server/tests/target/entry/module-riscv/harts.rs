@@ -68,7 +68,7 @@ pub fn check<'a>(boot: &Boot<'a>, modes: &[Mode]) -> [RiscvMmu<'a>; 2] {
         assert_eq!(mmu.hart(), hart as u64);
         mmu
     });
-    assert!(boot.sbi_services().hart_state_management().is_some());
+    assert!(boot.sbi_services().hart_state_management().unwrap().is_some());
     assert_eq!(status(major), STARTED);
     assert_eq!(status(minor), STOPPED);
     descriptions

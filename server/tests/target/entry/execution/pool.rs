@@ -8,7 +8,7 @@ use kernel::{
     entry::boot::{Boot, write},
     metal::memory::allocator::{
         Allocation, Allowance,
-        pool::{GroupSlot, Pool, Prepared, Reservation, VALUE_ALIGNMENT, VALUE_BYTES},
+        pool::{GroupReceipt, GroupSlot, Pool, Prepared, Reservation, VALUE_ALIGNMENT, VALUE_BYTES},
     },
 };
 
@@ -21,6 +21,7 @@ static mut GROUPS: [GroupSlot<'static, Boundary>; 1] = [GroupSlot::EMPTY];
 static mut TYPED: MaybeUninit<Pool<'static, Boundary>> = MaybeUninit::uninit();
 static mut ALLOCATION: Option<Allocation> = None;
 static mut ALLOWANCE: Option<Allowance> = None;
+static mut GROUP_RECEIPT: Option<GroupReceipt> = None;
 
 pub(super) fn prepare(boot: &Boot<'_>) {
     assert_eq!(size_of::<Boundary>(), VALUE_BYTES);
@@ -28,7 +29,8 @@ pub(super) fn prepare(boot: &Boot<'_>) {
     let directory = unsafe { &mut *(&raw mut GROUPS) };
     let allocation = unsafe { &mut *(&raw mut ALLOCATION) };
     let allowance = unsafe { &mut *(&raw mut ALLOWANCE) };
-    let (pool, _, _) = unsafe { install(boot, directory, allocation, allowance) };
+    let receipt = unsafe { &mut *(&raw mut GROUP_RECEIPT) };
+    let (pool, _, _) = unsafe { install(boot, directory, allocation, allowance, receipt) };
     unsafe { (&mut *(&raw mut TYPED)).write(pool) };
 }
 

@@ -75,7 +75,7 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     assert_eq!(description.hart(), boot.hart() as u64);
     // The runner's exact machine configuration has ACLINT and disables Sstc.
     // OpenSBI owns the machine comparator; the guest never maps or writes it.
-    let service = boot.sbi_services().timer().expect("SBI TIME");
+    let service = boot.sbi_services().timer().unwrap().expect("SBI TIME");
     assert!(unsafe { Counter::admit(timebase, u64::MAX) }.is_none());
     let counter = unsafe { Counter::admit(timebase, boot.hart() as u64) }.unwrap();
     assert!(matches!(

@@ -9,10 +9,6 @@ std::thread_local! {
     static MASKED: Cell<bool> = const { Cell::new(false) };
 }
 
-pub(super) fn ordinary_entry() -> bool {
-    true
-}
-
 pub(super) fn local_address() -> usize {
     LOCAL.with(|local| ptr::from_ref(*local).expose_provenance())
 }

@@ -103,6 +103,7 @@ pub(crate) unsafe fn wake_minor(
             .write_unaligned(params);
     }
     core::sync::atomic::fence(Ordering::SeqCst);
+    slot.publish();
     // The original caller keeps the trampoline and qualified APIC alive.
     // Identity mapping of the trampoline is this boot profile's premise.
     unsafe { prepared.start(*delay) }.map_err(failure)

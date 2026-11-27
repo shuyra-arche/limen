@@ -16,6 +16,7 @@ pub(crate) unsafe fn wake_minor(
     hart: usize,
     Startup::Sbi(service): &mut Startup,
 ) -> Result<(), StartError> {
+    slot.publish();
     service
         .start(
             hart,
