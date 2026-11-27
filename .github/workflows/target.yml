@@ -36,40 +36,24 @@ jobs:
       LIMEN_TEST_ARCH: ${{ matrix.arch }}
       LIMEN_TEST_PROFILE: ${{ matrix.profile }}
     steps:
-      - name: Install tools
-        id: tools
-        shell: bash
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl git build-essential jq gdb-multiarch
-          case "$LIMEN_TEST_ARCH" in
-            riscv64) qemu=qemu-system-riscv; firmware=opensbi ;;
-            aarch64) qemu=qemu-system-arm; firmware=qemu-efi-aarch64 ;;
-            x86_64) qemu=qemu-system-x86; firmware=ovmf ;;
-          esac
-          apt-get install -y --no-install-recommends "$firmware"
-          echo 'deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] https://snapshot.debian.org/archive/debian/20261124T000000Z/ trixie-backports main' > /etc/apt/sources.list.d/qemu.list
-          apt-get -o Acquire::Retries=3 update
-          apt-get install -y --no-install-recommends -t trixie-backports "$qemu"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Install pinned toolchain
-        id: toolchain
+      - name: Install base tools
+        id: base_tools
         shell: bash
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
-          sh /tmp/rustup.sh -y --profile minimal --default-toolchain none
-          source "$HOME/.cargo/env"
-          case "$LIMEN_TEST_ARCH" in
-            riscv64) target=riscv64gc-unknown-none-elf ;;
-            aarch64) target=aarch64-unknown-uefi ;;
-            x86_64) target=x86_64-unknown-uefi ;;
-          esac
-          rustup target add "$target"
-          echo "LIMEN_TEST_TARGET=$target" >> "$GITHUB_ENV"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential jq gdb-multiarch
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install QEMU and firmware
+        id: tools
+        shell: bash
+        run: bash server/tests/runner/ci/qemu.sh "$LIMEN_TEST_ARCH"
+      - name: Install pinned toolchain
+        id: toolchain
+        shell: bash
+        run: bash server/tests/runner/ci/toolchain.sh "$LIMEN_TEST_ARCH"
       - name: Record source
         id: source
         run: |
@@ -143,24 +127,11 @@ jobs:
             --manifest-path server/tests/target/Cargo.toml -p module-guest \
             --target "$LIMEN_TEST_TARGET" --tests --no-fail-fast "${profile[@]}" \
             2>&1 | tee .integration/stages/module.log
-      # Establish the bench transport on one supported machine/profile.
-      # This is a protocol smoke check, never a performance threshold.
-      - name: Run benchmark transport smoke
-        id: bench
-        if: ${{ !cancelled() && steps.runner.outcome == 'success' && matrix.arch == 'riscv64' && matrix.profile == 'release' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          evidence="$PWD/.integration/bench"
-          config="target.$LIMEN_TEST_TARGET.runner=['$LIMEN_TEST_RUNNER','bench','--evidence-root','$evidence']"
-          cargo -Z panic-abort-tests --config "$config" bench --locked \
-            --manifest-path server/tests/target/Cargo.toml -p riscv64-guest \
-            --target "$LIMEN_TEST_TARGET" --bench clock \
-            2>&1 | tee .integration/stages/bench.log
       - name: Record stage outcomes
         if: ${{ !cancelled() }}
         shell: bash
         env:
+          BASE_TOOLS: ${{ steps.base_tools.outcome }}
           TOOLS: ${{ steps.tools.outcome }}
           TOOLCHAIN: ${{ steps.toolchain.outcome }}
           SOURCE: ${{ steps.source.outcome }}
@@ -169,13 +140,12 @@ jobs:
           GUESTS: ${{ steps.guests.outcome }}
           MODULE_TARGET: ${{ steps.module.outcome }}
           MODULE_GUESTS: ${{ steps.module_guests.outcome }}
-          BENCH: ${{ steps.bench.outcome }}
         run: |
           set -euo pipefail
           mkdir -p .integration/stages
           # These are Actions step outcomes, not individual guest verdicts.
-          printf '{"tools":"%s","toolchain":"%s","source":"%s","runner":"%s","observers":"%s","guests":"%s","module_target":"%s","module_guests":"%s","bench":"%s"}\n' \
-            "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$OBSERVERS" "$GUESTS" "$MODULE_TARGET" "$MODULE_GUESTS" "$BENCH" \
+          printf '{"base_tools":"%s","tools":"%s","toolchain":"%s","source":"%s","runner":"%s","observers":"%s","guests":"%s","module_target":"%s","module_guests":"%s"}\n' \
+            "$BASE_TOOLS" "$TOOLS" "$TOOLCHAIN" "$SOURCE" "$RUNNER" "$OBSERVERS" "$GUESTS" "$MODULE_TARGET" "$MODULE_GUESTS" \
             > .integration/stages/outcomes.json
       - name: Preserve target evidence
         if: always()

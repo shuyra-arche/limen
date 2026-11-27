@@ -65,3 +65,8 @@ Cargo's benchmark invocation selects `verify bench --evidence-root <fresh-root>
 <image> --bench`. A completed guest with incomplete measurements is a failed
 benchmark invocation, not a usable timing result. The raw serial transcript
 and the native execution receipt remain available for investigation.
+
+The independent Bench workflow selects `--benches --no-fail-fast` for the
+currently supported riscv64 benchmark package. Target CI selects
+`--tests` only. The workflows share environment preparation but retain
+separate run receipts and artifacts.

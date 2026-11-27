@@ -222,10 +222,15 @@ retirement, then checks that the declared measurement series is complete.
 Only then is `measurement.json` written. Missing or malformed measurements
 fail the benchmark invocation even if the guest completion verdict is pass.
 QEMU data are emulator observations, not physical hardware results; no
-performance threshold is a correctness criterion. Target CI exercises the
-transport once in the riscv64 Release job, with its own evidence directory
-and stage outcome; it does not run a performance comparison. Other
-architecture measurements require their own admitted or explicitly
+performance threshold is a correctness criterion. The independent Bench
+workflow runs the discovered benchmark targets with Cargo's optimized bench
+profile on riscv64; it has separate triggers, concurrency, job results and
+evidence artifacts. It runs on relevant pull requests and main pushes, or
+by workflow dispatch. Target CI runs correctness tests only. Both workflows
+share the pinned QEMU and Rust preparation scripts in `runner/ci/`, but
+neither workflow depends on the other's verdict. Check still validates
+shared infrastructure, including Host tests of measurement parsing.
+Other architecture measurements require their own admitted or explicitly
 calibrated clocks.
 
 See [Runner](runner/README.md) for the execution and evidence boundary.
