@@ -10,8 +10,8 @@ use kernel::{
             RamPurpose::Metadata,
             Request, ReturnId, ReturnReceipt, Returned, Search,
             pool::{
-                Error as PoolError, GroupId, GroupSlot, Occupied, Pool, Reference, Retirement,
-                Stable, StableOwner,
+                Error as PoolError, GroupId, GroupReceipt, GroupSlot, Occupied, Pool, Reference,
+                Retirement, Stable, StableOwner,
             },
         },
         memory::mmu::internal::access::MappedRange,
@@ -39,6 +39,7 @@ const CONFIG: Config = Config {
     edits: 64,
 };
 
+static mut SPACE_GROUP_RECEIPT: Option<GroupReceipt> = None;
 static mut DIRECTORY: [GroupSlot<'static, PendSpace>; 1] = [GroupSlot::EMPTY];
 static mut STORAGE: MaybeUninit<Pool<'static, PendSpace>> = MaybeUninit::uninit();
 static mut INITIAL: Option<Allocation> = None;
@@ -55,6 +56,7 @@ static mut RECEIPT: Option<ReturnReceipt> = None;
 
 type Payload = [u64; 32];
 type Objects = Pool<'static, Stable<Payload>>;
+static mut OBJECT_GROUP_RECEIPT: Option<GroupReceipt> = None;
 static mut OBJECT_GROUPS: [GroupSlot<'static, Stable<Payload>>; 1] = [GroupSlot::EMPTY];
 static mut OBJECTS: MaybeUninit<Objects> = MaybeUninit::uninit();
 
@@ -121,7 +123,7 @@ fn retire_group(
     physical: PhysicalRange,
 ) -> (&'static Objects, ReturnId) {
     assert_eq!(material.as_ref().unwrap().physical(), physical);
-    let mut pool = Pool::new(unsafe { &mut *(&raw mut OBJECT_GROUPS) }).unwrap();
+    let pool = Pool::new(unsafe { &mut *(&raw mut OBJECT_GROUPS) }).unwrap();
     let mut mapping = unsafe { mapped(physical) };
     check_read_write(&mut mapping, 0x41, 0x42);
     let mut paired = Some(
@@ -129,7 +131,8 @@ fn retire_group(
             .ok()
             .unwrap(),
     );
-    let group = unsafe { pool.install(&mut paired) }.unwrap();
+    let receipt = unsafe { &mut *(&raw mut OBJECT_GROUP_RECEIPT) };
+    let group = unsafe { pool.install(&mut paired, receipt) }.unwrap();
     assert!(material.is_none() && paired.is_none());
     let pool = unsafe { (&mut *(&raw mut OBJECTS)).write(pool) };
     let supply = pool.supply(group).unwrap();
@@ -289,14 +292,15 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     assert_eq!(original.occupied().get(), PAGE);
     assert_eq!(managed, unassigned + original.capacity().get());
 
-    let mut pool = Pool::new(unsafe { &mut *(&raw mut DIRECTORY) }).unwrap();
+    let pool = Pool::new(unsafe { &mut *(&raw mut DIRECTORY) }).unwrap();
     let mapping = unsafe { mapped(group) };
     let mut paired = Some(
         unsafe { MappedStorage::prepare(material.take().unwrap(), mapping) }
             .ok()
             .unwrap(),
     );
-    unsafe { pool.install(&mut paired) }.unwrap();
+    let receipt = unsafe { &mut *(&raw mut SPACE_GROUP_RECEIPT) };
+    unsafe { pool.install(&mut paired, receipt) }.unwrap();
     assert!(material.is_none() && paired.is_none());
     let pool = unsafe { (&mut *(&raw mut STORAGE)).write(pool) };
     let mut reservation = None;

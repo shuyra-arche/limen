@@ -103,8 +103,12 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
     let mut bytes = Page([MaybeUninit::uninit(); PAGE]);
     let mut extra = Page([MaybeUninit::uninit(); PAGE]);
     let bytes_address = bytes.0.as_mut_ptr().addr();
-    let mut pool = Pool::new(&mut directory).unwrap();
-    assert_eq!(unsafe { pool.install(&mut None) }, Err(Error::Material));
+    let pool = Pool::new(&mut directory).unwrap();
+    let mut receipt1 = None;
+    assert_eq!(
+        unsafe { pool.install(&mut None, &mut receipt1) },
+        Err(Error::Material)
+    );
 
     let short = range(physical.start().get(), physical.end().get() - 1);
     let mapping = unsafe { MappedRange::new(short, &mut bytes.0[..PAGE - 1]) }.unwrap();
@@ -131,7 +135,8 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
 
     material = Some(allocation);
     let mut paired = mapped(&mut material, &mut extra.0);
-    let first = unsafe { pool.install(&mut paired) }.unwrap();
+    let mut receipt2 = None;
+    let first = unsafe { pool.install(&mut paired, &mut receipt2) }.unwrap();
     let supply = pool.supply(first).unwrap();
     assert_eq!(supply.allocation, first_id);
     assert_eq!(supply.geometry.slots, PAGE / supply.geometry.stride);
@@ -143,7 +148,11 @@ fn installation_rejection_keeps_the_exact_allocation_and_mapping() {
             .ok()
             .unwrap(),
     );
-    assert_eq!(unsafe { pool.install(&mut paired) }, Err(Error::Directory));
+    let mut receipt3 = None;
+    assert_eq!(
+        unsafe { pool.install(&mut paired, &mut receipt3) },
+        Err(Error::Directory)
+    );
     let (allocation, mut mapping) = paired.take().unwrap().into_parts();
     assert_eq!(allocation.id(), second_id);
     assert_eq!(mapping.physical(), second_physical);
@@ -159,10 +168,14 @@ fn the_layout_counts_alignment_state_and_zero_sized_values() {
     let [mut material, _] = supplies();
     let mut directory = [GroupSlot::<Overaligned>::EMPTY];
     let mut bytes = Page([MaybeUninit::uninit(); PAGE]);
-    let mut pool = Pool::new(&mut directory).unwrap();
+    let pool = Pool::new(&mut directory).unwrap();
     let mut paired = mapped(&mut material, &mut bytes.0);
     let id = paired.as_ref().unwrap().id();
-    assert_eq!(unsafe { pool.install(&mut paired) }, Err(Error::Layout));
+    let mut receipt4 = None;
+    assert_eq!(
+        unsafe { pool.install(&mut paired, &mut receipt4) },
+        Err(Error::Layout)
+    );
     assert_eq!(paired.as_ref().unwrap().id(), id);
     assert!(material.is_none());
 
@@ -211,9 +224,14 @@ fn partial_groups_take_priority_and_destroyed_slots_wait_for_settlement() {
     let mut directory = [const { GroupSlot::<Record<'_>>::EMPTY }; 2];
     let mut a = Page([MaybeUninit::uninit(); PAGE]);
     let mut b = Page([MaybeUninit::uninit(); PAGE]);
-    let mut pool = Pool::new(&mut directory).unwrap();
-    let first = unsafe { pool.install(&mut mapped(&mut first, a.0.as_mut_slice())) }.unwrap();
-    let second = unsafe { pool.install(&mut mapped(&mut second, b.0.as_mut_slice())) }.unwrap();
+    let pool = Pool::new(&mut directory).unwrap();
+    let mut receipt5 = None;
+    let first = unsafe { pool.install(&mut mapped(&mut first, a.0.as_mut_slice()), &mut receipt5) }
+        .unwrap();
+    let mut receipt6 = None;
+    let second =
+        unsafe { pool.install(&mut mapped(&mut second, b.0.as_mut_slice()), &mut receipt6) }
+            .unwrap();
     let count = pool.supply(first).unwrap().geometry.slots;
     assert!(count >= 2);
 
@@ -289,8 +307,15 @@ fn simultaneous_claims_do_not_share_a_slot() {
     let [mut material, _] = supplies();
     let mut directory = [GroupSlot::<u64>::EMPTY];
     let mut bytes = Page([MaybeUninit::uninit(); PAGE]);
-    let mut pool = Pool::new(&mut directory).unwrap();
-    unsafe { pool.install(&mut mapped(&mut material, bytes.0.as_mut_slice())) }.unwrap();
+    let pool = Pool::new(&mut directory).unwrap();
+    let mut receipt7 = None;
+    unsafe {
+        pool.install(
+            &mut mapped(&mut material, bytes.0.as_mut_slice()),
+            &mut receipt7,
+        )
+    }
+    .unwrap();
     let ready = Barrier::new(2);
     let pool = &pool;
     let addresses = thread::scope(|scope| {
@@ -331,8 +356,15 @@ fn reserve_and_publish_commit_into_the_held_consumer_record() {
     let [mut material, _] = supplies();
     let mut directory = [GroupSlot::<u64>::EMPTY];
     let mut bytes = Page([MaybeUninit::uninit(); PAGE]);
-    let mut pool = Pool::new(&mut directory).unwrap();
-    unsafe { pool.install(&mut mapped(&mut material, bytes.0.as_mut_slice())) }.unwrap();
+    let pool = Pool::new(&mut directory).unwrap();
+    let mut receipt8 = None;
+    unsafe {
+        pool.install(
+            &mut mapped(&mut material, bytes.0.as_mut_slice()),
+            &mut receipt8,
+        )
+    }
+    .unwrap();
     let free = pool.capacity().unwrap().free;
     let record = TurnLock::new((None, None));
     let mut work = TurnWorkspace::<2>::new();
@@ -411,8 +443,15 @@ fn all_unique_handles_transfer_a_send_value_between_workers() {
     let [mut material, _] = supplies();
     let mut directory = [GroupSlot::<Cell<u64>>::EMPTY];
     let mut bytes = Page([MaybeUninit::uninit(); PAGE]);
-    let mut pool = Pool::new(&mut directory).unwrap();
-    unsafe { pool.install(&mut mapped(&mut material, bytes.0.as_mut_slice())) }.unwrap();
+    let pool = Pool::new(&mut directory).unwrap();
+    let mut receipt9 = None;
+    unsafe {
+        pool.install(
+            &mut mapped(&mut material, bytes.0.as_mut_slice()),
+            &mut receipt9,
+        )
+    }
+    .unwrap();
     let pool = &pool;
 
     let (reserve, reserved) = sync_channel(1);
@@ -472,8 +511,10 @@ fn stable_references_hold_the_detached_slot_until_an_exclusive_reclaim_settles()
     let mut directory = [GroupSlot::<Stable<Record<'_>>>::EMPTY];
     let mut page = Page([MaybeUninit::uninit(); PAGE]);
     let drops = AtomicUsize::new(0);
-    let mut pool = Pool::new(&mut directory).unwrap();
-    let group = unsafe { pool.install(&mut mapped(&mut material, &mut page.0)) }.unwrap();
+    let pool = Pool::new(&mut directory).unwrap();
+    let mut receipt10 = None;
+    let group =
+        unsafe { pool.install(&mut mapped(&mut material, &mut page.0), &mut receipt10) }.unwrap();
     let slots = pool.capacity().unwrap().slots;
     let mut reserved = None;
     let mut occupied = None;
@@ -604,8 +645,10 @@ fn recovery_releases_an_ordinary_object_after_its_destroyer_exits() {
     let mut directory = [GroupSlot::<Record<'_>>::EMPTY];
     let mut page = Page([MaybeUninit::uninit(); PAGE]);
     let drops = AtomicUsize::new(0);
-    let mut pool = Pool::new(&mut directory).unwrap();
-    let group = unsafe { pool.install(&mut mapped(&mut material, &mut page.0)) }.unwrap();
+    let pool = Pool::new(&mut directory).unwrap();
+    let mut receipt11 = None;
+    let group =
+        unsafe { pool.install(&mut mapped(&mut material, &mut page.0), &mut receipt11) }.unwrap();
     let slots = pool.capacity().unwrap().slots;
     let mut reserved = None;
     let mut occupied = None;
@@ -640,8 +683,10 @@ fn a_direct_completion_beyond_the_scan_budget_cannot_release_a_later_object() {
     let [mut material, _] = supplies();
     let mut directory = [GroupSlot::<Stable<u64>>::EMPTY];
     let mut page = Page([MaybeUninit::uninit(); PAGE]);
-    let mut pool = Pool::new(&mut directory).unwrap();
-    let group = unsafe { pool.install(&mut mapped(&mut material, &mut page.0)) }.unwrap();
+    let pool = Pool::new(&mut directory).unwrap();
+    let mut receipt12 = None;
+    let group =
+        unsafe { pool.install(&mut mapped(&mut material, &mut page.0), &mut receipt12) }.unwrap();
     let slots = pool.capacity().unwrap().slots;
     assert!(slots > 64);
     let mut prefix = [const { None }; 64];
@@ -712,8 +757,10 @@ fn a_destructor_with_unknown_outcome_does_not_make_the_slot_reusable() {
     let [mut material, _] = supplies();
     let mut directory = [GroupSlot::<Fault>::EMPTY];
     let mut page = Page([MaybeUninit::uninit(); PAGE]);
-    let mut pool = Pool::new(&mut directory).unwrap();
-    let group = unsafe { pool.install(&mut mapped(&mut material, &mut page.0)) }.unwrap();
+    let pool = Pool::new(&mut directory).unwrap();
+    let mut receipt13 = None;
+    let group =
+        unsafe { pool.install(&mut mapped(&mut material, &mut page.0), &mut receipt13) }.unwrap();
     let slots = pool.capacity().unwrap().slots;
     let mut reserved = None;
     let mut occupied = None;
@@ -758,10 +805,12 @@ fn a_shut_group_keeps_its_original_charge_and_receipt_through_refund() {
     let mut directory = [const { GroupSlot::<u64>::EMPTY }; 2];
     let mut left = Page([MaybeUninit::uninit(); PAGE]);
     let mut right = Page([MaybeUninit::uninit(); PAGE]);
-    let mut pool = Pool::new(&mut directory).unwrap();
+    let pool = Pool::new(&mut directory).unwrap();
     let (original, b) = {
-        let a = unsafe { pool.install(&mut mapped(&mut a, &mut left.0)) }.unwrap();
-        let b = unsafe { pool.install(&mut mapped(&mut b, &mut right.0)) }.unwrap();
+        let mut receipt14 = None;
+        let a = unsafe { pool.install(&mut mapped(&mut a, &mut left.0), &mut receipt14) }.unwrap();
+        let mut receipt15 = None;
+        let b = unsafe { pool.install(&mut mapped(&mut b, &mut right.0), &mut receipt15) }.unwrap();
         let original = pool.supply(a).unwrap();
         let pool = &pool;
         std::thread::scope(|scope| {
@@ -851,10 +900,55 @@ fn an_id_from_another_pool_cannot_close_a_same_index_group() {
     let mut right = [GroupSlot::<u64>::EMPTY];
     let mut old = Page([MaybeUninit::uninit(); PAGE]);
     let mut new = Page([MaybeUninit::uninit(); PAGE]);
-    let mut first = Pool::new(&mut left).unwrap();
-    let mut second = Pool::new(&mut right).unwrap();
-    let original = unsafe { first.install(&mut mapped(&mut a, &mut old.0)) }.unwrap();
-    unsafe { second.install(&mut mapped(&mut b, &mut new.0)) }.unwrap();
+    let first = Pool::new(&mut left).unwrap();
+    let second = Pool::new(&mut right).unwrap();
+    let mut receipt16 = None;
+    let original =
+        unsafe { first.install(&mut mapped(&mut a, &mut old.0), &mut receipt16) }.unwrap();
+    let mut receipt17 = None;
+    unsafe { second.install(&mut mapped(&mut b, &mut new.0), &mut receipt17) }.unwrap();
     assert_eq!(second.shut(original), Err(Error::Stale));
     assert_eq!(second.capacity().unwrap().groups, 1);
+}
+
+#[test]
+fn retired_group_history_is_independent_of_runtime_directory_reuse() {
+    let ([mut first, mut second], allowance) = supply();
+    let mut directory = [GroupSlot::<u64>::EMPTY];
+    let mut first_page = Page([MaybeUninit::uninit(); PAGE]);
+    let mut next_page = Page([MaybeUninit::uninit(); PAGE]);
+    let pool = Pool::new(&mut directory).unwrap();
+    let mut first_receipt = None;
+    let mut next_receipt = None;
+    let mut first = mapped(&mut first, &mut first_page.0);
+    let original = unsafe { pool.install(&mut first, &mut first_receipt) }.unwrap();
+    let first_receipt = first_receipt.unwrap();
+    assert_eq!(first_receipt.id(), original);
+    assert_eq!(first_receipt.acknowledge(&pool), Err(Error::Busy));
+    let mut next = mapped(&mut second, &mut next_page.0);
+    pool.shut(original).unwrap();
+    unsafe { pool.begin_return(original, Fast) }.unwrap();
+    let returned = pool.finish_return(original, Fast).unwrap();
+    assert_eq!(pool.finish_return(original, Fast), Ok(returned));
+    assert_eq!(
+        unsafe { pool.install(&mut next, &mut next_receipt) },
+        Err(Error::Directory)
+    );
+    assert!(next.is_some() && next_receipt.is_none());
+    first_receipt.acknowledge(&pool).unwrap();
+    assert_eq!(pool.finish_return(original, Fast), Err(Error::Stale));
+    let successor = unsafe { pool.install(&mut next, &mut next_receipt) }.unwrap();
+    assert_ne!(original, successor);
+    assert_eq!(first_receipt.acknowledge(&pool), Err(Error::Stale));
+    assert_eq!(pool.shut(original), Err(Error::Stale));
+    assert_eq!(pool.capacity().unwrap().groups, 1);
+    let mut slot = None;
+    pool.reserve(&mut slot).unwrap();
+    assert_eq!(pool.shut(successor), Err(Error::Busy));
+    slot.unwrap().cancel().ok().unwrap();
+    pool.shut(successor).unwrap();
+    unsafe { pool.begin_return(successor, Fast) }.unwrap();
+    pool.finish_return(successor, Fast).unwrap();
+    next_receipt.unwrap().acknowledge(&pool).unwrap();
+    assert_eq!(allowance.balance().unwrap().occupied().get(), 0);
 }
