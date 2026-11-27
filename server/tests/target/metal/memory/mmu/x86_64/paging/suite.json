@@ -1,0 +1,68 @@
+{
+  "id": "x86-64-paging",
+  "profiles": [
+    "debug",
+    "release"
+  ],
+  "sources": [
+    "server/src/entry/boot/**",
+    "server/src/entry/mod.rs",
+    "server/src/lib.rs",
+    "server/src/metal/platform/description/devicetree/**",
+    "server/src/metal/memory/mod.rs",
+    "server/src/metal/mod.rs",
+    "server/src/metal/platform/boot/console.rs",
+    "server/src/metal/platform/boot/handoff/mod.rs",
+    "server/src/metal/platform/boot/handoff/uefi.rs",
+    "server/src/metal/platform/boot/major.rs",
+    "server/src/metal/platform/boot/mod.rs",
+    "server/src/metal/platform/boot/services.rs",
+    "server/src/metal/platform/boot/trap.rs",
+    "server/src/metal/platform/description/acpi/mod.rs",
+    "server/src/metal/platform/description/mod.rs",
+    "server/src/metal/platform/firmware/mod.rs",
+    "server/src/metal/platform/firmware/uefi/**",
+    "server/src/metal/platform/firmware/uefi/map.rs",
+    "server/src/metal/platform/firmware/uefi/mod.rs",
+    "server/src/metal/platform/mod.rs",
+    "server/src/metal/processor/hart/local/**",
+    "server/src/metal/processor/hart/mod.rs",
+    "server/src/metal/processor/mod.rs",
+    "server/tests/target/support/uefi/Cargo.lock",
+    "server/tests/target/support/uefi/Cargo.toml",
+    "server/tests/target/support/uefi/build.rs",
+    "server/tests/target/support/uefi/main.rs",
+    "server/tests/target/support/uefi/run.sh",
+    "server/src/metal/sync/**"
+  ],
+  "run": {
+    "kind": "board-boot",
+    "boards": [
+      "q35"
+    ],
+    "launcher": "support/uefi/run.sh",
+    "board_sources": {
+      "q35": [
+        "server/src/metal/platform/boot/x86_64/**",
+        "server/src/metal/processor/hart/x86_64/**",
+        "server/tests/target/support/uefi/q35.rs",
+        "server/tests/target/support/uefi/io.rs",
+        "server/src/metal/memory/mmu/x86_64/internal/**",
+        "server/src/metal/memory/mmu/x86_64/mod.rs",
+        "server/src/metal/memory/mmu/mod.rs",
+        "server/tests/target/support/paging/**",
+        "server/src/metal/platform/description/acpi/madt.rs"
+      ]
+    },
+    "launch": {
+      "q35": {
+        "features": [
+          "paging"
+        ],
+        "expects": [
+          "PASS internal paging switched=1 alias=1 restored=1"
+        ]
+      }
+    }
+  }
+}

@@ -14,8 +14,7 @@
     "server/src/metal/processor/mod.rs",
     "server/src/metal/module/**",
     "server/src/metal/memory/mmu/mod.rs",
-    "server/src/metal/memory/mmu/internal/mod.rs",
-    "server/src/metal/memory/mmu/internal/access.rs",
+    "server/src/metal/memory/mmu/access/**",
     "server/src/metal/platform/boot/mod.rs",
     "server/src/metal/platform/boot/console.rs",
     "server/src/metal/platform/boot/major.rs",
@@ -24,7 +23,7 @@
     "server/src/metal/platform/description/mod.rs",
     "server/src/metal/platform/firmware/mod.rs",
     "server/src/metal/platform/firmware/uefi/map.rs",
-    "server/src/metal/platform/description/acpi/**",
+    "server/src/metal/platform/description/acpi/mod.rs",
     "server/src/metal/platform/description/devicetree/**",
     "server/src/metal/platform/boot/handoff/mod.rs",
     "server/src/metal/platform/firmware/uefi/**",
@@ -48,8 +47,9 @@
         "server/src/metal/platform/boot/x86_64/major.rs",
         "server/src/metal/platform/boot/x86_64/mod.rs",
         "server/src/metal/interrupt/mod.rs",
-        "server/src/metal/interrupt/internal/mod.rs",
-        "server/src/metal/interrupt/internal/apic/**",
+        "server/src/metal/interrupt/x86_64/mod.rs",
+        "server/src/metal/interrupt/x86_64/internal/mod.rs",
+        "server/src/metal/interrupt/x86_64/internal/apic/**",
         "server/src/metal/processor/hart/x86_64/**",
         "server/tests/target/entry/module/board/x86_64.rs",
         "server/tests/target/entry/module/x86_mapping.rs"
@@ -61,8 +61,8 @@
         "server/src/metal/processor/hart/aarch64/**",
         "server/tests/target/entry/module/arm_mapping.rs",
         "server/tests/target/entry/module/board/aarch64.rs",
-        "server/tests/target/entry/platforms/devicetree.rs",
-        "server/tests/target/entry/platforms/pl011.rs"
+        "server/tests/target/support/uefi/devicetree.rs",
+        "server/tests/target/support/uefi/pl011.rs"
       ]
     }
   }

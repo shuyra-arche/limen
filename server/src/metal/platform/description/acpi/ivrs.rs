@@ -13,7 +13,7 @@ pub struct Ivhd<'a> {
     entries: &'a [u8],
 }
 
-impl Ivhd<'_> {
+impl<'a> Ivhd<'a> {
     pub fn segment(&self) -> u16 {
         self.segment
     }
@@ -33,15 +33,29 @@ impl Ivhd<'_> {
     /// The select-only scope is sufficient for directly attached PCI functions.
     /// Aliases, ranges and nonzero firmware settings require another profile.
     pub fn selects(&self, device: u16) -> bool {
-        let mut rest = self.entries;
-        while !rest.is_empty() {
-            let (entry, next) = split_entry(rest).expect("validated IVHD entries");
-            if entry[0] == 2 && u16::from_le_bytes(field(entry, 1)) == device {
-                return true;
+        self.selections().any(|candidate| candidate == device)
+    }
+
+    pub(crate) fn selections(&self) -> DeviceSelections<'a> {
+        DeviceSelections(self.entries)
+    }
+}
+
+/// Select records with an explicit requester in the admitted unaliased profile.
+pub(crate) struct DeviceSelections<'a>(&'a [u8]);
+
+impl Iterator for DeviceSelections<'_> {
+    type Item = u16;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.0.is_empty() {
+            let (entry, next) = split_entry(self.0).expect("validated IVHD entries");
+            self.0 = next;
+            if entry[0] == 2 {
+                return Some(u16::from_le_bytes(field(entry, 1)));
             }
-            rest = next;
         }
-        false
+        None
     }
 }
 

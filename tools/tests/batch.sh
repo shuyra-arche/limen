@@ -11,14 +11,21 @@ if [[ ${3:-} == --one ]]; then
     case "$platform" in q35|virt) args+=(--board "$platform") ;; esac
     status=0
     "$runner" "${args[@]}" >"$out/$label.log" 2>&1 || status=$?
-    if (( status )); then
-        echo "FAIL $label" >&2
+    verdict=$(jq -er '.verdict | select(. == "pass" or . == "fail" or . == "timeout" or . == "inconclusive")' \
+        "$out/$label/result.json" 2>/dev/null) || verdict=inconclusive
+    if { (( status == 0 )) && [[ $verdict != pass ]]; } ||
+        { (( status != 0 )) && [[ $verdict == pass ]]; }; then
+        verdict=inconclusive
+    fi
+    if [[ $verdict != pass ]]; then
+        echo "${verdict^^} $label" >&2
         tail -n 40 "$out/$label.log" >&2
         find "$out/$label" -type f \( -name stderr.log -o -name guest.log -o -name serial.log \) -exec tail -n 20 {} + >&2 || :
     else
         echo "PASS $label"
     fi
-    jq -cn --argjson test "$record" --argjson code "$status" '$test + {exit:$code}' >"$out/$label.status"
+    jq -cn --argjson test "$record" --argjson code "$status" --arg verdict "$verdict" \
+        '$test + {exit:$code, verdict:$verdict}' >"$out/$label.status"
     exit 0
 fi
 
@@ -29,6 +36,6 @@ printf '%s\n' "$plan" >"$out/plan.json"
 jq -c '.[]' <<<"$plan" | xargs -r -d '\n' -P 2 -n 1 bash "$0" "$runner" "$out" --one
 jq -s . "$out"/*.status >"$out/results.json"
 if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
-    jq -r '.[] | "- \(.id) / \(.platform) / \(.profile) — \(if .exit == 0 then "pass" else "FAIL" end)"' "$out/results.json" >>"$GITHUB_STEP_SUMMARY"
+    jq -r '.[] | "- \(.id) / \(.platform) / \(.profile) — \(.verdict)"' "$out/results.json" >>"$GITHUB_STEP_SUMMARY"
 fi
-jq -e --argjson plan "$plan" 'length == ($plan|length) and all(.[]; .exit == 0)' "$out/results.json"
+jq -e --argjson plan "$plan" 'length == ($plan|length) and all(.[]; .exit == 0 and .verdict == "pass")' "$out/results.json"

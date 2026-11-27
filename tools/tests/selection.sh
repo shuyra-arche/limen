@@ -29,6 +29,17 @@ change() {
 boards() {
     bash "$discover" . "$base" | jq -r 'map(.platform) | unique | join(" ")'
 }
+suites() {
+    bash "$discover" . "$base" | jq -r 'map(.id) | unique | join(" ")'
+}
+expect_suites() {
+    local actual
+    actual=$(suites)
+    if [[ $actual != "$*" ]]; then
+        printf 'expected suites: %s\nactual suites: %s\n' "$*" "$actual" >&2
+        return 1
+    fi
+}
 change server/src/metal/platform/boot/x86_64/mod.rs
 [[ $(boards) == q35 ]]
 bash "$discover" . "$base" | jq -e 'map(select(.id == "platform-boot").profile) | sort == ["debug","release"]' >/dev/null
@@ -53,28 +64,39 @@ change server/src/metal/sync/turn/mod.rs
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 for source in server/src/metal/processor/execution/mod.rs server/src/metal/processor/execution/cooperative/mod.rs; do
     change "$source"
-    bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["boot-handoff","kernel-execution","kernel-execution-harts","platform-boot","riscv-module-execution"]' >/dev/null
+    expect_suites boot-handoff kernel-execution kernel-execution-harts platform-execution riscv-module-execution
 done
 change server/src/metal/processor/execution/cooperative/x86_64/mod.rs
 [[ $(boards) == q35 ]]
+expect_suites platform-execution
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 change server/src/metal/processor/execution/cooperative/aarch64/mod.rs
 [[ $(boards) == virt ]]
+expect_suites platform-execution
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 change server/src/metal/identity/mod.rs
-[[ $(bash "$discover" . "$base") == "$(jq -c 'map(select(.id != "module-execution" and .id != "riscv-module-execution"))' <<<"$full")" ]]
+expect_suites boot-handoff kernel-execution kernel-execution-harts platform-boot platform-execution rv64-interrupt rv64-iommu
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 
-change server/tests/target/entry/platforms/io.rs
+change server/tests/target/support/uefi/io.rs
 [[ $(boards) == q35 ]]
-change server/tests/target/entry/platforms/virt.rs
+change server/tests/target/support/uefi/virt.rs
 [[ $(boards) == virt ]]
-change server/tests/target/entry/platforms/q35.rs server/src/metal/platform/boot/aarch64/mod.rs
+change server/tests/target/support/uefi/q35.rs server/src/metal/platform/boot/aarch64/mod.rs
 [[ $(boards) == 'q35 virt' ]]
-change server/tests/target/entry/platforms/main.rs
+change server/tests/target/support/uefi/main.rs
 [[ $(boards) == 'q35 virt' ]]
 change server/src/basis/execution.rs
-bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution","kernel-execution-harts","platform-boot"]' >/dev/null
+expect_suites kernel-execution kernel-execution-harts platform-execution
+change server/tests/target/basis/execution/platforms/scenario.rs
+expect_suites platform-execution
+[[ $(boards) == 'q35 virt' ]]
+change server/tests/target/basis/execution/platforms/x86_64.rs
+expect_suites platform-execution
+[[ $(boards) == q35 ]]
+change server/tests/target/basis/execution/platforms/aarch64.rs
+expect_suites platform-execution
+[[ $(boards) == virt ]]
 change server/tests/metal/sync/contracts.rs
 bash "$checks" . "$base" | jq -e '.rv64 and ((.host or .runner) | not)' >/dev/null
 [[ $(bash "$discover" . "$base") == '[]' ]]
@@ -94,8 +116,13 @@ change server/src/metal/platform/firmware/uefi/loader.rs
 [[ $(boards) == 'q35 virt' ]]
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/platform/description/acpi/madt.rs
-[[ $(bash "$discover" . "$base") == "$full" ]]
+[[ $(boards) == q35 ]]
+expect_suites platform-boot platform-execution x86-64-amdvi x86-64-ioapic x86-64-local-apic-failure x86-64-paging x86-64-vtd
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
+change server/src/metal/platform/description/acpi/dmar.rs
+expect_suites x86-64-vtd
+change server/src/metal/platform/description/acpi/ivrs.rs
+expect_suites x86-64-amdvi
 change server/src/metal/platform/firmware/uefi/map.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
@@ -116,49 +143,75 @@ change server/src/metal/platform/boot/handoff/uefi.rs
 [[ $(boards) == 'q35 virt' ]]
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/platform/boot/minor.rs
-bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["kernel-execution-harts","platform-boot","riscv-module-execution"]' >/dev/null
+expect_suites kernel-execution-harts platform-boot platform-execution riscv-module-execution x86-64-local-apic-failure
 change server/src/metal/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-for source in server/src/metal/platform/firmware/psci/native.rs server/src/metal/interrupt/internal/gic/native.rs server/src/metal/chrono/aarch64/native.rs; do
+for source in server/src/metal/platform/firmware/psci/native.rs server/src/metal/interrupt/aarch64/gic/native.rs server/src/metal/chrono/aarch64/native.rs; do
     change "$source"
     [[ $(boards) == virt ]]
     bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
 done
 for source in server/src/metal/processor/hart/aarch64/description.rs \
               server/src/metal/platform/firmware/psci/mod.rs \
-              server/src/metal/interrupt/internal/gic/mod.rs \
-              server/src/metal/interrupt/internal/architected.rs \
+              server/src/metal/interrupt/aarch64/gic/mod.rs \
+              server/src/metal/interrupt/aarch64/internal/timer.rs \
               server/src/metal/chrono/aarch64/mod.rs; do
     change "$source"
     [[ $(boards) == virt ]]
     bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 done
-for source in server/src/metal/interrupt/mod.rs \
-              server/src/metal/interrupt/internal/mod.rs; do
-    change "$source"
-    [[ $(boards) == 'q35 rv64 virt' ]]
-done
-change server/src/metal/interrupt/internal/apic/mod.rs
+change server/src/metal/interrupt/mod.rs
+[[ $(boards) == 'q35 rv64 virt' ]]
+change server/src/metal/interrupt/x86_64/internal/apic/mod.rs
 [[ $(boards) == q35 ]]
-bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["module-execution","platform-boot"]' >/dev/null
+expect_suites module-execution platform-boot platform-execution x86-64-ioapic x86-64-local-apic-failure
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
-change server/src/metal/interrupt/internal/apic/native.rs
+change server/src/metal/interrupt/x86_64/internal/apic/native.rs
 [[ $(boards) == q35 ]]
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
-for source in server/src/metal/interrupt/external/aplic/mod.rs \
-              server/src/metal/interrupt/external/aplic/direct.rs \
-              server/src/metal/interrupt/internal/aclint/timer/mod.rs \
-              server/src/metal/interrupt/internal/aclint/timer/supervisor.rs; do
+for source in server/src/metal/interrupt/riscv64/external/aplic/mod.rs \
+              server/src/metal/interrupt/riscv64/external/aplic/direct.rs \
+              server/src/metal/interrupt/riscv64/internal/aclint/mod.rs \
+              server/src/metal/interrupt/riscv64/external/aplic/encoding.rs; do
     change "$source"
-    bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["rv64-interrupt"]' >/dev/null
+    expect_suites rv64-interrupt
 done
-change server/src/metal/memory/mmu/external/riscv/queue.rs
-bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["rv64-iommu"]' >/dev/null
-change server/src/metal/memory/mmu/external/vtd.rs
-[[ $(boards) == q35 ]]
-change server/src/metal/memory/mmu/external/smmu/mod.rs
-[[ $(boards) == virt ]]
-change server/tests/metal/memory/mmu/internal/riscv/activity/mod.rs
+change server/src/metal/interrupt/riscv64/internal/timer/mod.rs
+expect_suites rv64-interrupt rv64-plic-sstc
+change server/src/metal/memory/mmu/riscv64/external/iommu/queue.rs
+expect_suites rv64-iommu
+change server/src/metal/memory/mmu/x86_64/external/vtd.rs
+expect_suites x86-64-vtd
+change server/src/metal/memory/mmu/x86_64/external/amdvi/mod.rs
+expect_suites x86-64-amdvi
+change server/src/metal/memory/mmu/aarch64/external/smmu/mod.rs
+expect_suites aarch64-smmu
+change server/src/metal/memory/mmu/x86_64/internal/native.rs
+expect_suites x86-64-paging
+bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
+change server/src/metal/memory/mmu/aarch64/internal/native.rs
+expect_suites aarch64-paging
+bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
+change server/src/metal/interrupt/x86_64/external/ioapic/mod.rs
+expect_suites x86-64-ioapic
+change server/src/metal/interrupt/riscv64/external/plic/context.rs
+expect_suites rv64-plic-sstc
+change server/tests/target/metal/interrupt/x86_64/apic-failure/scenario.rs
+expect_suites x86-64-local-apic-failure
+change server/tests/target/metal/interrupt/riscv64/plic-sstc/plic.rs
+expect_suites rv64-plic-sstc
+change server/tests/target/support/riscv64/reception.rs
+expect_suites rv64-interrupt rv64-plic-sstc
+change server/tests/target/support/pci/edu.rs
+expect_suites aarch64-smmu rv64-iommu x86-64-amdvi x86-64-vtd
+change server/tests/target/support/pci/q35.rs
+expect_suites x86-64-amdvi x86-64-vtd
+change server/tests/target/support/uefi/run.sh
+expect_suites aarch64-gic aarch64-paging aarch64-smmu platform-boot platform-execution x86-64-amdvi \
+    x86-64-ioapic x86-64-local-apic-failure x86-64-paging x86-64-vtd
+change server/tests/target/entry/boot/main.rs
+expect_suites boot-handoff
+change server/tests/metal/memory/mmu/riscv64/internal/activity/mod.rs
 [[ $(bash "$discover" . "$base") == '[]' ]]
 bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 change server/src/metal/platform/firmware/sbi/probe.rs
@@ -179,7 +232,7 @@ for source in server/src/metal/processor/hart/riscv64/description.rs \
     [[ $(boards) == rv64 ]]
     bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 done
-change server/src/metal/memory/mmu/internal/riscv/description.rs
+change server/src/metal/memory/mmu/riscv64/internal/description.rs
 [[ $(boards) == rv64 ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 for source in treaty/src/model/address.rs treaty/src/model/geometry.rs; do
@@ -194,7 +247,7 @@ change server/tests/qemu.version
 change rust-toolchain.toml
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host and .runner and .rv64' >/dev/null
-change server/src/metal/memory/mmu/internal/access.rs
+change server/src/metal/memory/mmu/access/ram.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 
@@ -209,8 +262,8 @@ done
 change server/tests/target/entry/module/arm_mapping.rs
 bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
     [["module-execution", "virt", "debug"], ["module-execution", "virt", "release"]]' >/dev/null
-for source in server/src/metal/memory/mmu/internal/riscv/encoder/mod.rs \
-              server/src/metal/memory/mmu/internal/riscv/encoder/binding.rs \
+for source in server/src/metal/memory/mmu/riscv64/internal/encoder/mod.rs \
+              server/src/metal/memory/mmu/riscv64/internal/encoder/binding.rs \
               server/tests/metal/module/riscv_root.rs \
               server/tests/metal/module/riscv_fixture.rs; do
     change "$source"
@@ -218,19 +271,19 @@ for source in server/src/metal/memory/mmu/internal/riscv/encoder/mod.rs \
         [["riscv-module-execution", "rv64", "debug"], ["riscv-module-execution", "rv64", "release"]]' >/dev/null
 done
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
-change server/src/metal/memory/mmu/internal/riscv/encoder/binding.rs
+change server/src/metal/memory/mmu/riscv64/internal/encoder/binding.rs
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 
 # Boot and cooperative admission now consume the actual SATP context and
 # supervisor enable/status observations, not independent raw comparisons.
 for source in server/src/metal/processor/hart/riscv64/status.rs \
-              server/src/metal/interrupt/internal/supervisor.rs \
-              server/src/metal/memory/mmu/internal/riscv/mode.rs \
-              server/src/metal/memory/mmu/internal/riscv/context/mod.rs \
-              server/src/metal/memory/mmu/internal/riscv/context/satp.rs; do
+              server/src/metal/interrupt/riscv64/internal/supervisor.rs \
+              server/src/metal/memory/mmu/riscv64/sv/mod.rs \
+              server/src/metal/memory/mmu/riscv64/internal/context/mod.rs \
+              server/src/metal/memory/mmu/riscv64/internal/context/satp.rs; do
     change "$source"
-    bash "$discover" . "$base" | jq -e 'map(.id) | unique ==
-        ["boot-handoff","kernel-execution","kernel-execution-harts","riscv-module-execution","rv64-interrupt","rv64-iommu"]' >/dev/null
+    expect_suites boot-handoff kernel-execution kernel-execution-harts riscv-module-execution \
+        rv64-interrupt rv64-iommu rv64-plic-sstc
     bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
 done
 for source in server/src/metal/processor/hart/aarch64/status.rs \
@@ -240,7 +293,7 @@ for source in server/src/metal/processor/hart/aarch64/status.rs \
     bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
 done
 change server/src/metal/processor/execution/description/aarch64.rs
-bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["platform-boot"]' >/dev/null
+expect_suites platform-execution
 change server/src/metal/memory/allocator/allocation/storage.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null

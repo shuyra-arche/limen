@@ -2,8 +2,8 @@
 //! below 1 MiB. Its contents and the BSP's identity mappings stay resident.
 use super::Descriptor;
 use crate::metal::{
-    interrupt::internal::apic::{Failure, LocalApic},
-    memory::mmu::internal::x86_64::Controls,
+    interrupt::x86_64::internal::apic::{Failure, LocalApic},
+    memory::mmu::x86_64::internal::Controls,
     platform::boot::minor::{self, Minor, StartError},
 };
 use core::{

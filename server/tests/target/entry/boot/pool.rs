@@ -1,18 +1,19 @@
 use core::{mem::MaybeUninit, ptr};
 
-use limen_treaty::model::PhysicalAddress;
 use kernel::{
     entry::boot::{self, Boot},
     metal::{
         memory::allocator::{
-            Allocation,
-            Allowance,
-            Error as SourceError,
-            pool::{Error, GroupReceipt, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement, Stable},
+            Allocation, Allowance, Error as SourceError,
+            pool::{
+                Error, GroupReceipt, GroupSlot, Pool, ReleaseCursor, ReleaseProgress, Retirement,
+                Stable,
+            },
         },
         sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
     },
 };
+use limen_treaty::model::PhysicalAddress;
 
 use super::{
     foundation::{inspect_budget, reference},
@@ -106,8 +107,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     }
     assert_eq!(pool.capacity().unwrap().free, geometry.slots);
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((PAGE as u64, 0))
     );
     let owner = allowance.as_ref().unwrap();

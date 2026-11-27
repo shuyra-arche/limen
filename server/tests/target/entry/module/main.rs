@@ -19,8 +19,8 @@ use kernel::metal::{platform::firmware::uefi::map::FirmwareMap, platform::firmwa
 use kernel::{
     entry::boot,
     metal::{
-        memory::mmu::internal::GEOMETRY,
-        memory::mmu::internal::access::MappedRange,
+        memory::mmu::GEOMETRY,
+        memory::mmu::access::ram::MappedRange,
         module::{Layout, ModuleImage, ModuleSlots, SegmentPermissions, UseError},
     },
 };

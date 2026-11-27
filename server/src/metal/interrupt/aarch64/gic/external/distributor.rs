@@ -1,0 +1,305 @@
+//! One Distributor serializes shared register words for independent SPI routes.
+
+use super::{GicV3, Route, Trigger};
+use crate::metal::{
+    memory::mmu::access::device::DeviceWindow, processor::hart::aarch64::description::AFFINITY_MASK,
+};
+
+const SPI_LIMIT: usize = 988;
+const CTLR: usize = 0;
+const TYPER: usize = 4;
+const PIDR2: usize = 0xffe8;
+const GROUP: usize = 0x80;
+const ENABLE: usize = 0x100;
+const DISABLE: usize = 0x180;
+const PENDING: usize = 0x200;
+const ACTIVE: usize = 0x300;
+const PRIORITY: usize = 0x400;
+const CONFIG: usize = 0xc00;
+const ROUTER: usize = 0x6000;
+const AFFINITY_ROUTING: u32 = 1 << 4;
+const SINGLE_SECURITY_STATE: u32 = 1 << 6;
+const WRITE_PENDING: u32 = 1 << 31;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Failure {
+    Mapping,
+    Profile,
+    Capacity,
+    Busy,
+    State,
+    Unconfirmed,
+}
+
+/// Only the exact affinity and priority can retry an uncertain configure.
+/// An uncertain enable can be masked. An uncertain mask can be observed again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum State {
+    Masked,
+    Configuring { affinity: u64, priority: u8 },
+    Configured,
+    Enabling,
+    Enabled,
+    Masking,
+}
+
+/// Bounded storage for one live SPI. Keep it with the Distributor until
+/// every admitted route has been retired.
+pub struct Slot<'tree> {
+    route: Option<(Route<'tree>, State)>,
+}
+
+impl Slot<'_> {
+    pub const EMPTY: Self = Self { route: None };
+}
+
+/// Ordering for an admitted GIC Distributor window.
+pub struct Barrier {
+    private: (),
+}
+
+impl Barrier {
+    #[cfg(all(limen_target, target_arch = "aarch64"))]
+    pub const fn native() -> Self {
+        Self { private: () }
+    }
+
+    fn synchronize(&self) {
+        let Self { private: () } = self;
+        #[cfg(all(limen_target, target_arch = "aarch64"))]
+        unsafe {
+            core::arch::asm!("dsb sy", options(nostack, preserves_flags));
+        }
+        #[cfg(not(all(limen_target, target_arch = "aarch64")))]
+        unreachable!("GIC ordering requires an admitted AArch64 target");
+    }
+}
+
+#[must_use]
+pub struct Distributor<'map, 'tree> {
+    mapping: &'map mut DeviceWindow,
+    gic: GicV3<'tree>,
+    barrier: Barrier,
+    slots: &'map mut [Slot<'tree>],
+    count: usize,
+}
+
+impl<'map, 'tree> Distributor<'map, 'tree> {
+    /// # Safety
+    /// The mapping is the original little-endian GICD in Non-secure state.
+    /// The caller excludes other writers of the shared Distributor words.
+    /// Existing firmware sources outside the admitted routes remain owned
+    /// by the original party. Keep the owner, slots and mapping live until
+    /// all admitted sources and their effects settle.
+    pub unsafe fn admit(
+        gic: GicV3<'tree>,
+        mapping: &'map mut DeviceWindow,
+        barrier: Barrier,
+        slots: &'map mut [Slot<'tree>],
+    ) -> Result<Self, Failure> {
+        if mapping.physical() != gic.distributor() || !mapping.supports_u32(PIDR2) {
+            return Err(Failure::Mapping);
+        }
+        if slots.is_empty() || slots.len() > SPI_LIMIT {
+            return Err(Failure::Capacity);
+        }
+        if slots.iter().any(|slot| slot.route.is_some()) {
+            return Err(Failure::Busy);
+        }
+        let mut distributor = Self {
+            mapping,
+            gic,
+            barrier,
+            slots,
+            count: 0,
+        };
+        let revision = distributor.word(PIDR2) >> 4 & 0xf;
+        distributor.count = 32 * (1 + (distributor.word(TYPER) & 31)) as usize;
+        if !matches!(revision, 3 | 4) || distributor.word(CTLR) & AFFINITY_ROUTING == 0 {
+            return Err(Failure::Profile);
+        }
+        Ok(distributor)
+    }
+
+    /// # Safety
+    /// The caller has quiesced this source and settled previous receptions
+    /// and writes. In a two-security-state domain trusted firmware must grant
+    /// this Non-secure Group 1 SPI as the group register is Secure-only.
+    pub unsafe fn reserve(&mut self, route: Route<'tree>) -> Result<(), Failure> {
+        if route.controller.source() != self.gic.source() || route.intid >= self.count {
+            return Err(Failure::Profile);
+        }
+        let id = route.intid;
+        if self.lookup(id).is_ok() || !self.available(id) {
+            return Err(Failure::Busy);
+        }
+        let slot = self
+            .slots
+            .iter_mut()
+            .find(|slot| slot.route.is_none())
+            .ok_or(Failure::Capacity)?;
+        slot.route = Some((route, State::Masked));
+        Ok(())
+    }
+
+    fn lookup(&self, id: usize) -> Result<usize, Failure> {
+        self.slots
+            .iter()
+            .position(|slot| slot.route.is_some_and(|(route, _)| route.intid == id))
+            .ok_or(Failure::State)
+    }
+
+    pub fn state(&self, id: usize) -> Result<State, Failure> {
+        Ok(self.slots[self.lookup(id)?].route.unwrap().1)
+    }
+
+    /// Observe the physical active bit without acknowledging reception.
+    pub fn active(&mut self, id: usize) -> Result<bool, Failure> {
+        self.lookup(id)?;
+        Ok(self.bit(ACTIVE, id))
+    }
+
+    fn word(&mut self, offset: usize) -> u32 {
+        u32::from_le(unsafe { self.mapping.read_u32(offset) }.expect("checked GICD window"))
+    }
+
+    fn write(&mut self, offset: usize, bits: u32) {
+        unsafe { self.mapping.write_u32(offset, bits.to_le()) }.expect("checked GICD window");
+    }
+
+    fn bank(offset: usize, id: usize) -> usize {
+        offset + id / 32 * 4
+    }
+
+    fn mask(id: usize) -> u32 {
+        1 << (id % 32)
+    }
+
+    fn bit(&mut self, offset: usize, id: usize) -> bool {
+        self.word(Self::bank(offset, id)) & Self::mask(id) != 0
+    }
+
+    fn available(&mut self, id: usize) -> bool {
+        self.word(CTLR) & WRITE_PENDING == 0
+            && !self.bit(ENABLE, id)
+            && !self.bit(ACTIVE, id)
+            && !self.bit(PENDING, id)
+    }
+
+    /// # Safety
+    /// The admitted source remains quiescent while its route is changed.
+    /// Affinity names a present PE in the same domain whose Group 1
+    /// reception will be available before unmasking.
+    pub unsafe fn configure(
+        &mut self,
+        id: usize,
+        affinity: u64,
+        priority: u8,
+    ) -> Result<(), Failure> {
+        let slot = self.lookup(id)?;
+        let (route, state) = self.slots[slot].route.unwrap();
+        let operation = State::Configuring { affinity, priority };
+        if state != State::Masked && state != operation {
+            return Err(Failure::State);
+        }
+        if affinity & !AFFINITY_MASK != 0 {
+            return Err(Failure::Profile);
+        }
+        if !self.available(id) {
+            return Err(Failure::Busy);
+        }
+        self.slots[slot].route = Some((route, operation));
+        if self.word(CTLR) & SINGLE_SECURITY_STATE != 0 {
+            let group = Self::bank(GROUP, id);
+            let value = self.word(group) | Self::mask(id);
+            self.write(group, value);
+            self.barrier.synchronize();
+            if !self.bit(GROUP, id) {
+                return Err(Failure::Unconfirmed);
+            }
+        }
+        let config = CONFIG + id / 16 * 4;
+        let edge = 2 << (id % 16 * 2);
+        let wanted = if route.trigger == Trigger::EdgeRising {
+            edge
+        } else {
+            0
+        };
+        let bits = (self.word(config) & !edge) | wanted;
+        self.write(config, bits);
+        unsafe {
+            self.mapping
+                .write_u8(PRIORITY + id, priority)
+                .expect("checked GICD priority");
+            self.mapping
+                .write_u64(ROUTER + id * 8, affinity.to_le())
+                .expect("checked GICD route");
+        }
+        self.barrier.synchronize();
+        if self.word(config) & edge != wanted
+            || unsafe { self.mapping.read_u8(PRIORITY + id) }.expect("checked GICD priority")
+                != priority
+            || u64::from_le(
+                unsafe { self.mapping.read_u64(ROUTER + id * 8) }.expect("checked GICD route"),
+            ) != affinity
+        {
+            return Err(Failure::Unconfirmed);
+        }
+        self.slots[slot].route = Some((route, State::Configured));
+        Ok(())
+    }
+
+    /// # Safety
+    /// The original target can receive this route with durable capacity
+    /// to retain the matching IAR, priority drop and deactivation.
+    pub unsafe fn enable(&mut self, id: usize) -> Result<(), Failure> {
+        let slot = self.lookup(id)?;
+        let (route, state) = self.slots[slot].route.unwrap();
+        if state != State::Configured {
+            return Err(Failure::State);
+        }
+        self.slots[slot].route = Some((route, State::Enabling));
+        self.write(Self::bank(ENABLE, id), Self::mask(id));
+        self.barrier.synchronize();
+        if !self.bit(ENABLE, id) {
+            return Err(Failure::Unconfirmed);
+        }
+        self.slots[slot].route = Some((route, State::Enabled));
+        Ok(())
+    }
+
+    /// Mask this source. Success still leaves old reception obligations.
+    pub fn disable(&mut self, id: usize) -> Result<(), Failure> {
+        let slot = self.lookup(id)?;
+        let (route, state) = self.slots[slot].route.unwrap();
+        if matches!(state, State::Configuring { .. }) {
+            return Err(Failure::Unconfirmed);
+        }
+        if state == State::Masked {
+            return Ok(());
+        }
+        if state != State::Masking {
+            self.slots[slot].route = Some((route, State::Masking));
+            self.write(Self::bank(DISABLE, id), Self::mask(id));
+            self.barrier.synchronize();
+        }
+        if self.word(CTLR) & WRITE_PENDING != 0 || self.bit(ENABLE, id) {
+            return Err(Failure::Busy);
+        }
+        self.slots[slot].route = Some((route, State::Masked));
+        Ok(())
+    }
+
+    /// # Safety
+    /// Exclude future assertions and old writes, and settle the original
+    /// source and CPU interface reception. Distributor bits cannot prove
+    /// the separately owned software and device obligations.
+    pub unsafe fn retire(&mut self, id: usize) -> Result<(), Failure> {
+        let slot = self.lookup(id)?;
+        if self.state(id)? != State::Masked || !self.available(id) {
+            return Err(Failure::Busy);
+        }
+        self.slots[slot].route = None;
+        Ok(())
+    }
+}

@@ -16,7 +16,7 @@ use crate::{
                 ReleaseProgress, Retirement, Stable,
             },
         },
-        memory::mmu::internal::access::MappedRange,
+        memory::mmu::access::ram::MappedRange,
         sync::{TurnLock, TurnMode::Fast, TurnWorkspace},
     },
 };

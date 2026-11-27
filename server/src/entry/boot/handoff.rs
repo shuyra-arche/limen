@@ -11,7 +11,7 @@ pub struct Boot<'a> {
     descriptions: &'a Descriptions<'a>,
     firmware_map: Option<FirmwareMap<'a>>,
     #[cfg(limen_firmware = "sbi")]
-    reception: Option<crate::metal::interrupt::internal::supervisor::Supervisor>,
+    reception: Option<crate::metal::interrupt::riscv64::internal::supervisor::Supervisor>,
 }
 
 impl<'a> Boot<'a> {
@@ -69,7 +69,7 @@ impl<'a> Boot<'a> {
     #[cfg(limen_firmware = "sbi")]
     pub fn take_reception(
         &mut self,
-    ) -> Option<crate::metal::interrupt::internal::supervisor::Supervisor> {
+    ) -> Option<crate::metal::interrupt::riscv64::internal::supervisor::Supervisor> {
         self.reception.take()
     }
 
@@ -106,7 +106,7 @@ impl<'a> Boot<'a> {
         firmware_map: Option<FirmwareMap<'a>>,
         descriptions: &'a Descriptions<'a>,
         #[cfg(limen_firmware = "sbi")]
-        reception: crate::metal::interrupt::internal::supervisor::Supervisor,
+        reception: crate::metal::interrupt::riscv64::internal::supervisor::Supervisor,
     ) -> Self {
         Self {
             hart,

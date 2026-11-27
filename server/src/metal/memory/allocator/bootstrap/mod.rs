@@ -11,7 +11,7 @@ use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
 use crate::metal::{
     identity::{Entry, Generation, Slot},
-    memory::mmu::internal::access::MappedRange,
+    memory::mmu::access::ram::MappedRange,
     sync::TurnLock,
 };
 

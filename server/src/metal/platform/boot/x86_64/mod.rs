@@ -1,5 +1,5 @@
 use crate::metal::{
-    interrupt::internal::apic,
+    interrupt::x86_64::internal::apic,
     platform::boot::handoff::{Descriptions, Facts, uefi},
     platform::boot::trap as diagnostic,
     processor::hart::{

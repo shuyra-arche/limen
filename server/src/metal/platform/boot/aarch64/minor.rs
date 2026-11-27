@@ -7,7 +7,7 @@ use core::{
 };
 
 use crate::metal::{
-    memory::mmu::internal::aarch64::Controls, platform::firmware::psci::Psci,
+    memory::mmu::aarch64::internal::Controls, platform::firmware::psci::Psci,
     processor::hart::aarch64::description::AFFINITY_MASK,
 };
 #[derive(Clone, Copy)]

@@ -4,7 +4,7 @@ use super::{
     Boot, FirmwareMap, PhysicalAddress, PhysicalRange, Retirement, describe, image, range,
 };
 use crate::metal::memory::allocator::{RegionDescription, RegionOrigin};
-use crate::metal::memory::mmu::internal::access::{Error as AccessError, MappedRange};
+use crate::metal::memory::mmu::access::ram::{Error as AccessError, MappedRange};
 use core::{alloc::Layout, mem::MaybeUninit};
 use limen_treaty::model::{Alignment, ByteLength};
 

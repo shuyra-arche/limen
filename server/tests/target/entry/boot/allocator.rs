@@ -2,17 +2,8 @@ use kernel::{
     entry::boot::{self, Boot},
     metal::{
         memory::allocator::{
-            Allocation,
-            Allowance,
-            Config,
-            Error,
-            Initial,
-            LookupObservation,
-            Pending,
-            RamPurpose::Metadata,
-            Request,
-            ReturnReceipt,
-            Search,
+            Allocation, Allowance, Config, Error, Initial, LookupObservation, Pending,
+            RamPurpose::Metadata, Request, ReturnReceipt, Search,
         },
         sync::TurnMode::{Fast, Slow},
     },
@@ -88,8 +79,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     assert_eq!(source.root(), pages(4, 4 + root_pages));
     let capacity = (13 - root_pages) * PAGE;
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity - 10 * PAGE))
     );
 
@@ -158,7 +148,11 @@ pub(super) fn check(boot: &Boot<'_>) {
         Metadata,
     )
     .unwrap();
-    let Search::Candidate(aligned) = source.lookup(request, Some(added), &mut [LookupObservation::EMPTY; 3]).unwrap().step().unwrap()
+    let Search::Candidate(aligned) = source
+        .lookup(request, Some(added), &mut [LookupObservation::EMPTY; 3])
+        .unwrap()
+        .step()
+        .unwrap()
     else {
         panic!("the new Region has an eligible aligned grain");
     };
@@ -179,8 +173,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     assert_eq!(done.physical, pages(0, 3));
     let capacity = capacity + 4 * PAGE;
     assert_eq!(
-        inspect_budget(source)
-            .map(|(total, unassigned)| (total.get(), unassigned.get())),
+        inspect_budget(source).map(|(total, unassigned)| (total.get(), unassigned.get())),
         Ok((capacity, capacity))
     );
     allowance.reclaim(Slow).ok().unwrap();

@@ -18,7 +18,7 @@
     "server/src/metal/platform/description/mod.rs",
     "server/src/metal/platform/firmware/mod.rs",
     "server/src/metal/platform/firmware/uefi/map.rs",
-    "server/src/metal/platform/description/acpi/**",
+    "server/src/metal/platform/description/acpi/mod.rs",
     "server/src/entry/boot/**",
     "server/src/metal/platform/boot/riscv64/**",
     "server/src/metal/platform/firmware/sbi/**",
@@ -44,11 +44,13 @@
     "server/src/metal/platform/boot/handoff/sbi.rs",
     "server/src/metal/processor/hart/riscv64/status.rs",
     "server/src/metal/interrupt/mod.rs",
-    "server/src/metal/interrupt/internal/mod.rs",
-    "server/src/metal/interrupt/internal/supervisor.rs",
-    "server/src/metal/memory/mmu/internal/riscv/mod.rs",
-    "server/src/metal/memory/mmu/internal/riscv/context/**",
-    "server/src/metal/memory/mmu/internal/riscv/mode.rs"
+    "server/src/metal/interrupt/riscv64/mod.rs",
+    "server/src/metal/interrupt/riscv64/internal/mod.rs",
+    "server/src/metal/interrupt/riscv64/internal/supervisor.rs",
+    "server/src/metal/memory/mmu/riscv64/internal/mod.rs",
+    "server/src/metal/memory/mmu/riscv64/internal/context/**",
+    "server/src/metal/memory/mmu/riscv64/sv/**",
+    "server/src/metal/memory/mmu/riscv64/internal/pte.rs"
   ],
   "run": {
     "kind": "qemu",

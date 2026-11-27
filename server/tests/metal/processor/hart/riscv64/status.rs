@@ -19,7 +19,7 @@ fn global_mask_and_each_extension_state_are_independent() {
                     let bits = (fs << 13)
                         | (vs << 9)
                         | (xs << 15)
-                        | usize::from(enabled) * 2
+                        | (usize::from(enabled) * 2)
                         | (1 << 5)
                         | (1 << 18);
                     let status = Status::from_bits(bits);

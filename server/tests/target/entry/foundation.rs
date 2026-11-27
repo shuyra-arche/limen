@@ -15,7 +15,7 @@ use kernel::{
                 Reference, Retirement, Stable, StableOwner,
             },
         },
-        memory::mmu::internal::access::MappedRange,
+        memory::mmu::access::ram::MappedRange,
         sync::TurnMode::Fast,
     },
 };

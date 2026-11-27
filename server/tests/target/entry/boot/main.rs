@@ -4,22 +4,19 @@
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
+use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 use kernel::metal::{
     chrono::riscv64::RiscvTimebase,
-    processor::execution::description::riscv64::RiscvExtension, processor::execution::description::riscv64::RiscvIsa,
+    memory::mmu::riscv64::internal::description::{MaximumMode, RiscvMmu},
     platform::description::devicetree::memory::Source,
-    memory::mmu::internal::riscv::description::{MaximumMode, RiscvMmu},
+    processor::execution::description::riscv64::RiscvExtension,
+    processor::execution::description::riscv64::RiscvIsa,
 };
-use kernel::entry::boot::{Boot, shutdown, stack_range, write};
 use limen_treaty::model::{ByteLength, PhysicalAddress};
 
 #[path = "../synchronization.rs"]
 mod synchronization;
 
-#[path = "../reception.rs"]
-mod reception;
-mod plic;
-mod sstc;
 mod allocator;
 #[path = "../foundation.rs"]
 mod foundation;
@@ -73,10 +70,7 @@ fn check_discovery(boot: &Boot<'_>) {
     let mmu = RiscvMmu::describe(&cpu)
         .unwrap()
         .expect("declared MMU mode");
-    assert!(matches!(
-        mmu.maximum(),
-        MaximumMode::Paged(_)
-    ));
+    assert!(matches!(mmu.maximum(), MaximumMode::Paged(_)));
     assert_eq!(mmu.source(), cpu.node().id());
     let isa = RiscvIsa::describe(&cpu).unwrap().expect("declared ISA");
     assert_eq!(isa.source(), cpu.node().id());
@@ -106,7 +100,7 @@ fn check_discovery(boot: &Boot<'_>) {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
+extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let original = unsafe { (&raw const FIRMWARE_HART).read_volatile() };
     assert!(
         original < 4 && boot.hart() == original,
@@ -204,9 +198,6 @@ extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
     assert!(magic == 0xd00d_feed, "invalid firmware tree magic");
     assert!(length == device_tree.len(), "firmware tree length mismatch");
     check_discovery(&boot);
-    let mut reception = boot.take_reception().unwrap();
-    plic::check(&boot, &mut reception);
-    sstc::check(&boot, &mut reception.timer);
 
     let memory = boot.dtb_memory().expect("OpenSBI DTB memory");
     assert!(boot.conventional_ram().is_none());

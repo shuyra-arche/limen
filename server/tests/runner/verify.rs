@@ -2,7 +2,7 @@ use crate::{qmp::Shutdown, suite::Distinct};
 use kernel_verification::{Result, process::Outcome};
 use regex::Regex;
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fs, path::Path};
 
 pub fn check(log: &str, expects: &[String], distinct: Option<&Distinct>) -> Result<Value> {
     let missing: Vec<_> = expects
@@ -46,6 +46,40 @@ pub fn verdict(result: &Outcome, details: &Value, shutdown: Option<&Shutdown>) -
         && shutdown.is_some_and(|s| s.guest && s.reason == "guest-shutdown")
     {
         "pass"
+    } else {
+        "inconclusive"
+    }
+}
+
+pub fn board_verdict(
+    result: &Outcome,
+    evidence: &Path,
+    declared: Option<(&str, &str)>,
+) -> &'static str {
+    if result.status == "timeout" {
+        return "timeout";
+    }
+    if !result.exited() {
+        return "inconclusive";
+    }
+    if let Some((scenario, board)) = declared {
+        let receipt = fs::read(evidence.join("verdict.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .filter(|value| value["scenario"] == scenario && value["board"] == board);
+        return match receipt.as_ref().and_then(|value| value["verdict"].as_str()) {
+            Some("pass") if result.success() => "pass",
+            Some("fail") if !result.success() => "fail",
+            Some("timeout") if !result.success() => "timeout",
+            _ => "inconclusive",
+        };
+    }
+    if result.success() {
+        "pass"
+    } else if fs::read_to_string(evidence.join("exit.status"))
+        .is_ok_and(|status| status.trim() == "124")
+    {
+        "timeout"
     } else {
         "inconclusive"
     }

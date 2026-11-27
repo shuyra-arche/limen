@@ -3,7 +3,7 @@
 use core::{arch::global_asm, mem::offset_of};
 
 use crate::metal::{
-    interrupt::internal::supervisor, memory::mmu::internal::riscv::context::Context,
+    interrupt::riscv64::internal::supervisor, memory::mmu::riscv64::internal::context::Context,
     processor::hart::riscv64::native,
 };
 

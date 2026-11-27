@@ -2,7 +2,7 @@
 use super::Fixture;
 use kernel::metal::processor::hart::riscv64::description::RiscvCpus;
 use kernel::metal::{
-    interrupt::{external::aplic, internal::aclint::timer},
+    interrupt::riscv64::{external::aplic, internal::aclint},
     platform::description::devicetree::{DeviceTree, Error},
 };
 
@@ -82,7 +82,7 @@ fn sparse_hart_ids_follow_the_actual_controller_order() {
     assert_eq!(route.domain(), aplic.source());
     assert_eq!(route.id(), 10);
     assert_eq!(route.mode(), aplic::Mode::LevelHigh);
-    let timer = timer::Description::read(&tree, &cpus, 3).unwrap().unwrap();
+    let timer = aclint::Description::read(&tree, &cpus, 3).unwrap().unwrap();
     assert_eq!(timer.counter().start().get(), 0x0200_bff8);
     assert_eq!(timer.comparator().start().get(), 0x0200_4008);
     assert_eq!(timer.comparator().length().get(), 8);
@@ -113,7 +113,10 @@ fn malformed_or_mixed_targets_are_not_admitted() {
         let bytes = fixture(&[2, 9, 1, 9], targets, 10, 5, 0x8000);
         let tree = DeviceTree::new(&bytes).unwrap();
         let cpus = RiscvCpus::new(tree).unwrap().unwrap();
-        assert_eq!(timer::Description::read(&tree, &cpus, 3).err(), Some(error));
+        assert_eq!(
+            aclint::Description::read(&tree, &cpus, 3).err(),
+            Some(error)
+        );
     }
 }
 
@@ -153,14 +156,14 @@ fn controller_discovery_rejects_foreign_cpu_scope() {
         Some(Error::Conflict)
     );
     assert_eq!(
-        timer::Description::read(&tree, &cpus, 3).err(),
+        aclint::Description::read(&tree, &cpus, 3).err(),
         Some(Error::Conflict)
     );
 }
 
 #[test]
 fn plic_supervisor_route_preserves_holes_and_rejects_ambiguous_contexts() {
-    use kernel::metal::interrupt::external::plic::Route;
+    use kernel::metal::interrupt::riscv64::external::plic::Route;
     for (targets, index) in [
         (vec![1, u32::MAX, 1, 9], Ok(1)),
         (vec![1, 11, 1, 9], Ok(1)),

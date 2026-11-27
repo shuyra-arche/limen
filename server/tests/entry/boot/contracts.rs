@@ -23,7 +23,7 @@ pub fn raw_space(revoker: &Revoker) {
 }
 
 #[cfg(contract = "mapping")]
-pub fn raw_mapping(mapping: &kernel::metal::memory::mmu::internal::access::MappedRange<'_>) {
+pub fn raw_mapping(mapping: &kernel::metal::memory::mmu::access::ram::MappedRange<'_>) {
     let _ = &mapping.bytes;
 }
 
@@ -33,7 +33,7 @@ pub fn raw_material(material: &kernel::metal::memory::allocator::MappedStorage<'
 }
 
 #[cfg(contract = "mapping-move")]
-pub fn reuse_mapping(mapping: kernel::metal::memory::mmu::internal::access::MappedRange<'_>) {
+pub fn reuse_mapping(mapping: kernel::metal::memory::mmu::access::ram::MappedRange<'_>) {
     let physical = mapping.physical();
     let offset = physical.length();
     let _ = mapping.split(offset);

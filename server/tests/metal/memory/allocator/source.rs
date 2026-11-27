@@ -6,7 +6,7 @@ use crate::{
             Initial, LookupObservation, Pending, RamPurpose::Metadata, RegionDescription,
             RegionOrigin, Request, Retired, ReturnReceipt, Search,
         },
-        memory::mmu::internal::access::MappedRange,
+        memory::mmu::access::ram::MappedRange,
         sync::{
             TurnAcquireError,
             TurnMode::{Fast, Slow},
@@ -1170,7 +1170,7 @@ fn source_directory_scale_is_independent_of_joint_lock_capacity() {
     use crate::metal::sync::{TURN_CAPACITY, TurnWorkspace};
 
     const REGIONS: usize = 6;
-    assert!(REGIONS > TURN_CAPACITY);
+    const { assert!(REGIONS > TURN_CAPACITY) };
     let mut receiver = None;
     bootstrap(|regions, mapping| {
         let config = Config {

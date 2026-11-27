@@ -1,7 +1,7 @@
 pub(crate) use super::handoff::sbi::admit;
 use crate::metal::{
-    interrupt::internal::supervisor,
-    memory::mmu::internal::riscv::context::Context,
+    interrupt::riscv64::internal::supervisor,
+    memory::mmu::riscv64::internal::context::Context,
     platform::boot::trap as diagnostic,
     processor::hart::{
         local,

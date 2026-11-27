@@ -1,9 +1,9 @@
 use super::{IMAGES, PAGE, ROOT, SV39_ROOT};
 use kernel::metal::{
-    memory::mmu::internal::access::MappedRange,
-    memory::mmu::internal::{
+    memory::mmu::access::ram::MappedRange,
+    memory::mmu::{
         GEOMETRY,
-        riscv::{Mode, encoder},
+        riscv64::{internal::encoder, sv::Mode},
     },
     module::{Contract, Layout, Machine, ModuleImage, ModuleSlots, UseError},
 };

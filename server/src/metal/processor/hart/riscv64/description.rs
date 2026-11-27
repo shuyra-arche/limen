@@ -71,9 +71,9 @@ impl<'a> RiscvCpus<'a> {
         cause: u32,
         hart: u64,
     ) -> Result<Option<(usize, usize)>, Error> {
-        let pairs = bytes.chunks_exact(8);
+        let (pairs, remainder) = bytes.as_chunks::<8>();
         let count = pairs.len();
-        if count == 0 || !pairs.remainder().is_empty() {
+        if count == 0 || !remainder.is_empty() {
             return Err(Error::Format);
         }
         if count > HART_LIMIT {
@@ -81,7 +81,7 @@ impl<'a> RiscvCpus<'a> {
         }
         let mut seen = [0; HART_LIMIT];
         let mut target = None;
-        for (index, pair) in pairs.enumerate() {
+        for (index, pair) in pairs.iter().enumerate() {
             let handle = u32::from_be_bytes(pair[..4].try_into().unwrap());
             let kind = u32::from_be_bytes(pair[4..].try_into().unwrap());
             if kind != cause {

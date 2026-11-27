@@ -7,10 +7,10 @@ use kernel::metal::{
 };
 use uefi::Status;
 
-#[path = "../../platforms/devicetree.rs"]
+#[path = "../../../support/uefi/devicetree.rs"]
 mod devicetree;
 
-#[path = "../../platforms/pl011.rs"]
+#[path = "../../../support/uefi/pl011.rs"]
 mod pl011;
 
 pub const MACHINE: Machine = Machine::Aarch64;

@@ -6,7 +6,7 @@ use crate::metal::{
         Allocator, Allowance, Config, Error, Initial, RegionDescription, RegionOrigin,
         RootInitialization, RootStorage,
     },
-    memory::mmu::internal::access::MappedRange,
+    memory::mmu::access::ram::MappedRange,
     platform::{
         description::devicetree::memory::DtbMemory,
         firmware::uefi::map::{FirmwareMap, FirmwareRegion, PAGE_ALIGNMENT},

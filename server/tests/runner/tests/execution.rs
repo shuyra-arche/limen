@@ -1,6 +1,6 @@
-use crate::{qmp, verify};
+use crate::{composition, qmp, verify};
 use kernel_verification::process;
-use std::{fs, process::Command, thread, time::Duration};
+use std::{fs, path::Path, process::Command, thread, time::Duration};
 fn scratch(name: &str) -> std::path::PathBuf {
     let root = std::env::temp_dir().join(format!("kernel-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
@@ -108,6 +108,66 @@ fn deadline_kills_even_after_success_marker() {
     let cleanup: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("cleanup.json")).unwrap()).unwrap();
     assert_eq!(cleanup["settled"], true);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn board_launch_requires_a_receipt_consistent_with_the_process() {
+    let root = scratch("board-receipt");
+    let mut outcome = process::Outcome {
+        command: "launcher".into(),
+        status: "exited".into(),
+        code: Some(0),
+        elapsed_seconds: 0.0,
+        passed: false,
+    };
+    let receipt = root.join("verdict.json");
+    let declared = Some(("io", "q35"));
+    assert_eq!(
+        verify::board_verdict(&outcome, &root, declared),
+        "inconclusive"
+    );
+    fs::write(
+        &receipt,
+        r#"{"verdict":"pass","scenario":"io","board":"q35"}"#,
+    )
+    .unwrap();
+    assert_eq!(verify::board_verdict(&outcome, &root, declared), "pass");
+    assert_eq!(
+        verify::board_verdict(&outcome, &root, Some(("io", "virt"))),
+        "inconclusive"
+    );
+    outcome.code = Some(1);
+    assert_eq!(
+        verify::board_verdict(&outcome, &root, declared),
+        "inconclusive"
+    );
+    for verdict in ["fail", "timeout", "inconclusive"] {
+        fs::write(
+            &receipt,
+            format!(r#"{{"verdict":"{verdict}","scenario":"io","board":"q35"}}"#),
+        )
+        .unwrap();
+        assert_eq!(verify::board_verdict(&outcome, &root, declared), verdict);
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_file_import_copies_only_the_declared_fixture() {
+    let root = scratch("fixture-import");
+    let fixture = Path::new("target/entry/memory.rs");
+    let destination = root.join(fixture);
+    let hashes = composition::import(fixture, &destination).unwrap();
+    assert_eq!(hashes.len(), 1);
+    assert_eq!(
+        hashes["memory.rs"],
+        kernel_verification::digest(&destination).unwrap()
+    );
+    assert_eq!(
+        fs::read_dir(destination.parent().unwrap()).unwrap().count(),
+        1
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -7,7 +7,7 @@ use core::{
 };
 
 use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
-use kernel::metal::memory::mmu::internal::riscv::{LeafAccess, Mode, context::{Context, Translation}};
+use kernel::metal::memory::mmu::{LeafAccess, riscv64::{internal::context::{Context, Translation}, sv::Mode}};
 
 pub const PAGE: u64 = 4096;
 const ENTRIES: usize = 512;

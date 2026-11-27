@@ -1,10 +1,8 @@
 use kernel::{
     entry::boot::Boot,
-    metal::{
-        memory::allocator::{
-            Allocation, Allocator, Allowance, Config, Initial, MappedStorage,
-            pool::{GroupId, GroupReceipt, GroupSlot, Pool},
-        },
+    metal::memory::allocator::{
+        Allocation, Allocator, Allowance, Config, Initial, MappedStorage,
+        pool::{GroupId, GroupReceipt, GroupSlot, Pool},
     },
 };
 

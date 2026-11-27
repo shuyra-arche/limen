@@ -7,7 +7,7 @@ use super::{Contract, Interface};
 pub use description::{Description, DescriptionError};
 pub use elf::{Machine, SegmentPermissions};
 
-use crate::metal::memory::mmu::internal::access::MappedRange;
+use crate::metal::memory::mmu::access::ram::MappedRange;
 use core::mem::MaybeUninit;
 use limen_treaty::model::{
     Alignment, ByteCoordinate, ByteLength, InternalAddress, InternalRange, PageSize, PhysicalRange,

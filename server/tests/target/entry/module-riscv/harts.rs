@@ -13,7 +13,7 @@ use kernel::{
     entry::boot::{Boot, Minor, Startup},
     metal::{
         processor::execution::description::riscv64::{RiscvExtension, RiscvIsa},
-        memory::mmu::internal::riscv::{Mode, context::{Context, Translation}, description::RiscvMmu, encoder::Encoder},
+        memory::mmu::riscv64::{internal::{context::{Context, Translation}, description::RiscvMmu, encoder::Encoder}, sv::Mode},
         module::ModuleUse,
     },
 };

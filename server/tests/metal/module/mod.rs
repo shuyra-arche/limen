@@ -1,9 +1,9 @@
 mod lifecycle;
 
-use kernel::metal::memory::mmu::internal::access::MappedRange;
-use kernel::metal::memory::mmu::internal::{
+use kernel::metal::memory::mmu::access::ram::MappedRange;
+use kernel::metal::memory::mmu::{
     GEOMETRY,
-    riscv::{Mode, encoder},
+    riscv64::{internal::encoder, sv::Mode},
 };
 use kernel::metal::module::{Contract, Error, Machine, ModuleImage, SegmentPermissions};
 use limen_treaty::model::{ByteLength, InternalAddress, PageSize, PhysicalAddress, PhysicalRange};
