@@ -103,9 +103,9 @@ impl NotifyHart for IpiRoute<'_, '_> {
 
 impl<'map> LocalApic<'map> {
     /// # Safety
-    /// The target is the live remote Hart whose original vector, installed
-    /// gate and reception route the caller has qualified. Retain the exact
-    /// remote path through pending issues and independent reception.
+    /// If the target passes the native scope checks, it must identify the
+    /// original live remote Hart, vector, gate and reception route. Retain
+    /// that path through pending issues and independent reception.
     pub unsafe fn bind_ipi(&mut self, target: IpiTarget) -> Result<IpiRoute<'_, 'map>, Failure> {
         self.check_ipi_target(target)?;
         if self.ipi.is_some_and(|original| original != target) {

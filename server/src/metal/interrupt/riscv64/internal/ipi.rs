@@ -14,6 +14,12 @@ use crate::metal::{
 
 use super::supervisor::Reception;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct Source<'tree> {
+    scope: NodeId<'tree>,
+    hart: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     Scope,
@@ -38,25 +44,37 @@ impl<'tree> Target<'tree> {
     }
 }
 
-/// One source Hart's SBI doorbell endpoint. SBI admission covers only the
-/// sending operation. The destination owns the delivery and any work notice.
-pub struct Sender<'tree> {
-    scope: NodeId<'tree>,
-    source: usize,
-    harts: HartService,
-    interrupts: IpiService,
+/// Resident issuance record retained by the original Hart owner.
+pub struct SendState<'tree> {
+    source: Option<Source<'tree>>,
     unconfirmed: Option<(usize, isize)>,
 }
 
+impl<'tree> SendState<'tree> {
+    pub const FRESH: Self = Self {
+        source: None,
+        unconfirmed: None,
+    };
+}
+
+/// One source Hart's SBI doorbell endpoint. SBI admission covers only the
+/// sending operation. The destination owns the delivery and any work notice.
+pub struct Sender<'state, 'tree> {
+    source: Source<'tree>,
+    state: &'state mut SendState<'tree>,
+    harts: HartService,
+    interrupts: IpiService,
+}
+
 /// A borrow of the sender bound to the original ready remote receiver.
-pub struct IpiRoute<'a, 'tree> {
-    owner: &'a mut Sender<'tree>,
+pub struct IpiRoute<'a, 'state, 'tree> {
+    owner: &'a mut Sender<'state, 'tree>,
     target: &'a Target<'tree>,
 }
 
-impl Sealed for IpiRoute<'_, '_> {}
+impl Sealed for IpiRoute<'_, '_, '_> {}
 
-impl NotifyHart for IpiRoute<'_, '_> {
+impl NotifyHart for IpiRoute<'_, '_, '_> {
     type Error = Error;
 
     fn notify(&mut self) -> Result<Issuance<Error>, Error> {
@@ -69,7 +87,7 @@ impl NotifyHart for IpiRoute<'_, '_> {
 
     fn pending(&mut self) -> Result<Option<Issuance<Error>>, Error> {
         self.owner.check_source()?;
-        match self.owner.unconfirmed {
+        match self.owner.state.unconfirmed {
             Some((hart, error)) if hart == self.target.hart => {
                 Ok(Some(Issuance::Unconfirmed(Error::Firmware(error))))
             }
@@ -79,43 +97,57 @@ impl NotifyHart for IpiRoute<'_, '_> {
     }
 }
 
-impl<'tree> Sender<'tree> {
-    pub fn bind(
+impl<'state, 'tree> Sender<'state, 'tree> {
+    /// # Safety
+    /// The actual sending Hart owner supplies its one resident record.
+    /// Preserve it across sender drops and re-admissions, including after
+    /// uncertain effects. Only a never-used native source starts fresh.
+    /// Exclude any independent issuer for the same source.
+    pub unsafe fn bind(
         cpus: &RiscvCpus<'tree>,
-        source: usize,
+        hart: usize,
+        state: &'state mut SendState<'tree>,
         harts: HartService,
         interrupts: IpiService,
     ) -> Result<Self, Error> {
-        if try_current_hart().is_none_or(|hart| hart.get() != source) {
+        if try_current_hart().is_none_or(|current| current.get() != hart) {
             return Err(Error::Scope);
         }
         if !cpus
-            .cpu(source as u64)
+            .cpu(hart as u64)
             .ok()
             .flatten()
             .is_some_and(|cpu| cpu.enabled())
         {
             return Err(Error::Scope);
         }
-        Ok(Self {
+        let source = Source {
             scope: cpus.node().id(),
+            hart,
+        };
+        if state.source.is_some_and(|original| original != source) {
+            return Err(Error::Scope);
+        }
+        state.source = Some(source);
+        Ok(Self {
             source,
+            state,
             harts,
             interrupts,
-            unconfirmed: None,
         })
     }
 
     /// # Safety
-    /// The destination is the original ready receiver for the caller's
-    /// published work. Keep that exact Hart participation and its receiving
-    /// line live through pending issues and independent reception.
+    /// If the destination passes the native scope checks, it must be the
+    /// original ready receiver for the caller's published work. Keep that
+    /// Hart participation and line live through any pending issue and receipt.
     pub unsafe fn bind_ipi<'a>(
         &'a mut self,
         target: &'a Target<'tree>,
-    ) -> Result<IpiRoute<'a, 'tree>, Error> {
+    ) -> Result<IpiRoute<'a, 'state, 'tree>, Error> {
         self.check_target(target)?;
         if self
+            .state
             .unconfirmed
             .is_some_and(|(hart, _)| hart != target.hart)
         {
@@ -128,7 +160,7 @@ impl<'tree> Sender<'tree> {
     }
 
     fn check_source(&self) -> Result<(), Error> {
-        if try_current_hart().is_some_and(|hart| hart.get() == self.source) {
+        if try_current_hart().is_some_and(|hart| hart.get() == self.source.hart) {
             Ok(())
         } else {
             Err(Error::Scope)
@@ -137,8 +169,8 @@ impl<'tree> Sender<'tree> {
 
     fn check_target(&self, target: &Target<'tree>) -> Result<(), Error> {
         self.check_source()?;
-        if target.scope == self.scope
-            && target.hart != self.source
+        if target.scope == self.source.scope
+            && target.hart != self.source.hart
             && self.harts.started(target.hart)
         {
             Ok(())
@@ -151,13 +183,16 @@ impl<'tree> Sender<'tree> {
     /// A firmware failure leaves delivery unknown. SBI success reports sending,
     /// while the receiver owns the separately observed pending bit. Publish any
     /// work to the receiver's synchronized mailbox before calling this method.
-    pub fn notify(&mut self, target: &Target<'tree>) -> Result<(), Error> {
+    fn notify(&mut self, target: &Target<'tree>) -> Result<(), Error> {
         self.check_target(target)?;
-        if self.unconfirmed.is_some() {
+        if self.state.unconfirmed.is_some() {
             return Err(Error::Busy);
         }
+        // Firmware may raise the interrupt through device output. Order
+        // ordinary work publication before those native effects.
+        unsafe { core::arch::asm!("fence rw, iorw", options(nostack)) };
         if let Err(error) = self.interrupts.send(target.hart) {
-            self.unconfirmed = Some((target.hart, error));
+            self.state.unconfirmed = Some((target.hart, error));
             return Err(Error::Firmware(error));
         }
         Ok(())

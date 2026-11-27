@@ -58,7 +58,9 @@ fn minor(hart: usize, argument: usize) -> ! {
     for round in 1..=2 {
         let gate = unsafe { Window::install(vector.vector()) };
         READY.store(round, Release);
-        MAILBOX.wait_for_issues(round, await_phase);
+        if round == 1 {
+            MAILBOX.wait_for_issues(round, await_phase);
+        }
         let start = q35::tsc();
         let timeout = q35::tsc_frequency();
         while gate.count() == 0 {
@@ -111,7 +113,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
 
     let boot::Startup::Xapic { controller, .. } = &mut startup;
     assert!(matches!(
-        unsafe { controller.notify(original) },
+        unsafe { controller.bind_ipi(original) },
         Err(Failure::Scope)
     ));
     for round in 1..=2 {

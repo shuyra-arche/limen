@@ -34,10 +34,11 @@ impl Mailbox {
         Self::issue(sender);
         if duplicate {
             Self::issue(sender);
+            // The controlled duplicate round keeps the local gate masked
+            // until both issues. The next round has no sender-to-receiver
+            // latch and must recheck after an actual interrupt arrives.
+            self.issued.store(round, Release);
         }
-        // The fixture keeps the receiving gate masked until after both
-        // local issues. This latch cannot count as remote work observation.
-        self.issued.store(round, Release);
     }
 
     fn issue<S: NotifyHart>(sender: &mut S)

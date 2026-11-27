@@ -14,7 +14,7 @@ use kernel::{
     entry::boot::{self, Boot, Minor, Startup},
     metal::{
         chrono::riscv64::{Counter, RiscvTimebase},
-        interrupt::riscv64::internal::ipi::{Error, Receiver, Sender, Target},
+        interrupt::riscv64::internal::ipi::{Error, Receiver, SendState, Sender, Target},
     },
 };
 
@@ -48,7 +48,9 @@ fn minor(hart: usize, hertz: usize) -> ! {
     receiver.open().unwrap();
     READY.store(1, Release);
     for round in 1..=2 {
-        MAILBOX.wait_for_issues(round, |state, expected| wait(state, expected, hertz as u64));
+        if round == 1 {
+            MAILBOX.wait_for_issues(round, |state, expected| wait(state, expected, hertz as u64));
+        }
         assert_eq!(
             unsafe { reception::receive(now() + 5 * hertz as u64) },
             (1usize << 63) | 1
@@ -79,14 +81,23 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     let sbi = boot.sbi_services();
     let harts = sbi.hart_state_management().unwrap().unwrap();
     let ipi = sbi.ipi().unwrap().unwrap();
-    let mut sender = Sender::bind(cpus, source, harts, ipi).unwrap();
+    let mut send_state = SendState::FRESH;
     let local = Target::describe(&cpus.cpu(source as u64).unwrap().unwrap()).unwrap();
     let target = Target::describe(&cpus.cpu(peer as u64).unwrap().unwrap()).unwrap();
-    assert_eq!(sender.notify(&local), Err(Error::Scope));
+    {
+        let mut sender =
+            unsafe { Sender::bind(cpus, source, &mut send_state, harts, ipi) }.unwrap();
+        assert!(matches!(
+            unsafe { sender.bind_ipi(&local) },
+            Err(Error::Scope)
+        ));
+    }
     unsafe { MINOR.start(peer, minor, hertz, &mut Startup::Sbi(harts)) }.unwrap();
     wait(&READY, 1, hertz as u64);
-    let mut route = unsafe { sender.bind_ipi(&target) }.unwrap();
     for round in 1..=2 {
+        let mut sender =
+            unsafe { Sender::bind(cpus, source, &mut send_state, harts, ipi) }.unwrap();
+        let mut route = unsafe { sender.bind_ipi(&target) }.unwrap();
         MAILBOX.publish(&mut route, round, round == 1);
         MAILBOX.wait_for_recheck(round, |state, expected| wait(state, expected, hertz as u64));
     }
