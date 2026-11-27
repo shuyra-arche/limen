@@ -195,6 +195,6 @@ fn admit_loader<'a>(
     loader: &Loader<'a>,
     descriptions: &'a mut Descriptions<'a>,
 ) -> Option<Boot<'a>> {
-    let facts = describe_loader(loader, descriptions)?;
+    let facts = unsafe { describe_loader(loader, descriptions) }?;
     Some(Boot::new(7, facts.image, facts.firmware_map, descriptions))
 }

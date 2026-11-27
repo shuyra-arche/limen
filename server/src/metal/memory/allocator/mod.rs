@@ -2,7 +2,7 @@
 
 mod allocation;
 mod allowance;
-pub(crate) mod bootstrap;
+mod bootstrap;
 mod directory;
 mod pool;
 // The independent target stack fixture exercises Buddy's native storage geometry.

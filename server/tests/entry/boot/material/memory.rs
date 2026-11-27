@@ -28,14 +28,16 @@ pub(super) fn retirement(boot: &Boot<'_>, physical: PhysicalRange) -> Retirement
             .any(|ram| ram.covers(physical))
     );
 
+    let satp: usize;
+    unsafe {
+        core::arch::asm!("csrr {value}, satp", value = out(reg) satp, options(nomem, nostack));
+    }
+    assert_eq!(satp, 0);
     let mut retirement = Retirement::new(physical);
-    for condition in [
-        Condition::RuntimeStack,
-        Condition::ReadersGone,
-        Condition::TranslationRetired,
-        Condition::DevicesIsolated,
-    ] {
-        unsafe { retirement.record(condition) };
+    unsafe {
+        retirement.record(Condition::NoEarlyBorrow);
+        retirement.record(Condition::TranslationRetired);
+        retirement.record(Condition::DevicesIsolated);
     }
     retirement
 }

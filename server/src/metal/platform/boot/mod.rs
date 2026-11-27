@@ -2,7 +2,7 @@
 
 pub(crate) mod handoff;
 #[cfg(limen_target)]
-pub(crate) mod major;
+mod major;
 pub mod treaty;
 
 #[cfg(all(limen_target, target_arch = "aarch64"))]

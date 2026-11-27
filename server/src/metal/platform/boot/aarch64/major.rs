@@ -36,6 +36,6 @@ pub unsafe extern "C" fn major(
         exceptions = const status::ALL_EXCEPTIONS,
         stack_select = const status::SP_EL1,
         vectors = sym vectors,
-        loaded = sym crate::entry::boot::start,
+        loaded = sym super::super::major::start,
     );
 }

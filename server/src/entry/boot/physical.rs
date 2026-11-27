@@ -2,9 +2,11 @@
 
 use super::acpi::Acpi;
 use super::{DtbMemory, FirmwareMap, Source};
-use crate::metal::memory::allocator::treaty::{Allocator, Error, Grant, RegionDescription};
-use core::ops::Range;
-use limen_treaty::model::{PhysicalAddress, PhysicalRange};
+use crate::metal::{
+    memory::allocator::treaty::{Allocator, Error, Grant, RegionDescription},
+    platform::firmware::treaty::map::MemoryUse,
+};
+use limen_treaty::model::PhysicalRange;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Occupant {
@@ -15,7 +17,7 @@ pub enum Occupant {
     Acpi,
     FirmwareMap,
     Reservation(Source),
-    Firmware { kind: u32, attributes: u64 },
+    Firmware(MemoryUse),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,21 +26,10 @@ pub struct Exclusion {
     pub occupant: Occupant,
 }
 
-const RUNTIME: u64 = 1 << 63;
-const CONVENTIONAL: u32 = 7;
-
 impl Exclusion {
     /// Storage that must remain reserved throughout this handoff.
     pub fn fixed(self) -> bool {
-        match self.occupant {
-            // Loader and Boot Services allocations may be returned after all
-            // remaining uses end. ACPI reclaim also needs ACPI enablement.
-            Occupant::Firmware {
-                kind: 1..=4,
-                attributes,
-            } => attributes & RUNTIME != 0,
-            _ => true,
-        }
+        self.occupant != Occupant::Firmware(MemoryUse::Reclaimable)
     }
 }
 
@@ -49,6 +40,7 @@ pub enum Condition {
     ReadersGone = 2,
     TranslationRetired = 4,
     DevicesIsolated = 8,
+    NoEarlyBorrow = 16,
 }
 
 /// Monotonic completion evidence for one physical scope. The scope alone
@@ -73,20 +65,30 @@ impl Retirement {
     /// The caller must have evidence from the responsible owners covering
     /// the entire scope. RuntimeStack means the permanent stack is active.
     /// ReadersGone includes other processors and the last relevant reader.
-    /// TranslationRetired covers old CPU translations and page-table walks.
-    /// DevicesIsolated covers old DMA access, including device translations,
-    /// page-table walks and in-flight transactions.
+    /// NoEarlyBorrow means the extent is independent of all such stack
+    /// and reader lifetimes. Absence from firmware reservations alone
+    /// cannot prove this. TranslationRetired covers old CPU translations
+    /// and page-table walks. DevicesIsolated covers old device translations,
+    /// walks and in-flight transactions. For those hardware conditions the
+    /// original owner may prove that a path never had access to this extent.
     /// The recorded condition must stay true through physical handoff.
     pub unsafe fn record(&mut self, condition: Condition) {
         self.observed |= condition as u8;
     }
 
     pub(super) fn completed(&self) -> Option<PhysicalRange> {
-        const COMPLETE: u8 = Condition::RuntimeStack as u8
-            | Condition::ReadersGone as u8
-            | Condition::TranslationRetired as u8
-            | Condition::DevicesIsolated as u8;
-        (self.observed == COMPLETE).then_some(self.physical)
+        let hardware_safe =
+            self.has(Condition::TranslationRetired) && self.has(Condition::DevicesIsolated);
+        let readers_safe = self.closed_early_borrows() || self.has(Condition::NoEarlyBorrow);
+        (hardware_safe && readers_safe).then_some(self.physical)
+    }
+
+    fn has(&self, condition: Condition) -> bool {
+        self.observed & condition as u8 != 0
+    }
+
+    fn closed_early_borrows(&self) -> bool {
+        self.has(Condition::RuntimeStack) && self.has(Condition::ReadersGone)
     }
 
     /// Prepare the original owner's delayed admission handoff.
@@ -134,25 +136,19 @@ impl<'a> Exclusions<'a> {
         image: PhysicalRange,
         major: PhysicalRange,
         trap: PhysicalRange,
-        tree: Option<Range<usize>>,
+        tree: Option<PhysicalRange>,
         map: Option<FirmwareMap<'a>>,
+        map_storage: Option<PhysicalRange>,
         memory: Option<&'a DtbMemory>,
     ) -> Self {
         let entry = |physical, occupant| Exclusion { physical, occupant };
-        let map_storage = map.map(|map| {
-            let bytes = map.descriptors().as_ptr_range();
-            entry(
-                extent(bytes.start.addr()..bytes.end.addr()),
-                Occupant::FirmwareMap,
-            )
-        });
         Self {
             resident: [
                 Some(entry(image, Occupant::Image)),
                 Some(entry(major, Occupant::MajorStack)),
                 Some(entry(trap, Occupant::TrapStack)),
-                tree.map(|tree| entry(extent(tree), Occupant::DeviceTree)),
-                map_storage,
+                tree.map(|physical| entry(physical, Occupant::DeviceTree)),
+                map_storage.map(|physical| entry(physical, Occupant::FirmwareMap)),
             ],
             map,
             memory,
@@ -182,15 +178,13 @@ impl<'a> Exclusions<'a> {
             })
         });
         let firmware = self.map.iter().flat_map(|map| {
-            map.regions()
-                .filter(|region| region.kind != CONVENTIONAL || region.attributes & RUNTIME != 0)
-                .map(|region| Exclusion {
+            map.regions().filter_map(|region| {
+                let usage = region.memory_use();
+                (usage != MemoryUse::Conventional).then_some(Exclusion {
                     physical: region.physical,
-                    occupant: Occupant::Firmware {
-                        kind: region.kind,
-                        attributes: region.attributes,
-                    },
+                    occupant: Occupant::Firmware(usage),
                 })
+            })
         });
         self.resident
             .iter()
@@ -216,19 +210,9 @@ impl<'a> Exclusions<'a> {
         if !retirement.is_some_and(|evidence| evidence.covers(physical)) {
             return true;
         }
-        self.entries()
-            .any(|entry| entry.fixed() && entry.physical.overlaps(physical))
+        let closed_early_borrows = retirement.is_some_and(Retirement::closed_early_borrows);
+        self.entries().any(|entry| {
+            entry.physical.overlaps(physical) && (entry.fixed() || !closed_early_borrows)
+        })
     }
-}
-
-#[cfg_attr(
-    not(any(limen_target, test)),
-    expect(dead_code, reason = "native entry supplies the original stack ranges")
-)]
-pub(super) fn extent(range: Range<usize>) -> PhysicalRange {
-    PhysicalRange::new(
-        PhysicalAddress::new(range.start as u64),
-        PhysicalAddress::new(range.end as u64),
-    )
-    .expect("nonempty extent supplied by the boot owner")
 }

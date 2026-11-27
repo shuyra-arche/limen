@@ -319,7 +319,8 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
         reservations[2].physical,
         range(0x1_0000_1000, 0x1_0000_2000)
     );
-    let early = super::physical::Exclusions::new(image(), image(), image(), None, None, Some(&map));
+    let early =
+        super::physical::Exclusions::new(image(), image(), image(), None, None, None, Some(&map));
     let claims = early
         .entries()
         .filter(|entry| matches!(entry.occupant, super::physical::Occupant::Reservation(_)));
@@ -333,6 +334,7 @@ fn reports_multiple_ram_ranges_and_preserves_both_reservation_sources() {
     let tree = super::devicetree::DeviceTree::new(&blob).unwrap();
     let descriptions = super::Descriptions {
         device_tree: Some(tree),
+        device_tree_physical: None,
         memory: Some(map),
         acpi: None,
     };
