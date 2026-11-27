@@ -74,6 +74,15 @@ verifies both compiler collection and terminal behavior. Owner-local
 assertions remain in Entry, Basis and Metal. One explicit path to an
 owner's test implementation is preferable to a registry of scenarios.
 
+Shared behavior is not automatically execution infrastructure. Boot's
+foundation contract and RAM/Pool preparation live under `entry/boot/`;
+the latter supplies both Boot and Basis lifecycle scenarios. The migration
+contract and its SBI/UEFI admission adapters live together under
+`basis/execution/migration/`. Native clock observations and interrupt
+consumer contracts belong to Chrono and Interrupt respectively.
+The target workspace retains compilation entries, the guest declaration,
+startup and completion, and reusable machine fixtures.
+
 The linked `.testenv` record describes the selected execution purpose
 independently of the machine configuration (firmware, interrupt controller,
 Hart count, serial topology, IOMMU and PCI devices). The Runner rejects a

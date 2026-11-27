@@ -15,9 +15,9 @@ use core::{
 };
 use limen_treaty::model::ByteLength;
 
-#[path = "../../../target/entry/foundation.rs"]
+#[path = "../foundation.rs"]
 mod foundation;
-#[path = "../../../target/entry/memory.rs"]
+#[path = "../material/memory.rs"]
 mod memory;
 mod ram;
 #[path = "../../../metal/sync/native.rs"]

@@ -6,11 +6,7 @@
 
 use guest::platform;
 
-#[cfg(target_arch = "riscv64")]
-#[path = "../support/sbi/execution.rs"]
-mod native;
-#[cfg(target_os = "uefi")]
-#[path = "../support/uefi/execution.rs"]
+#[path = "../../basis/execution/migration/mod.rs"]
 mod native;
 
 guest::entry! {

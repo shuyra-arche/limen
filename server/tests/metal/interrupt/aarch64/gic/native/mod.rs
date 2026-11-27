@@ -6,7 +6,7 @@ use kernel::metal::{
     processor::treaty::HartId,
 };
 
-#[path = "../../../../../target/support/clock.rs"]
+#[path = "../../../../chrono/observation.rs"]
 mod clock;
 
 mod scenario;

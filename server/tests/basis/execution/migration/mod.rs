@@ -1,4 +1,13 @@
-//! Cross-Hart Unit migration, independent of firmware admission.
+//! Cross-Hart Unit migration and its firmware-specific admission.
+
+#[cfg(target_arch = "riscv64")]
+mod sbi;
+#[cfg(target_os = "uefi")]
+mod uefi;
+#[cfg(target_arch = "riscv64")]
+pub use sbi::check;
+#[cfg(target_os = "uefi")]
+pub use uefi::{check, prepare};
 
 use core::{
     hint::{black_box, spin_loop},
@@ -24,17 +33,17 @@ use kernel::{
 };
 
 #[cfg(target_arch = "aarch64")]
-#[path = "../../metal/processor/execution/registers/aarch64.rs"]
+#[path = "../../../metal/processor/execution/registers/aarch64.rs"]
 mod aarch64;
 #[cfg(target_arch = "aarch64")]
 use aarch64 as registers;
 #[cfg(target_arch = "x86_64")]
-#[path = "../../metal/processor/execution/registers/x86_64.rs"]
+#[path = "../../../metal/processor/execution/registers/x86_64.rs"]
 mod x86_64;
 #[cfg(target_arch = "x86_64")]
 use x86_64 as registers;
 #[cfg(target_arch = "riscv64")]
-#[path = "../../metal/processor/execution/registers/riscv64/mod.rs"]
+#[path = "../../../metal/processor/execution/registers/riscv64/mod.rs"]
 mod riscv64;
 #[cfg(target_arch = "riscv64")]
 use riscv64 as registers;
@@ -49,10 +58,10 @@ static MAJOR: AtomicUsize = AtomicUsize::new(usize::MAX);
 static PEER: AtomicUsize = AtomicUsize::new(usize::MAX);
 static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
 static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
-pub static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
+static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
-#[path = "../../metal/sync/native.rs"]
+#[path = "../../../metal/sync/native.rs"]
 mod synchronization;
 
 struct Launch {
@@ -178,7 +187,7 @@ fn finish(execution: &Execution, unit: UnitId, receipt: Occupancy, value: u64) {
     assert_eq!(execution.lifecycle(unit), Err(Error::Gone));
 }
 
-pub fn run(
+fn run(
     mut boot: Boot<'_>,
     target: usize,
     startup: &mut Startup,

@@ -22,7 +22,7 @@ use kernel::{
     },
 };
 
-#[path = "../../../../target/support/ipi.rs"]
+#[path = "../../ipi.rs"]
 mod ipi;
 #[path = "../../../../target/support/riscv64/reception.rs"]
 mod reception;

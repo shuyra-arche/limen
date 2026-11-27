@@ -5,9 +5,6 @@ use kernel::{
     metal::processor::treaty::{Minor, Startup},
 };
 
-#[path = "../../../basis/execution/migration.rs"]
-mod migration;
-
 fn observe(minor: &Minor, _: usize) {
     let sp: usize;
     unsafe { core::arch::asm!("mv {}, sp", out(reg) sp, options(nomem, nostack)) };
@@ -29,7 +26,7 @@ pub fn check(boot: Boot<'_>, complete: fn() -> !) -> ! {
         .hart_state_management()
         .unwrap()
         .expect("SBI HSM");
-    migration::run(
+    super::run(
         boot,
         target,
         &mut Startup::Sbi(service),

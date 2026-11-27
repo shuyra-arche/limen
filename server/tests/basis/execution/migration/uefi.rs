@@ -4,9 +4,6 @@ use kernel::entry::boot::Boot;
 use uefi::Status;
 use uefi_fixture as fixture;
 
-#[path = "../../../basis/execution/migration.rs"]
-mod migration;
-
 pub fn prepare() -> Result<(), Status> {
     #[cfg(target_arch = "x86_64")]
     fixture::q35::prepare_minor()?;
@@ -14,10 +11,10 @@ pub fn prepare() -> Result<(), Status> {
 }
 
 pub fn check(boot: Boot<'_>, complete: fn() -> !) -> ! {
-    let view = fixture::check_handoff(&boot, Some(&migration::MINOR));
+    let view = fixture::check_handoff(&boot, Some(&super::MINOR));
     let target = fixture::target();
     let mut startup = fixture::inspect(&boot, &view);
-    migration::run(
+    super::run(
         boot,
         target,
         &mut startup,

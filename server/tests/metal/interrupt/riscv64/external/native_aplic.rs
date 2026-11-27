@@ -1,9 +1,9 @@
 use kernel::metal::interrupt::treaty::{AbsoluteTimer, Completion, HardwareClaim};
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 
-#[path = "../../../../target/support/claim.rs"]
+#[path = "../../claim.rs"]
 mod claim_consumer;
-#[path = "../../../../target/support/interrupt.rs"]
+#[path = "../../completion.rs"]
 mod consumer;
 
 use kernel::{

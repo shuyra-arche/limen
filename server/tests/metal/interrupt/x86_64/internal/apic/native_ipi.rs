@@ -36,7 +36,7 @@ static READY: AtomicUsize = AtomicUsize::new(0);
 static CLOSED: AtomicUsize = AtomicUsize::new(0);
 static MAILBOX: ipi::Mailbox = ipi::Mailbox::new();
 
-#[path = "../../../../../target/support/ipi.rs"]
+#[path = "../../../ipi.rs"]
 mod ipi;
 
 fn await_phase(phase: &AtomicUsize, expected: usize) {

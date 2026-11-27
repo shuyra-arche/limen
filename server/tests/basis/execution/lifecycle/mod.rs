@@ -5,12 +5,12 @@ mod admission;
 #[cfg(target_arch = "riscv64")]
 mod buddy;
 #[cfg(target_arch = "riscv64")]
-#[path = "../../../target/entry/memory.rs"]
+#[path = "../../../entry/boot/material/memory.rs"]
 mod memory;
 #[cfg(target_arch = "riscv64")]
 mod pool;
 #[cfg(target_arch = "riscv64")]
-#[path = "../../../target/entry/pool.rs"]
+#[path = "../../../entry/boot/material/pool.rs"]
 mod pool_material;
 
 use core::{

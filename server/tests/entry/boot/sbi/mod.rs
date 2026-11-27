@@ -14,12 +14,12 @@ use limen_treaty::model::{ByteLength, PhysicalAddress};
 mod synchronization;
 
 mod allocator;
-#[path = "../../../target/entry/foundation.rs"]
+#[path = "../foundation.rs"]
 mod foundation;
-#[path = "../../../target/entry/memory.rs"]
+#[path = "../material/memory.rs"]
 mod memory;
 mod pool;
-#[path = "../../../target/entry/pool.rs"]
+#[path = "../material/pool.rs"]
 mod pool_material;
 
 unsafe extern "C" {
