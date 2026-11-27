@@ -1,4 +1,4 @@
-use super::{ClearStep, Event, Failure, ProgramStep, State};
+use super::{ClearStep, Effect, Event, Failure, Prior, ProgramStep, State};
 #[cfg(limen_firmware = "sbi")]
 use crate::metal::platform::firmware::sbi::TimerService;
 use crate::metal::{
@@ -227,9 +227,37 @@ impl AbsoluteTimer for Timer<'_> {
         self.drive()
     }
 
+    fn advance_deadline(&mut self, deadline: Deadline<'_>) -> Result<(), Failure> {
+        let target = deadline
+            .count_for(self.counter.clock())
+            .ok_or(Failure::Scope)?;
+        let previous = self.state.deadline().ok_or(Failure::Busy)?;
+        let now = self.counter()?;
+        if now >= previous || target > previous {
+            return Err(Failure::Busy);
+        }
+        self.state.advance(Event::Rearm { now, target })?;
+        self.drive()
+    }
+
     fn due(&self) -> Result<bool, Failure> {
         self.context()?;
         let deadline = self.state.deadline().ok_or(Failure::Busy)?;
         Ok(self.counter()? >= deadline)
+    }
+
+    unsafe fn stop_due(&mut self) -> Result<(), Failure> {
+        let deadline = match self.state {
+            State::Armed(target) => target,
+            State::AwaitingClear(Prior::Armed(_)) => return unsafe { self.shut() },
+            State::Uncertain(Effect::Clearing(clear)) if matches!(clear.prior, Prior::Armed(_)) => {
+                return unsafe { self.shut() };
+            }
+            _ => return Err(Failure::Busy),
+        };
+        if self.counter()? < deadline {
+            return Err(Failure::Busy);
+        }
+        unsafe { self.shut() }
     }
 }

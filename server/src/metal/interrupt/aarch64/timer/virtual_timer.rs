@@ -144,12 +144,20 @@ impl AbsoluteTimer for VirtualTimer<'_, '_, '_> {
         self.program(None, target)
     }
 
+    fn advance_deadline(&mut self, target: Deadline<'_>) -> Result<(), Failure> {
+        self.rearm_at(target)
+    }
+
     fn due(&self) -> Result<bool, Failure> {
         let now = self.now()?;
         let State::Armed(target) = self.state else {
             return Err(Failure::Busy);
         };
         Ok(now >= target)
+    }
+
+    unsafe fn stop_due(&mut self) -> Result<(), Failure> {
+        self.stop()
     }
 }
 

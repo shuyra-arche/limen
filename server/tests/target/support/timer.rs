@@ -18,3 +18,22 @@ where
 {
     assert!(timer.due().unwrap());
 }
+
+pub fn advance<T: AbsoluteTimer>(clock: &Clock, timer: &mut T, early: Duration)
+where
+    T::Failure: Debug,
+{
+    let sample = clock.sample().unwrap();
+    let later = sample.after(Duration::from_secs(30)).unwrap();
+    assert!(timer.advance_deadline(later).is_err());
+    assert!(!timer.due().unwrap());
+    timer
+        .advance_deadline(sample.after(early).unwrap())
+        .unwrap();
+}
+
+/// # Safety
+/// The target scenario has taken responsibility for the original notification.
+pub unsafe fn stop<T: AbsoluteTimer>(timer: &mut T) -> Result<(), T::Failure> {
+    unsafe { timer.stop_due() }
+}

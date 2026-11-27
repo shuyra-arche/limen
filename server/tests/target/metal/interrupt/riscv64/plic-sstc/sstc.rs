@@ -46,7 +46,7 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Reception) {
             unsafe { timer.rearm(counter.deadline(limit)) }.unwrap();
         }
         assert_eq!(timer.due(), Ok(false));
-        unsafe { timer.rearm(counter.deadline(now + u64::from(counter.hertz()) / 20)) }.unwrap();
+        consumer::advance(counter.clock(), &mut timer, Duration::from_millis(50));
         assert_eq!(
             unsafe { super::reception::receive(limit) },
             (1usize << 63) | 5
@@ -55,7 +55,7 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Reception) {
     }
     let limit = counter.read().unwrap() + u64::from(counter.hertz());
     loop {
-        match unsafe { timer.shut() } {
+        match unsafe { consumer::stop(&mut timer) } {
             Err(Failure::Busy) if counter.read().unwrap() < limit => continue,
             result => result.unwrap(),
         }

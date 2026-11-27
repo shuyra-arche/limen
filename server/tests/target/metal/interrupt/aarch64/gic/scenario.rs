@@ -263,31 +263,13 @@ fn check_virtual_timer(
         timer_consumer::arm(clock, &mut timer, delay);
         if delay == Duration::from_secs(5) {
             assert_eq!(timer.stop(), Err(TimerFailure::Busy));
-            assert_eq!(
-                timer.rearm_at(
-                    clock
-                        .sample()
-                        .unwrap()
-                        .after(Duration::from_secs(8))
-                        .unwrap()
-                ),
-                Err(TimerFailure::Busy)
-            );
-            timer
-                .rearm_at(
-                    clock
-                        .sample()
-                        .unwrap()
-                        .after(Duration::from_millis(1))
-                        .unwrap(),
-                )
-                .unwrap();
+            timer_consumer::advance(clock, &mut timer, Duration::from_millis(10));
         }
         assert!(timer.stopped_ppi().is_none());
         wait_for_claim(&mut receiver, role.intid as usize);
         timer_consumer::confirm_due(&timer);
         assert_eq!(timer.pending(), Ok(true));
-        timer.stop().unwrap();
+        unsafe { timer_consumer::stop(&mut timer) }.unwrap();
         assert_eq!(
             AbsoluteTimer::arm_at(
                 &mut timer,
