@@ -1,4 +1,5 @@
 use crate::metal::{
+    interrupt::internal::apic,
     platform::boot::handoff::{Descriptions, Facts, uefi},
     platform::boot::trap as diagnostic,
     processor::hart::{local, x86_64},
@@ -45,7 +46,7 @@ pub(crate) unsafe fn admit<'a>(
 ) -> Option<Facts<'a>> {
     let facts = unsafe { uefi::admit(hart, x86_64::boot_identity(), input, descriptions) }?;
     if let Some(acpi) = descriptions.acpi.as_ref()
-        && !x86_64::matches_madt(hart, acpi.madt()?)
+        && !apic::native::matches_madt(hart, acpi.madt()?)
     {
         return None;
     }

@@ -37,7 +37,7 @@ pub(crate) const fn minor_context() -> MinorContext {
 pub(crate) unsafe fn wake_minor(
     slot: &Minor,
     hart: usize,
-    Startup::Psci(service): Startup,
+    Startup::Psci(service): &mut Startup,
 ) -> Result<(), StartError> {
     let mut regs = Registers::default();
     unsafe {

@@ -128,8 +128,8 @@ pub(super) fn run(
     boot: Boot<'_>,
     major: usize,
     target: usize,
-    startup: Startup,
-    started: impl FnOnce(),
+    startup: &mut Startup,
+    started: impl FnOnce(&Startup),
 ) {
     MAJOR.store(major, Relaxed);
     let runtime = Execution::with_minor(
@@ -151,7 +151,7 @@ pub(super) fn run(
         spin_loop();
     }
     assert!(super::MINOR.ready());
-    started();
+    started(startup);
     assert_eq!(
         unsafe { execution.start_minor(target, minor, startup) },
         Err(Error::Busy)

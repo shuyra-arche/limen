@@ -231,6 +231,6 @@ fn inspect_firmware(tree: &DeviceTree<'_>, major: usize) -> Psci {
 }
 
 /// Recheck the original PSCI target only after the minor has entered.
-pub(super) fn inspect_started(boot::Startup::Psci(psci): boot::Startup, target: usize) {
+pub(super) fn inspect_started(boot::Startup::Psci(psci): &boot::Startup, target: usize) {
     unsafe { psci.verify_affinity(target, true) }.expect("live minor affinity");
 }

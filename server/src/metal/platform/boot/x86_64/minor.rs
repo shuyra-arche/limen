@@ -1,13 +1,17 @@
 //! Legacy xAPIC startup. The loader reserves one executable SIPI page
 //! below 1 MiB. Its contents and the BSP's identity mappings stay resident.
 use super::Descriptor;
-use crate::metal::platform::boot::minor::{self, Minor, StartError};
+use crate::metal::{
+    interrupt::internal::apic::{Failure, LocalApic},
+    platform::boot::minor::{self, Minor, StartError},
+};
 use core::{
     arch::{asm, naked_asm},
     mem::offset_of,
     ptr,
     sync::atomic::Ordering,
 };
+use limen_treaty::model::PhysicalAddress;
 
 pub(crate) struct MinorContext;
 pub(crate) const fn minor_context() -> MinorContext {
@@ -16,9 +20,9 @@ pub(crate) const fn minor_context() -> MinorContext {
 
 /// The caller owns the low executable page and a timer valid after firmware exit.
 /// The delay takes microseconds and reports whether the full interval elapsed.
-#[derive(Clone, Copy)]
 pub enum Startup {
     Xapic {
+        controller: LocalApic,
         trampoline: core::ptr::NonNull<[core::mem::MaybeUninit<u8>; 4096]>,
         delay: fn(u32) -> bool,
     },
@@ -44,25 +48,28 @@ fn rdmsr(index: u32) -> u64 {
     unsafe { asm!("rdmsr", in("ecx") index,out("eax") lo,out("edx") hi,options(nostack,nomem)) };
     u64::from(lo) | (u64::from(hi) << 32)
 }
-fn idle(icr: *mut u32) -> bool {
-    (0..100_000).any(|_| unsafe { icr.read_volatile() } & (1 << 12) == 0)
+fn failure(error: Failure) -> StartError {
+    match error {
+        Failure::Scope => StartError::Rejected(-2),
+        Failure::Busy => StartError::Rejected(-1),
+        Failure::Unconfirmed => StartError::Unconfirmed(-1),
+    }
 }
 
 pub(crate) unsafe fn wake_minor(
     slot: &Minor,
     hart: usize,
-    method: Startup,
+    method: &mut Startup,
 ) -> Result<(), StartError> {
-    let Startup::Xapic { trampoline, delay } = method;
-    let page = trampoline.addr().get();
-    let apic = rdmsr(0x1b);
-    if !(4096..0x100000).contains(&page)
-        || !page.is_multiple_of(4096)
-        || hart >= 255
-        || apic & 0xc00 != 0x800
-    {
-        return Err(StartError::Rejected(-2));
-    }
+    let Startup::Xapic {
+        controller,
+        trampoline,
+        delay,
+    } = method;
+    let page = PhysicalAddress::new(trampoline.addr().get() as u64);
+    // Reject conflicting or uncertain old ICR effects before rewriting
+    // the original trampoline.
+    let prepared = controller.prepare(hart, page).map_err(failure)?;
     let mut gdt = Descriptor { limit: 0, base: 0 };
     let (cr0, cr3, cr4): (usize, usize, usize);
     let cs: u16;
@@ -96,32 +103,10 @@ pub(crate) unsafe fn wake_minor(
             .write_unaligned(params);
     }
     core::sync::atomic::fence(Ordering::SeqCst);
-    let base = (apic as usize) & 0x000f_ffff_ffff_f000;
-    let icr = ptr::without_provenance_mut::<u32>(base + 0x300);
-    let destination = ptr::without_provenance_mut::<u32>(base + 0x310);
-    if !idle(icr) || !delay(1) {
-        return Err(StartError::Rejected(-1));
-    }
     slot.publish();
-    let send = |cmd| unsafe {
-        destination.write_volatile((hart as u32) << 24);
-        icr.write_volatile(cmd);
-    };
-    send(0xc500); // INIT, level-triggered, assert.
-    if !idle(icr) || !delay(10_000) {
-        return Err(StartError::Unconfirmed(-1));
-    }
-    send(0x8500); // Deassert INIT, then deliver the startup vector.
-    if !idle(icr) {
-        return Err(StartError::Unconfirmed(-1));
-    }
-    for _ in 0..2 {
-        send(0x600 | (page as u32 >> 12));
-        if !idle(icr) || !delay(200) {
-            return Err(StartError::Unconfirmed(-1));
-        }
-    }
-    Ok(())
+    // The original caller keeps the trampoline and qualified APIC alive.
+    // Identity mapping of the trampoline is this boot profile's premise.
+    unsafe { prepared.start(*delay) }.map_err(failure)
 }
 
 // Position-independent reset code: DS addresses the SIPI page. The two
