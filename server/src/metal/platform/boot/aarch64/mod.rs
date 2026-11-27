@@ -17,12 +17,7 @@ pub(crate) unsafe fn admit<'a>(
 }
 
 pub(crate) fn established() -> bool {
-    let (daif, spsel): (usize, usize);
-    unsafe {
-        asm!("mrs {}, DAIF", "mrs {}, SPSel", out(reg) daif, out(reg) spsel,
-             options(nostack, nomem, preserves_flags));
-    }
-    daif & 0x3c0 == 0x3c0 && spsel == 1 && entry().is_some()
+    native::masked_stack() && entry().is_some()
 }
 
 pub(in crate::metal) fn entry() -> Option<local::Entry> {

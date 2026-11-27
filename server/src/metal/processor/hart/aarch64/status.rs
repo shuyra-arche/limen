@@ -1,0 +1,19 @@
+//! Actual EL1 stack and exception-mask fields.
+
+const EL1: usize = 1 << 2;
+const SP_EL1: usize = 1;
+pub(super) const IRQ_FIQ: usize = 0b0011;
+const ALL_EXCEPTIONS: usize = 0b1111;
+const DAIF_MASK: usize = ALL_EXCEPTIONS << 6;
+
+pub(super) const fn el1(bits: usize) -> bool {
+    bits == EL1
+}
+
+pub(super) const fn masked_stack(mask: usize, select: usize) -> bool {
+    mask & DAIF_MASK == DAIF_MASK && select == SP_EL1
+}
+
+#[cfg(test)]
+#[path = "../../../../../tests/metal/processor/hart/aarch64/status.rs"]
+mod tests;

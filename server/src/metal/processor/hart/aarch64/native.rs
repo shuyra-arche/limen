@@ -1,6 +1,9 @@
 use core::arch::asm;
 
-use super::description::{AFFINITY_MASK, Aarch64Cpus, CpuCandidate};
+use super::{
+    description::{AFFINITY_MASK, Aarch64Cpus, CpuCandidate},
+    status,
+};
 use crate::metal::platform::description::devicetree::Error;
 
 impl<'tree, 'a> Aarch64Cpus<'tree, 'a> {
@@ -34,7 +37,15 @@ pub(in crate::metal::processor::hart) unsafe fn install_local(address: usize) {
 
 pub(in crate::metal::processor::hart) unsafe fn mask_interrupts() -> usize {
     let previous;
-    unsafe { asm!("mrs {}, daif", "msr daifset, #3", out(reg) previous, options(nostack)) };
+    unsafe {
+        asm!(
+            "mrs {}, daif",
+            "msr daifset, #{mask}",
+            out(reg) previous,
+            mask = const status::IRQ_FIQ,
+            options(nostack),
+        )
+    };
     previous
 }
 
@@ -54,11 +65,28 @@ pub(in crate::metal) struct Entry {
     pub(in crate::metal) vector: usize,
 }
 
-pub(in crate::metal) fn entry() -> Option<Entry> {
+fn at_el1() -> bool {
     let level: usize;
     unsafe { asm!("mrs {}, CurrentEL", out(reg) level, options(nostack, nomem, preserves_flags)) };
-    const EL1: usize = 1 << 2;
-    if level != EL1 {
+    status::el1(level)
+}
+
+/// Actual ordinary kernel stack selection and all four exception masks.
+/// This is an observation, not a local-protection or execution receipt.
+pub(in crate::metal) fn masked_stack() -> bool {
+    if !at_el1() {
+        return false;
+    }
+    let (mask, select): (usize, usize);
+    unsafe {
+        asm!("mrs {}, DAIF", "mrs {}, SPSel", out(reg) mask, out(reg) select,
+             options(nostack, nomem, preserves_flags))
+    };
+    status::masked_stack(mask, select)
+}
+
+pub(in crate::metal) fn entry() -> Option<Entry> {
+    if !at_el1() {
         return None;
     }
     let vector: usize;
