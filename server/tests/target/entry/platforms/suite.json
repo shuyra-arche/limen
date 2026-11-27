@@ -41,7 +41,8 @@
     "server/src/metal/processor/execution/mod.rs",
     "server/src/metal/processor/execution/cooperative/mod.rs",
     "server/src/metal/platform/firmware/uefi/mod.rs",
-    "server/src/metal/platform/boot/handoff/uefi.rs"
+    "server/src/metal/platform/boot/handoff/uefi.rs",
+    "server/src/metal/processor/execution/description/mod.rs"
   ],
   "run": {
     "kind": "board-boot",
@@ -76,7 +77,8 @@
         "server/src/metal/chrono/aarch64/**",
         "server/src/metal/processor/hart/aarch64/**",
         "server/src/metal/processor/execution/cooperative/aarch64/**",
-        "server/tests/target/entry/platforms/cooperative/aarch64.rs"
+        "server/tests/target/entry/platforms/cooperative/aarch64.rs",
+        "server/src/metal/processor/execution/description/aarch64.rs"
       ]
     }
   }

@@ -1,6 +1,6 @@
 //! RISC-V supervisor local reception lines, independent of their producers.
 
-use crate::metal::processor::hart::local::try_current_hart;
+use crate::metal::processor::hart::{local::try_current_hart, riscv::native};
 use core::{arch::asm, marker::PhantomData};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,15 +51,12 @@ impl Reception {
     }
 
     pub(crate) fn valid(&self) -> bool {
-        let status: usize;
-        unsafe { asm!("csrr {}, sstatus", out(reg) status, options(nostack, nomem)) };
-        try_current_hart().is_some_and(|hart| hart.get() as u64 == self.hart) && status & 2 == 0
+        try_current_hart().is_some_and(|hart| hart.get() as u64 == self.hart)
+            && native::status().masked()
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        let enabled: usize;
-        unsafe { asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem)) };
-        enabled & self.cause.mask() != 0
+        enabled_sources() & self.cause.mask() != 0
     }
 
     pub(crate) fn pending(&self) -> bool {
@@ -78,6 +75,17 @@ impl Reception {
             }
         }
     }
+}
+
+fn enabled_sources() -> usize {
+    let enabled;
+    unsafe { asm!("csrr {}, sie", out(reg) enabled, options(nostack, nomem)) };
+    enabled
+}
+
+/// Observe the actual full supervisor enable register; no control is granted.
+pub(in crate::metal) fn all_masked() -> bool {
+    enabled_sources() == 0
 }
 
 /// The two independently borrowable reception lines handed off by Entry.

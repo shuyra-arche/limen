@@ -1,4 +1,4 @@
-use super::vectors;
+use super::{status, vectors};
 use crate::metal::platform::boot::{STACK_BYTES, major::STACK};
 use crate::metal::platform::firmware::uefi::Loader;
 use core::arch::naked_asm;
@@ -12,10 +12,10 @@ use core::arch::naked_asm;
 pub unsafe extern "C" fn major(hart: usize, input: &Loader<'_>) -> ! {
     naked_asm!(
         "mrs x2, CurrentEL",
-        "cmp x2, #4",
+        "cmp x2, #{level}",
         "b.ne 2f",
-        "msr daifset, #15",
-        "msr spsel, #1",
+        "msr daifset, #{exceptions}",
+        "msr spsel, #{stack_select}",
         "msr tpidr_el1, xzr",
         "adrp x2, {stack}",
         "add x2, x2, :lo12:{stack}",
@@ -27,6 +27,9 @@ pub unsafe extern "C" fn major(hart: usize, input: &Loader<'_>) -> ! {
         "b {loaded}",
         "2: wfe",
         "b 2b",
+        level = const status::EL1,
+        exceptions = const status::ALL_EXCEPTIONS,
+        stack_select = const status::SP_EL1,
         vectors = sym vectors,
         loaded = sym crate::entry::boot::start,
         stack = sym STACK,

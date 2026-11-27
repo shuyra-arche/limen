@@ -205,9 +205,6 @@ bash "$discover" . "$base" | jq -e 'map([.id, .platform, .profile]) | sort ==
     [["module-execution", "virt", "debug"], ["module-execution", "virt", "release"]]' >/dev/null
 for source in server/src/metal/memory/mmu/internal/riscv/encoder/mod.rs \
               server/src/metal/memory/mmu/internal/riscv/encoder/binding.rs \
-              server/src/metal/memory/mmu/internal/riscv/mode.rs \
-              server/src/metal/memory/mmu/internal/riscv/context/mod.rs \
-              server/src/metal/memory/mmu/internal/riscv/context/satp.rs \
               server/tests/metal/module/riscv_root.rs \
               server/tests/metal/module/riscv_fixture.rs; do
     change "$source"
@@ -217,6 +214,27 @@ done
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
 change server/src/metal/memory/mmu/internal/riscv/encoder/binding.rs
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
+
+# Boot and cooperative admission now consume the actual SATP context and
+# supervisor enable/status observations, not independent raw comparisons.
+for source in server/src/metal/processor/hart/riscv/status.rs \
+              server/src/metal/interrupt/internal/supervisor.rs \
+              server/src/metal/memory/mmu/internal/riscv/mode.rs \
+              server/src/metal/memory/mmu/internal/riscv/context/mod.rs \
+              server/src/metal/memory/mmu/internal/riscv/context/satp.rs; do
+    change "$source"
+    bash "$discover" . "$base" | jq -e 'map(.id) | unique ==
+        ["boot-handoff","kernel-execution","kernel-execution-harts","riscv-module-execution","rv64-interrupt"]' >/dev/null
+    bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
+done
+for source in server/src/metal/processor/hart/aarch64/status.rs \
+              server/src/metal/processor/execution/description/aarch64.rs; do
+    change "$source"
+    [[ $(boards) == virt ]]
+    bash "$checks" . "$base" | jq -e '.host and ((.runner or .rv64) | not)' >/dev/null
+done
+change server/src/metal/processor/execution/description/aarch64.rs
+bash "$discover" . "$base" | jq -e 'map(.id) | unique == ["platform-boot"]' >/dev/null
 change server/src/metal/memory/allocator/allocation/storage.rs
 [[ $(boards) == 'q35 rv64 virt' ]]
 bash "$checks" . "$base" | jq -e '.host' >/dev/null

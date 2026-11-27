@@ -1,7 +1,12 @@
 pub(crate) use super::handoff::sbi::admit;
 use crate::metal::{
+    interrupt::internal::supervisor,
+    memory::mmu::internal::riscv::context::Context,
     platform::boot::trap as diagnostic,
-    processor::hart::{local, riscv::native},
+    processor::hart::{
+        local,
+        riscv::{native, status},
+    },
 };
 use core::arch::{asm, naked_asm};
 
@@ -9,9 +14,9 @@ use core::arch::{asm, naked_asm};
 macro_rules! establish_supervisor {
     () => {
         r#"
-        csrci sstatus, 2
+        csrci sstatus, {interrupt_enable}
         csrw sie, zero
-        li t0, (3 << 13) | (3 << 9)
+        li t0, {extensions}
         csrc sstatus, t0
         .option push
         .option norelax
@@ -28,19 +33,12 @@ pub use minor::Startup;
 pub(crate) use minor::{MinorContext, minor_context, wake_minor};
 
 pub(crate) fn established() -> bool {
-    let (status, interrupt_enable, translation): (usize, usize, usize);
-    unsafe {
-        asm!(
-            "csrr {status}, sstatus",
-            "csrr {interrupt_enable}, sie",
-            "csrr {translation}, satp",
-            status = out(reg) status,
-            interrupt_enable = out(reg) interrupt_enable,
-            translation = out(reg) translation,
-            options(nomem, nostack),
-        );
-    }
-    status & 2 == 0 && interrupt_enable == 0 && translation == 0 && entry().is_some()
+    let status = native::status();
+    status.masked()
+        && status.extensions_off()
+        && supervisor::all_masked()
+        && Context::current() == Some(Context::BARE)
+        && entry().is_some()
 }
 
 pub(in crate::metal) fn entry() -> Option<local::Entry> {
