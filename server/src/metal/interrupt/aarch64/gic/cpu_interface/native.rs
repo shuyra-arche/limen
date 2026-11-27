@@ -4,7 +4,7 @@ use core::arch::asm;
 
 use super::super::{
     reception::{Failure, Mode, State},
-    redistributor::{Frame, Ppi},
+    redistributor::{self, Frame, Ppi, StoppedPpi},
     sgi::{Phase, Sgi},
 };
 use crate::metal::processor::hart::aarch64::{native::boot_identity, status};
@@ -127,8 +127,19 @@ impl<'map> CpuInterface<'map> {
         Ok(())
     }
 
-    pub(in crate::metal::interrupt::aarch64) fn admits_ppi(&mut self, ppi: &Ppi<'_>) -> bool {
-        self.state == State::Empty && self.context().is_ok() && self.frame.ready_ppi(ppi)
+    /// Prepare the exact PPI for a producer after the original input is quiet.
+    /// The producer retains the PPI while this interface receives independently.
+    pub fn prepare_ppi(&mut self, ppi: &mut Ppi<'_, '_>) -> Result<(), Failure> {
+        self.context()?;
+        if self.state != State::Empty {
+            return Err(Failure::Busy);
+        }
+        self.frame
+            .prepare_ppi(ppi)
+            .map_err(|failure| match failure {
+                redistributor::Failure::Busy => Failure::Busy,
+                _ => Failure::Scope,
+            })
     }
 
     fn context(&self) -> Result<(), Failure> {
@@ -164,6 +175,17 @@ pub struct Claim<'slot, 'map> {
 impl Claim<'_, '_> {
     pub fn intid(&self) -> u32 {
         self.id
+    }
+
+    /// Settle this native receipt after its exact PPI producer has stopped.
+    /// An unrelated claim leaves the stopped input available for retry.
+    pub fn complete_ppi(&mut self, stopped: StoppedPpi<'_, '_, '_>) -> Result<(), Failure> {
+        if !stopped.matches(&self.owner.frame, self.id) {
+            return Err(Failure::Scope);
+        }
+        unsafe { crate::metal::interrupt::HardwareClaim::finish(self)? };
+        stopped.complete();
+        Ok(())
     }
 
     /// Complete precisely the SGI sent to this destination and retain a

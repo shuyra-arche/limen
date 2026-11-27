@@ -9,9 +9,9 @@ pub use private::{PrivateInterrupt, PrivateInterrupts};
 #[cfg(all(limen_target, target_arch = "aarch64"))]
 mod inputs;
 #[cfg(all(limen_target, target_arch = "aarch64"))]
-pub use inputs::Ppi;
-#[cfg(all(limen_target, target_arch = "aarch64"))]
 use inputs::PrivateState;
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+pub use inputs::{Ppi, StoppedPpi};
 
 const TYPER: usize = 8;
 const WAKER: usize = 0x14;

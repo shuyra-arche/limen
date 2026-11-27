@@ -40,17 +40,30 @@ pub(super) enum PrivateState {
     Restoring(Setup),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PpiState {
+    Reserved,
+    Ready,
+    Producing,
+    Stopped,
+    Completed,
+}
+
 /// Linear permission for one reserved input in its original GICR frame.
 #[derive(Debug)]
 #[must_use]
-pub struct Ppi<'tree> {
+pub struct Ppi<'tree, 'map> {
     source: NodeId<'tree>,
     domain: NodeId<'tree>,
+    redistributor: PhysicalRange,
     physical: PhysicalRange,
+    affinity: usize,
     intid: u32,
+    state: PpiState,
+    mapping: PhantomData<&'map mut ()>,
 }
 
-impl<'tree> Ppi<'tree> {
+impl<'tree, 'map> Ppi<'tree, 'map> {
     pub fn source(&self) -> NodeId<'tree> {
         self.source
     }
@@ -61,6 +74,56 @@ impl<'tree> Ppi<'tree> {
 
     pub fn intid(&self) -> u32 {
         self.intid
+    }
+
+    pub(in crate::metal::interrupt::aarch64) fn local_to(&self, hart: usize) -> bool {
+        self.affinity == hart && local(self.affinity)
+    }
+
+    pub(in crate::metal::interrupt::aarch64) fn permits_programming(
+        &self,
+        replacement: bool,
+    ) -> bool {
+        self.state
+            == if replacement {
+                PpiState::Producing
+            } else {
+                PpiState::Ready
+            }
+    }
+
+    pub(in crate::metal::interrupt::aarch64) fn producing(&mut self) {
+        self.state = PpiState::Producing;
+    }
+
+    /// Called by the exact producer after its native stop is confirmed.
+    pub(in crate::metal::interrupt::aarch64) fn stopped(&mut self) {
+        debug_assert_eq!(self.state, PpiState::Producing);
+        self.state = PpiState::Stopped;
+    }
+
+    pub(in crate::metal::interrupt::aarch64) fn stopped_input(
+        &mut self,
+    ) -> Option<StoppedPpi<'_, 'tree, 'map>> {
+        (self.state == PpiState::Stopped).then_some(StoppedPpi(self))
+    }
+}
+
+/// The exact PPI of a confirmed stopped native producer.
+#[must_use]
+pub struct StoppedPpi<'input, 'tree, 'map>(&'input mut Ppi<'tree, 'map>);
+
+impl StoppedPpi<'_, '_, '_> {
+    pub(in crate::metal::interrupt::aarch64::gic) fn matches(
+        &self,
+        frame: &Frame<'_>,
+        intid: u32,
+    ) -> bool {
+        frame.ppi_index(self.0).is_ok() && self.0.intid == intid
+    }
+
+    pub(in crate::metal::interrupt::aarch64::gic) fn complete(self) {
+        self.0.state = PpiState::Completed;
     }
 }
 
@@ -77,7 +140,7 @@ impl<'map> Frame<'map> {
         interrupts: &PrivateInterrupts<'tree>,
         interrupt: PrivateInterrupt,
         priority: u8,
-    ) -> Result<Ppi<'tree>, Failure> {
+    ) -> Result<Ppi<'tree, 'map>, Failure> {
         let id = interrupt.intid;
         if !local(self.affinity())
             || self.domain() != interrupts.controller().redistributor()
@@ -95,17 +158,38 @@ impl<'map> Frame<'map> {
         Ok(Ppi {
             source: interrupts.source(),
             domain: interrupts.controller().source(),
+            redistributor: self.domain(),
             physical: self.physical(),
+            affinity: self.affinity(),
             intid: id,
+            state: PpiState::Reserved,
+            mapping: PhantomData,
         })
     }
 
-    /// # Safety
-    /// A qualified CPU Interface on this exact PE will preserve the original
-    /// PPI's IAR and its mandatory native completion.
-    pub unsafe fn enable_ppi(&mut self, ppi: &Ppi<'_>) -> Result<(), Failure> {
-        self.ppi_index(ppi)?;
-        self.enable_input(ppi.intid)
+    pub(in crate::metal::interrupt::aarch64::gic) fn prepare_ppi(
+        &mut self,
+        ppi: &mut Ppi<'_, '_>,
+    ) -> Result<(), Failure> {
+        let index = self.ppi_index(ppi)?;
+        match ppi.state {
+            PpiState::Reserved => {
+                if !matches!(self.private[index], PrivateState::Enabled(_)) {
+                    self.enable_input(ppi.intid)?;
+                }
+            }
+            PpiState::Completed => (),
+            _ => return Err(Failure::Busy),
+        }
+        let bit = 1 << ppi.intid;
+        if !matches!(self.private[index], PrivateState::Enabled(_))
+            || self.private_word(ENABLE) & bit == 0
+            || (self.private_word(PENDING) | self.private_word(ACTIVE)) & bit != 0
+        {
+            return Err(Failure::Busy);
+        }
+        ppi.state = PpiState::Ready;
+        Ok(())
     }
 
     fn reserve_input(&mut self, id: u32, priority: u8) -> Result<(), Failure> {
@@ -151,24 +235,17 @@ impl<'map> Frame<'map> {
         Ok(())
     }
 
-    pub(in crate::metal::interrupt::aarch64::gic) fn ready_ppi(&mut self, ppi: &Ppi<'_>) -> bool {
-        let Ok(index) = self.ppi_index(ppi) else {
-            return false;
-        };
-        let bit = 1 << ppi.intid;
-        matches!(self.private[index], PrivateState::Enabled(_))
-            && self.private_word(ENABLE) & bit != 0
-            && (self.private_word(PENDING) | self.private_word(ACTIVE)) & bit == 0
-    }
-
     /// # Safety
     /// The producing source is stopped and the original CPU Interface,
     /// priority drop and deactivation are all settled. Keep the source
     /// stopped through reacquisition. A refusal returns the exact lease.
-    pub unsafe fn retire_ppi<'tree>(
+    pub unsafe fn retire_ppi<'tree, 'origin>(
         &mut self,
-        ppi: Ppi<'tree>,
-    ) -> Result<(), (Ppi<'tree>, Failure)> {
+        ppi: Ppi<'tree, 'origin>,
+    ) -> Result<(), (Ppi<'tree, 'origin>, Failure)> {
+        if matches!(ppi.state, PpiState::Producing | PpiState::Stopped) {
+            return Err((ppi, Failure::Busy));
+        }
         self.ppi_index(&ppi)
             .and_then(|_| self.retire_input(ppi.intid))
             .map_err(|failure| (ppi, failure))
@@ -256,8 +333,11 @@ impl<'map> Frame<'map> {
         Ok(())
     }
 
-    fn ppi_index(&self, ppi: &Ppi<'_>) -> Result<usize, Failure> {
-        if ppi.physical != self.physical() || !local(self.affinity()) {
+    fn ppi_index(&self, ppi: &Ppi<'_, '_>) -> Result<usize, Failure> {
+        if ppi.physical != self.physical()
+            || ppi.redistributor != self.domain()
+            || !ppi.local_to(self.affinity())
+        {
             return Err(Failure::Scope);
         }
         Ok(ppi.intid as usize)

@@ -1,6 +1,6 @@
 //! QEMU virt hands the guest an identity-mapped physical GIC with a single
 //! security state. Keep the PE IRQ/FIQ masks closed and poll its real IAR.
-use kernel::metal::interrupt::Completion;
+use kernel::metal::interrupt::{AbsoluteTimer, Completion};
 
 #[path = "../../../../support/claim.rs"]
 mod claim_consumer;
@@ -253,45 +253,59 @@ fn check_virtual_timer(
     let timer = GenericTimer::describe(tree, &bindings).unwrap();
     let role = timer.virtual_interrupt();
     let mut ppi = unsafe { frame.reserve_ppi(&bindings, role, 0x10) }.unwrap();
-    unsafe { frame.enable_ppi(&ppi) }.unwrap();
     let mut receiver = unsafe { CpuInterface::admit(frame) }
         .unwrap_or_else(|(_, reason)| panic!("timer PPI CPU Interface: {reason:?}"));
     let clock = unsafe { counter.clock(major) }.unwrap();
-    {
-        let mut timer = unsafe { VirtualTimer::admit(timer, &clock, &ppi, &mut receiver) }.unwrap();
-        timer_consumer::arm(&clock, &mut timer, Duration::from_secs(5));
-        assert_eq!(timer.stop(), Err(TimerFailure::Busy));
-        assert_eq!(
-            timer.rearm_at(
-                clock
-                    .sample()
-                    .unwrap()
-                    .after(Duration::from_secs(8))
-                    .unwrap()
-            ),
-            Err(TimerFailure::Busy)
-        );
-        timer
-            .rearm_at(
-                clock
-                    .sample()
-                    .unwrap()
-                    .after(Duration::from_millis(1))
-                    .unwrap(),
-            )
-            .unwrap();
-        wait_for_claim(timer.receiver(), role.intid as usize);
+    for delay in [Duration::from_secs(5), Duration::from_millis(10)] {
+        receiver.prepare_ppi(&mut ppi).unwrap();
+        let mut timer = unsafe { VirtualTimer::admit(timer, &clock, &mut ppi) }.unwrap();
+        timer_consumer::arm(&clock, &mut timer, delay);
+        if delay == Duration::from_secs(5) {
+            assert_eq!(timer.stop(), Err(TimerFailure::Busy));
+            assert_eq!(
+                timer.rearm_at(
+                    clock
+                        .sample()
+                        .unwrap()
+                        .after(Duration::from_secs(8))
+                        .unwrap()
+                ),
+                Err(TimerFailure::Busy)
+            );
+            timer
+                .rearm_at(
+                    clock
+                        .sample()
+                        .unwrap()
+                        .after(Duration::from_millis(1))
+                        .unwrap(),
+                )
+                .unwrap();
+        }
+        assert!(timer.stopped_ppi().is_none());
+        wait_for_claim(&mut receiver, role.intid as usize);
         timer_consumer::confirm_due(&timer);
         assert_eq!(timer.pending(), Ok(true));
         timer.stop().unwrap();
+        assert_eq!(
+            AbsoluteTimer::arm_at(
+                &mut timer,
+                clock
+                    .sample()
+                    .unwrap()
+                    .after(Duration::from_millis(10))
+                    .unwrap(),
+            ),
+            Err(TimerFailure::Busy)
+        );
+        let mut claim = receiver.claim().expect("original virtual timer claim");
+        assert_eq!(claim.intid(), role.intid);
+        claim
+            .complete_ppi(timer.stopped_ppi().expect("original stopped timer input"))
+            .unwrap();
+        assert!(timer.stopped_ppi().is_none());
+        assert_eq!(receiver.state(), State::Empty);
     }
-    let mut claim = receiver.claim().expect("original virtual timer claim");
-    assert_eq!(claim.intid(), ppi.intid());
-    unsafe {
-        claim.drop_priority().unwrap();
-        claim.deactivate().unwrap();
-    }
-    assert_eq!(receiver.state(), State::Empty);
     let mut frame = receiver
         .release()
         .unwrap_or_else(|_| panic!("timer receiver remains live"));
