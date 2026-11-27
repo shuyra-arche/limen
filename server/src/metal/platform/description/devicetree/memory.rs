@@ -1,5 +1,5 @@
 use super::{DeviceTree, Error, Node, registers::Cells};
-use crate::devicetree::RESERVATION_LIMIT;
+use crate::metal::devicetree::RESERVATION_LIMIT;
 use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 const RAM_LIMIT: usize = 16;

@@ -2,7 +2,7 @@
 
 use super::super::{Contract, Interface};
 use super::{ImageAddress, elf::Elf};
-use crate::devicetree::{DeviceTree, Error as TreeError, Node};
+use crate::metal::devicetree::{DeviceTree, Error as TreeError, Node};
 
 const NOTE_OWNER: &[u8] = b"SHUYRA\0";
 const NOTE_TYPE: u32 = 1;
