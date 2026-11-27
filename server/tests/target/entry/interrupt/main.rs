@@ -182,7 +182,6 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
     let serial_end = range.length().as_usize().unwrap();
     assert_eq!(unsafe { serial.read_u8(serial_end) }, Err(DeviceError::Range));
     assert_eq!(unsafe { serial.write_u8(usize::MAX, 0) }, Err(DeviceError::Range));
-    boot::write("PASS device-window widths=2 rejected=5\n");
     assert!(matches!(
         unsafe { Direct::admit(description, &mut mapping, wrong) },
         Err(aplic::Failure::Scope)
@@ -245,6 +244,9 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
     unsafe { direct.shut() }.unwrap();
     assert_eq!(direct.state(), aplic::State::Shut);
     assert_eq!(uart_read(&mut serial, 1), 0);
+    // Actual controller and device effects have settled before using the firmware console.
+    drop(serial);
+    boot::write("\nPASS device-window widths=2 rejected=5\n");
     boot::write("\nPASS aplic-direct received=2 cleared=2 stale=1 shutdown=1 states=1 rejected=1\n");
 }
 
