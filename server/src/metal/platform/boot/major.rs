@@ -18,6 +18,8 @@ static LOCAL: Storage<TURN_CAPACITY> = Storage::new();
 pub(crate) struct Admission<'a> {
     pub(crate) hart: usize,
     pub(crate) facts: Facts<'a>,
+    #[cfg(limen_cooperative)]
+    pub(crate) major: crate::metal::processor::hart::Major,
     #[cfg(target_arch = "riscv64")]
     pub(crate) reception: Supervisor,
 }
@@ -52,7 +54,8 @@ pub(crate) unsafe fn admit<'a>(
             "FAIL Limen boot: entry changed before Hart admission\n"
         ));
     };
-    unsafe { LOCAL.bind().install(hart, entry) };
+    let local = unsafe { LOCAL.bind() };
+    unsafe { local.install(hart, entry) };
     if !local::can_switch() {
         services.reject(format_args!(
             "FAIL Limen boot: local protection is not idle\n"
@@ -65,6 +68,8 @@ pub(crate) unsafe fn admit<'a>(
     Admission {
         hart,
         facts,
+        #[cfg(limen_cooperative)]
+        major: unsafe { local.major() },
         #[cfg(target_arch = "riscv64")]
         reception,
     }

@@ -12,12 +12,13 @@ use crate::{
         processor::execution::cooperative::{
             self, Hart, LeaveReceipt, LocalHart, cooperative_ready,
         },
-        processor::hart::local::{self, HartId},
+        processor::hart::{
+            Major,
+            local::{self, HartId},
+        },
         sync::{TurnAcquireError, TurnLock, TurnMode, TurnWorkspace, turn_capacity},
     },
 };
-
-use crate::entry::boot::Boot;
 
 type Entry = fn(&mut Current) -> u64;
 
@@ -78,8 +79,8 @@ pub enum EstablishError {
 }
 
 /// The original handoff and independent supplies, returned before ownership.
-pub struct EstablishFailure<'a, const HARTS: usize> {
-    pub boot: Boot<'a>,
+pub struct EstablishFailure<const HARTS: usize> {
+    pub major: Major,
     pub stacks: &'static mut Stacks,
     pub records: &'static mut [UnitRecord<KernelBinding>],
     pub harts: &'static mut Harts<HARTS>,
@@ -100,15 +101,15 @@ pub struct Execution {
 }
 
 impl Execution {
-    /// Consume the unique trusted construction handoff. No Hart participates
+    /// Consume the original native major relation. No Hart participates
     /// until its own Attach; all supplies remain independent and resident.
-    pub fn new<'a, const HARTS: usize>(
-        boot: Boot<'a>,
+    pub fn new<const HARTS: usize>(
+        major: Major,
         stacks: &'static mut Stacks,
         records: &'static mut [UnitRecord<KernelBinding>],
         harts: &'static mut Harts<HARTS>,
-    ) -> Result<Self, EstablishFailure<'a, HARTS>> {
-        let reason = if local::try_current_hart() != Some(HartId::new(boot.hart())) {
+    ) -> Result<Self, EstablishFailure<HARTS>> {
+        let reason = if !major.is_current() {
             Some(EstablishError::WrongHart)
         } else if !cooperative_ready() {
             Some(EstablishError::Unsupported)
@@ -119,7 +120,7 @@ impl Execution {
         };
         if let Some(reason) = reason {
             return Err(EstablishFailure {
-                boot,
+                major,
                 stacks,
                 records,
                 harts,

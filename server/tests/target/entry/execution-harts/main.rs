@@ -247,7 +247,7 @@ fn run_fourth(_: usize, argument: usize) -> ! {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
+extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
     assert_eq!(
         MINOR.stack_range().len(),
         kernel::entry::boot::stack_range().len()
@@ -265,7 +265,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         .unwrap()
         .expect("SBI HSM");
     let runtime = Execution::new(
-        boot,
+        boot.take_major().expect("original native major relation"),
         unsafe { &mut *(&raw mut STACKS) },
         unsafe { &mut *(&raw mut RECORDS) },
         unsafe { &mut *(&raw mut HARTS) },

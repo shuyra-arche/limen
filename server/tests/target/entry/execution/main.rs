@@ -107,19 +107,22 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
 }
 
 #[unsafe(no_mangle)]
-extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
+extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
     pool::prepare(&boot);
     let major = boot.hart();
     let device_tree = boot.device_tree();
     assert!(major < 4, "unexpected QEMU boot hart");
-    // The fixture owns both static objects and runs on the sole Boot Hart.
+    // The fixture owns these static objects and runs on the sole Boot Hart.
     let stacks = &raw mut STACKS;
+    let records = (&raw mut RECORDS).cast::<UnitRecord<KernelBinding>>();
+    let harts = &raw mut HARTS;
+    let admitted = boot.take_major().expect("original native major relation");
+    assert!(boot.take_major().is_none());
     // Individual interrupt sources remain masked. SIE makes the execution
     // environment unsupported before the constructor binds the stack supply.
     unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-    let harts = &raw mut HARTS;
     let rejected = Execution::new(
-        boot,
+        admitted,
         unsafe { &mut *stacks },
         unsafe { &mut *(&raw mut RECORDS) },
         unsafe { &mut *harts },
@@ -129,13 +132,19 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
         panic!("execution admitted with interrupts enabled");
     };
     assert_eq!(failure.reason, EstablishError::Unsupported);
-    assert_eq!(failure.boot.hart(), major);
-    assert_eq!(failure.boot.device_tree(), device_tree);
+    assert_eq!(boot.hart(), major);
+    assert_eq!(boot.device_tree(), device_tree);
     assert!(core::ptr::eq(failure.stacks, stacks));
+    assert!(core::ptr::eq(failure.records.as_ptr(), records));
     assert!(core::ptr::eq(failure.harts, harts));
-    let runtime = Execution::new(failure.boot, failure.stacks, failure.records, failure.harts)
-        .map_err(|failure| failure.reason)
-        .expect("original handoff and independent supplies can be retried");
+    let runtime = Execution::new(
+        failure.major,
+        failure.stacks,
+        failure.records,
+        failure.harts,
+    )
+    .map_err(|failure| failure.reason)
+    .expect("original handoff and independent supplies can be retried");
     unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     let execution = execution();
     assert_eq!(execution.enter(), Err(Error::Unsupported));

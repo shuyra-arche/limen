@@ -140,7 +140,7 @@ fn finish(execution: &Execution, unit: UnitId, receipt: Occupancy, value: u64) {
 }
 
 pub(super) fn run(
-    boot: Boot<'_>,
+    mut boot: Boot<'_>,
     major: usize,
     target: usize,
     startup: &mut Startup,
@@ -148,7 +148,7 @@ pub(super) fn run(
 ) -> ! {
     MAJOR.store(major, Relaxed);
     let runtime = Execution::new(
-        boot,
+        boot.take_major().expect("original native major relation"),
         unsafe { &mut *(&raw mut STACKS) },
         unsafe { &mut *(&raw mut RECORDS) },
         unsafe { &mut *(&raw mut HARTS) },

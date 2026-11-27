@@ -3,6 +3,8 @@ use super::{DtbMemory, FirmwareMap, FirmwareRegion, devicetree, physical::Exclus
 use crate::metal::platform::boot::handoff::Descriptions;
 #[cfg(limen_target)]
 use crate::metal::platform::boot::major::Admission;
+#[cfg(limen_cooperative)]
+use crate::metal::processor::hart::Major;
 use core::ops::Range;
 use limen_treaty::model::PhysicalRange;
 
@@ -12,6 +14,8 @@ pub struct Boot<'a> {
     image: PhysicalRange,
     descriptions: &'a Descriptions<'a>,
     firmware_map: Option<FirmwareMap<'a>>,
+    #[cfg(limen_cooperative)]
+    major: Option<Major>,
     #[cfg(all(limen_target, target_arch = "riscv64"))]
     reception: Option<crate::metal::interrupt::riscv64::internal::supervisor::Supervisor>,
 }
@@ -23,6 +27,12 @@ impl<'a> Boot<'a> {
 
     pub fn image(&self) -> PhysicalRange {
         self.image
+    }
+
+    /// Transfer the original native construction relation to its consumer.
+    #[cfg(limen_cooperative)]
+    pub fn take_major(&mut self) -> Option<Major> {
+        self.major.take()
     }
 
     pub(crate) fn exclusions_for(
@@ -109,6 +119,8 @@ impl<'a> Boot<'a> {
             admission.facts.image,
             admission.facts.firmware_map,
             descriptions,
+            #[cfg(limen_cooperative)]
+            admission.major,
             #[cfg(target_arch = "riscv64")]
             admission.reception,
         )
@@ -119,6 +131,7 @@ impl<'a> Boot<'a> {
         image: PhysicalRange,
         firmware_map: Option<FirmwareMap<'a>>,
         descriptions: &'a Descriptions<'a>,
+        #[cfg(limen_cooperative)] major: Major,
         #[cfg(all(limen_target, target_arch = "riscv64"))]
         reception: crate::metal::interrupt::riscv64::internal::supervisor::Supervisor,
     ) -> Self {
@@ -127,6 +140,8 @@ impl<'a> Boot<'a> {
             image,
             descriptions,
             firmware_map,
+            #[cfg(limen_cooperative)]
+            major: Some(major),
             #[cfg(all(limen_target, target_arch = "riscv64"))]
             reception: Some(reception),
         }

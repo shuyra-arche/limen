@@ -1,5 +1,7 @@
 //! Trusted local CPU facts and fixed storage.
 
+#[cfg(limen_cooperative)]
+use core::marker::PhantomData;
 use core::ptr;
 #[cfg(limen_target)]
 use core::{cell::Cell, ops::Range};
@@ -65,6 +67,24 @@ struct CooperativeBinding {
     slot: usize,
 }
 
+/// The permanent local state installed by the native major entry.
+///
+/// Startup can move this hardware relation to the cooperative constructor
+/// once. Its use must still match the actual Hart and ordinary entry.
+#[cfg(limen_cooperative)]
+#[must_use]
+pub struct Major {
+    local: &'static HartLocal,
+    hart_local: PhantomData<*mut ()>,
+}
+
+#[cfg(limen_cooperative)]
+impl Major {
+    pub(crate) fn is_current(&self) -> bool {
+        ordinary_local().is_some_and(|local| ptr::eq(local, self.local))
+    }
+}
+
 /// Resident storage supplied by one actual CPU's construction path.
 pub(in crate::metal) struct Storage<const N: usize> {
     local: HartLocal,
@@ -125,6 +145,18 @@ impl HartLocal {
         self.entry.set(Some(entry));
         self.identity.set(identity);
         unsafe { backend::install_local(ptr::from_ref(self).expose_provenance()) };
+    }
+
+    /// # Safety
+    /// Only the trusted native major entry may deliver this relation, once,
+    /// from its own installed permanent local state and ordinary entry.
+    #[cfg(limen_cooperative)]
+    pub(in crate::metal) unsafe fn major(&'static self) -> Major {
+        assert!(ordinary_local().is_some_and(|local| ptr::eq(local, self)));
+        Major {
+            local: self,
+            hart_local: PhantomData,
+        }
     }
 }
 
