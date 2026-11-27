@@ -1,7 +1,11 @@
 use core::arch::asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use kernel::entry::boot;
-use limen_treaty::model::PhysicalAddress;
+use kernel::metal::{
+    interrupt::internal::apic::{self, LocalApic},
+    memory::mmu::internal::device::DeviceWindow,
+};
+use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress};
 use uefi::{Status, mem::memory_map::MemoryMap};
 
 static OLD_IDT: AtomicUsize = AtomicUsize::new(0);
@@ -53,8 +57,26 @@ fn delay(microseconds: u32) -> bool {
     ticks != 0
 }
 
-fn startup() -> boot::Startup {
+fn startup(boot: &boot::Boot<'_>) -> boot::Startup {
+    let madt = boot.acpi().unwrap().madt().unwrap();
+    let address = madt.local_controller_address().unwrap();
+    let physical = address.range(ByteLength::new(4096)).unwrap();
+    // The q35 loader's retained identity mappings include this local APIC
+    // page with UC attributes. This fixture owns the actual original ICR.
+    let window =
+        unsafe { DeviceWindow::admit(physical, InternalAddress::new(address.get())) }.unwrap();
+    let (window, reason) = unsafe { LocalApic::admit(usize::MAX, madt, window) }
+        .err()
+        .expect("wrong Hart must retain the window");
+    assert_eq!(reason, apic::Failure::Scope);
+    let controller = unsafe { LocalApic::admit(boot.hart(), madt, window) }
+        .ok()
+        .expect("actual local APIC");
+    assert_eq!(controller.state(), apic::State::Idle);
+    assert!(!controller.can_start(boot.hart()));
+    assert!(!controller.can_start(255));
     boot::Startup::Xapic {
+        controller,
         trampoline: NonNull::new(TRAMPOLINE.load(Ordering::Acquire))
             .unwrap()
             .cast(),
@@ -159,7 +181,7 @@ pub(super) fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) -> boot::Startu
         assert!(unsafe { gate.add(2).cast::<u16>().read_unaligned() } == cs);
     }
     boot::write("PASS firmware-discovery q35 acpi=1 madt=1 routes=1 retained=1\n");
-    startup()
+    startup(boot)
 }
 
 pub(super) fn report() -> ! {
@@ -169,4 +191,11 @@ pub(super) fn report() -> ! {
         .write_str("PASS q35 major=1 minor=1 ebs=1 cpl0=1 paging=1 masked=1 stack=1 idt=1\n")
         .expect("diagnostic output");
     boot::shutdown(true)
+}
+
+pub(super) fn inspect_started(boot::Startup::Xapic { controller, .. }: &boot::Startup, _: usize) {
+    // ICR completion alone would not prove the AP entered. The shared
+    // cooperative fixture has already observed the actual minor Ready.
+    assert_eq!(controller.state(), apic::State::Idle);
+    boot::write("PASS local-apic startup=1 scope-rejected=1 target-rejected=1\n");
 }

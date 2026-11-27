@@ -211,7 +211,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     let pinned = unsafe { execution.create(pinned) }.expect("create on major");
     execution.submit(pinned).expect("admit pinned Unit");
     assert!(matches!(
-        unsafe { execution.start_minor(8, run_minor, Startup::Sbi(service)) },
+        unsafe { execution.start_minor(8, run_minor, &mut Startup::Sbi(service)) },
         Err(Error::Firmware(_))
     ));
     unsafe {
@@ -221,7 +221,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
             minor: minor_hart,
         });
         execution
-            .start_minor(minor_hart, run_minor, Startup::Sbi(service))
+            .start_minor(minor_hart, run_minor, &mut Startup::Sbi(service))
             .expect("start actual minor Hart");
     }
     turn::major();

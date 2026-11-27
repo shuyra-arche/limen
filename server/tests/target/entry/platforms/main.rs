@@ -245,8 +245,7 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
     board::check_discovery(&boot, target);
     let major = boot.hart();
     let startup = board::inspect(&boot, &view);
-    cooperative::run(boot, major, target, startup, || {
-        #[cfg(target_arch = "aarch64")]
+    cooperative::run(boot, major, target, startup, |startup| {
         board::inspect_started(startup, target);
     });
     synchronization::check();
