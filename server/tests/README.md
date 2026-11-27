@@ -56,7 +56,7 @@ at the local-address and interrupt-mask edges.
 | x86 local APIC native operations | Live local APIC mode, registers and current CPU observation. |
 | CPU MMU native context bindings and RV64 encoder binding | Live translation controls and maintenance, or the resident module's native call ABI. Format, installation transitions and offer checks are shared. |
 | SMMUv3, RV64 IOMMU and VT-d ordering constructors and operations | Native memory ordering, cache-line publication and register synchronization. The controller records and descriptor encoders are shared. |
-| Platform boot major, minor, trap, services and ISA entry modules, and PSCI invocation | Installed machine entry, native stacks and vector ABI, terminal service delivery, or an actual PSCI conduit. SBI and UEFI handoff selection follows the firmware profile. |
+| Platform Boot major and firmware handoff, Processor Executor entry and launch, Execution Terminal, and PSCI invocation | Installed machine entry, native stacks and vector ABI, terminal service delivery, or an actual PSCI conduit. SBI and UEFI handoff selection follows the firmware profile. |
 | Hart ISA backends and local entry, stack access, resident storage installation and protection | Actual entry registers, trusted stack range, CPU-local address and interrupt masking/restoration. Resident construction requires native entry or the owner-local Host observation fixture. |
 
 The Metal Sync Host suite executes the production MCS queue with the same
@@ -173,7 +173,8 @@ expose the SBI reset reason in QMP; the diagnostic and absence of the normal
 handoff marker distinguish the injected failure from a normal boot. The test
 does not independently observe the SBI reset reason.
 Its image, injection record, serial output and verdict are kept beside the
-normal result. No production hook or extra linker symbols are used. Run it
+normal result. The verifier uses the linked stack boundaries consumed by the
+production entry. Run it
 against the selected output plan with `PLAN` set to the discovery JSON:
 
 ```sh

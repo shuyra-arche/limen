@@ -1,6 +1,6 @@
 //! Non-secure EL1 minor startup for an identity-mapped image.
 use super::{self as launch, Minor, StartError};
-use crate::metal::platform::boot::aarch64 as boot;
+use crate::metal::processor::execution::terminal::aarch64::vectors;
 use core::{
     arch::{asm, naked_asm},
     cell::UnsafeCell,
@@ -137,14 +137,7 @@ unsafe extern "C" fn minor(slot: *const Minor) -> ! {
         state = const launch::STATE_OFFSET,
         published = const launch::PUBLISHED,
         entered = const launch::ENTERED,
-        vectors = sym boot::vectors,
+        vectors = sym vectors,
         arrive = sym launch::arrive,
     )
-}
-
-impl Minor {
-    pub(in crate::metal) fn established(&self, hart: usize) -> bool {
-        hart == crate::metal::processor::executor::aarch64::native::boot_identity()
-            && boot::established()
-    }
 }

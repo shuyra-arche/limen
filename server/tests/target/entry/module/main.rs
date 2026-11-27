@@ -1,7 +1,11 @@
 #![no_std]
 #![no_main]
 
-use kernel::metal::platform::boot::treaty as boot_diagnostic;
+use kernel::metal::{
+    platform::boot::treaty as boot_diagnostic,
+    processor::treaty::{LocalStorage, Stack, Terminal},
+    sync::treaty::Supply,
+};
 #[cfg(target_arch = "aarch64")]
 #[path = "board/aarch64.rs"]
 mod board;
@@ -63,10 +67,11 @@ impl Write for Output {
     }
 }
 
-static SERVICES: boot_diagnostic::Services = boot_diagnostic::Services {
-    output: Some(board::write_byte),
-    reset: Some(board::reset),
-};
+static MAJOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static MAJOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static MAJOR: boot_diagnostic::MajorMaterial =
+    boot_diagnostic::MajorMaterial::new(&MAJOR_STACK, &MAJOR_LOCAL);
+static TERMINAL: Terminal = Terminal::new(Some(board::write_byte), Some(board::reset));
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
@@ -241,7 +246,7 @@ fn main() -> Status {
         device_tree,
         acpi: None,
     };
-    unsafe { boot_diagnostic::major(board::hart(), &input, &SERVICES) }
+    unsafe { boot_diagnostic::major(board::hart(), &input, &TERMINAL, &MAJOR) }
 }
 
 #[unsafe(no_mangle)]

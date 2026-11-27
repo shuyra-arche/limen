@@ -19,3 +19,5 @@ pub fn turn_capacity() -> Option<usize> {
     let protection = protect()?;
     Some(protection.synchronization()?.capacity())
 }
+
+pub use super::local::Supply;

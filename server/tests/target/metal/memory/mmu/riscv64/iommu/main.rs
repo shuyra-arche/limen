@@ -1,12 +1,14 @@
 #![no_std]
 #![no_main]
 
+kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
+
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-#[path = "../../../../../support/paging/retirement.rs"]
-mod retirement;
+#[path = "../../../../../support/paging/binding.rs"]
+mod binding;
 
 use core::{arch::asm, fmt::Write};
-use kernel::metal::memory::mmu::treaty::{Retirement, Unbind};
+use kernel::metal::memory::mmu::treaty::{BindingControl, BindingEffect, BindingRejection};
 use kernel::{
     entry::boot::Boot,
     metal::memory::{
@@ -234,19 +236,24 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
         } else {
             Refresh::FirstStage
         };
-        let command = unsafe { controller.begin_refresh(original, scope) }.unwrap();
-        let effect = Effect::Refreshed(original, scope);
-        assert_eq!(controller.unsettled_effect(), Some(effect));
+        let command =
+            unsafe { BindingControl::begin_refresh(&mut controller, original, scope) }.unwrap();
         assert_eq!(
-            unsafe { controller.begin_refresh(original, scope) },
-            Err(iommu::Error::Busy)
+            controller.unsettled_effect(),
+            Some(Effect::Refreshed(original, scope))
+        );
+        assert_eq!(
+            unsafe { BindingControl::begin_refresh(&mut controller, original, scope) },
+            Err(BindingRejection::Rejected(iommu::Error::Busy))
         );
         if let Some(previous) = previous {
             assert_eq!(controller.observe(previous), Err(iommu::Error::Stale));
         }
-        assert_eq!(retry(|| controller.observe(command)), effect);
-        assert_eq!(controller.observe(command), Err(iommu::Error::Stale));
-        previous = Some(command);
+        assert_eq!(
+            binding::settle(&mut controller, command),
+            BindingEffect::Refreshed(original, scope)
+        );
+        previous = Some(command.command());
     }
     for (word, pattern) in words.into_iter().zip(PATTERNS) {
         unsafe { word.write_volatile(!pattern) };
@@ -260,40 +267,31 @@ extern "Rust" fn limen_platform_ready(boot: Boot<'_>) -> ! {
     let (page, queue) = retry(|| controller.shut_queue());
     assert_eq!(queue, address);
     unsafe { controller.open_queue(page, queue) }.unwrap();
-    let unbind = unsafe { controller.begin_unbind(original) }.unwrap();
+    let unbind = unsafe { controller.begin_retirement(original) }.unwrap();
     assert_eq!(
         controller.observe(previous.unwrap()),
         Err(iommu::Error::Stale)
     );
     assert_eq!(controller.binding(pci::RID), None);
-    assert_eq!(controller.pending_command(), Some(unbind));
-    assert!(controller.pending_retirement(other).is_none());
-    let recovered = controller.pending_retirement(original).unwrap();
-    let settled = retry(|| match controller.observe_retirement(&recovered) {
-        Ok(Retirement::Pending) => Err(iommu::Error::Busy),
-        result => result,
-    });
-    assert_eq!(settled, Retirement::Settled);
+    assert_eq!(controller.pending_command(), Some(unbind.command()));
+    assert!(controller.pending_change(other).is_none());
     assert_eq!(
-        controller.observe_retirement(&recovered),
-        Err(iommu::Error::Stale)
+        binding::settle(&mut controller, unbind),
+        BindingEffect::Unbound(original)
     );
     assert!(controller.pending_command().is_none());
     unsafe { words[0].write_volatile(!PATTERNS[0]) };
     order();
     endpoints[0].transfer(IOVA, true);
     assert_eq!(unsafe { words[0].read_volatile() }, !PATTERNS[0]);
-    let bind = unsafe { controller.begin_bind(original.context()) }.unwrap();
-    let Effect::Bound(replacement) = retry(|| controller.observe(bind)) else {
-        panic!("wrong binding effect");
-    };
+    let replacement = unsafe { binding::bind(&mut controller, original.context()) };
     assert_ne!(replacement, original);
     assert_eq!(
-        unsafe { controller.begin_unbind(original) },
-        Err(iommu::Error::Stale)
+        unsafe { controller.begin_retirement(original) },
+        Err(BindingRejection::Rejected(iommu::Error::Stale))
     );
     for binding in [replacement, other, diagnostic] {
-        unsafe { retirement::retire(&mut controller, binding, |_| {}) };
+        unsafe { binding::retire(&mut controller, binding, |_| {}) };
     }
     let (returned, original) = retry(|| controller.shut_queue());
     assert_eq!(original, address);

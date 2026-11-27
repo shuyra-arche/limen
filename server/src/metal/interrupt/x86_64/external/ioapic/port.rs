@@ -1,6 +1,7 @@
 //! One selector/data pair for the original I/O APIC mapping.
 
 use crate::metal::memory::access::treaty::device::DeviceWindow;
+use limen_treaty::model::PhysicalAddress;
 
 const SELECT: usize = 0;
 const DATA: usize = 0x10;
@@ -13,6 +14,10 @@ impl<'map> Port<'map> {
             && window.supports_u32(SELECT)
             && window.supports_u32(DATA))
         .then(|| Self(window.reborrow()))
+    }
+
+    pub(super) fn address(&self) -> PhysicalAddress {
+        self.0.physical().start()
     }
 
     fn select(&mut self, register: u8) {

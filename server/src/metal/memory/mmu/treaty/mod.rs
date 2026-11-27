@@ -11,8 +11,11 @@ pub use installation::Installation;
     )
 ))]
 pub use installation::{Context, LocalContext, LocalInstall};
-pub(super) mod retirement;
-pub use retirement::{Retirement, Unbind};
+pub(super) mod binding;
+pub use binding::{
+    BindingChange, BindingCommand, BindingControl, BindingEffect, BindingObservation,
+    BindingProgress, BindingRejection, BindingSubmission,
+};
 
 /// Exact leaf access shared by CPU descriptor encoders.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

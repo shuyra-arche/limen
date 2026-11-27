@@ -1,5 +1,6 @@
 //! Terminal diagnostics for early exceptions on major and minor CPUs.
-use crate::metal::{platform::boot::firmware, processor::executor::local::stack::Stack};
+use super::Terminal;
+use crate::metal::processor::executor::local::stack::Stack;
 use core::sync::atomic::AtomicPtr;
 
 const BYTES: usize = 16 * 1024;
@@ -33,7 +34,13 @@ impl Trap {
             stack,
             status,
         } = self;
-        firmware::trap_services().reject(format_args!(
+        // RV64 may trap while clearing BSS. Probe firmware directly in that
+        // path so reporting does not depend on a published terminal.
+        #[cfg(limen_firmware = "sbi")]
+        let terminal = Terminal::sbi_initial();
+        #[cfg(limen_firmware = "uefi")]
+        let terminal = Terminal::early();
+        terminal.reject(format_args!(
             "FAIL Limen boot trap: cause={cause:#x} pc={pc:#x} value={value:#x} stack={stack:#x} status={status:#x}\n"
         ))
     }

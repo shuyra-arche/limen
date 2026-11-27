@@ -1,59 +1,5 @@
-use super::super::{CommandIdentity, Directory, Effect, Profile, Refresh};
-use super::{Binding, Context, Error, Page, Sequence};
+use super::{Context, Directory, DirectoryWord, Error, Page, Profile, Table};
 use limen_treaty::model::PhysicalAddress;
-
-#[test]
-fn a_prepared_binding_keeps_its_original_retirement_at_sequence_exhaustion() {
-    let mut sequence = Sequence {
-        number: u64::MAX - 2,
-        ..Sequence::FRESH
-    };
-    let binding = Binding {
-        controller: PhysicalAddress::new(0x1000),
-        generation: sequence.prepare_binding().unwrap(),
-        context: Context {
-            device: 7,
-            root: PhysicalAddress::new(0x3000),
-            pscid: 1,
-        },
-    };
-    assert_eq!(sequence.prepare_binding(), Err(Error::Exhausted));
-    assert_eq!(sequence.next(), Ok(u64::MAX)); // First queue.
-    assert_eq!(sequence.next_available(), Err(Error::Exhausted));
-    assert_eq!(
-        Effect::Refreshed(binding, Refresh::FirstStage).command_identity(&mut sequence),
-        Err(Error::Exhausted),
-    );
-    assert_eq!(
-        Effect::Unbound(binding).command_identity(&mut sequence),
-        Ok(CommandIdentity::Retirement(u64::MAX - 1)),
-    );
-}
-
-#[test]
-fn final_binding_installation_and_its_retirement_have_disjoint_ids() {
-    let mut sequence = Sequence {
-        number: u64::MAX - 1,
-        ..Sequence::FRESH
-    };
-    let binding = Binding {
-        controller: PhysicalAddress::new(0x1000),
-        generation: sequence.next().unwrap(),
-        context: Context {
-            device: 7,
-            root: PhysicalAddress::new(0x3000),
-            pscid: 1,
-        },
-    };
-    assert_eq!(
-        Effect::Bound(binding).command_identity(&mut sequence),
-        Ok(CommandIdentity::Ordinary(u64::MAX)),
-    );
-    assert_eq!(
-        Effect::Unbound(binding).command_identity(&mut sequence),
-        Ok(CommandIdentity::Retirement(u64::MAX)),
-    );
-}
 
 #[test]
 fn basic_and_extended_contexts_use_their_own_directory_boundaries() {
@@ -88,4 +34,81 @@ fn basic_and_extended_contexts_use_their_own_directory_boundaries() {
     let expected = [1, 0, 0x12345_000, (8 << 60) | 3];
     assert_eq!(context.words(basic), Ok(expected));
     assert_eq!(context.words(extended), Ok(expected));
+}
+
+#[test]
+fn cutoff_keeps_the_requester_and_its_slot_until_original_retirement() {
+    use super::{Binding, DeviceOrder, Sequence};
+    use std::boxed::Box;
+
+    let profile = Profile {
+        sv39: true,
+        debug_translation: false,
+        extended_context: true,
+        little_endian_tables: true,
+        address_bits: 48,
+        directory: Directory::Off,
+    };
+    let page = Box::leak(Box::new(Page::EMPTY));
+    let mut records = [None; 2];
+    let mut sequence = Sequence::FRESH;
+    let scope = PhysicalAddress::new(0x1_0000);
+    let mut table = Table::admit(
+        page,
+        PhysicalAddress::new(0x1000),
+        &mut records,
+        profile,
+        DirectoryWord(0),
+    )
+    .unwrap();
+    let original = Binding::new(
+        scope,
+        sequence.next().unwrap(),
+        Context {
+            device: 56,
+            root: PhysicalAddress::new(0x3000),
+            pscid: 1,
+        },
+    );
+    let order = DeviceOrder(|| {});
+    let entry = table.entry(profile, original.context).unwrap();
+    table.publish(entry, original, &order);
+    assert_eq!(table.binding(56), Some(original));
+    assert!(matches!(
+        table.entry(
+            profile,
+            Context {
+                device: 63,
+                root: PhysicalAddress::new(0x5000),
+                ..original.context
+            }
+        ),
+        Err(Error::Mode)
+    ));
+    assert!(matches!(
+        table.entry(
+            profile,
+            Context {
+                device: 64,
+                ..original.context
+            }
+        ),
+        Err(Error::Address)
+    ));
+    table.block(profile, original, &order);
+    assert_eq!(table.binding(56), Some(original));
+    assert!(matches!(
+        table.entry(profile, original.context),
+        Err(Error::Mode)
+    ));
+    table.retire(profile, original, &order);
+    assert_eq!(table.binding(56), None);
+    let replacement = Binding {
+        generation: sequence.next().unwrap(),
+        ..original
+    };
+    let entry = table.entry(profile, replacement.context).unwrap();
+    table.publish(entry, replacement, &order);
+    assert_ne!(table.binding(56), Some(original));
+    assert_eq!(table.binding(56), Some(replacement));
 }

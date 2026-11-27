@@ -1,7 +1,9 @@
 use super::{self as launch, Minor, StartError};
-use crate::metal::platform::boot::riscv64::{self as boot, establish_supervisor};
-use crate::metal::platform::boot::trap as diagnostic;
 use crate::metal::platform::firmware::treaty::sbi::HartService;
+use crate::metal::processor::{
+    execution::terminal::{riscv64::trap, trap as diagnostic},
+    executor::entry::riscv64::establish_supervisor,
+};
 use core::arch::naked_asm;
 
 pub enum Startup {
@@ -56,7 +58,7 @@ unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
         "j 3b",
         interrupt_enable = const crate::metal::processor::description::riscv64::status::SIE,
         extensions = const crate::metal::processor::description::riscv64::status::WRITABLE_EXTENSIONS,
-        vector = sym boot::trap,
+        vector = sym trap,
         state = const launch::STATE_OFFSET,
         published = const launch::PUBLISHED,
         entered = const launch::ENTERED,
@@ -65,11 +67,4 @@ unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
         top = sym diagnostic::TOP,
         loaded = sym launch::arrive,
     );
-}
-
-impl Minor {
-    pub(in crate::metal) fn established(&self, _hart: usize) -> bool {
-        // The entry ABI and trampoline already checked the incoming Hart.
-        boot::established()
-    }
 }

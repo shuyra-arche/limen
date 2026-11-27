@@ -1,9 +1,13 @@
 //! Route encoding and progress for each occupied physical pin.
 
 use crate::metal::{
-    interrupt::x86_64::internal::apic::VectorLease,
+    interrupt::{
+        treaty::{RouteControl, RouteOperation, RouteState},
+        x86_64::internal::apic::VectorLease,
+    },
     platform::description::acpi::{Polarity, Trigger},
 };
+use limen_treaty::model::PhysicalAddress;
 
 use super::{Controller, Failure, pin::Pin};
 
@@ -41,7 +45,8 @@ impl Route {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Effect {
     Configure,
-    Enable,
+    Publish,
+    Resume,
     Mask,
 }
 
@@ -49,6 +54,7 @@ pub enum Effect {
 pub enum State {
     Vacant,
     Reserved(Route),
+    Prepared(Route),
     Masked(Route),
     Enabled(Route),
     /// Readback failed after an effect. The original route remains occupied.
@@ -58,6 +64,7 @@ pub enum State {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {
     Reserved,
+    Prepared,
     Masked,
     Enabled,
     Unconfirmed(Effect),
@@ -74,10 +81,72 @@ impl Binding {
     fn observe(&self) -> State {
         match self.phase {
             Phase::Reserved => State::Reserved(self.route),
+            Phase::Prepared => State::Prepared(self.route),
             Phase::Masked => State::Masked(self.route),
             Phase::Enabled => State::Enabled(self.route),
             Phase::Unconfirmed(effect) => State::Unconfirmed(self.route, effect),
         }
+    }
+}
+
+/// The exclusive reference to a pin and its original receiving vector.
+#[must_use]
+pub struct BoundRoute {
+    controller: PhysicalAddress,
+    route: Option<Route>,
+}
+
+struct Control<'route, 'map> {
+    owner: &'route mut Controller<'map>,
+    binding: &'route mut BoundRoute,
+    pin: Pin,
+}
+
+impl crate::metal::interrupt::treaty::route::Sealed for Control<'_, '_> {}
+
+impl RouteControl for Control<'_, '_> {
+    type Failure = Failure;
+    type Retired = VectorLease;
+
+    fn state(&self) -> RouteState {
+        match self.owner.routes[self.pin.index()]
+            .as_ref()
+            .map(|binding| binding.phase)
+        {
+            Some(Phase::Prepared) => RouteState::Prepared,
+            Some(Phase::Enabled) => RouteState::Open,
+            Some(Phase::Masked) => RouteState::Masked,
+            Some(Phase::Unconfirmed(Effect::Publish)) => {
+                RouteState::Unconfirmed(RouteOperation::Publish)
+            }
+            Some(Phase::Unconfirmed(Effect::Resume)) => {
+                RouteState::Unconfirmed(RouteOperation::Resume)
+            }
+            Some(Phase::Unconfirmed(Effect::Mask)) => RouteState::Unconfirmed(RouteOperation::Mask),
+            Some(Phase::Reserved | Phase::Unconfirmed(Effect::Configure)) => {
+                unreachable!("I/O APIC control requires a configured route")
+            }
+            None => RouteState::Retired,
+        }
+    }
+
+    unsafe fn publish(&mut self) -> Result<(), Failure> {
+        unsafe {
+            self.owner
+                .enable(self.pin, Phase::Prepared, Effect::Publish)
+        }
+    }
+
+    fn mask(&mut self) -> Result<(), Failure> {
+        self.owner.mask(self.pin)
+    }
+
+    unsafe fn resume(&mut self) -> Result<(), Failure> {
+        unsafe { self.owner.enable(self.pin, Phase::Masked, Effect::Resume) }
+    }
+
+    unsafe fn retire(&mut self) -> Result<VectorLease, Failure> {
+        unsafe { self.owner.retire(self.pin, self.binding) }
     }
 }
 
@@ -136,7 +205,7 @@ impl Controller<'_> {
         &mut self,
         route: Route,
         lease: VectorLease,
-    ) -> Result<(), (VectorLease, Failure)> {
+    ) -> Result<BoundRoute, (VectorLease, Failure)> {
         let pin = match self.validate(route) {
             Ok(pin) if lease.matches(route.hart, route.vector) => pin,
             _ => return Err((lease, Failure::Scope)),
@@ -150,16 +219,47 @@ impl Controller<'_> {
             vector: lease,
             phase: Phase::Reserved,
         });
-        Ok(())
+        Ok(BoundRoute {
+            controller: self.port.address(),
+            route: Some(route),
+        })
+    }
+
+    fn bound_pin(&self, binding: &BoundRoute) -> Result<Pin, Failure> {
+        let route = binding.route.ok_or(Failure::Scope)?;
+        let pin = self.pins.pin(route.gsi)?;
+        if binding.controller != self.port.address() || self.binding(pin)?.route != route {
+            return Err(Failure::Scope);
+        }
+        Ok(pin)
+    }
+
+    /// Recover control of the original configured binding.
+    pub fn control<'route>(
+        &'route mut self,
+        binding: &'route mut BoundRoute,
+    ) -> Result<impl RouteControl<Failure = Failure, Retired = VectorLease> + 'route, Failure> {
+        let pin = self.bound_pin(binding)?;
+        if matches!(
+            self.binding(pin)?.phase,
+            Phase::Reserved | Phase::Unconfirmed(Effect::Configure)
+        ) {
+            return Err(Failure::Busy);
+        }
+        Ok(Control {
+            owner: self,
+            binding,
+            pin,
+        })
     }
 
     /// Return a reservation that has issued no hardware operation.
-    pub fn cancel(&mut self, gsi: u32) -> Result<VectorLease, Failure> {
-        let pin = self.pins.pin(gsi)?;
+    pub fn cancel(&mut self, binding: &mut BoundRoute) -> Result<VectorLease, Failure> {
+        let pin = self.bound_pin(binding)?;
         if self.binding(pin)?.phase != Phase::Reserved {
             return Err(Failure::Busy);
         }
-        self.release(pin)
+        self.release(pin, binding)
     }
 
     fn program(&mut self, pin: Pin, effect: Effect) -> Result<(), Failure> {
@@ -167,7 +267,7 @@ impl Controller<'_> {
             .as_mut()
             .expect("reserved I/O APIC pin");
         let route = binding.route;
-        let masked = effect != Effect::Enable;
+        let masked = matches!(effect, Effect::Configure | Effect::Mask);
         let low = route.low(masked);
         binding.phase = Phase::Unconfirmed(effect);
         if effect == Effect::Configure {
@@ -182,10 +282,10 @@ impl Controller<'_> {
         if self.port.read(register) & PROGRAMMABLE != low {
             return Err(Failure::Unconfirmed);
         }
-        binding.phase = if masked {
-            Phase::Masked
-        } else {
-            Phase::Enabled
+        binding.phase = match effect {
+            Effect::Configure => Phase::Prepared,
+            Effect::Mask => Phase::Masked,
+            Effect::Publish | Effect::Resume => Phase::Enabled,
         };
         Ok(())
     }
@@ -195,19 +295,20 @@ impl Controller<'_> {
     /// drained old delivery at the device and all prior destinations.
     /// Preserve these facts through retirement and exclude firmware PIC and NMI use.
     /// After unconfirmed readback, retry only the original masked route.
-    pub unsafe fn configure(&mut self, route: Route) -> Result<(), Failure> {
-        let pin = self.validate(route)?;
-        let binding = self.binding(pin)?;
-        if binding.route != route
-            || !matches!(
-                binding.phase,
-                Phase::Reserved | Phase::Unconfirmed(Effect::Configure)
-            )
-            || !quiesced(self.port.read(pin.low_register()))
+    pub unsafe fn configure<'route>(
+        &'route mut self,
+        binding: &'route mut BoundRoute,
+    ) -> Result<impl RouteControl<Failure = Failure, Retired = VectorLease> + 'route, Failure> {
+        let pin = self.bound_pin(binding)?;
+        if !matches!(
+            self.binding(pin)?.phase,
+            Phase::Reserved | Phase::Unconfirmed(Effect::Configure)
+        ) || !quiesced(self.port.read(pin.low_register()))
         {
             return Err(Failure::Busy);
         }
-        self.program(pin, Effect::Configure)
+        self.program(pin, Effect::Configure)?;
+        self.control(binding)
     }
 
     /// # Safety
@@ -215,22 +316,21 @@ impl Controller<'_> {
     /// and the matching Local APIC EOI path. Level delivery requires EOI
     /// broadcasts or an independently verified directed EOI path. The device
     /// and its handler are ready, including any necessary rearm after service.
-    pub unsafe fn enable(&mut self, gsi: u32) -> Result<(), Failure> {
-        let pin = self.pins.pin(gsi)?;
-        if self.binding(pin)?.phase != Phase::Masked {
+    unsafe fn enable(&mut self, pin: Pin, ready: Phase, effect: Effect) -> Result<(), Failure> {
+        let phase = self.binding(pin)?.phase;
+        if phase != ready && phase != Phase::Unconfirmed(effect) {
             return Err(Failure::Busy);
         }
-        self.program(pin, Effect::Enable)
+        self.program(pin, effect)
     }
 
     /// Confirm masking of future input. Already accepted delivery can persist.
-    pub fn mask(&mut self, gsi: u32) -> Result<(), Failure> {
-        let pin = self.pins.pin(gsi)?;
-        if !matches!(
-            self.binding(pin)?.phase,
-            Phase::Enabled | Phase::Unconfirmed(Effect::Enable | Effect::Mask)
-        ) {
-            return Err(Failure::Busy);
+    fn mask(&mut self, pin: Pin) -> Result<(), Failure> {
+        match self.binding(pin)?.phase {
+            Phase::Masked => return Ok(()),
+            Phase::Enabled
+            | Phase::Unconfirmed(Effect::Publish | Effect::Resume | Effect::Mask) => {}
+            _ => return Err(Failure::Busy),
         }
         // A previous enable/mask may already have taken effect. Both retain
         // the same confirmed fixed route; a final mask write is idempotent.
@@ -241,23 +341,27 @@ impl Controller<'_> {
     /// The original device, messages in flight, receiving Local APIC and
     /// software reception have all been drained independently. The observed
     /// mask, send status and Remote IRR only describe this controller.
-    pub unsafe fn retire(&mut self, gsi: u32) -> Result<VectorLease, Failure> {
-        let pin = self.pins.pin(gsi)?;
-        if self.binding(pin)?.phase != Phase::Masked
+    unsafe fn retire(
+        &mut self,
+        pin: Pin,
+        binding: &mut BoundRoute,
+    ) -> Result<VectorLease, Failure> {
+        if !matches!(self.binding(pin)?.phase, Phase::Prepared | Phase::Masked)
             || !quiesced(self.port.read(pin.low_register()))
         {
             return Err(Failure::Busy);
         }
-        self.release(pin)
+        self.release(pin, binding)
     }
 
     fn binding(&self, pin: Pin) -> Result<&Binding, Failure> {
         self.routes[pin.index()].as_ref().ok_or(Failure::Busy)
     }
 
-    fn release(&mut self, pin: Pin) -> Result<VectorLease, Failure> {
-        let binding = self.routes[pin.index()].take().ok_or(Failure::Busy)?;
-        Ok(binding.vector)
+    fn release(&mut self, pin: Pin, binding: &mut BoundRoute) -> Result<VectorLease, Failure> {
+        let original = self.routes[pin.index()].take().ok_or(Failure::Busy)?;
+        binding.route = None;
+        Ok(original.vector)
     }
 }
 

@@ -2,6 +2,10 @@
 #![no_main]
 
 use kernel::metal::processor::treaty::Minor;
+use kernel::metal::{
+    processor::treaty::{LocalStorage, Stack},
+    sync::treaty::Supply,
+};
 
 use kernel::entry::boot;
 use uefi::prelude::*;
@@ -13,7 +17,9 @@ mod scenario;
 #[path = "../../../entry/synchronization.rs"]
 mod synchronization;
 
-static MINOR: Minor = Minor::new();
+static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 fn observe_minor(hart: usize) {

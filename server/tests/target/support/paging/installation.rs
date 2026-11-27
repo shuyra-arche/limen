@@ -7,6 +7,7 @@ pub(super) unsafe fn install(
     candidate: Context,
 ) -> LocalInstall {
     assert_ne!(expected, candidate);
+    assert_eq!(control.confirm(), Err(SwitchError::Current));
     assert_eq!(unsafe { control.retry() }, Err(SwitchError::Current));
     let installed = unsafe { control.install(expected, candidate) }.unwrap();
     assert_eq!(installed.previous(), expected);

@@ -7,7 +7,7 @@ use crate::metal::{
 };
 
 use super::super::supervisor::Reception;
-use super::{Error, SendState, Source, Target};
+use super::{Error, Record, SendState, Source, Target};
 
 /// One source Hart's SBI doorbell endpoint. SBI admission covers only the
 /// sending operation. The destination owns the delivery and any work notice.
@@ -24,22 +24,60 @@ pub struct IpiRoute<'a, 'state, 'tree> {
     target: &'a Target<'tree>,
 }
 
-impl Sealed for IpiRoute<'_, '_, '_> {}
+/// The exact original firmware CPU scope, sender, destination and issue round.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IpiIssue<'tree> {
+    source: Source<'tree>,
+    hart: usize,
+    round: u64,
+}
 
-impl NotifyHart for IpiRoute<'_, '_, '_> {
-    type Error = Error;
-
-    fn notify(&mut self) -> Result<Issuance<Error>, Error> {
-        match self.owner.notify(self.target) {
-            Ok(()) => Ok(Issuance::Confirmed),
-            Err(error @ Error::Firmware(_)) => Ok(Issuance::Unconfirmed(error)),
-            Err(error) => Err(error),
+impl<'tree> IpiIssue<'tree> {
+    fn new(source: Source<'tree>, record: Record) -> Self {
+        Self {
+            source,
+            hart: record.hart,
+            round: record.round,
         }
     }
+}
 
-    fn pending(&mut self) -> Result<Option<Issuance<Error>>, Error> {
+impl Sealed for IpiRoute<'_, '_, '_> {}
+
+impl<'tree> NotifyHart for IpiRoute<'_, '_, 'tree> {
+    type Error = Error;
+    type Issue = IpiIssue<'tree>;
+
+    fn notify(&mut self) -> Result<Issuance<Self::Issue, Error>, Error> {
+        self.owner.notify(self.target)
+    }
+
+    fn pending(&self) -> Result<Option<Self::Issue>, Error> {
         self.owner.check_source()?;
-        self.owner.state.pending(self.target.hart)
+        Ok(self
+            .owner
+            .state
+            .pending(self.target.hart)?
+            .map(|record| IpiIssue::new(self.owner.source, record)))
+    }
+
+    fn confirm(&mut self, original: Self::Issue) -> Result<Issuance<Self::Issue, Error>, Error> {
+        self.owner.check_source()?;
+        let record = self
+            .owner
+            .state
+            .pending(self.target.hart)?
+            .ok_or(Error::Busy)?;
+        if IpiIssue::new(self.owner.source, record) != original {
+            return Err(Error::Busy);
+        }
+        // The SBI IPI service has no readback for a failed ecall. In particular
+        // a receiver rechecking published work cannot attribute coalesced
+        // interrupts to this individual issue.
+        Ok(match record.error {
+            Some(error) => Issuance::Unconfirmed(original, Error::Firmware(error)),
+            None => Issuance::Pending(original),
+        })
     }
 }
 
@@ -88,8 +126,10 @@ impl<'state, 'tree> Sender<'state, 'tree> {
         &'a mut self,
         target: &'a Target<'tree>,
     ) -> Result<IpiRoute<'a, 'state, 'tree>, Error> {
-        self.check_target(target)?;
-        self.state.pending(target.hart)?;
+        self.check_scope(target)?;
+        if self.state.pending(target.hart)?.is_none() && !self.harts.started(target.hart) {
+            return Err(Error::Scope);
+        }
         Ok(IpiRoute {
             owner: self,
             target,
@@ -104,12 +144,9 @@ impl<'state, 'tree> Sender<'state, 'tree> {
         }
     }
 
-    fn check_target(&self, target: &Target<'tree>) -> Result<(), Error> {
+    fn check_scope(&self, target: &Target<'tree>) -> Result<(), Error> {
         self.check_source()?;
-        if target.scope == self.source.scope
-            && target.hart != self.source.hart
-            && self.harts.started(target.hart)
-        {
+        if target.scope == self.source.scope && target.hart != self.source.hart {
             Ok(())
         } else {
             Err(Error::Scope)
@@ -120,17 +157,25 @@ impl<'state, 'tree> Sender<'state, 'tree> {
     /// A firmware failure leaves delivery unknown. SBI success reports sending,
     /// while the receiver owns the separately observed pending bit. Publish any
     /// work to the receiver's synchronized mailbox before calling this method.
-    fn notify(&mut self, target: &Target<'tree>) -> Result<(), Error> {
-        self.check_target(target)?;
-        self.state.require_available()?;
+    fn notify(
+        &mut self,
+        target: &Target<'tree>,
+    ) -> Result<Issuance<IpiIssue<'tree>, Error>, Error> {
+        self.check_scope(target)?;
+        if !self.harts.started(target.hart) {
+            return Err(Error::Scope);
+        }
+        let record = self.state.begin(target.hart)?;
+        let original = IpiIssue::new(self.source, record);
         // Firmware may raise the interrupt through device output. Order
         // ordinary work publication before those native effects.
         unsafe { core::arch::asm!("fence rw, iorw", options(nostack)) };
-        if let Err(error) = self.interrupts.send(target.hart) {
-            self.state.retain_unconfirmed(target.hart, error);
-            return Err(Error::Firmware(error));
-        }
-        Ok(())
+        let result = self.interrupts.send(target.hart);
+        self.state.finish(result);
+        Ok(match result {
+            Ok(()) => Issuance::Confirmed(original),
+            Err(error) => Issuance::Unconfirmed(original, Error::Firmware(error)),
+        })
     }
 }
 

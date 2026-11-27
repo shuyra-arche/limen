@@ -1,14 +1,15 @@
 //! Non-secure command queue for configurations with a linear stream table,
 //! stage-2 translation and no endpoint translation caches.
 
-use super::{ABORT, CR0, CR0_ACK, DeviceOrder, DeviceWindow, Error, GBPA, UPDATE, read};
+use super::{
+    DeviceOrder, Error,
+    registers::{
+        ABORT, CR0, CR0_ACK, GBPA, GLOBAL_ERROR, GLOBAL_ERROR_ACK, IDR1, QUEUE_BASE,
+        QUEUE_CONSUMER, QUEUE_PRODUCER, Registers, SMMU_ENABLE, UPDATE,
+    },
+};
 use limen_treaty::model::PhysicalAddress;
 
-const BASE: usize = 0x90;
-const PRODUCER: usize = 0x98;
-const CONSUMER: usize = 0x9c;
-const GLOBAL_ERROR: usize = 0x60;
-const GLOBAL_ERROR_ACK: usize = 0x64;
 const QUEUE_ENABLE: u32 = 1 << 3;
 const LOG_ENTRIES: u32 = 2;
 const ENTRIES: u32 = 1 << LOG_ENTRIES;
@@ -68,13 +69,13 @@ impl Queue {
     /// in pinned device-visible, coherent memory with CR1-compatible cache
     /// attributes.
     /// Retain the ring and hardware obligations even if the observer is lost.
-    pub(super) unsafe fn prepare(
-        window: &mut DeviceWindow<'_>,
+    pub(super) fn prepare(
+        registers: &mut Registers<'_>,
         ring: &'static mut Ring,
         physical: PhysicalAddress,
         generation: u64,
     ) -> Result<Self, Error> {
-        let idr1 = unsafe { read(window, 4)? };
+        let idr1 = registers.read(IDR1)?;
         let address = physical.get();
         if address & 63 != 0 || address >> 52 != 0 {
             return Err(Error::Window);
@@ -82,18 +83,16 @@ impl Queue {
         if idr1 & (1 << 29) != 0 || ((idr1 >> 21) & 31) < LOG_ENTRIES {
             return Err(Error::Rejected);
         }
-        let retained_control = unsafe { read(window, CR0)? };
-        if retained_control & !super::SMMU_ENABLE != 0
-            || unsafe { read(window, CR0_ACK)? } != retained_control
-        {
+        let retained_control = registers.read(CR0)?;
+        if retained_control & !SMMU_ENABLE != 0 || registers.read(CR0_ACK)? != retained_control {
             return Err(Error::Active);
         }
-        if unsafe { read(window, GBPA)? } & (ABORT | UPDATE) != ABORT {
+        if registers.read(GBPA)? & (ABORT | UPDATE) != ABORT {
             return Err(Error::Rejected);
         }
-        if !window.supports_u64(BASE)
-            || !window.supports_u32(PRODUCER)
-            || !window.supports_u32(CONSUMER)
+        if !registers.supports_base(QUEUE_BASE)
+            || !registers.supports(QUEUE_PRODUCER)
+            || !registers.supports(QUEUE_CONSUMER)
         {
             return Err(Error::Window);
         }
@@ -125,21 +124,20 @@ impl Queue {
     /// readback blocks further admission while that storage remains held.
     pub(super) fn start(
         &mut self,
-        window: &mut DeviceWindow<'_>,
+        registers: &mut Registers<'_>,
         order: &DeviceOrder,
     ) -> Result<(), Error> {
         let base = self.physical.get() | u64::from(LOG_ENTRIES);
-        unsafe { window.write_u64(BASE, base.to_le()) }.map_err(|_| Error::Window)?;
+        registers.write_base(QUEUE_BASE, base)?;
         order.fence();
-        let actual = u64::from_le(unsafe { window.read_u64(BASE) }.map_err(|_| Error::Window)?);
+        let actual = registers.read_base(QUEUE_BASE)?;
         if actual & ((1 << 52) - 1) != base {
             return Err(self.fail());
         }
-        unsafe { window.write_u32(PRODUCER, 0) }.map_err(|_| Error::Window)?;
-        unsafe { window.write_u32(CONSUMER, 0) }.map_err(|_| Error::Window)?;
+        registers.write(QUEUE_PRODUCER, 0)?;
+        registers.write(QUEUE_CONSUMER, 0)?;
         order.fence();
-        unsafe { window.write_u32(CR0, (self.retained_control | QUEUE_ENABLE).to_le()) }
-            .map_err(|_| Error::Window)
+        registers.write(CR0, self.retained_control | QUEUE_ENABLE)
     }
 
     pub(super) fn into_storage(self) -> (&'static mut Ring, PhysicalAddress) {
@@ -161,18 +159,18 @@ impl Queue {
 
     fn healthy(
         &mut self,
-        window: &mut DeviceWindow<'_>,
+        registers: &mut Registers<'_>,
         order: &DeviceOrder,
     ) -> Result<u32, Error> {
         order.fence();
-        let errors = unsafe { read(window, GLOBAL_ERROR)? ^ read(window, GLOBAL_ERROR_ACK)? };
-        let consumer = unsafe { read(window, CONSUMER)? };
+        let errors = registers.read(GLOBAL_ERROR)? ^ registers.read(GLOBAL_ERROR_ACK)?;
+        let consumer = registers.read(QUEUE_CONSUMER)?;
         // Exclusive control: never acknowledge, skip a bad command or recover
         // by resetting the ring while this operation is outstanding.
         if errors != 0 || consumer & !POINTER_MASK != 0 {
             return Err(self.fail());
         }
-        if unsafe { read(window, CR0_ACK)? } & QUEUE_ENABLE == 0 {
+        if registers.read(CR0_ACK)? & QUEUE_ENABLE == 0 {
             return Err(Error::Busy);
         }
         Ok(consumer)
@@ -182,7 +180,7 @@ impl Queue {
     /// CMD_SYNC without an MSI, then ring the producer doorbell only once.
     pub(super) fn submit(
         &mut self,
-        window: &mut DeviceWindow<'_>,
+        registers: &mut Registers<'_>,
         order: &DeviceOrder,
         operation: Invalidate,
     ) -> Result<(), Error> {
@@ -193,11 +191,13 @@ impl Queue {
             Invalidate::Stream(_) => return Err(Error::Rejected),
             Invalidate::StageTwo(vmid) => (u64::from(vmid) << 32) | 0x28,
         };
-        if !matches!(self.state, State::Starting | State::Ready) {
-            return Err(Error::Active);
+        match self.state {
+            State::Starting | State::Ready => {}
+            State::Failed(_) => return Err(Error::Unconfirmed),
+            _ => return Err(Error::Active),
         }
-        let consumer = self.healthy(window, order)?;
-        if consumer != self.producer || unsafe { read(window, PRODUCER)? } != self.producer {
+        let consumer = self.healthy(registers, order)?;
+        if consumer != self.producer || registers.read(QUEUE_PRODUCER)? != self.producer {
             return Err(self.fail());
         }
         let slot = (self.producer % ENTRIES) as usize;
@@ -206,43 +206,44 @@ impl Queue {
         order.fence();
         self.producer = (self.producer + 2) & POINTER_MASK;
         self.state = State::Issued(operation);
-        unsafe { window.write_u32(PRODUCER, self.producer.to_le()) }.map_err(|_| Error::Window)
+        registers.write(QUEUE_PRODUCER, self.producer)
     }
 
     /// One exclusive producer and one outstanding batch disambiguate wrap.
     /// Only consumption through this batch's CMD_SYNC completes the operation.
     pub(super) fn observe(
         &mut self,
-        window: &mut DeviceWindow<'_>,
+        registers: &mut Registers<'_>,
         order: &DeviceOrder,
     ) -> Result<Invalidate, Error> {
-        let State::Issued(operation) = self.state else {
-            return Err(Error::Active);
+        let operation = match self.state {
+            State::Issued(operation) => operation,
+            State::Failed(Some(_)) => return Err(Error::Unconfirmed),
+            _ => return Err(Error::Active),
         };
-        if self.healthy(window, order)? != self.producer {
+        if self.healthy(registers, order)? != self.producer {
             return Err(Error::Busy);
         }
-        self.healthy(window, order)?;
+        self.healthy(registers, order)?;
         self.state = State::Ready;
         Ok(operation)
     }
 
     pub(super) fn shut(
         &mut self,
-        window: &mut DeviceWindow<'_>,
+        registers: &mut Registers<'_>,
         order: &DeviceOrder,
     ) -> Result<(), Error> {
         if matches!(self.state, State::Starting | State::Ready) {
-            self.healthy(window, order)?;
+            self.healthy(registers, order)?;
             self.state = State::Shutting;
-            unsafe { window.write_u32(CR0, self.retained_control.to_le()) }
-                .map_err(|_| Error::Window)?;
+            registers.write(CR0, self.retained_control)?;
         }
         if self.state != State::Shutting {
             return Err(Error::Active);
         }
         order.fence();
-        if unsafe { read(window, CR0_ACK)? } != self.retained_control {
+        if registers.read(CR0_ACK)? != self.retained_control {
             return Err(Error::Busy);
         }
         self.state = State::Shut;

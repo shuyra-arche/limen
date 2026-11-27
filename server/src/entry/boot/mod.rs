@@ -22,19 +22,22 @@ use crate::metal::platform::{
     firmware::treaty::map::{FirmwareMap, FirmwareRegion},
 };
 pub use handoff::Boot;
-#[cfg(limen_target)]
-pub use major::stack_range;
 pub use physical::{Condition, Exclusion, Exclusions, Occupant, Retirement};
 pub use regions::{RegionError, Regions};
 
 #[cfg(limen_target)]
 /// The firmware adapter supplies a stable DTB (OpenSBI) or Loader (UEFI).
 /// All referenced storage and mappings remain reserved until the consumer is done.
-pub(crate) unsafe extern "C" fn start(hart: usize, input: *const ()) -> ! {
+pub(crate) unsafe extern "C" fn start(
+    hart: usize,
+    input: *const (),
+    stack_top: usize,
+    material: &'static crate::metal::platform::boot::treaty::MajorMaterial,
+) -> ! {
     // The nonreturning platform callback borrows the original descriptions
     // from here. Keep a single retained copy off the nested admission frames.
     let mut descriptions = Descriptions::new();
-    let admission = unsafe { major::admit(hart, input, &mut descriptions) };
+    let admission = unsafe { major::admit(hart, input, stack_top, material, &mut descriptions) };
     let boot = Boot::from_major(admission, &descriptions);
     if !boot.stacks_in_image() {
         boot.terminal().reject(format_args!(
@@ -58,16 +61,16 @@ impl Boot<'_> {
 
     pub fn exclusions(&self) -> Exclusions<'_> {
         self.exclusions_for(
-            physical::extent(stack_range()),
-            physical::extent(crate::metal::platform::boot::trap_stack_range()),
+            physical::extent(self.stack_range()),
+            physical::extent(crate::metal::processor::execution::terminal::trap::stack_range()),
         )
     }
 
     fn stacks_in_image(&self) -> bool {
         let image = self.image();
-        image.covers(physical::extent(stack_range()))
+        image.covers(physical::extent(self.stack_range()))
             && image.covers(physical::extent(
-                crate::metal::platform::boot::trap_stack_range(),
+                crate::metal::processor::execution::terminal::trap::stack_range(),
             ))
     }
 }

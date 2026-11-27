@@ -97,10 +97,6 @@ impl Queue {
         })
     }
 
-    pub(super) fn generation(&self) -> u64 {
-        self.generation
-    }
-
     pub(super) fn open_generation(&self) -> Result<u64, Error> {
         self.state.admits_command()?;
         Ok(self.generation)
@@ -178,9 +174,7 @@ impl Queue {
             Invalidate::Device(_) => return Err(Error::Address),
             Invalidate::FirstStage => 1,
         };
-        if !matches!(self.state, State::Starting | State::Idle) {
-            return Err(Error::Mode);
-        }
+        self.state.admits_command()?;
         self.active(window, order)?;
         if Self::read(window, HEAD)? != self.tail || Self::read(window, TAIL)? != self.tail {
             return Err(self.fail());
@@ -204,8 +198,10 @@ impl Queue {
         window: &mut DeviceWindow<'_>,
         order: &DeviceOrder,
     ) -> Result<Invalidate, Error> {
-        let State::InFlight(operation) = self.state else {
-            return Err(Error::Mode);
+        let operation = match self.state {
+            State::InFlight(operation) => operation,
+            State::Fault(Some(_)) => return Err(Error::Unconfirmed),
+            _ => return Err(Error::Mode),
         };
         self.active(window, order)?;
         let head = Self::read(window, HEAD)?;

@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
+
 use core::fmt::Write;
 use kernel::entry::boot::Boot;
 use kernel::metal::platform::boot::treaty as boot_diagnostic;

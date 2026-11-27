@@ -3,6 +3,10 @@
 
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::metal::processor::treaty::Minor;
+use kernel::metal::{
+    processor::treaty::{LocalStorage, Stack},
+    sync::treaty::Supply,
+};
 
 use kernel::entry::boot;
 use uefi::prelude::*;
@@ -12,7 +16,9 @@ use fixture::q35::delay;
 
 mod scenario;
 
-static MINOR: Minor = Minor::new();
+static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 
 #[entry]
 fn main() -> Status {

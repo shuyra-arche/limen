@@ -7,7 +7,7 @@ use super::{
 use crate::metal::{
     interrupt::{
         riscv64::internal::supervisor::{Cause, Reception},
-        treaty::{Receive, claim::Sealed},
+        treaty::{ClaimConfirmation, ClaimId, Completion, HardwareClaim, Receive, claim::Sealed},
     },
     platform::description::devicetree::{DeviceTree, Error},
     processor::description::riscv64::cpu::RiscvCpus,
@@ -80,6 +80,16 @@ pub enum State {
 }
 
 impl State {
+    fn reborrowable_claim(self) -> Result<Option<(u64, u32)>, Failure> {
+        match self {
+            Self::Receiving(_) | Self::Completing(..) => Err(Failure::Unconfirmed),
+            Self::Received(round, source) | Self::Awaiting(round, source) => {
+                Ok(Some((round, source)))
+            }
+            Self::Prepared | Self::Opening | Self::Open | Self::Shutting | Self::Shut => Ok(None),
+        }
+    }
+
     pub(super) fn retains_claim(self, source: u32) -> bool {
         match self {
             Self::Receiving(_) => true,
@@ -381,8 +391,7 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
     ) -> Result<Option<Claim<'slot, 'access, 'storage, 'tree>>, Failure> {
         let context = self.controller.contexts[slot].0.unwrap();
         self.check(context, local)?;
-        let (State::Received(round, source) | State::Awaiting(round, source)) = context.state
-        else {
+        let Some((round, source)) = context.state.reborrowable_claim()? else {
             return Ok(None);
         };
         Ok(Some(Claim {
@@ -446,15 +455,36 @@ mod tests;
 
 impl crate::metal::interrupt::treaty::claim::Sealed for Claim<'_, '_, '_, '_> {}
 
-impl crate::metal::interrupt::treaty::HardwareClaim for Claim<'_, '_, '_, '_> {
+impl HardwareClaim for Claim<'_, '_, '_, '_> {
     type Error = Failure;
 
-    fn source_number(&self) -> u32 {
-        self.source()
+    fn identity(&self) -> ClaimId {
+        let controller = &self.owner.controller;
+        let context = controller.contexts[self.slot].0.unwrap();
+        ClaimId::new(
+            controller.domain.registers().start(),
+            context.index as u64,
+            self.round,
+            self.source,
+        )
     }
 
-    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::treaty::Completion, Failure> {
-        use crate::metal::interrupt::treaty::Completion;
-        unsafe { self.complete() }.map(|()| Completion::AwaitingConfirmation)
+    fn confirm(&mut self, evidence: ClaimConfirmation) -> Result<Completion, Failure> {
+        if evidence.id() != self.identity() {
+            return Err(Failure::Scope);
+        }
+        let context = self.owner.controller.contexts[self.slot].0.unwrap();
+        self.owner.check(context, self.local)?;
+        if context.state != State::Awaiting(self.round, self.source) {
+            return Err(Failure::Busy);
+        }
+        if !evidence.accepted() {
+            return Ok(Completion::AwaitingAcceptance);
+        }
+        unsafe { Claim::confirm(self) }.map(|()| Completion::Settled)
+    }
+
+    unsafe fn finish(&mut self) -> Result<Completion, Failure> {
+        unsafe { self.complete() }.map(|()| Completion::AwaitingAcceptance)
     }
 }

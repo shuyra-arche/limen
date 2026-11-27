@@ -59,3 +59,6 @@ pub use super::execution::terminal::Console;
 pub use super::execution::terminal::Terminal;
 #[cfg(limen_target)]
 pub use super::executor::launch::{Minor, StartError, Startup};
+
+#[cfg(limen_target)]
+pub use super::executor::local::{LocalStorage, stack::Stack};

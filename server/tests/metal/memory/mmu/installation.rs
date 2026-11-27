@@ -21,8 +21,8 @@ fn uncertain_readback_retains_the_original_operation() {
         Err(SwitchError::Unconfirmed)
     );
     assert_eq!(installation.retry(30), Err(SwitchError::Unconfirmed));
-    assert_eq!(installation.retry(10), Ok(20));
-    assert_eq!(installation.retry(20), Ok(20));
+    assert_eq!(installation.retry(10), Ok(Some(20)));
+    assert_eq!(installation.retry(20), Ok(None));
     assert_eq!(installation.pending(), Some((10, 20)));
 
     assert_eq!(installation.complete(20), Ok((10, 20)));
@@ -50,7 +50,7 @@ fn same_root_readback_does_not_excuse_a_changed_execution_profile() {
     install.issue(first, first, next).unwrap();
     assert_eq!(install.complete(wrong), Err(SwitchError::Unconfirmed));
     assert_eq!(install.retry(wrong), Err(SwitchError::Unconfirmed));
-    assert_eq!(install.retry(first), Ok(next));
+    assert_eq!(install.retry(first), Ok(Some(next)));
     assert_eq!(install.complete(next), Ok((first, next)));
 }
 
@@ -75,7 +75,7 @@ fn an_unrelated_arm_root_change_cannot_complete_the_original_install() {
     install.issue(first, first, next).unwrap();
     assert_eq!(install.complete(wrong), Err(SwitchError::Unconfirmed));
     assert_eq!(install.pending(), Some((first, next)));
-    assert_eq!(install.retry(next), Ok(next));
+    assert_eq!(install.retry(next), Ok(None));
     assert_eq!(install.complete(next), Ok((first, next)));
     install.issue(next, next, first).unwrap();
     assert_eq!(install.complete(first), Ok((next, first)));
@@ -95,6 +95,6 @@ fn satp_readback_carries_its_exact_mode_even_when_the_root_is_unchanged() {
     assert_eq!(install.complete(previous), Err(SwitchError::Unconfirmed));
     assert_eq!(install.retry(unrelated), Err(SwitchError::Unconfirmed));
     assert_eq!(install.pending(), Some((previous, requested)));
-    assert_eq!(install.retry(previous), Ok(requested));
+    assert_eq!(install.retry(previous), Ok(Some(requested)));
     assert_eq!(install.complete(requested), Ok((previous, requested)));
 }

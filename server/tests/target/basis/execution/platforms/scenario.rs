@@ -17,7 +17,7 @@ use kernel::{
         room::{Harts, Occupancy},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
-    entry::boot::{self, Boot},
+    entry::boot::Boot,
 };
 
 #[cfg(target_arch = "aarch64")]
@@ -151,6 +151,7 @@ pub(super) fn run(
     mut started: impl FnMut(&Startup),
 ) -> ! {
     MAJOR.store(major, Relaxed);
+    let major_stack = boot.stack_range();
     let runtime = Execution::new(
         boot.take_major().expect("original native major relation"),
         boot.terminal(),
@@ -168,7 +169,7 @@ pub(super) fn run(
     let mut schedule = || {
         let mark = core::hint::black_box(0u8);
         let address = core::hint::black_box(&mark) as *const u8 as usize;
-        assert!(!boot::stack_range().contains(&address));
+        assert!(!major_stack.contains(&address));
         let argument = ptr::from_ref(execution).expose_provenance();
 
         assert_eq!(

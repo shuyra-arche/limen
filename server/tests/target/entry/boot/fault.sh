@@ -23,9 +23,11 @@ for profile in $(jq -r '.[] | select(.id == "boot-handoff" and .platform == "rv6
     bss_start=$((16#$(symbol "$elf" _bss_start)))
     bss_end=$((16#$(symbol "$elf" _bss_end)))
     (( bss_end - bss_start > 8 ))
-    # Read the actual Rust object without adding a production linker symbol.
-    major=$(readelf -Ws "$elf" | awk '$4 == "OBJECT" && $3 == 32768 && $8 ~ /4boot5major5STACK$/ {print $2}')
-    major_top=$((16#$major + 32768))
+    # The trusted image supplies the stack. Check the same bounds the entry uses.
+    major_start=$((16#$(symbol "$elf" _major_stack_start)))
+    major_top=$((16#$(symbol "$elf" _major_stack_end)))
+    (( bss_start <= major_start && major_start < major_top && major_top <= bss_end ))
+    (( major_start % 16 == 0 && major_top % 16 == 0 ))
     IFS=' ' read -r text_address text_offset text_size < <(
         readelf -WS "$elf" | awk '{for (i=1; i<=NF; ++i) if ($i==".text" && $(i+1)=="PROGBITS") print $(i+2),$(i+3),$(i+4)}'
     )
@@ -52,10 +54,11 @@ for profile in $(jq -r '.[] | select(.id == "boot-handoff" and .platform == "rv6
     patched_hash=$(sha256sum "$fault" | cut -d' ' -f1)
     printf -v pc_hex '0x%x' "$pc"
     printf -v sp_hex '0x%x' "$major_top"
+    printf -v major_start_hex '0x%x' "$major_start"
     jq -n --arg source "$(jq -r .source "$candidate/inputs.json")" \
         --arg original "$hash" --arg patched "$patched_hash" \
-        --arg pc "$pc_hex" --arg sp "$sp_hex" --argjson offset "$position" \
-        '{source:$source,original_sha256:$original,patched_sha256:$patched,pc:$pc,interrupted_sp:$sp,file_offset:$offset,before:"a102",after:"0000"}' \
+        --arg pc "$pc_hex" --arg sp "$sp_hex" --arg start "$major_start_hex" --argjson offset "$position" \
+        '{source:$source,original_sha256:$original,patched_sha256:$patched,pc:$pc,interrupted_sp:$sp,major_stack_start:$start,file_offset:$offset,before:"a102",after:"0000"}' \
         > "$output/injection.json"
     # Reuse the existing bounded QEMU/QMP executor.
     "$runner" observe "$fault" "$output/run"

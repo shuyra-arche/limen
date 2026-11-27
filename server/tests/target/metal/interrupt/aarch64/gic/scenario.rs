@@ -1,9 +1,9 @@
 //! QEMU virt hands the guest an identity-mapped physical GIC with a single
 //! security state. Keep the PE IRQ/FIQ masks closed and poll its real IAR.
 
-use kernel::metal::interrupt::treaty::{AbsoluteTimer, Completion};
+use kernel::metal::interrupt::treaty::{AbsoluteTimer, ClaimId, Completion, HardwareClaim};
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-use kernel::metal::processor::treaty::{Minor, Startup};
+use kernel::metal::processor::treaty::{LocalStorage, Minor, Stack, Startup};
 
 #[path = "../../../../support/claim.rs"]
 mod claim_consumer;
@@ -41,7 +41,7 @@ use kernel::metal::{
         description::treaty::devicetree::DeviceTree, firmware::treaty::psci::PsciDescription,
     },
     processor::description::aarch64::cpu::Aarch64Cpus,
-    sync::treaty::LeafLock,
+    sync::treaty::{LeafLock, Supply},
 };
 use limen_treaty::model::{InternalAddress, PhysicalRange};
 
@@ -78,15 +78,15 @@ fn transmit(uart: &mut DeviceWindow<'_>) {
     sync();
 }
 
-fn wait_for_claim(receiver: &mut CpuInterface<'_>, expected: usize) {
+fn wait_for_claim(receiver: &mut CpuInterface<'_>, expected: usize) -> ClaimId {
     let start: u64;
     let frequency: u64;
     unsafe {
         asm!("mrs {}, CNTVCT_EL0", "mrs {}, CNTFRQ_EL0", out(reg) start, out(reg) frequency, options(nostack))
     };
     loop {
-        if claim_consumer::receive(receiver, expected as u32).is_some() {
-            return;
+        if let Some(claim) = claim_consumer::receive(receiver, expected as u32) {
+            return claim.identity();
         }
         let now: u64;
         unsafe { asm!("mrs {}, CNTVCT_EL0", out(reg) now, options(nostack)) };
@@ -97,7 +97,9 @@ fn wait_for_claim(receiver: &mut CpuInterface<'_>, expected: usize) {
     }
 }
 
-static MINOR: Minor = Minor::new();
+static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static MINOR_FRAME: LeafLock<Option<FrameHandoff<'static>>> = LeafLock::new(None);
 static MINOR_OBSERVED: AtomicBool = AtomicBool::new(false);
 static MINOR_SIGNAL: LeafLock<Option<Sgi<'static>>> = LeafLock::new(None);
@@ -393,6 +395,7 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
         asm!("mrs {}, ICC_IGRPEN1_EL1", "mrs {}, ICC_PMR_EL1", out(reg) old_group, out(reg) old_priority, options(nostack));
     }
     sync();
+    let mut prior_receipt: Option<ClaimId> = None;
     for split in [false, true] {
         let requested = (old_mode & !2) | (u64::from(split) << 1);
         unsafe { asm!("msr ICC_CTLR_EL1, {}", "isb", in(reg) requested, options(nostack)) };
@@ -437,9 +440,15 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
         ] {
             assert_eq!(spi.state(input), Ok(SpiState::Enabled));
             transmit(uart);
-            wait_for_claim(&mut receiver, input);
+            let receipt = wait_for_claim(&mut receiver, input);
+            if let Some(prior) = prior_receipt {
+                assert_eq!(receipt.controller(), prior.controller());
+                assert_eq!(receipt.context(), prior.context());
+                assert!(receipt.round() > prior.round());
+            }
+            prior_receipt = Some(receipt);
             assert_eq!(receiver.state(), State::Claimed(input as u32));
-            let mut claim = claim_consumer::pending(&mut receiver, input as u32);
+            let mut claim = claim_consumer::pending(&mut receiver, receipt);
             assert_eq!(claim.intid(), input as u32);
             assert!(unsafe { claim.deactivate() }.is_err());
             assert_eq!(unsafe { uart.read_u32(UART_STATUS) }.unwrap(), TX_INTERRUPT);
@@ -461,8 +470,15 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
             }
             assert_eq!(spi.active(input), Ok(false));
             assert_eq!(receiver.state(), State::Empty);
+            unsafe { route_consumer::resume(&mut spi.control(binding).unwrap()) };
+            assert_eq!(spi.state(input), Ok(SpiState::Enabled));
+            route_consumer::mask(&mut spi.control(binding).unwrap());
             unsafe { route_consumer::retire(&mut spi.control(binding).unwrap()) };
+            let mut replacement =
+                unsafe { spi.reserve(if input == id { route } else { second_route }) }.unwrap();
             assert!(spi.control(binding).is_err());
+            spi.cancel(&mut replacement).unwrap();
+            assert!(spi.cancel(&mut replacement).is_err());
         }
         local_frame = receiver
             .release()

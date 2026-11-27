@@ -7,10 +7,6 @@ pub(in crate::metal::sync) struct QueueNode {
 }
 
 impl QueueNode {
-    #[cfg_attr(
-        not(any(limen_target, test)),
-        expect(dead_code, reason = "the CPU startup supply constructs resident nodes")
-    )]
     pub(in crate::metal::sync) const fn new() -> Self {
         Self {
             next: AtomicPtr::new(core::ptr::null_mut()),

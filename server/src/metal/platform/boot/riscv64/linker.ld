@@ -33,8 +33,13 @@ SECTIONS
     *(.got .got.*)
   } :writable
 
-  .bss (NOLOAD) : ALIGN(8) {
+  .bss (NOLOAD) : ALIGN(16) {
     _bss_start = .;
+    _major_stack_start = .;
+    KEEP(*(.bss.limen_major_stack))
+    _major_stack_end = .;
+    ASSERT(_major_stack_end > _major_stack_start && (_major_stack_end & 15) == 0,
+           "image must supply a nonempty aligned major stack")
     *(.bss .bss.* .sbss .sbss.*)
     *(COMMON)
     . = ALIGN(8);

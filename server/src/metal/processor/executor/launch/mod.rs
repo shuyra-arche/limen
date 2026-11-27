@@ -6,11 +6,15 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use crate::metal::{
-    platform::boot::{self, STACK_BYTES},
-    processor::executor::local::{self, Storage, stack::Stack},
-    processor::treaty::can_switch,
-    sync::{TURN_CAPACITY, local::Supply},
+use crate::metal::processor::{
+    executor::{
+        entry,
+        local::{
+            self, LocalStorage,
+            stack::{Stack, StackExtent},
+        },
+    },
+    treaty::can_switch,
 };
 use core::ops::Range;
 
@@ -63,9 +67,9 @@ struct Launch {
 pub struct Minor {
     state: AtomicU32,
     launch: UnsafeCell<MaybeUninit<Launch>>,
-    stack: Stack<STACK_BYTES>,
+    stack: StackExtent,
     context: native::MinorContext,
-    local: Storage<TURN_CAPACITY>,
+    local: local::Material,
 }
 
 // The state word grants exactly one writer and releases the descriptor to
@@ -80,13 +84,17 @@ pub(in crate::metal) const HART_OFFSET: usize =
 pub(in crate::metal) const STACK_OFFSET: usize =
     offset_of!(Minor, launch) + offset_of!(Launch, stack);
 impl Minor {
-    pub const fn new() -> Self {
+    /// Construct a launch record with the original fixed startup materials.
+    pub const fn new<const BYTES: usize, const N: usize>(
+        stack: &'static Stack<BYTES>,
+        local: &'static LocalStorage<N>,
+    ) -> Self {
         Self {
             state: AtomicU32::new(State::Idle as u32),
             launch: UnsafeCell::new(MaybeUninit::uninit()),
-            stack: Stack::new(),
+            stack: stack.extent(),
             context: native::minor_context(),
-            local: Storage::new(Supply::new()),
+            local: local.material(),
         }
     }
 
@@ -103,7 +111,7 @@ impl Minor {
     }
 
     pub fn stack_range(&self) -> Range<usize> {
-        self.stack.top() - STACK_BYTES..self.stack.top()
+        self.stack.range()
     }
 
     /// Request startup of an exclusively owned, inactive CPU.
@@ -111,6 +119,8 @@ impl Minor {
     /// # Safety
     /// Call on the major CPU after Boot delivery. The image, stacks, page
     /// tables and launch record must remain reserved and identity-addressable.
+    /// Dedicate this stack and local supply to this record. Keep both reserved
+    /// through an unconfirmed wake, or for the lifetime of the entered CPU.
     /// The caller supplies a trusted entry within the shared kernel image.
     /// The entry must fit the minor stack and accept the supplied argument.
     /// Use the firmware-verified startup method for this target. On x86, keep
@@ -155,20 +165,14 @@ impl Minor {
     }
 }
 
-impl Default for Minor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub(crate) extern "C" fn arrive(hart: usize, minor: &'static Minor) -> ! {
     let launch = unsafe { (&*minor.launch.get()).assume_init_ref() };
-    let sp = local::stack_pointer();
-    assert!(hart == launch.hart && minor.stack_range().contains(&sp));
-    assert!(minor.established(hart));
+    assert_eq!(hart, launch.hart);
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    assert!(entry::matches_identity(hart));
     // `Entered` identifies this CPU as the sole initializer of this resident
     // local record. The terminal vectors cannot observe its partial setup.
-    let entry = boot::entry().expect("verified minor entry");
+    let entry = entry::admit(minor.stack_range()).expect("verified minor entry");
     unsafe { minor.local.bind().install(hart, entry) };
     assert!(can_switch(), "minor Hart protection is not idle");
     minor.state.store(State::Ready as u32, Ordering::Release);

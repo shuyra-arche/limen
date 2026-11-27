@@ -1,54 +1,6 @@
 pub(crate) use super::handoff::sbi::admit;
-use crate::metal::{
-    interrupt::riscv64::internal::supervisor,
-    memory::mmu::riscv64::internal::context::Context,
-    platform::boot::trap as diagnostic,
-    processor::{
-        description::riscv64::status,
-        executor::{local, riscv64::native},
-    },
-};
-use core::arch::{asm, naked_asm};
-
-// Both entries establish supervisor state before using either stack.
-macro_rules! establish_supervisor {
-    () => {
-        r#"
-        csrci sstatus, {interrupt_enable}
-        csrw sie, zero
-        li t0, {extensions}
-        csrc sstatus, t0
-        .option push
-        .option norelax
-        la gp, __global_pointer$
-        .option pop
-        mv tp, zero
-        "#
-    };
-}
-
-pub(in crate::metal) use establish_supervisor;
 
 mod major;
-
-pub(crate) fn established() -> bool {
-    let status = native::status();
-    status.masked()
-        && status.extensions_off()
-        && supervisor::all_masked()
-        && Context::current() == Some(Context::BARE)
-        && entry().is_some()
-}
-
-pub(in crate::metal) fn entry() -> Option<local::Entry> {
-    local::Entry::admit(
-        native::Entry {
-            vector: trap as *const () as usize,
-            scratch: (&raw const diagnostic::TOP).addr(),
-        },
-        diagnostic::stack_range(),
-    )
-}
 
 pub(crate) fn image() -> core::ops::Range<usize> {
     // These boundaries describe the final linked image, including the platform
@@ -60,36 +12,10 @@ pub(crate) fn image() -> core::ops::Range<usize> {
     (&raw const _kernel_base).addr()..(&raw const _kernel_edge).addr()
 }
 
-#[unsafe(naked)]
-#[rustc_align(4)]
-pub(in crate::metal) unsafe extern "C" fn trap() -> ! {
-    naked_asm!(
-        "csrr t0, sscratch",
-        "amoswap.d.aq t0, zero, (t0)",
-        "beqz t0, 2f",
-        "mv a0, sp",
-        "mv sp, t0",
-        "tail {capture}",
-        "2: wfi",
-        "j 2b",
-        capture = sym capture,
-    );
-}
-
-extern "C" fn capture(stack: usize) -> ! {
-    let (cause, pc, value, status);
-    unsafe {
-        asm!(
-            "csrr {}, scause", "csrr {}, sepc", "csrr {}, stval", "csrr {}, sstatus",
-            out(reg) cause, out(reg) pc, out(reg) value, out(reg) status, options(nomem, nostack)
-        )
+pub(crate) fn linked_stack() -> core::ops::Range<usize> {
+    unsafe extern "C" {
+        static _major_stack_start: u8;
+        static _major_stack_end: u8;
     }
-    diagnostic::Trap {
-        cause,
-        pc,
-        value,
-        stack,
-        status,
-    }
-    .report()
+    (&raw const _major_stack_start).addr()..(&raw const _major_stack_end).addr()
 }

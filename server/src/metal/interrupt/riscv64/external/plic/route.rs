@@ -5,7 +5,10 @@ use super::{
     registers::{enable, priority},
     source::Priority,
 };
-use crate::metal::{interrupt::treaty::RouteControl, platform::description::devicetree::Error};
+use crate::metal::{
+    interrupt::treaty::{RouteControl, RouteOperation, RouteState as SharedState},
+    platform::description::devicetree::Error,
+};
 
 const PENDING: usize = 0x1000;
 
@@ -75,15 +78,39 @@ impl crate::metal::interrupt::treaty::route::Sealed for Control<'_, '_, '_, '_> 
 
 impl RouteControl for Control<'_, '_, '_, '_> {
     type Failure = Failure;
+    type Retired = ();
+
+    fn state(&self) -> SharedState {
+        let binding = &self.owner.controller.routes[self.binding.slot];
+        match binding.0.map(|binding| binding.state) {
+            Some(RouteState::Prepared) => SharedState::Prepared,
+            Some(RouteState::Prioritizing | RouteState::Enabling) => {
+                SharedState::Unconfirmed(RouteOperation::Publish)
+            }
+            Some(RouteState::Enabled) => SharedState::Open,
+            Some(RouteState::Masking) => SharedState::Unconfirmed(RouteOperation::Mask),
+            Some(RouteState::Masked) => SharedState::Masked,
+            Some(RouteState::Reprioritizing) => SharedState::Unconfirmed(RouteOperation::Resume),
+            Some(RouteState::Disabling | RouteState::Restoring) => {
+                SharedState::Unconfirmed(RouteOperation::Retire)
+            }
+            None => SharedState::Retired,
+        }
+    }
 
     unsafe fn publish(&mut self) -> Result<(), Failure> {
         let slot = self.owner.bound_slot(self.binding)?;
-        unsafe { self.owner.enable(slot) }
+        unsafe { self.owner.enable(slot, RouteOperation::Publish) }
     }
 
     fn mask(&mut self) -> Result<(), Failure> {
         let slot = self.owner.bound_slot(self.binding)?;
         self.owner.mask(slot)
+    }
+
+    unsafe fn resume(&mut self) -> Result<(), Failure> {
+        let slot = self.owner.bound_slot(self.binding)?;
+        unsafe { self.owner.enable(slot, RouteOperation::Resume) }
     }
 
     unsafe fn retire(&mut self) -> Result<(), Failure> {
@@ -180,7 +207,7 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
     pub fn control<'route>(
         &'route mut self,
         binding: &'route mut BoundRoute<'tree>,
-    ) -> Result<impl RouteControl<Failure = Failure> + 'route, Failure> {
+    ) -> Result<impl RouteControl<Failure = Failure, Retired = ()> + 'route, Failure> {
         self.bound_slot(binding)?;
         Ok(Control {
             owner: self,
@@ -228,22 +255,24 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
     /// # Safety
     /// A compatible receiver and the source's handler are ready. An open
     /// Context may receive the interrupt immediately.
-    unsafe fn enable(&mut self, slot: usize) -> Result<(), Failure> {
+    unsafe fn enable(&mut self, slot: usize, operation: RouteOperation) -> Result<(), Failure> {
         let binding = self.controller.routes[slot].0.unwrap();
         let source = self.controller.sources[binding.source].0.unwrap();
         let id = source.id;
         if !self.state(binding.context)?.excludes_source(id) || self.holds_claim(id) {
             return Err(Failure::Busy);
         }
-        match binding.state {
-            RouteState::Prepared | RouteState::Prioritizing => {
+        match (operation, binding.state) {
+            (RouteOperation::Publish, RouteState::Prepared | RouteState::Prioritizing) => {
                 self.set_route(slot, RouteState::Prioritizing);
                 self.program(priority(id), source.requested)?;
                 self.set_route(slot, RouteState::Enabling);
                 self.set_enabled(binding.context, id, true)?;
             }
-            RouteState::Enabling => self.set_enabled(binding.context, id, true)?,
-            RouteState::Masking | RouteState::Masked | RouteState::Reprioritizing => {
+            (RouteOperation::Publish, RouteState::Enabling) => {
+                self.set_enabled(binding.context, id, true)?;
+            }
+            (RouteOperation::Resume, RouteState::Masked | RouteState::Reprioritizing) => {
                 self.set_route(slot, RouteState::Reprioritizing);
                 self.program(priority(id), source.requested)?;
             }
@@ -276,7 +305,14 @@ impl<'access, 'storage, 'tree> Access<'access, 'storage, 'tree> {
         let binding = self.controller.routes[slot].0.unwrap();
         let source = self.controller.sources[binding.source].0.unwrap();
         let id = source.id;
-        if !self.state(binding.context)?.excludes_source(id)
+        if !matches!(
+            binding.state,
+            RouteState::Prepared
+                | RouteState::Enabled
+                | RouteState::Masked
+                | RouteState::Disabling
+                | RouteState::Restoring
+        ) || !self.state(binding.context)?.excludes_source(id)
             || self.holds_claim(id)
             || self.read(PENDING + id as usize / 32 * 4) & (1 << (id % 32)) != 0
         {

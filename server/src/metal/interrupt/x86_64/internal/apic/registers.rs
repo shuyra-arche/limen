@@ -4,7 +4,7 @@ use limen_treaty::model::{ByteLength, PhysicalAddress, PhysicalRange};
 
 use crate::metal::platform::description::acpi::Madt;
 
-use super::{LocalApic, ipi::IpiTarget, launch};
+use super::{LocalApic, ipi::IpiIssue, launch};
 
 pub(super) const PAGE: u64 = 4096;
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
@@ -78,13 +78,13 @@ pub(super) enum Icr {
     Idle,
     Launching(launch::Effect),
     LaunchUnconfirmed(launch::Effect),
-    Notifying(IpiTarget),
+    Notifying(IpiIssue),
 }
 
 impl Icr {
-    pub(super) fn notification(self) -> Option<IpiTarget> {
+    pub(super) fn notification(self) -> Option<IpiIssue> {
         match self {
-            Self::Notifying(target) => Some(target),
+            Self::Notifying(issue) => Some(issue),
             _ => None,
         }
     }

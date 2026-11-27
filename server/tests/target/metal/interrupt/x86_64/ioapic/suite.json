@@ -13,14 +13,16 @@
     "server/src/metal/platform/description/treaty/devicetree.rs",
     "server/src/metal/memory/mod.rs",
     "server/src/metal/mod.rs",
-    "server/src/metal/processor/execution/terminal/**",
+    "server/src/metal/processor/execution/mod.rs",
+    "server/src/metal/processor/execution/terminal/mod.rs",
+    "server/src/metal/processor/execution/terminal/console.rs",
+    "server/src/metal/processor/execution/terminal/trap.rs",
+    "server/src/metal/processor/executor/entry/mod.rs",
     "server/src/metal/platform/boot/treaty/mod.rs",
     "server/src/metal/platform/boot/handoff/mod.rs",
     "server/src/metal/platform/boot/handoff/uefi.rs",
     "server/src/metal/platform/boot/major.rs",
     "server/src/metal/platform/boot/mod.rs",
-    "server/src/metal/platform/boot/services.rs",
-    "server/src/metal/platform/boot/trap.rs",
     "server/src/metal/platform/description/acpi/mod.rs",
     "server/src/metal/platform/description/treaty/acpi.rs",
     "server/src/metal/platform/description/mod.rs",
@@ -43,7 +45,9 @@
     "server/tests/target/support/uefi/lib.rs",
     "server/src/metal/interrupt/treaty/mod.rs",
     "server/src/metal/interrupt/treaty/claim.rs",
-    "server/tests/target/support/interrupt.rs"
+    "server/tests/target/support/interrupt.rs",
+    "server/src/metal/interrupt/treaty/route.rs",
+    "server/tests/target/support/route.rs"
   ],
   "run": {
     "kind": "board-boot",
@@ -53,6 +57,8 @@
     "launcher": "support/uefi/run.sh",
     "board_sources": {
       "q35": [
+        "server/src/metal/processor/executor/entry/x86_64.rs",
+        "server/src/metal/processor/execution/terminal/x86_64.rs",
         "server/src/metal/platform/boot/x86_64/**",
         "server/src/metal/processor/executor/x86_64/**",
         "server/src/metal/processor/description/x86_64/mod.rs",
@@ -74,7 +80,7 @@
     "launch": {
       "q35": {
         "expects": [
-          "PASS q35 interrupt uart=1 ioapic=1 vector=1 eoi=1 masked=1"
+          "PASS q35 interrupt uart=2 ioapic=1 vector=1 eoi=2 masked=1 resumed=1"
         ],
         "devices": [
           {

@@ -1,8 +1,15 @@
 //! OpenSBI enters the major CPU with (hart, DTB).
-use super::trap;
-use crate::metal::platform::boot::trap as diagnostic;
-use crate::metal::platform::boot::{STACK_BYTES, major::STACK};
+use crate::metal::platform::boot::treaty::MajorMaterial;
+use crate::metal::processor::{
+    description::riscv64::status,
+    execution::terminal::{riscv64::trap, trap as diagnostic},
+    executor::entry::riscv64::establish_supervisor,
+};
 use core::arch::naked_asm;
+
+unsafe extern "Rust" {
+    static LIMEN_MAJOR_MATERIAL: MajorMaterial;
+}
 
 // OpenSBI hands this entry to one hart. Firmware holds the other harts until
 // HSM startup, which the platform can request only after this handoff.
@@ -12,9 +19,7 @@ use core::arch::naked_asm;
 unsafe extern "C" fn major(hart: usize, dtb: usize) -> ! {
     naked_asm!(
         establish_supervisor!(),
-        "la sp, {stack}",
-        "li t0, {size}",
-        "add sp, sp, t0",
+        "la sp, _major_stack_end",
         "la t0, {top}",
         "csrw sscratch, t0",
         "la t0, {vector}",
@@ -28,11 +33,12 @@ unsafe extern "C" fn major(hart: usize, dtb: usize) -> ! {
         "sd zero, 0(t0)",
         "addi t0, t0, 8",
         "j 2b",
-        "3: tail {loaded}",
-        interrupt_enable = const super::status::SIE,
-        extensions = const super::status::WRITABLE_EXTENSIONS,
-        stack = sym STACK,
-        size = const STACK_BYTES,
+        "3: mv a2, sp",
+        "la a3, {material}",
+        "tail {loaded}",
+        interrupt_enable = const status::SIE,
+        extensions = const status::WRITABLE_EXTENSIONS,
+        material = sym LIMEN_MAJOR_MATERIAL,
         top = sym diagnostic::TOP,
         vector = sym trap,
         loaded = sym crate::entry::boot::start,

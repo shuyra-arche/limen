@@ -9,7 +9,7 @@ use super::{
 };
 use crate::metal::memory::{
     access::treaty::device::DeviceWindow,
-    mmu::treaty::{Retirement, Unbind},
+    mmu::treaty::{BindingControl, BindingEffect, BindingProgress, BindingRejection},
 };
 use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress};
 use std::boxed::Box;
@@ -157,41 +157,55 @@ fn only_the_original_running_batch_can_release_the_binding() {
     controller.progress = Progress::Ready;
     controller.write(STATUS, RUNNING);
 
-    assert_eq!(
-        unsafe { controller.bind(context(0x30, 1)) },
-        Err(Error::Pending)
-    );
+    let publication = unsafe { controller.begin_binding(context(0x30, 1)) }.unwrap();
     let original = controller.bindings[0].unwrap();
+    assert_eq!(publication.effect(), BindingEffect::Bound(original));
+    assert_eq!(controller.pending_change(original), Some(publication));
+    assert_eq!(controller.binding(0x30), None);
+    assert_eq!(
+        unsafe { controller.begin_binding(context(0x30, 1)) },
+        Err(BindingRejection::Rejected(Error::Occupied))
+    );
+    assert_eq!(
+        controller.observe_change(publication),
+        BindingProgress::Pending
+    );
     let completion = controller.storage.completion.0.0.get();
     unsafe { completion.write_volatile(original.number) };
-    assert_eq!(controller.poll(), Ok(()));
+    assert_eq!(controller.poll(), Err(Error::Occupied));
+    assert_eq!(
+        controller.observe_change(publication),
+        BindingProgress::Confirmed(BindingEffect::Bound(original))
+    );
     assert_eq!(controller.binding(0x30), Some(original));
 
-    let ticket = unsafe { controller.retire(original) }.unwrap();
+    let ticket = unsafe { controller.begin_retirement(original) }.unwrap();
+    assert_eq!(
+        controller.observe_change(publication),
+        BindingProgress::Stale
+    );
     let other = Binding {
         epoch: original.epoch + 1,
         ..original
     };
-    assert!(controller.pending_retirement(other).is_none());
+    assert!(controller.pending_change(other).is_none());
     assert_eq!(controller.poll(), Err(Error::Occupied));
     assert_eq!(controller.storage.table.0.0[0x30], DENY);
     unsafe { completion.write_volatile(original.number) };
-    assert_eq!(
-        controller.observe_retirement(&ticket),
-        Ok(Retirement::Pending)
-    );
+    assert_eq!(controller.observe_change(ticket), BindingProgress::Pending);
     assert_eq!(controller.bindings[0], Some(original));
 
     unsafe { completion.write_volatile(original.retirement) };
     controller.write(STATUS, 0);
     assert_eq!(
-        controller.observe_retirement(&ticket),
-        Err(Error::Unconfirmed)
+        controller.observe_change(ticket),
+        BindingProgress::Unconfirmed(Error::Unconfirmed)
     );
-    let recovered = controller.pending_retirement(original).unwrap();
+    let recovered = controller.pending_change(original).unwrap();
+    assert_eq!(recovered, ticket);
     assert_eq!(
-        controller.observe_retirement(&recovered),
-        Err(Error::Unconfirmed)
+        controller.observe_change(recovered),
+        BindingProgress::Unconfirmed(Error::Unconfirmed)
     );
     assert_eq!(controller.bindings[0], Some(original));
     assert_eq!(controller.storage.table.0.0[0x30], DENY);

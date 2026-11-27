@@ -70,8 +70,7 @@ change server/src/metal/processor/executor/local/protection.rs
 change server/src/metal/sync/turn/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
-for source in server/src/metal/processor/execution/mod.rs \
-              server/src/metal/processor/execution/cooperative/mod.rs \
+for source in server/src/metal/processor/execution/cooperative/mod.rs \
               server/src/metal/processor/treaty/cooperative.rs; do
     change "$source"
     expect_suites boot-handoff kernel-execution kernel-execution-harts platform-execution riscv-module-execution
@@ -171,8 +170,23 @@ change server/src/entry/boot/handoff.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/platform/boot/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/platform/boot/trap.rs
-[[ $(bash "$discover" . "$base") == "$full" ]]
+for source in server/src/metal/processor/execution/mod.rs \
+              server/src/metal/processor/execution/terminal/trap.rs \
+              server/src/metal/processor/executor/entry/mod.rs; do
+    change "$source"
+    [[ $(bash "$discover" . "$base") == "$full" ]]
+    bash "$checks" . "$base" | jq -e '.host and .rv64 and (.runner | not)' >/dev/null
+done
+for pair in 'riscv64 rv64' 'aarch64 virt' 'x86_64 q35'; do
+    read -r arch board <<<"$pair"
+    for owner in execution/terminal executor/entry; do
+        change "server/src/metal/processor/$owner/$arch.rs"
+        [[ $(boards) == "$board" ]]
+        bash "$checks" . "$base" | jq -e --arg board "$board" '
+            if $board == "rv64" then .rv64 and (.runner | not)
+            else ((.host or .runner or .rv64) | not) end' >/dev/null
+    done
+done
 change server/src/metal/platform/boot/major.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/platform/boot/handoff/mod.rs
@@ -230,8 +244,10 @@ for source in server/src/metal/interrupt/riscv64/external/aplic/{mod,description
 done
 change server/src/metal/interrupt/riscv64/internal/timer/mod.rs
 expect_suites rv64-interrupt rv64-plic-sstc
-change server/src/metal/memory/mmu/riscv64/external/iommu/queue.rs
-expect_suites rv64-iommu
+for owner in mod binding command directory queue registers translation; do
+    change "server/src/metal/memory/mmu/riscv64/external/iommu/$owner.rs"
+    expect_suites rv64-iommu
+done
 for owner in mod binding command directory fault translation; do
     change "server/src/metal/memory/mmu/x86_64/external/vtd/$owner.rs"
     expect_suites x86-64-vtd
@@ -240,8 +256,10 @@ for owner in mod binding directory queue; do
     change "server/src/metal/memory/mmu/x86_64/external/amdvi/$owner.rs"
     expect_suites x86-64-amdvi
 done
-change server/src/metal/memory/mmu/aarch64/external/smmu/mod.rs
-expect_suites aarch64-smmu
+for owner in mod binding command directory queue registers translation; do
+    change "server/src/metal/memory/mmu/aarch64/external/smmu/$owner.rs"
+    expect_suites aarch64-smmu
+done
 change server/src/metal/memory/mmu/x86_64/internal/installation.rs
 expect_suites x86-64-paging
 bash "$checks" . "$base" | jq -e '((.host or .runner or .rv64) | not)' >/dev/null
@@ -289,8 +307,8 @@ change server/src/metal/interrupt/treaty/absolute.rs
 expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc
 for source in server/src/metal/interrupt/treaty/route.rs server/tests/target/support/route.rs; do
     change "$source"
-    expect_suites aarch64-gic rv64-plic-sstc
-    [[ $(boards) == 'rv64 virt' ]]
+    expect_suites aarch64-gic rv64-plic-sstc x86-64-ioapic
+    [[ $(boards) == 'q35 rv64 virt' ]]
 done
 change server/tests/target/support/interrupt.rs
 expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc x86-64-ioapic
@@ -300,8 +318,10 @@ change server/src/metal/interrupt/treaty/claim.rs
 expect_suites aarch64-gic rv64-interrupt rv64-plic-sstc x86-64-ioapic
 change server/src/metal/interrupt/treaty/mod.rs
 expect_suites aarch64-gic rv64-interrupt rv64-ipi rv64-plic-sstc x86-64-ioapic x86-64-local-apic-ipi
-change server/src/metal/memory/mmu/treaty/retirement.rs
-expect_suites aarch64-smmu rv64-iommu x86-64-amdvi x86-64-vtd
+for source in server/src/metal/memory/mmu/treaty/binding.rs server/tests/target/support/paging/binding.rs; do
+    change "$source"
+    expect_suites aarch64-smmu rv64-iommu x86-64-amdvi x86-64-vtd
+done
 change server/src/metal/memory/mmu/treaty/mod.rs
 expect_suites aarch64-paging aarch64-smmu module-execution riscv-module-execution rv64-iommu x86-64-amdvi x86-64-paging x86-64-vtd
 change server/tests/target/support/pci/edu.rs
@@ -328,8 +348,6 @@ change server/src/metal/platform/boot/treaty/mod.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 change server/src/metal/processor/execution/terminal/console.rs
 bash "$checks" . "$base" | jq -e '.host' >/dev/null
-[[ $(bash "$discover" . "$base") == "$full" ]]
-change server/src/metal/platform/boot/services.rs
 [[ $(bash "$discover" . "$base") == "$full" ]]
 for source in server/src/metal/platform/description/devicetree/mod.rs \
               server/src/metal/platform/description/treaty/devicetree.rs; do

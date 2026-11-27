@@ -49,7 +49,9 @@ pub struct LocalApic<'map> {
     window: DeviceWindow<'map>,
     probe: Probe,
     icr: Icr,
+    ipi_round: u64,
     reception: Reception,
+    reception_round: u64,
     vectors: [u64; 4],
     timer: timer::Slot,
 }
@@ -88,7 +90,9 @@ impl<'map> LocalApic<'map> {
             window,
             probe,
             icr: Icr::Idle,
+            ipi_round: 0,
             reception: Reception::Idle,
+            reception_round: 0,
             vectors: [0; 4],
             timer: timer::Slot::Unobserved,
         })
@@ -101,7 +105,7 @@ mod timer;
 pub use timer::{Countdown, Divider, TimerState};
 
 mod ipi;
-pub use ipi::{IpiRoute, IpiSend, IpiTarget};
+pub use ipi::{IpiIssue, IpiRoute, IpiTarget};
 
 #[cfg(all(limen_target, target_arch = "x86_64"))]
 pub(in crate::metal) mod native;

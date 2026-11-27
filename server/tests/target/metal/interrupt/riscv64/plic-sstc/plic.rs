@@ -1,6 +1,8 @@
 //! QEMU virt: two physical source routes in the original supervisor context.
 
-use kernel::metal::interrupt::treaty::Completion;
+use kernel::metal::interrupt::treaty::{
+    ClaimConfirmation, ClaimId, Completion, HardwareClaim, Receive,
+};
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 
 #[path = "../../../../support/claim.rs"]
@@ -105,6 +107,7 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
     assert_eq!(rtc_id / 32, uart_id / 32, "sources share an enable word");
     let timebase = RiscvTimebase::describe(cpus).unwrap().unwrap();
     let clock = unsafe { Counter::admit(timebase, hart) }.unwrap();
+    let physical = domain.registers().start();
     let mut mapping = mapped(domain.registers());
     // QEMU virt uses the SiFive-compatible three-bit priority/threshold.
     // The chosen policy is nondefault so a constant mechanism cannot pass.
@@ -174,7 +177,7 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
         assert_eq!(unsafe { serial.read_u8(3) }.unwrap() & 0x80, 0);
         assert!(domain.claim(index, &local.external).unwrap().is_none());
 
-        let mut prior = 0;
+        let mut prior: Option<ClaimId> = None;
         for round in 0..2 {
             unsafe {
                 serial.write_u8(1, 2).unwrap();
@@ -182,14 +185,15 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
             }
             synchronize();
             receive(&clock);
-            {
+            let receipt = {
                 let mut receiver = domain.receiver(destination, &local.external).unwrap();
                 let claim = claim_consumer::receive(&mut receiver, uart_id).unwrap();
                 assert!(claim.expected());
-                assert_eq!(claim.source(), uart_id);
-                assert!(claim.round() > prior);
-                prior = claim.round();
-            }
+                claim.identity()
+            };
+            assert_eq!(receipt.context(), index as u64);
+            assert_eq!(receipt.controller(), physical);
+            assert!(prior.is_none_or(|old| receipt.round() > old.round()));
             assert_eq!(unsafe { serial.read_u8(2) }.unwrap() & 0x0f, 2);
             unsafe { serial.write_u8(1, 0) }.unwrap();
             assert_eq!(unsafe { serial.read_u8(1) }, Ok(0));
@@ -197,20 +201,29 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
             assert_eq!(domain.route_state(uart_id), Ok(RouteState::Masked));
             assert_eq!(domain.route_state(rtc_id), Ok(RouteState::Enabled));
             let mut receiver = domain.receiver(destination, &local.external).unwrap();
-            let mut original = claim_consumer::pending(&mut receiver, uart_id);
-            assert_eq!(original.round(), prior);
-            assert!(original.expected());
+            {
+                let mut original = claim_consumer::pending(&mut receiver, receipt);
+                assert!(original.expected());
+                unsafe { consumer::finish(&mut original, uart_id, Completion::AwaitingAcceptance) };
+            }
+            let mut original = claim_consumer::pending(&mut receiver, receipt);
+            if let Some(old) = prior {
+                assert!(
+                    HardwareClaim::confirm(&mut original, ClaimConfirmation::observe(old)).is_err()
+                );
+            }
             // QEMU virt accepts this enabled context's exact completion on the
             // original MMIO write. Device drain is asserted independently.
-            unsafe { consumer::finish(&mut original, uart_id, Completion::AwaitingConfirmation) };
-            unsafe { original.confirm() }.unwrap();
+            unsafe { confirm_accepted(&mut original, receipt) };
+            assert!(receiver.pending_claim().unwrap().is_none());
+            prior = Some(receipt);
             if round == 0 {
-                unsafe { route_consumer::publish(&mut domain.control(&mut uart_binding).unwrap()) };
+                unsafe { route_consumer::resume(&mut domain.control(&mut uart_binding).unwrap()) };
             }
         }
         unsafe { route_consumer::retire(&mut domain.control(&mut uart_binding).unwrap()) };
         assert_eq!(domain.route_state(rtc_id), Ok(RouteState::Enabled));
-        (prior, rtc_binding)
+        (prior.unwrap(), rtc_binding)
     };
     assert_eq!(unsafe { mapping.read_u32(threshold) }.unwrap(), 1);
     assert_eq!(unsafe { mapping.read_u32(rtc_priority) }.unwrap(), 3);
@@ -240,29 +253,24 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
     {
         let mut domain = unsafe { controller.access(&mut mapping, Barrier::native()) }.unwrap();
         assert!(domain.claim(index, &local.external).unwrap().is_none());
-        unsafe { route_consumer::publish(&mut domain.control(&mut rtc_binding).unwrap()) };
+        unsafe { route_consumer::resume(&mut domain.control(&mut rtc_binding).unwrap()) };
     }
     receive(&clock);
-    {
+    let receipt = {
         let mut domain = unsafe { controller.access(&mut mapping, Barrier::native()) }.unwrap();
         let mut receiver = domain.receiver(destination, &local.external).unwrap();
         let claim = claim_consumer::receive(&mut receiver, rtc_id).unwrap();
         assert!(claim.expected());
-        assert_eq!(claim.source(), rtc_id);
-        assert!(claim.round() > prior);
-    }
+        assert!(claim.identity().round() > prior.round());
+        claim.identity()
+    };
     clear_alarm(&mut alarm);
     let mut domain = unsafe { controller.access(&mut mapping, Barrier::native()) }.unwrap();
     let mut receiver = domain.receiver(destination, &local.external).unwrap();
-    let mut original = claim_consumer::pending(&mut receiver, rtc_id);
-    assert_eq!(
-        original.source(),
-        rtc_id,
-        "original claim survives access return"
-    );
+    let mut original = claim_consumer::pending(&mut receiver, receipt);
     unsafe {
-        original.complete().unwrap();
-        original.confirm().unwrap();
+        consumer::finish(&mut original, rtc_id, Completion::AwaitingAcceptance);
+        confirm_accepted(&mut original, receipt);
     }
     assert!(domain.claim(index, &local.external).unwrap().is_none());
     unsafe {
@@ -281,4 +289,19 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
     boot_diagnostic::write(
         "\nPASS plic uart=2 rtc=1 complete=3 contexts=2 shared-enable=1 duplicate=0 restored=1\n",
     );
+}
+
+/// # Safety
+/// The target has established acceptance by this exact original gateway.
+unsafe fn confirm_accepted(claim: &mut impl HardwareClaim, original: ClaimId) {
+    assert_eq!(claim.identity(), original);
+    assert!(
+        HardwareClaim::confirm(claim, ClaimConfirmation::observe(original))
+            .is_ok_and(|state| state == Completion::AwaitingAcceptance)
+    );
+    let evidence = unsafe { ClaimConfirmation::platform_accepted(original) };
+    assert!(
+        HardwareClaim::confirm(claim, evidence).is_ok_and(|state| state == Completion::Settled)
+    );
+    assert!(HardwareClaim::confirm(claim, evidence).is_err());
 }

@@ -1,6 +1,12 @@
 #![no_std]
 #![no_main]
 
+use kernel::metal::{
+    processor::treaty::{LocalStorage, Stack},
+    sync::treaty::Supply,
+};
+kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
+
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::metal::processor::treaty::{Minor, Startup};
 
@@ -26,7 +32,9 @@ mod ipi;
 #[path = "../../../../support/riscv64/reception.rs"]
 mod reception;
 
-static MINOR: Minor = Minor::new();
+static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static READY: AtomicUsize = AtomicUsize::new(0);
 static MAILBOX: ipi::Mailbox = ipi::Mailbox::new();
 

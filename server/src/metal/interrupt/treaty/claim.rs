@@ -1,6 +1,85 @@
 //! Reception and completion on an already bound interrupt interface.
 
+use limen_treaty::model::PhysicalAddress;
+
 pub trait Sealed {}
+
+/// Identity of an original claim in one continuously admitted receiver.
+/// This observation does not grant access to a controller or its claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimId {
+    controller: PhysicalAddress,
+    context: u64,
+    round: u64,
+    source: u32,
+}
+
+impl ClaimId {
+    pub(in crate::metal::interrupt) fn new(
+        controller: PhysicalAddress,
+        context: u64,
+        round: u64,
+        source: u32,
+    ) -> Self {
+        Self {
+            controller,
+            context,
+            round,
+            source,
+        }
+    }
+
+    pub fn controller(self) -> PhysicalAddress {
+        self.controller
+    }
+
+    pub fn context(self) -> u64 {
+        self.context
+    }
+
+    pub fn round(self) -> u64 {
+        self.round
+    }
+
+    pub fn source(self) -> u32 {
+        self.source
+    }
+}
+
+/// Evidence for the completion of one original claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimConfirmation {
+    id: ClaimId,
+    accepted: bool,
+}
+
+impl ClaimConfirmation {
+    /// Read native confirmation of the retained effect.
+    pub fn observe(id: ClaimId) -> Self {
+        Self {
+            id,
+            accepted: false,
+        }
+    }
+
+    /// Present qualified platform evidence for a receiver without native readback.
+    ///
+    /// # Safety
+    /// The platform established that this exact issued completion reached and
+    /// was accepted by the original controller context and source. It must
+    /// have been observed in the same uninterrupted receiver admission.
+    pub unsafe fn platform_accepted(id: ClaimId) -> Self {
+        Self { id, accepted: true }
+    }
+
+    pub(in crate::metal::interrupt) fn id(self) -> ClaimId {
+        self.id
+    }
+
+    pub(in crate::metal::interrupt) fn accepted(self) -> bool {
+        self.accepted
+    }
+}
 
 /// An admitted local receiver that reads a hardware claim register. The
 /// original context keeps the only open claim until completion is settled.
@@ -15,7 +94,8 @@ pub trait Receive: Sealed {
     /// Read the original controller only if its previous claim has settled.
     fn receive(&mut self) -> Result<Option<Self::Claim<'_>>, Self::Error>;
 
-    /// Reborrow the receiver's retained claim without reading hardware again.
+    /// Reborrow the receiver's retained claim without another destructive read.
+    /// An unreadable claim result retains its reservation and returns an error.
     fn pending_claim(&mut self) -> Result<Option<Self::Claim<'_>>, Self::Error>;
 }
 
@@ -23,9 +103,11 @@ pub trait Receive: Sealed {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Completion {
     Settled,
-    /// The write was issued. The native owner still needs its original
-    /// confirmation and must not reissue completion on this evidence.
-    AwaitingConfirmation,
+    /// The original completion needs further native observation.
+    AwaitingObservation,
+    /// The original write was issued. Its native interface has no readback,
+    /// so this claim requires qualified acceptance from the platform.
+    AwaitingAcceptance,
 }
 
 /// A borrowed native claim. Its owner retains the active record when the
@@ -34,8 +116,17 @@ pub enum Completion {
 pub trait HardwareClaim: Sealed {
     type Error;
 
+    /// Exact original controller, context, round and source.
+    fn identity(&self) -> ClaimId;
+
     /// Hardware source number within this original receiver's scope.
-    fn source_number(&self) -> u32;
+    fn source_number(&self) -> u32 {
+        self.identity().source()
+    }
+
+    /// Observe or confirm the original completion without issuing it again.
+    /// Evidence for a different claim leaves the original claim unchanged.
+    fn confirm(&mut self, evidence: ClaimConfirmation) -> Result<Completion, Self::Error>;
 
     /// Complete this claim with its original controller.
     ///

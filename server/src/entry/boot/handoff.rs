@@ -16,6 +16,8 @@ pub struct Boot<'a> {
     firmware_map: Option<FirmwareMap<'a>>,
     #[cfg(limen_target)]
     terminal: crate::metal::processor::treaty::Terminal,
+    #[cfg(limen_target)]
+    stack: Range<usize>,
     #[cfg(limen_cooperative)]
     major: Option<Major>,
     #[cfg(all(limen_target, target_arch = "riscv64"))]
@@ -35,6 +37,12 @@ impl<'a> Boot<'a> {
     #[cfg(limen_target)]
     pub const fn terminal(&self) -> crate::metal::processor::treaty::Terminal {
         self.terminal
+    }
+
+    /// The ordinary stack supplied by the trusted image for the major CPU.
+    #[cfg(limen_target)]
+    pub fn stack_range(&self) -> Range<usize> {
+        self.stack.clone()
     }
 
     /// Transfer the original native construction relation to its consumer.
@@ -130,6 +138,7 @@ impl<'a> Boot<'a> {
             admission.facts.firmware_map,
             descriptions,
             admission.terminal,
+            admission.stack,
             #[cfg(limen_cooperative)]
             admission.major,
             #[cfg(target_arch = "riscv64")]
@@ -147,6 +156,7 @@ impl<'a> Boot<'a> {
         firmware_map: Option<FirmwareMap<'a>>,
         descriptions: &'a Descriptions<'a>,
         #[cfg(limen_target)] terminal: crate::metal::processor::treaty::Terminal,
+        #[cfg(limen_target)] stack: Range<usize>,
         #[cfg(limen_cooperative)] major: Major,
         #[cfg(all(limen_target, target_arch = "riscv64"))]
         reception: crate::metal::interrupt::riscv64::internal::supervisor::Supervisor,
@@ -158,6 +168,8 @@ impl<'a> Boot<'a> {
             firmware_map,
             #[cfg(limen_target)]
             terminal,
+            #[cfg(limen_target)]
+            stack,
             #[cfg(limen_cooperative)]
             major: Some(major),
             #[cfg(all(limen_target, target_arch = "riscv64"))]

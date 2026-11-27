@@ -42,10 +42,11 @@ fn conduit() -> Conduit {
         Conduit::Smc
     }
 }
-pub(super) static SERVICES: boot_diagnostic::Services = boot_diagnostic::Services {
-    output: Some(|b| unsafe { pl011::write_byte(UART.load(Ordering::Acquire), b) }),
-    reset: Some(|_| unsafe { conduit().system_off() }),
-};
+pub(super) static TERMINAL: kernel::metal::processor::treaty::Terminal =
+    kernel::metal::processor::treaty::Terminal::new(
+        Some(|b| unsafe { pl011::write_byte(UART.load(Ordering::Acquire), b) }),
+        Some(|_| unsafe { conduit().system_off() }),
+    );
 
 fn checked<T>(result: Result<T, TreeError>) -> Result<T, Status> {
     result.map_err(|error| match error {
@@ -126,7 +127,7 @@ pub fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) -> Startup {
              out(reg) spsel, options(nostack, nomem, preserves_flags));
     }
     assert!(el == 4 && daif & 0x3c0 == 0x3c0 && spsel == 1);
-    assert!(boot::stack_range().contains(&sp));
+    assert!(boot.stack_range().contains(&sp));
     assert_ne!(vectors, FIRMWARE_VECTORS.load(Ordering::Relaxed));
     assert!(vectors != 0 && vectors.is_multiple_of(2048));
     // All 16 architectural vector slots must fit inside loaded image code.

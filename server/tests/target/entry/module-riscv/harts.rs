@@ -9,7 +9,7 @@ use core::{
         Ordering::{Acquire, Relaxed, Release},
     },
 };
-use kernel::metal::processor::treaty::{Minor, Startup};
+use kernel::metal::processor::treaty::{LocalStorage, Minor, Stack, Startup};
 use kernel::{
     entry::boot::Boot,
     metal::{
@@ -19,6 +19,7 @@ use kernel::{
         },
         module::treaty::ModuleUse,
         processor::description::riscv64::isa::{RiscvExtension, RiscvIsa},
+        sync::treaty::Supply,
     },
 };
 
@@ -41,7 +42,13 @@ enum Phase {
     Departed,
 }
 
-static MINORS: [Minor; 3] = [const { Minor::new() }; 3];
+static STACKS: [Stack<{ 32 * 1024 }>; 3] = [const { Stack::new() }; 3];
+static LOCALS: [LocalStorage<5>; 3] = [const { LocalStorage::new(Supply::new()) }; 3];
+static MINORS: [Minor; 3] = [
+    Minor::new(&STACKS[0], &LOCALS[0]),
+    Minor::new(&STACKS[1], &LOCALS[1]),
+    Minor::new(&STACKS[2], &LOCALS[2]),
+];
 static PHASE: AtomicU8 = AtomicU8::new(Phase::Idle as u8);
 static ROOTS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 static ENTRY: AtomicU64 = AtomicU64::new(0);

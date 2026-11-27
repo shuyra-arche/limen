@@ -3,7 +3,7 @@ use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use kernel::entry::boot;
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-use kernel::metal::processor::treaty::Startup;
+use kernel::metal::processor::treaty::{Startup, Terminal};
 use kernel::metal::{
     interrupt::x86_64::internal::apic::{self, LocalApic, Probe},
     memory::access::treaty::device::DeviceWindow,
@@ -36,13 +36,13 @@ pub fn tsc_frequency() -> u64 {
         .unwrap()
 }
 
-pub(super) static SERVICES: boot_diagnostic::Services = boot_diagnostic::Services {
-    output: Some(|byte| {
+pub(super) static TERMINAL: Terminal = Terminal::new(
+    Some(|byte| {
         unsafe { io::write8(0xe9, byte) };
         true
     }),
-    reset: Some(|success| unsafe { io::write32(0xf4, if success { 0x10 } else { 0x11 }) }),
-};
+    Some(|success| unsafe { io::write32(0xf4, if success { 0x10 } else { 0x11 }) }),
+);
 
 pub fn tsc() -> u64 {
     use core::arch::x86_64::{_mm_lfence, _rdtsc};
@@ -202,7 +202,7 @@ pub fn inspect(boot: &boot::Boot<'_>, _: &impl MemoryMap) -> Startup {
              out(reg) sp, out(reg) flags, out(reg) cr0, out(reg) cs);
     }
     assert!(cs & 3 == 0 && cr0 & (1 << 31) != 0);
-    assert!(flags & (1 << 9) == 0 && boot::stack_range().contains(&sp));
+    assert!(flags & (1 << 9) == 0 && boot.stack_range().contains(&sp));
     assert!(idtr.limit == 4095 && idtr.base != 0 && idtr.base != OLD_IDT.load(Ordering::Relaxed));
     // Confirm the active table consists of the kernel's diagnostic gates.
     for i in 0..256 {

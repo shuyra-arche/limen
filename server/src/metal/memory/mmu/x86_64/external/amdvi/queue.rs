@@ -120,7 +120,7 @@ impl Controller<'_> {
         self.write(TAIL, (self.tail * 16) as u64);
     }
 
-    /// Continue an original table installation or binding publication.
+    /// Continue the original table installation.
     pub fn poll(&mut self) -> Result<(), Error> {
         for _ in 0..256 {
             match self.progress {
@@ -133,7 +133,7 @@ impl Controller<'_> {
                     }
                 }
                 Progress::Waiting(batch) => {
-                    if matches!(batch.operation, Operation::Unbind(_)) {
+                    if matches!(batch.operation, Operation::Bind(_) | Operation::Unbind(_)) {
                         return Err(Error::Occupied);
                     }
                     match self.observe_batch(batch) {

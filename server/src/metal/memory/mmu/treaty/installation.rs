@@ -155,10 +155,19 @@ mod bound {
             let observed = unsafe { Native::observe() };
             self.installation
                 .issue(previous, observed, requested.controls)?;
-            unsafe { self.complete(requested.controls) }
+            unsafe { self.apply(requested.controls) }
+        }
+
+        /// Confirm the installed controls of the original pending operation.
+        /// Observation does not issue another native write or prove retirement.
+        pub fn confirm(&mut self) -> Result<LocalInstall, SwitchError> {
+            Native::check(self.installation.hart())?;
+            self.installation.pending().ok_or(SwitchError::Current)?;
+            self.settle(unsafe { Native::observe() })
         }
 
         /// Retry only the exact retained installation on its original Hart.
+        /// If its target is already observed, settle the original operation.
         ///
         /// # Safety
         /// Keep the original switch's ownership, mappings and ordering live.
@@ -166,13 +175,19 @@ mod bound {
         pub unsafe fn retry(&mut self) -> Result<LocalInstall, SwitchError> {
             Native::check(self.installation.hart())?;
             let observed = unsafe { Native::observe() };
-            let next = self.installation.retry(observed)?;
-            unsafe { self.complete(next) }
+            if let Some(next) = self.installation.retry(observed)? {
+                unsafe { self.apply(next) }
+            } else {
+                self.settle(observed)
+            }
         }
 
-        unsafe fn complete(&mut self, requested: Controls) -> Result<LocalInstall, SwitchError> {
+        unsafe fn apply(&mut self, requested: Controls) -> Result<LocalInstall, SwitchError> {
             unsafe { self.native.install(requested) };
-            let observed = unsafe { Native::observe() };
+            self.settle(unsafe { Native::observe() })
+        }
+
+        fn settle(&mut self, observed: Controls) -> Result<LocalInstall, SwitchError> {
             let (previous, installed) = self.installation.complete(observed)?;
             Ok(LocalInstall {
                 hart: self.installation.hart(),
@@ -275,10 +290,14 @@ impl<C: Copy + Eq> Installation<C> {
         Ok(())
     }
 
-    pub fn retry(&self, observed: C) -> Result<C, SwitchError> {
+    /// Return the original requested controls only if they still need reapplying.
+    /// An exact observation of the requested controls can settle without a write.
+    pub fn retry(&self, observed: C) -> Result<Option<C>, SwitchError> {
         let (previous, requested) = self.pending().ok_or(SwitchError::Current)?;
-        if observed == previous || observed == requested {
-            Ok(requested)
+        if observed == requested {
+            Ok(None)
+        } else if observed == previous {
+            Ok(Some(requested))
         } else {
             Err(SwitchError::Unconfirmed)
         }

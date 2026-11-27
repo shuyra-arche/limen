@@ -103,9 +103,10 @@ impl State {
                 (Self::program(Some(old), now, target)?, Ok(()))
             }
             (_, Event::Shut) => (self.clearing()?, Ok(())),
-            (Self::Programming(program), Event::Compared(result))
-                if program.step == ProgramStep::Compare =>
-            {
+            (
+                Self::Programming(program) | Self::Uncertain(Effect::Programming(program)),
+                Event::Compared(result),
+            ) if program.step == ProgramStep::Compare => {
                 let next = if result.is_ok() {
                     Self::Programming(Programming {
                         step: ProgramStep::Enable,
@@ -116,9 +117,10 @@ impl State {
                 };
                 (next, result)
             }
-            (Self::Programming(program), Event::Enabled(confirmed))
-                if program.step == ProgramStep::Enable =>
-            {
+            (
+                Self::Programming(program) | Self::Uncertain(Effect::Programming(program)),
+                Event::Enabled(confirmed),
+            ) if program.step == ProgramStep::Enable => {
                 if confirmed {
                     (Self::Armed(program.requested), Ok(()))
                 } else {
@@ -128,7 +130,10 @@ impl State {
                     )
                 }
             }
-            (Self::Clearing(clear), Event::Masked(confirmed)) if clear.step == ClearStep::Mask => {
+            (
+                Self::Clearing(clear) | Self::Uncertain(Effect::Clearing(clear)),
+                Event::Masked(confirmed),
+            ) if clear.step == ClearStep::Mask => {
                 if confirmed {
                     (
                         Self::Clearing(Clearing {
@@ -144,9 +149,10 @@ impl State {
                     )
                 }
             }
-            (Self::Clearing(clear), Event::Compared(result))
-                if clear.step == ClearStep::Compare =>
-            {
+            (
+                Self::Clearing(clear) | Self::Uncertain(Effect::Clearing(clear)),
+                Event::Compared(result),
+            ) if clear.step == ClearStep::Compare => {
                 let next = if result.is_ok() {
                     Self::AwaitingClear(clear.prior)
                 } else {
@@ -179,9 +185,10 @@ impl State {
             Self::Idle => Prior::Idle,
             Self::Armed(count) => Prior::Armed(count),
             Self::Uncertain(Effect::Programming(program)) => Prior::Programming(program),
-            Self::Uncertain(Effect::Clearing(clear)) => clear.prior,
             Self::AwaitingClear(_) => return Ok(self),
-            Self::Programming(_) | Self::Clearing(_) => return Err(Failure::Busy),
+            Self::Programming(_) | Self::Clearing(_) | Self::Uncertain(Effect::Clearing(_)) => {
+                return Err(Failure::Busy);
+            }
         };
         Ok(Self::Clearing(Clearing {
             prior,

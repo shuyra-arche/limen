@@ -4,7 +4,8 @@ use super::{GicV3, Trigger};
 
 mod route;
 use crate::metal::{
-    interrupt::treaty::RouteControl, memory::access::treaty::device::DeviceWindow,
+    interrupt::treaty::{RouteControl, RouteOperation, RouteState},
+    memory::access::treaty::device::DeviceWindow,
     processor::description::aarch64::cpu::AFFINITY_MASK,
 };
 pub use route::Route;
@@ -43,6 +44,7 @@ pub enum State {
     Configuring { affinity: u64, priority: u8 },
     Configured,
     Enabling,
+    Resuming,
     Enabled,
     Masking,
     Quiesced,
@@ -106,15 +108,39 @@ impl crate::metal::interrupt::treaty::route::Sealed for Control<'_, '_, '_> {}
 
 impl RouteControl for Control<'_, '_, '_> {
     type Failure = Failure;
+    type Retired = ();
+
+    fn state(&self) -> RouteState {
+        match self.owner.slots[self.binding.slot]
+            .route
+            .map(|(_, state)| state)
+        {
+            Some(State::Configured) => RouteState::Prepared,
+            Some(State::Enabling) => RouteState::Unconfirmed(RouteOperation::Publish),
+            Some(State::Resuming) => RouteState::Unconfirmed(RouteOperation::Resume),
+            Some(State::Enabled) => RouteState::Open,
+            Some(State::Masking) => RouteState::Unconfirmed(RouteOperation::Mask),
+            Some(State::Quiesced) => RouteState::Masked,
+            Some(State::Masked | State::Configuring { .. }) => {
+                unreachable!("SPI control requires a configured route")
+            }
+            None => RouteState::Retired,
+        }
+    }
 
     unsafe fn publish(&mut self) -> Result<(), Failure> {
         let slot = self.owner.bound_slot(self.binding)?;
-        unsafe { self.owner.enable(slot) }
+        unsafe { self.owner.enable(slot, State::Configured, State::Enabling) }
     }
 
     fn mask(&mut self) -> Result<(), Failure> {
         let slot = self.owner.bound_slot(self.binding)?;
         self.owner.disable(slot)
+    }
+
+    unsafe fn resume(&mut self) -> Result<(), Failure> {
+        let slot = self.owner.bound_slot(self.binding)?;
+        unsafe { self.owner.enable(slot, State::Quiesced, State::Resuming) }
     }
 
     unsafe fn retire(&mut self) -> Result<(), Failure> {
@@ -213,12 +239,29 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     pub fn control<'route>(
         &'route mut self,
         binding: &'route mut BoundRoute<'tree>,
-    ) -> Result<impl RouteControl<Failure = Failure> + 'route, Failure> {
-        self.bound_slot(binding)?;
+    ) -> Result<impl RouteControl<Failure = Failure, Retired = ()> + 'route, Failure> {
+        let slot = self.bound_slot(binding)?;
+        if matches!(
+            self.slots[slot].route.unwrap().1,
+            State::Masked | State::Configuring { .. }
+        ) {
+            return Err(Failure::State);
+        }
         Ok(Control {
             owner: self,
             binding,
         })
+    }
+
+    /// Return an unprogrammed reservation to its original Distributor.
+    pub fn cancel(&mut self, binding: &mut BoundRoute<'tree>) -> Result<(), Failure> {
+        let slot = self.bound_slot(binding)?;
+        if self.slots[slot].route.unwrap().1 != State::Masked {
+            return Err(Failure::State);
+        }
+        self.slots[slot].route = None;
+        binding.route = None;
+        Ok(())
     }
 
     pub fn state(&self, id: usize) -> Result<State, Failure> {
@@ -270,7 +313,7 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
         binding: &'route mut BoundRoute<'tree>,
         affinity: u64,
         priority: u8,
-    ) -> Result<impl RouteControl<Failure = Failure> + 'route, Failure> {
+    ) -> Result<impl RouteControl<Failure = Failure, Retired = ()> + 'route, Failure> {
         let slot = self.bound_slot(binding)?;
         let (route, state) = self.slots[slot].route.unwrap();
         let id = route.intid;
@@ -328,17 +371,15 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     /// # Safety
     /// The original target can receive this route with durable capacity
     /// to retain the matching IAR, priority drop and deactivation.
-    unsafe fn enable(&mut self, slot: usize) -> Result<(), Failure> {
+    unsafe fn enable(&mut self, slot: usize, ready: State, pending: State) -> Result<(), Failure> {
         let (route, state) = self.slots[slot].route.unwrap();
         let id = route.intid;
-        match state {
-            State::Configured | State::Quiesced => {
-                self.slots[slot].route = Some((route, State::Enabling));
-                self.write(Self::bank(ENABLE, id), Self::mask(id));
-                self.barrier.synchronize();
-            }
-            State::Enabling => {}
-            _ => return Err(Failure::State),
+        if state == ready {
+            self.slots[slot].route = Some((route, pending));
+            self.write(Self::bank(ENABLE, id), Self::mask(id));
+            self.barrier.synchronize();
+        } else if state != pending {
+            return Err(Failure::State);
         }
         if !self.bit(ENABLE, id) {
             return Err(Failure::Unconfirmed);
@@ -351,16 +392,15 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     fn disable(&mut self, slot: usize) -> Result<(), Failure> {
         let (route, state) = self.slots[slot].route.unwrap();
         let id = route.intid;
-        if matches!(state, State::Configuring { .. }) {
-            return Err(Failure::Unconfirmed);
-        }
-        if matches!(state, State::Masked | State::Quiesced) {
-            return Ok(());
-        }
-        if state != State::Masking {
-            self.slots[slot].route = Some((route, State::Masking));
-            self.write(Self::bank(DISABLE, id), Self::mask(id));
-            self.barrier.synchronize();
+        match state {
+            State::Quiesced => return Ok(()),
+            State::Enabled | State::Enabling | State::Resuming => {
+                self.slots[slot].route = Some((route, State::Masking));
+                self.write(Self::bank(DISABLE, id), Self::mask(id));
+                self.barrier.synchronize();
+            }
+            State::Masking => {}
+            _ => return Err(Failure::State),
         }
         if self.word(CTLR) & WRITE_PENDING != 0 || self.bit(ENABLE, id) {
             return Err(Failure::Busy);
@@ -375,7 +415,7 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     /// the separately owned software and device obligations.
     unsafe fn retire(&mut self, slot: usize) -> Result<(), Failure> {
         let (route, state) = self.slots[slot].route.unwrap();
-        if !matches!(state, State::Masked | State::Quiesced) || !self.available(route.intid) {
+        if !matches!(state, State::Configured | State::Quiesced) || !self.available(route.intid) {
             return Err(Failure::Busy);
         }
         self.slots[slot].route = None;

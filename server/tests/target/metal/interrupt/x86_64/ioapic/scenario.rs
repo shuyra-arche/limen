@@ -1,9 +1,11 @@
 //! The q35 guest owns COM1 and receives its actual THRE interrupt on the BSP.
 
-use kernel::metal::interrupt::treaty::Completion;
+use kernel::metal::interrupt::treaty::{ClaimConfirmation, Completion, HardwareClaim};
 
 #[path = "../../../../support/interrupt.rs"]
 mod consumer;
+#[path = "../../../../support/route.rs"]
+mod route_consumer;
 
 use core::arch::asm;
 use kernel::metal::{
@@ -36,49 +38,62 @@ pub(super) fn check(madt: Madt<'_>, hart: usize, local: &mut LocalApic<'_>) {
         .unwrap();
     let lease = local.reserve_vector(VECTOR).unwrap();
     assert!(matches!(local.reserve_vector(VECTOR), Err(Failure::Busy)));
-    controller.reserve(route, lease).unwrap();
+    let mut binding = controller.reserve(route, lease).unwrap();
     assert_eq!(controller.state(route.gsi), Ok(State::Reserved(route)));
     unsafe {
         io::write8(UART + 3, 3); // 8N1, DLAB clear
         io::write8(UART + 1, 0);
         io::write8(UART + 4, 8); // OUT2 gates the ISA interrupt
-        controller.configure(route).unwrap();
-        let window = Window::install(VECTOR);
-        controller.enable(route.gsi).unwrap();
-        // A fresh THRE condition, with the transmitter idle.
-        assert_ne!(input(UART + 5) & 0x20, 0);
-        io::write8(UART + 1, 2);
-        // Allow only a bounded interval for the actual interrupt entry. No
-        // software 'int' instruction can set the xAPIC ISR bit checked below.
-        for _ in 0..1_000_000 {
-            window.permit();
-            if window.count() != 0 {
-                break;
+        for second_round in [false, true] {
+            let window = Window::install(VECTOR);
+            if second_round {
+                route_consumer::resume(&mut controller.control(&mut binding).unwrap());
+            } else {
+                route_consumer::publish(&mut controller.configure(&mut binding).unwrap());
             }
+            // A fresh THRE condition, with the transmitter idle.
+            assert_ne!(input(UART + 5) & 0x20, 0);
+            io::write8(UART + 1, 2);
+            // Allow only a bounded interval for the actual interrupt entry. No
+            // software 'int' instruction can set the xAPIC ISR bit checked below.
+            for _ in 0..1_000_000 {
+                window.permit();
+                if window.count() != 0 {
+                    break;
+                }
+            }
+            assert_eq!(window.count(), 1);
+            drop(window);
+            assert!(matches!(local.receive(0xff), Err(Failure::Scope)));
+            assert!(matches!(local.receive(VECTOR - 1), Err(Failure::Scope)));
+            assert_eq!(local.reception(), Reception::Idle);
+            let receipt = local.receive(VECTOR).unwrap().identity();
+            assert_eq!(receipt.source(), u32::from(VECTOR));
+            assert_eq!(local.reception(), Reception::Received(VECTOR));
+            assert!(matches!(local.receive(VECTOR), Err(Failure::Busy)));
+            route_consumer::mask(&mut controller.control(&mut binding).unwrap());
+            assert_eq!(input(UART + 2) & 0xf, 2);
+            io::write8(UART + 1, 0);
+            let mut claim = local.current().unwrap();
+            assert_eq!(claim.identity(), receipt);
+            consumer::finish(&mut claim, u32::from(VECTOR), Completion::Settled);
+            assert!(
+                HardwareClaim::confirm(&mut claim, ClaimConfirmation::observe(receipt)).is_err()
+            );
+            assert!(local.current().is_none());
         }
-        assert_eq!(window.count(), 1);
-        drop(window);
-        assert!(matches!(local.receive(0xff), Err(Failure::Scope)));
-        assert!(matches!(local.receive(VECTOR - 1), Err(Failure::Scope)));
-        assert_eq!(local.reception(), Reception::Idle);
-        assert_eq!(local.receive(VECTOR).unwrap().vector(), VECTOR);
-        assert_eq!(local.reception(), Reception::Received(VECTOR));
-        assert!(matches!(local.receive(VECTOR), Err(Failure::Busy)));
-        controller.mask(route.gsi).unwrap();
-        assert_eq!(input(UART + 2) & 0xf, 2);
-        io::write8(UART + 1, 0);
-        let mut claim = local.current().unwrap();
-        consumer::finish(&mut claim, u32::from(VECTOR), Completion::Settled);
-        assert!(claim.confirm().is_err());
-        assert!(local.current().is_none());
-        let lease = controller.retire(route.gsi).unwrap();
+        let lease = route_consumer::retire(&mut controller.control(&mut binding).unwrap());
         local.release_vector(lease).unwrap();
     }
     let fresh = local.reserve_vector(VECTOR).unwrap();
+    let mut replacement = controller.reserve(route, fresh).unwrap();
+    assert!(controller.control(&mut binding).is_err());
+    let fresh = controller.cancel(&mut replacement).unwrap();
+    assert!(controller.cancel(&mut replacement).is_err());
     local.release_vector(fresh).unwrap();
     assert_eq!(local.reception(), Reception::Idle);
     assert_eq!(controller.state(route.gsi), Ok(State::Vacant));
     kernel::metal::platform::boot::treaty::write(
-        "PASS q35 interrupt uart=1 ioapic=1 vector=1 eoi=1 masked=1\n",
+        "PASS q35 interrupt uart=2 ioapic=1 vector=1 eoi=2 masked=1 resumed=1\n",
     );
 }

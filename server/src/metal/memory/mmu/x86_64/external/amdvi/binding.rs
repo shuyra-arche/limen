@@ -5,9 +5,13 @@ use super::{
     queue::{Batch, Operation, Progress},
 };
 use crate::metal::{
-    memory::mmu::treaty::{Retirement, Unbind, retirement::Sealed},
+    memory::mmu::treaty::{
+        BindingChange, BindingCommand, BindingControl, BindingEffect, BindingObservation,
+        BindingRejection, BindingSubmission, binding::Sealed,
+    },
     platform::description::acpi::Ivhd,
 };
+use core::convert::Infallible;
 use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 /// Resident admission history for one described physical unit. Its owner
@@ -75,11 +79,6 @@ impl Binding {
     }
 }
 
-/// Observation of the completion store reserved by this original binding.
-pub struct Unbinding {
-    binding: Binding,
-}
-
 impl Controller<'_> {
     /// The binding is usable only after the original batch settles.
     pub fn binding(&self, requester: u16) -> Option<Binding> {
@@ -108,7 +107,7 @@ impl Controller<'_> {
     /// obligations. The complete host table remains pinned and visible
     /// through unbind and matching completion. The caller controls its
     /// nonzero domain exclusively within the physical IOMMU.
-    pub unsafe fn bind(&mut self, context: Context) -> Result<(), Error> {
+    unsafe fn begin_bind(&mut self, context: Context) -> Result<Binding, Error> {
         if !matches!(self.progress, Progress::Ready) {
             return Err(Error::Occupied);
         }
@@ -118,68 +117,95 @@ impl Controller<'_> {
         let entry = context.device_entry()?;
         let index = admit_binding(self.bindings, context)?;
         let (number, retirement) = reserve_binding_numbers(&mut self.next)?;
-        self.bindings[index] = Some(Binding {
+        let binding = Binding {
             scope: self.admissions.scope,
             epoch: self.admissions.epoch,
             number,
             retirement,
             context,
-        });
+        };
+        self.bindings[index] = Some(binding);
         let dte = &mut self.storage.table.0.0[usize::from(context.requester)];
         dte[1] = entry[1];
         dte[0] = entry[0];
         self.invalidate(number, Operation::Bind(index));
-        self.poll()
+        Ok(binding)
     }
 
-    fn retirement_batch(&self, binding: Binding) -> Option<(Batch, usize)> {
+    fn binding_batch(&self) -> Option<(Batch, BindingEffect<Binding, Infallible>)> {
         let batch = match self.progress {
             Progress::Waiting(batch) | Progress::Unconfirmed(Some(batch)) => batch,
             _ => return None,
         };
-        let Operation::Unbind(index) = batch.operation else {
-            return None;
+        let effect = match batch.operation {
+            Operation::Bind(index) => BindingEffect::Bound(self.bindings[index]?),
+            Operation::Unbind(index) => BindingEffect::Unbound(self.bindings[index]?),
+            _ => return None,
         };
-        (batch.number == binding.retirement && self.bindings[index] == Some(binding))
-            .then_some((batch, index))
+        Some((batch, effect))
     }
 }
 
 impl Sealed for Controller<'_> {}
 
-impl Unbind for Controller<'_> {
+impl BindingControl for Controller<'_> {
+    type Context = Context;
     type Binding = Binding;
-    type Ticket = Unbinding;
+    type Refresh = Infallible;
+    type Command = u64;
     type Error = Error;
 
-    unsafe fn retire(&mut self, binding: Binding) -> Result<Unbinding, Error> {
+    unsafe fn begin_binding(&mut self, context: Context) -> BindingSubmission<Self> {
+        let binding = unsafe { self.begin_bind(context) }.map_err(BindingRejection::Rejected)?;
+        Ok(BindingCommand::new(
+            binding.number,
+            BindingEffect::Bound(binding),
+        ))
+    }
+
+    unsafe fn begin_refresh(&mut self, _: Binding, scope: Infallible) -> BindingSubmission<Self> {
+        match scope {}
+    }
+
+    unsafe fn begin_retirement(&mut self, binding: Binding) -> BindingSubmission<Self> {
         if !matches!(self.progress, Progress::Ready) {
-            return Err(Error::Occupied);
+            return Err(BindingRejection::Rejected(Error::Occupied));
         }
-        let index = binding_slot(self.bindings, binding)?;
+        let index = binding_slot(self.bindings, binding).map_err(BindingRejection::Rejected)?;
         self.invalidate(binding.retirement, Operation::Unbind(index));
-        Ok(Unbinding { binding })
+        Ok(BindingCommand::new(
+            binding.retirement,
+            BindingEffect::Unbound(binding),
+        ))
     }
 
-    fn pending_retirement(&self, binding: Binding) -> Option<Unbinding> {
-        self.retirement_batch(binding)
-            .map(|_| Unbinding { binding })
+    fn unsettled_change(&self) -> Option<BindingChange<Self>> {
+        let (batch, effect) = self.binding_batch()?;
+        Some(BindingCommand::new(batch.number, effect))
     }
 
-    fn observe_retirement(&mut self, ticket: &Unbinding) -> Result<Retirement, Error> {
-        let (batch, index) = self.retirement_batch(ticket.binding).ok_or(Error::Stale)?;
-        if matches!(self.progress, Progress::Unconfirmed(_)) {
-            return Err(Error::Unconfirmed);
-        }
-        match self.observe_batch(batch) {
-            Ok(()) => {
-                self.bindings[index] = None;
-                self.progress = Progress::Ready;
-                Ok(Retirement::Settled)
-            }
-            Err(Error::Pending) => Ok(Retirement::Pending),
-            Err(error) => Err(error),
-        }
+    fn observe_change(&mut self, change: BindingChange<Self>) -> BindingObservation<Self> {
+        let pending = self.binding_batch();
+        change.observe(
+            pending.map(|(batch, effect)| BindingCommand::new(batch.number, effect)),
+            |_| {
+                if matches!(self.progress, Progress::Unconfirmed(_)) {
+                    return Err(Error::Unconfirmed);
+                }
+                let (batch, effect) = pending.expect("matched binding batch");
+                match self.observe_batch(batch) {
+                    Ok(()) => {
+                        if let Operation::Unbind(index) = batch.operation {
+                            self.bindings[index] = None;
+                        }
+                        self.progress = Progress::Ready;
+                        Ok(Some(effect))
+                    }
+                    Err(Error::Pending) => Ok(None),
+                    Err(error) => Err(error),
+                }
+            },
+        )
     }
 }
 

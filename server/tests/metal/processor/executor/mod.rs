@@ -1,7 +1,7 @@
 //! Host inputs for production Hart-local synchronization.
 
-use super::{Executor, Storage};
-use crate::metal::sync::{TURN_CAPACITY, local::Supply};
+use super::{Executor, LocalStorage};
+use crate::metal::sync::treaty::Supply;
 use core::{
     cell::{Cell, OnceCell},
     ptr,
@@ -16,7 +16,9 @@ std::thread_local! {
 pub(super) fn local_address() -> usize {
     LOCAL.with(|local| {
         let hart = local.get_or_init(|| unsafe {
-            Box::leak(Box::new(Storage::<TURN_CAPACITY>::new(Supply::new()))).bind()
+            Box::leak(Box::new(LocalStorage::<5>::new(Supply::new())))
+                .material()
+                .bind()
         });
         ptr::from_ref(*hart).expose_provenance()
     })
@@ -78,7 +80,11 @@ fn acquisition_uses_the_nodes_supplied_to_this_hart() {
     };
 
     std::thread::spawn(|| {
-        let hart = unsafe { Box::leak(Box::new(Storage::<1>::new(Supply::new()))).bind() };
+        let hart = unsafe {
+            Box::leak(Box::new(LocalStorage::<1>::new(Supply::new())))
+                .material()
+                .bind()
+        };
         LOCAL.with(|local| assert!(local.set(hart).is_ok()));
         assert_eq!(turn_capacity(), Some(1));
         let first = TurnLock::new(0);

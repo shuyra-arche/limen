@@ -1,15 +1,15 @@
 //! One stopped EDU function, one IVHD and a resident single-level table.
 
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-#[path = "../../../../../support/paging/retirement.rs"]
-mod retirement;
+#[path = "../../../../../support/paging/binding.rs"]
+mod binding;
 
 use super::edu::{self, Endpoint, REQUESTER};
 use core::arch::x86_64::_mm_mfence;
 use kernel::metal::{
     memory::access::treaty::device::DeviceWindow,
     memory::mmu::{
-        treaty::Unbind,
+        treaty::{BindingControl, BindingProgress, BindingRejection},
         x86_64::external::amdvi::{
             Controller, Error, Storage,
             binding::{Admissions, Binding, Context},
@@ -111,16 +111,15 @@ pub(super) fn check(unit: Ivhd<'_>) {
         domain: 1,
         levels: 1,
     };
-    let result = unsafe { controller.bind(context) };
-    settle(&mut controller, result);
-    let binding = controller.binding(REQUESTER).unwrap();
+    let binding = unsafe { binding::bind(&mut controller, context) };
+    assert_eq!(controller.binding(REQUESTER), Some(binding));
     assert_eq!(binding.context(), context);
     unsafe {
         endpoint.write_to_ram(IOVA);
         assert_eq!(data.read_volatile(), PATTERN);
     }
     let ticket = unsafe {
-        retirement::retire(&mut controller, binding, |controller| {
+        binding::retire(&mut controller, binding, |controller| {
             assert_eq!(controller.binding(REQUESTER), None);
         })
     };
@@ -131,13 +130,11 @@ pub(super) fn check(unit: Ivhd<'_>) {
         endpoint.write_to_ram(IOVA);
         assert_eq!(data.read_volatile(), !PATTERN);
     }
-    let result = unsafe { controller.bind(context) };
-    settle(&mut controller, result);
-    let rebound = controller.binding(REQUESTER).unwrap();
+    let rebound = unsafe { binding::bind(&mut controller, context) };
     assert_ne!(binding, rebound);
     assert!(matches!(
-        unsafe { controller.retire(binding) },
-        Err(Error::Stale)
+        unsafe { controller.begin_retirement(binding) },
+        Err(BindingRejection::Rejected(Error::Stale))
     ));
     assert_eq!(controller.binding(REQUESTER), Some(rebound));
     unsafe {
@@ -145,8 +142,8 @@ pub(super) fn check(unit: Ivhd<'_>) {
         assert_eq!(data.read_volatile(), PATTERN);
     }
     unsafe {
-        retirement::retire(&mut controller, rebound, |controller| {
-            assert_eq!(controller.observe_retirement(&ticket), Err(Error::Stale));
+        binding::retire(&mut controller, rebound, |controller| {
+            assert_eq!(controller.observe_change(ticket), BindingProgress::Stale);
         });
     }
     boot_diagnostic::write(

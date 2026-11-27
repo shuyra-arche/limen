@@ -1,12 +1,12 @@
 //! Trusted UEFI admission and retained description construction.
 
-#[cfg(limen_firmware = "uefi")]
-use super::super::treaty::Services;
 use super::{Descriptions, Facts};
 use crate::metal::platform::{
     description::{acpi, devicetree},
     firmware::uefi::{DeviceTree, Loader, map::FirmwareMap},
 };
+#[cfg(limen_firmware = "uefi")]
+use crate::metal::processor::treaty::Terminal;
 use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
 const LOADER_DATA: u32 = 2;
@@ -23,7 +23,7 @@ pub(crate) unsafe fn admit<'a>(
     // The current loader handoff supplies an identity checked against the
     // physical CPU, rather than the trusted SBI entry's current-Hart ABI.
     if hart != observed {
-        Services::active().reject(format_args!(
+        Terminal::early().reject(format_args!(
             "FAIL Limen boot: major CPU identity mismatch\n"
         ));
     }
@@ -35,13 +35,8 @@ pub(crate) unsafe fn admit<'a>(
 }
 
 #[cfg(limen_firmware = "uefi")]
-pub(crate) fn services_on_entry() -> &'static Services {
-    Services::active()
-}
-
-#[cfg(limen_firmware = "uefi")]
-pub(crate) fn trap_services() -> &'static Services {
-    Services::active()
+pub(crate) fn terminal_on_entry() -> Terminal {
+    Terminal::early()
 }
 
 pub(crate) fn describe<'a, 'b>(

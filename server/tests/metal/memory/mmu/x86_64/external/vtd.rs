@@ -8,7 +8,7 @@ use super::{
 };
 use crate::metal::memory::{
     access::treaty::device::DeviceWindow,
-    mmu::treaty::{Retirement, Unbind},
+    mmu::treaty::{BindingControl, BindingEffect, BindingProgress, BindingRejection},
 };
 use limen_treaty::model::{InternalAddress, PhysicalAddress};
 
@@ -51,6 +51,15 @@ fn binding_keeps_its_retirement_number_when_the_sequence_is_exhausted() {
 
 #[test]
 fn retirement_requires_the_original_context_and_iotlb_completions() {
+    check_retirement(false);
+}
+
+#[test]
+fn an_unconfirmed_retirement_start_returns_the_original_ticket() {
+    check_retirement(true);
+}
+
+fn check_retirement(uncertain_at_start: bool) {
     let mut description = [0; 64];
     description[..4].copy_from_slice(b"DMAR");
     description[36] = 47;
@@ -90,43 +99,59 @@ fn retirement_requires_the_original_context_and_iotlb_completions() {
         domain: 1,
         root: PhysicalAddress::new(0xa000),
     };
-    // Start after the denying context has already been published. Native
-    // cache-line writeback and the actual start are covered by the q35 guest.
     let original = controller
         .storage
         .sequence
         .reserve_binding(unit.registers().start(), context)
         .unwrap();
+    controller.state = State::Enabled;
+    assert_eq!(
+        unsafe { controller.begin_retirement(original) },
+        Err(BindingRejection::Rejected(Error::Stale))
+    );
+    assert!(controller.unsettled_change().is_none());
     controller.storage.bindings[0] = Some(original);
-    controller.pending = Some((original.retirement(), Operation::Unbind(0)));
-    controller.state = State::RefreshingContexts;
-    controller.write(CONTEXT, IN_PROGRESS);
-    let ticket = controller.pending_retirement(original).unwrap();
+    let ticket = if uncertain_at_start {
+        // A directory word no longer matching its admitted Binding must
+        // quarantine the old Binding before any new register command.
+        let Err(BindingRejection::Unconfirmed { change, error }) =
+            (unsafe { controller.begin_retirement(original) })
+        else {
+            panic!("retirement with a changed directory must retain the original binding");
+        };
+        assert_eq!(error, Error::Unconfirmed);
+        assert_eq!(controller.read(CONTEXT), 0);
+        change
+    } else {
+        // Start after denying context publication. Native cache writeback
+        // and publication itself are covered by the q35 guest.
+        controller.pending = Some((original.retirement(), Operation::Unbind(0)));
+        controller.state = State::RefreshingContexts;
+        controller.write(CONTEXT, IN_PROGRESS);
+        let ticket = controller.pending_change(original).unwrap();
+        assert_eq!(controller.observe(original.publication), Err(Error::Stale));
+        assert_eq!(controller.observe_change(ticket), BindingProgress::Pending);
+        controller.write(CONTEXT, 1 << 59);
+        assert_eq!(controller.observe_change(ticket), BindingProgress::Pending);
+        assert_eq!(controller.storage.bindings[0], Some(original));
+        controller.write(controller.iotlb, 0);
+        ticket
+    };
+    assert_eq!(ticket.command(), original.retirement());
+    assert_eq!(ticket.effect(), BindingEffect::Unbound(original));
     assert_eq!(
         controller.pending(),
         Some((original.retirement(), Change::Unbound(original)))
     );
-    assert_eq!(controller.observe(original.publication), Err(Error::Stale));
     assert_eq!(
-        controller.observe_retirement(&ticket),
-        Ok(Retirement::Pending)
+        controller.observe_change(ticket),
+        BindingProgress::Unconfirmed(Error::Unconfirmed)
     );
-    controller.write(CONTEXT, 1 << 59);
+    let recovered = controller.pending_change(original).unwrap();
+    assert_eq!(recovered, ticket);
     assert_eq!(
-        controller.observe_retirement(&ticket),
-        Ok(Retirement::Pending)
-    );
-    assert_eq!(controller.storage.bindings[0], Some(original));
-
-    controller.write(controller.iotlb, 0);
-    assert_eq!(
-        controller.observe_retirement(&ticket),
-        Err(Error::Unconfirmed)
-    );
-    let recovered = controller.pending_retirement(original).unwrap();
-    assert_eq!(
-        controller.observe_retirement(&recovered),
-        Err(Error::Unconfirmed)
+        controller.observe_change(recovered),
+        BindingProgress::Unconfirmed(Error::Unconfirmed)
     );
     assert_eq!(controller.storage.bindings[0], Some(original));
     assert_eq!(controller.storage.contexts.0.0[0x30], [0; 2]);

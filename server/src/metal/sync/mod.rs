@@ -8,6 +8,3 @@ pub(in crate::metal) mod local;
 mod snap;
 pub mod treaty;
 mod turn;
-
-/// Default node supply selected by the current trusted bootstrap image.
-pub const TURN_CAPACITY: usize = 5;

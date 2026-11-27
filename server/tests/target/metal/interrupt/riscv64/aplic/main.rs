@@ -1,7 +1,9 @@
 #![no_std]
 #![no_main]
 
-use kernel::metal::interrupt::treaty::{AbsoluteTimer, Completion};
+kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
+
+use kernel::metal::interrupt::treaty::{AbsoluteTimer, Completion, HardwareClaim};
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 
 #[path = "../../../../support/claim.rs"]
@@ -75,7 +77,7 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
     );
     assert_eq!(timer.due(), Err(timer::Failure::Busy));
     assert_eq!(timer.state(), State::Inherited(None));
-    unsafe { timer.shut() }.unwrap();
+    unsafe { timer.clear() }.unwrap();
     assert_eq!(timer.state(), State::Idle);
     assert!(!timer.pending().unwrap());
     let hertz = u64::from(timebase.hertz());
@@ -117,21 +119,28 @@ fn timer_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) {
             );
             assert_eq!(timer.state(), State::Armed(later));
         }
-        // Replace the old comparison directly. In round two this also clears
-        // the pending interrupt from round one without an intervening shut.
-        unsafe { timer.rearm(counter.deadline(target)) }.unwrap();
+        if round == 0 {
+            timer.advance_deadline(counter.deadline(target)).unwrap();
+        } else {
+            // The received first obligation is settled. The native replacement
+            // also clears its pending bit without an intervening clear.
+            unsafe { timer.rearm(counter.deadline(target)) }.unwrap();
+        }
+        assert!(timer.pending_effect().unwrap().is_none());
         assert_eq!(timer.state(), State::Armed(target));
         assert!(!timer.pending().unwrap());
         assert_eq!(unsafe { receive(limit) }, TIMER, "supervisor timer trap");
         assert!(timer.pending().unwrap());
         assert!(timer.due().unwrap());
     }
-    unsafe { timer.shut() }.unwrap();
+    unsafe { timer.clear() }.unwrap();
     assert_eq!(timer.state(), State::Idle);
     assert!(!timer.pending().unwrap());
     assert_eq!(timer.due(), Err(timer::Failure::Busy));
-    unsafe { timer.shut() }.unwrap();
+    unsafe { timer.clear() }.unwrap();
     assert_eq!(timer.state(), State::Idle);
+    assert!(timer.pending_effect().unwrap().is_none());
+    assert!(timer.confirm_effect().is_err());
     boot_diagnostic::write("PASS sbi-timer received=2 cleared=2 states=1 rejected=1\n");
 }
 
@@ -282,23 +291,22 @@ fn external_test(boot: &Boot<'_>, local: &mut Reception, wrong: &mut Reception) 
             EXTERNAL,
             "supervisor external trap"
         );
-        {
+        let receipt = {
             let mut receiver = domain.receiver(&mut context).unwrap();
             let claim =
                 claim_consumer::receive(&mut receiver, route.id()).expect("real UART claim");
-            assert_eq!(claim.source(), route.id());
             assert_eq!(claim.priority(), 1);
-            assert!(claim.round() > previous);
-            previous = claim.round();
-            // Borrow ends here, but the persistent hardware obligation remains.
-        }
+            let receipt = claim.identity();
+            assert!(receipt.round() > previous);
+            previous = receipt.round();
+            receipt
+        };
         assert_eq!(
             domain.source(route.id()).unwrap(),
             aplic::Source::Masked(route.mode())
         );
         let mut receiver = domain.receiver(&mut context).unwrap();
-        let mut claim = claim_consumer::pending(&mut receiver, route.id());
-        assert_eq!(claim.round(), previous);
+        let mut claim = claim_consumer::pending(&mut receiver, receipt);
         assert_eq!(uart_read(&mut serial, 2) & 0x0f, 2, "UART THRE cause");
         uart_write(&mut serial, 1, 0);
         // The test has consumed this notification and disabled the actual

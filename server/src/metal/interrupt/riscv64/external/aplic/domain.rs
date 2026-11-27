@@ -230,6 +230,34 @@ impl<'description, 'resources> Domain<'description, 'resources> {
         Ok(())
     }
 
+    /// Reconcile the original IDC mask from native enable readback.
+    pub(super) fn confirm_claim_mask(
+        &mut self,
+        context: &mut Context<'_>,
+        source: u32,
+    ) -> Result<(), Failure> {
+        self.check(context)?;
+        if self.state != State::Uncertain(Effect::Mask(source)) {
+            return Err(Failure::Busy);
+        }
+        let Source::Masking(mode) = self.source(source)? else {
+            return Err(Failure::Busy);
+        };
+        if self.registers.enabled(source) {
+            return Err(Failure::Unconfirmed);
+        }
+        // Undo only the local safety hold imposed while the mask was unknown.
+        if !context.enabled() {
+            context.set_enabled(true);
+            if !context.enabled() {
+                return Err(Failure::Unconfirmed);
+            }
+        }
+        self.sources.set(source, Source::Masked(mode));
+        self.state = State::Open;
+        Ok(())
+    }
+
     /// # Safety
     /// Before enabling global SIE, install a trusted reception path with
     /// capacity for the original exclusive claim slot.

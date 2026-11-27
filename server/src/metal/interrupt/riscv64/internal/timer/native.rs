@@ -5,7 +5,7 @@ use crate::metal::{
     chrono::{riscv64::time::Counter, treaty::Deadline},
     interrupt::{
         riscv64::internal::supervisor::{Cause, Reception},
-        treaty::{AbsoluteTimer, absolute::Sealed},
+        treaty::{AbsoluteTimer, TimerEffect, absolute::Sealed},
     },
     processor::description::riscv64::{
         cpu::RiscvCpu,
@@ -24,7 +24,7 @@ enum Comparator {
 }
 
 impl Comparator {
-    fn inherited(self) -> Option<u64> {
+    fn read_comparison(self) -> Option<u64> {
         match self {
             Self::Sstc => Some(compare()),
             #[cfg(limen_firmware = "sbi")]
@@ -117,7 +117,7 @@ impl<'a> Timer<'a> {
             counter,
             local,
             comparator,
-            state: State::Inherited(comparator.inherited()),
+            state: State::Inherited(comparator.read_comparison()),
         })
     }
 
@@ -160,18 +160,6 @@ impl<'a> Timer<'a> {
         self.drive()
     }
 
-    /// Mask the interrupt and move the comparison to the far future.
-    /// Failure preserves the original comparator responsibility.
-    ///
-    /// # Safety
-    /// All higher-level stop and wake obligations have settled or are
-    /// continuously covered elsewhere throughout this operation.
-    pub unsafe fn shut(&mut self) -> Result<(), Failure> {
-        self.context()?;
-        self.state.advance(Event::Shut)?;
-        self.drive()
-    }
-
     fn drive(&mut self) -> Result<(), Failure> {
         loop {
             let event = match self.state {
@@ -196,12 +184,9 @@ impl<'a> Timer<'a> {
         }
     }
 
-    fn observe_clear(&mut self) -> Result<bool, Failure> {
+    fn observe_clear(&self) -> Result<bool, Failure> {
         if self.local.enabled() {
-            self.local.set(false);
-            if self.local.enabled() {
-                return Err(Failure::Unconfirmed);
-            }
+            return Err(Failure::Unconfirmed);
         }
         for _ in 0..OBSERVATIONS {
             if !self.pending()? {
@@ -251,18 +236,77 @@ impl AbsoluteTimer for Timer<'_> {
         Ok(self.counter()? >= deadline)
     }
 
+    fn pending_effect(&self) -> Result<Option<TimerEffect>, Failure> {
+        self.context()?;
+        Ok(match self.state {
+            State::Programming(program) | State::Uncertain(Effect::Programming(program)) => {
+                Some(TimerEffect::Programming {
+                    previous: program.previous,
+                    requested: program.requested,
+                })
+            }
+            State::Clearing(_)
+            | State::AwaitingClear(_)
+            | State::Uncertain(Effect::Clearing(_)) => Some(TimerEffect::Clearing),
+            State::Inherited(_) | State::Idle | State::Armed(_) => None,
+        })
+    }
+
+    fn confirm_effect(&mut self) -> Result<(), Failure> {
+        self.context()?;
+        let event = match self.state {
+            State::Uncertain(Effect::Programming(program)) => match program.step {
+                ProgramStep::Compare => {
+                    let observed = self.comparator.read_comparison();
+                    Event::Compared(
+                        (observed == Some(program.requested))
+                            .then_some(())
+                            .ok_or(Failure::Unconfirmed),
+                    )
+                }
+                ProgramStep::Enable => Event::Enabled(self.local.enabled()),
+            },
+            State::Uncertain(Effect::Clearing(clear)) => match clear.step {
+                ClearStep::Mask => Event::Masked(!self.local.enabled()),
+                ClearStep::Compare => Event::Compared(
+                    (self.comparator.read_comparison() == Some(u64::MAX))
+                        .then_some(())
+                        .ok_or(Failure::Unconfirmed),
+                ),
+            },
+            State::AwaitingClear(_) => return self.drive(),
+            _ => return Err(Failure::Busy),
+        };
+        self.state.advance(event)?;
+        self.drive()
+    }
+
+    unsafe fn clear(&mut self) -> Result<(), Failure> {
+        self.context()?;
+        if self.pending_effect()? == Some(TimerEffect::Clearing) {
+            return self.confirm_effect();
+        }
+        if self.state == State::Idle {
+            return (!self.local.enabled() && !self.local.pending())
+                .then_some(())
+                .ok_or(Failure::Unconfirmed);
+        }
+        self.state.advance(Event::Shut)?;
+        self.drive()
+    }
+
     unsafe fn stop_due(&mut self) -> Result<(), Failure> {
         let deadline = match self.state {
             State::Armed(target) => target,
-            State::AwaitingClear(Prior::Armed(_)) => return unsafe { self.shut() },
+            State::AwaitingClear(Prior::Armed(_)) => return self.confirm_effect(),
             State::Uncertain(Effect::Clearing(clear)) if matches!(clear.prior, Prior::Armed(_)) => {
-                return unsafe { self.shut() };
+                return self.confirm_effect();
             }
             _ => return Err(Failure::Busy),
         };
         if self.counter()? < deadline {
             return Err(Failure::Busy);
         }
-        unsafe { self.shut() }
+        unsafe { self.clear() }
     }
 }

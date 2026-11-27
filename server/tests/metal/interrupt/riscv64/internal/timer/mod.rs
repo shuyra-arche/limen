@@ -61,7 +61,7 @@ fn clear_resumes_observation_after_unconfirmed_programming() {
         Err(Failure::Unconfirmed)
     );
     assert_eq!(state, State::Uncertain(Effect::Clearing(clearing)));
-    state.advance(Event::Shut).unwrap();
+    assert_eq!(state.advance(Event::Shut), Err(Failure::Busy));
     state.advance(Event::Masked(true)).unwrap();
     assert_eq!(
         state.advance(Event::Compared(Err(Failure::Unconfirmed))),
@@ -74,8 +74,8 @@ fn clear_resumes_observation_after_unconfirmed_programming() {
             step: ClearStep::Compare,
         }))
     );
-    state.advance(Event::Shut).unwrap();
-    state.advance(Event::Masked(true)).unwrap();
+    assert_eq!(state.advance(Event::Shut), Err(Failure::Busy));
+    assert_eq!(state.advance(Event::Masked(true)), Err(Failure::Busy));
     state.advance(Event::Compared(Ok(()))).unwrap();
     assert_eq!(state, State::AwaitingClear(prior));
     assert_eq!(state.advance(Event::Drained(false)), Err(Failure::Busy));
@@ -115,4 +115,7 @@ fn still_pending_enable_keeps_the_already_programmed_target() {
         Err(Failure::Unconfirmed)
     );
     assert_eq!(state, State::Uncertain(Effect::Programming(program)));
+    assert_eq!(state.advance(Event::Compared(Ok(()))), Err(Failure::Busy));
+    state.advance(Event::Enabled(true)).unwrap();
+    assert_eq!(state, State::Armed(60));
 }

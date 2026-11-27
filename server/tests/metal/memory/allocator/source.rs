@@ -1173,10 +1173,10 @@ fn skip_only_advances_the_lookup_with_an_outstanding_candidate() {
 
 #[test]
 fn source_directory_scale_is_independent_of_joint_lock_capacity() {
-    use crate::metal::sync::{TURN_CAPACITY, treaty::TurnWorkspace};
+    use crate::metal::sync::treaty::{TurnWorkspace, turn_capacity};
 
     const REGIONS: usize = 6;
-    const { assert!(REGIONS > TURN_CAPACITY) };
+    assert!(turn_capacity().is_some_and(|capacity| REGIONS > capacity));
     let mut receiver = None;
     bootstrap(|regions, mapping| {
         let config = Config {

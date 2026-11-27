@@ -10,8 +10,9 @@ use super::super::{
     },
     sgi::{Phase, Sgi},
 };
-use crate::metal::processor::{
-    description::aarch64::status, executor::aarch64::native::boot_identity,
+use crate::metal::{
+    interrupt::treaty::{ClaimConfirmation, ClaimId, Completion, HardwareClaim},
+    processor::{description::aarch64::status, executor::aarch64::native::boot_identity},
 };
 
 pub(in crate::metal::interrupt::aarch64::gic) fn local(affinity: usize) -> bool {
@@ -162,7 +163,13 @@ impl<'map> CpuInterface<'map> {
 
     pub fn receive(&mut self) -> Result<Option<Claim<'_, 'map>>, Failure> {
         self.context()?;
+        let round = self
+            .frame
+            .claim_round
+            .checked_add(1)
+            .ok_or(Failure::Exhausted)?;
         self.state.begin_read()?;
+        self.frame.claim_round = round;
         let raw: u64;
         unsafe { asm!("mrs {}, ICC_IAR1_EL1", "dsb sy", out(reg) raw, options(nostack)) };
         self.state.finish_read(raw)?;
@@ -247,15 +254,30 @@ impl Claim<'_, '_> {
 
 impl crate::metal::interrupt::treaty::claim::Sealed for Claim<'_, '_> {}
 
-impl crate::metal::interrupt::treaty::HardwareClaim for Claim<'_, '_> {
+impl HardwareClaim for Claim<'_, '_> {
     type Error = Failure;
 
-    fn source_number(&self) -> u32 {
-        self.intid()
+    fn identity(&self) -> ClaimId {
+        ClaimId::new(
+            self.owner.frame.physical().start(),
+            self.owner.frame.affinity() as u64,
+            self.owner.frame.claim_round,
+            self.intid(),
+        )
     }
 
-    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::treaty::Completion, Failure> {
-        use crate::metal::interrupt::treaty::Completion;
+    fn confirm(&mut self, evidence: ClaimConfirmation) -> Result<Completion, Failure> {
+        if evidence.id() != self.identity() || evidence.accepted() {
+            return Err(Failure::Scope);
+        }
+        self.owner.context()?;
+        if self.owner.state != State::Empty {
+            return Err(Failure::Busy);
+        }
+        Ok(Completion::Settled)
+    }
+
+    unsafe fn finish(&mut self) -> Result<Completion, Failure> {
         if self.owner.state == State::Claimed(self.id) {
             unsafe { self.drop_priority() }?;
             if self.owner.state == State::Empty {

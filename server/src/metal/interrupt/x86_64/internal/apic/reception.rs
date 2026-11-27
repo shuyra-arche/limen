@@ -1,6 +1,7 @@
 //! Non-nested fixed-vector reception on the owning xAPIC Hart.
 
 use super::{Failure, LocalApic};
+use crate::metal::interrupt::treaty::{ClaimConfirmation, ClaimId, Completion, HardwareClaim};
 
 const ISR: usize = 0x100;
 const EOI: usize = 0xb0;
@@ -14,6 +15,25 @@ pub enum Reception {
     Received(u8),
     /// The EOI write escaped. Never repeat it on this evidence.
     Unconfirmed(u8),
+    /// A vector entered hardware after the last representable claim round.
+    Exhausted(u8),
+}
+
+impl Reception {
+    /// Record a vector already accepted by this Hart's hardware.
+    fn record(&mut self, round: &mut u64, vector: u8) -> Result<(), Failure> {
+        let Some(next) = round.checked_add(1) else {
+            *self = Self::Exhausted(vector);
+            return Err(Failure::Busy);
+        };
+        *round = next;
+        *self = Self::Received(vector);
+        Ok(())
+    }
+
+    fn involves(self, vector: u8) -> bool {
+        matches!(self, Self::Received(old) | Self::Unconfirmed(old) | Self::Exhausted(old) if old == vector)
+    }
 }
 
 /// A fixed vector reserved on one original Local APIC.
@@ -75,7 +95,7 @@ impl<'map> LocalApic<'map> {
             return Err(Failure::Scope);
         }
         let (bank, bit) = Self::vector_bit(vector);
-        if self.vectors[bank] & bit != 0 {
+        if self.vectors[bank] & bit != 0 || self.reception_round == u64::MAX {
             return Err(Failure::Busy);
         }
         self.vectors[bank] |= bit;
@@ -88,10 +108,7 @@ impl<'map> LocalApic<'map> {
             return Err((lease, Failure::Scope));
         }
         let (bank, bit) = Self::vector_bit(lease.vector);
-        if self.vectors[bank] & bit == 0
-            || matches!(self.reception, Reception::Received(vector) | Reception::Unconfirmed(vector)
-                if vector == lease.vector)
-        {
+        if self.vectors[bank] & bit == 0 || self.reception_involves(lease.vector) {
             return Err((lease, Failure::Busy));
         }
         self.vectors[bank] &= !bit;
@@ -152,7 +169,7 @@ impl<'map> LocalApic<'map> {
         {
             return Err(Failure::Scope);
         }
-        self.reception = Reception::Received(vector);
+        self.reception.record(&mut self.reception_round, vector)?;
         Ok(Claim {
             owner: self,
             vector,
@@ -195,25 +212,44 @@ impl<'map> LocalApic<'map> {
     }
 
     pub(super) fn reception_involves(&self, vector: u8) -> bool {
-        matches!(self.reception, Reception::Received(old) | Reception::Unconfirmed(old) if old == vector)
+        self.reception.involves(vector)
     }
 }
 
 impl crate::metal::interrupt::treaty::claim::Sealed for Claim<'_, '_> {}
 
-impl crate::metal::interrupt::treaty::HardwareClaim for Claim<'_, '_> {
+impl HardwareClaim for Claim<'_, '_> {
     type Error = Failure;
 
-    fn source_number(&self) -> u32 {
-        u32::from(self.vector())
+    fn identity(&self) -> ClaimId {
+        ClaimId::new(
+            self.owner.base.physical.start(),
+            self.owner.hart as u64,
+            self.owner.reception_round,
+            u32::from(self.vector()),
+        )
     }
 
-    unsafe fn finish(&mut self) -> Result<crate::metal::interrupt::treaty::Completion, Failure> {
-        use crate::metal::interrupt::treaty::Completion;
+    fn confirm(&mut self, evidence: ClaimConfirmation) -> Result<Completion, Failure> {
+        if evidence.id() != self.identity() || evidence.accepted() {
+            return Err(Failure::Scope);
+        }
+        match Claim::confirm(self) {
+            Ok(()) => Ok(Completion::Settled),
+            Err(Failure::Unconfirmed) => Ok(Completion::AwaitingObservation),
+            Err(error) => Err(error),
+        }
+    }
+
+    unsafe fn finish(&mut self) -> Result<Completion, Failure> {
         match unsafe { self.complete() } {
             Ok(()) => Ok(Completion::Settled),
-            Err(Failure::Unconfirmed) => Ok(Completion::AwaitingConfirmation),
+            Err(Failure::Unconfirmed) => Ok(Completion::AwaitingObservation),
             Err(error) => Err(error),
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../../tests/metal/interrupt/x86_64/internal/apic/reception.rs"]
+mod tests;

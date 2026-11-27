@@ -2,12 +2,18 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use kernel::metal::interrupt::x86_64::internal::apic;
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::metal::processor::treaty::{Minor, StartError, Startup};
+use kernel::metal::{
+    processor::treaty::{LocalStorage, Stack},
+    sync::treaty::Supply,
+};
 use limen_treaty::model::PhysicalAddress;
 
 use super::delay;
 
 static FAILURE_DELAY_CALLS: AtomicUsize = AtomicUsize::new(0);
-static OTHER_MINOR: Minor = Minor::new();
+static OTHER_MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static OTHER_MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static OTHER_MINOR: Minor = Minor::new(&OTHER_MINOR_STACK, &OTHER_MINOR_LOCAL);
 
 fn reject_before_send(_: u32) -> bool {
     false

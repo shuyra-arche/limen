@@ -3,6 +3,6 @@
 #[cfg(limen_cooperative)]
 pub(super) mod cooperative;
 
-pub(in crate::metal) mod terminal;
+pub(crate) mod terminal;
 
 mod profile;

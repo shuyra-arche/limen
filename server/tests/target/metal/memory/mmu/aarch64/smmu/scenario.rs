@@ -1,8 +1,8 @@
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-#[path = "../../../../../support/paging/retirement.rs"]
-mod retirement;
+#[path = "../../../../../support/paging/binding.rs"]
+mod binding;
 
-use kernel::metal::memory::mmu::treaty::{Retirement, Unbind};
+use kernel::metal::memory::mmu::treaty::{BindingControl, BindingEffect, BindingRejection};
 use kernel::metal::{
     memory::{
         access::treaty::device::DeviceWindow,
@@ -109,46 +109,38 @@ pub(super) fn check(tree: &DeviceTree<'_>) {
     endpoints[0].downgrade(controller.format().unwrap());
     let binding = bindings[0];
     let refresh = Refresh::StageTwo;
-    let command = unsafe { controller.begin_refresh(binding, refresh) }.unwrap();
+    let command =
+        unsafe { BindingControl::begin_refresh(&mut controller, binding, refresh) }.unwrap();
     assert_eq!(
-        retry(|| controller.observe(command)),
-        Effect::Refreshed(binding, refresh)
+        binding::settle(&mut controller, command),
+        BindingEffect::Refreshed(binding, refresh)
     );
     check_destinations(&mut endpoints, 0, false);
     check_destinations(&mut endpoints, 1, true);
-    let previous = command;
+    let previous = command.command();
     let (ring, queue) = retry(|| controller.shut_queue());
     assert_eq!(queue, physical);
     unsafe { controller.open_queue(ring, queue) }.unwrap();
-    let command = unsafe { controller.begin_unbind(bindings[1]) }.unwrap();
+    let command = unsafe { controller.begin_retirement(bindings[1]) }.unwrap();
     assert_eq!(controller.observe(previous), Err(smmu::Error::Stale));
     assert_eq!(controller.binding(stream::SECOND), None);
-    assert_eq!(controller.pending_command(), Some(command));
-    assert!(controller.pending_retirement(bindings[0]).is_none());
-    let recovered = controller.pending_retirement(bindings[1]).unwrap();
-    let settled = retry(|| match controller.observe_retirement(&recovered) {
-        Ok(Retirement::Pending) => Err(smmu::Error::Busy),
-        result => result,
-    });
-    assert_eq!(settled, Retirement::Settled);
+    assert_eq!(controller.pending_command(), Some(command.command()));
+    assert!(controller.pending_change(bindings[0]).is_none());
     assert_eq!(
-        controller.observe_retirement(&recovered),
-        Err(smmu::Error::Stale)
+        binding::settle(&mut controller, command),
+        BindingEffect::Unbound(bindings[1])
     );
     assert!(controller.pending_command().is_none());
     check_destinations(&mut endpoints, 1, false);
-    let command = unsafe { controller.begin_bind(bindings[1].context()) }.unwrap();
-    let Effect::Bound(replacement) = retry(|| controller.observe(command)) else {
-        panic!("expected the new stream binding");
-    };
+    let replacement = unsafe { binding::bind(&mut controller, bindings[1].context()) };
     assert_ne!(replacement, bindings[1]);
     assert_eq!(
-        unsafe { controller.begin_unbind(bindings[1]) },
-        Err(smmu::Error::Stale)
+        unsafe { controller.begin_retirement(bindings[1]) },
+        Err(BindingRejection::Rejected(smmu::Error::Stale))
     );
     check_destinations(&mut endpoints, 1, true);
     for binding in [bindings[0], replacement] {
-        unsafe { retirement::retire(&mut controller, binding, |_| {}) };
+        unsafe { binding::retire(&mut controller, binding, |_| {}) };
     }
     let (returned, original) = retry(|| controller.shut_queue());
     assert_eq!(original, physical);

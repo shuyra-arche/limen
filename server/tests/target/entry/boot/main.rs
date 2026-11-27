@@ -1,11 +1,13 @@
 #![no_std]
 #![no_main]
 
+kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
+
 use kernel::metal::platform::boot::treaty::{shutdown, write};
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
-use kernel::entry::boot::{Boot, stack_range};
+use kernel::entry::boot::Boot;
 use kernel::metal::{
     chrono::riscv64::description::RiscvTimebase,
     memory::mmu::riscv64::internal::description::{MaximumMode, RiscvMmu},
@@ -155,7 +157,7 @@ extern "Rust" fn limen_platform_ready(boot: Boot) -> ! {
     );
     let top: usize;
     unsafe { asm!("ld {}, 0({})", out(reg) top, in(reg) sscratch, options(nostack, readonly)) };
-    let reserved = stack_range();
+    let reserved = boot.stack_range();
     let emergency = top.checked_sub(16 * 1024).expect("emergency stack top");
     assert!(
         top.is_multiple_of(16)

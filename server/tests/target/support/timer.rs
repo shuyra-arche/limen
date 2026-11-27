@@ -1,7 +1,10 @@
 //! The same consumer of a confirmed native timer on both hardware profiles.
 
 use core::{fmt::Debug, time::Duration};
-use kernel::metal::{chrono::treaty::Clock, interrupt::treaty::AbsoluteTimer};
+use kernel::metal::{
+    chrono::treaty::Clock,
+    interrupt::treaty::{AbsoluteTimer, TimerEffect},
+};
 
 pub fn arm<T: AbsoluteTimer>(clock: &Clock, timer: &mut T, delay: Duration)
 where
@@ -9,6 +12,8 @@ where
 {
     let target = clock.sample().unwrap().after(delay).unwrap();
     timer.arm_at(target).unwrap();
+    assert!(timer.pending_effect().unwrap().is_none());
+    assert!(timer.confirm_effect().is_err());
     assert!(!timer.due().unwrap());
 }
 
@@ -30,10 +35,23 @@ where
     timer
         .advance_deadline(sample.after(early).unwrap())
         .unwrap();
+    assert!(timer.pending_effect().unwrap().is_none());
 }
 
 /// # Safety
 /// The target scenario has taken responsibility for the original notification.
-pub unsafe fn stop<T: AbsoluteTimer>(timer: &mut T) -> Result<(), T::Failure> {
-    unsafe { timer.stop_due() }
+pub unsafe fn stop<T: AbsoluteTimer>(timer: &mut T) -> Result<(), T::Failure>
+where
+    T::Failure: Debug,
+{
+    let result = if timer.pending_effect()? == Some(TimerEffect::Clearing) {
+        timer.confirm_effect()
+    } else {
+        unsafe { timer.stop_due() }
+    };
+    if result.is_ok() {
+        assert!(timer.pending_effect()?.is_none());
+        assert!(timer.confirm_effect().is_err());
+    }
+    result
 }

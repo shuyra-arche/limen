@@ -12,7 +12,7 @@ use core::{cell::Cell, ops::Range};
 
 use crate::metal::sync::local::LocalSync;
 #[cfg(any(limen_target, test))]
-use crate::metal::sync::local::Supply;
+use crate::metal::sync::local::{self as synchronization, Supply};
 
 mod protection;
 #[cfg(limen_target)]
@@ -92,7 +92,7 @@ impl Major {
 
 /// Resident storage supplied by one actual CPU's construction path.
 #[cfg(any(limen_target, test))]
-pub(in crate::metal) struct Storage<const N: usize> {
+pub struct LocalStorage<const N: usize> {
     local: Executor,
     synchronization: Supply<N>,
 }
@@ -100,24 +100,41 @@ pub(in crate::metal) struct Storage<const N: usize> {
 // Only the entering CPU binds or accesses the local records. Queue successors
 // access individual published nodes through Sync's atomic links.
 #[cfg(any(limen_target, test))]
-unsafe impl<const N: usize> Sync for Storage<N> {}
+unsafe impl<const N: usize> Sync for LocalStorage<N> {}
 
 #[cfg(any(limen_target, test))]
-impl<const N: usize> Storage<N> {
-    pub(in crate::metal) const fn new(synchronization: Supply<N>) -> Self {
+impl<const N: usize> LocalStorage<N> {
+    pub const fn new(synchronization: Supply<N>) -> Self {
         Self {
             local: Executor::new(),
             synchronization,
         }
     }
 
+    pub(in crate::metal) const fn material(&'static self) -> Material {
+        Material {
+            local: &self.local,
+            synchronization: self.synchronization.material(),
+        }
+    }
+}
+
+/// Fixed local material passed from the construction site to native startup.
+#[cfg(any(limen_target, test))]
+pub(in crate::metal) struct Material {
+    local: &'static Executor,
+    synchronization: synchronization::Material,
+}
+
+#[cfg(any(limen_target, test))]
+impl Material {
     /// # Safety
     /// Only the entering CPU may establish the fixed synchronization
     /// association, before installing any local register or ordinary operation.
-    pub(in crate::metal) unsafe fn bind(&'static self) -> &'static Executor {
+    pub(in crate::metal) unsafe fn bind(&self) -> &'static Executor {
         let synchronization = unsafe { self.synchronization.bind() };
         assert!(self.local.synchronization.set(synchronization).is_ok());
-        &self.local
+        self.local
     }
 }
 

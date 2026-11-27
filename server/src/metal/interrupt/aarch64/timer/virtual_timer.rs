@@ -10,7 +10,7 @@ use crate::metal::{
     },
     interrupt::{
         aarch64::gic::redistributor::input::{Ppi, StoppedPpi},
-        treaty::{AbsoluteTimer, absolute::Sealed},
+        treaty::{AbsoluteTimer, TimerEffect, absolute::Sealed},
     },
 };
 
@@ -116,10 +116,17 @@ impl<'scope, 'tree, 'map> VirtualTimer<'scope, 'tree, 'map> {
     /// until the separate original claim is completed on its CPU Interface.
     pub fn stop(&mut self) -> Result<(), Failure> {
         let now = self.now()?;
-        self.state.begin_stop(now)?;
-        unsafe {
-            asm!("msr cntv_ctl_el0, {}", "isb", in(reg) MASK, options(nostack, preserves_flags))
-        };
+        if !matches!(self.state, State::Masking(_)) {
+            self.state.begin_stop(now)?;
+            unsafe {
+                asm!("msr cntv_ctl_el0, {}", "isb", in(reg) MASK, options(nostack, preserves_flags))
+            };
+        }
+        self.confirm_stop()
+    }
+
+    fn confirm_stop(&mut self) -> Result<(), Failure> {
+        self.now()?;
         self.state
             .finish_stop(control() & (ENABLE | MASK) == MASK)?;
         self.ppi.stopped();
@@ -156,6 +163,38 @@ impl AbsoluteTimer for VirtualTimer<'_, '_, '_> {
             return Err(Failure::Busy);
         };
         Ok(now >= target)
+    }
+
+    fn pending_effect(&self) -> Result<Option<TimerEffect>, Failure> {
+        self.now()?;
+        Ok(match self.state {
+            State::Programming {
+                previous,
+                requested,
+            } => Some(TimerEffect::Programming {
+                previous,
+                requested,
+            }),
+            State::Masking(_) => Some(TimerEffect::Clearing),
+            State::Idle | State::Armed(_) => None,
+        })
+    }
+
+    fn confirm_effect(&mut self) -> Result<(), Failure> {
+        match self.state {
+            State::Programming { .. } => self.confirm_program(),
+            State::Masking(_) => self.confirm_stop(),
+            State::Idle | State::Armed(_) => Err(Failure::Busy),
+        }
+    }
+
+    unsafe fn clear(&mut self) -> Result<(), Failure> {
+        self.now()?;
+        match self.state {
+            State::Idle if control() & ENABLE == 0 => Ok(()),
+            State::Armed(_) | State::Masking(_) => self.stop(),
+            _ => Err(Failure::Busy),
+        }
     }
 
     unsafe fn stop_due(&mut self) -> Result<(), Failure> {

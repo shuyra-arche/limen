@@ -1,16 +1,15 @@
 //! Supervisor notification scope and the original SBI issuance record.
 
 use crate::metal::{
-    interrupt::treaty::Issuance, platform::description::devicetree::NodeId,
-    processor::description::riscv64::cpu::RiscvCpu,
+    platform::description::devicetree::NodeId, processor::description::riscv64::cpu::RiscvCpu,
 };
 
 #[cfg(all(limen_target, target_arch = "riscv64", limen_firmware = "sbi"))]
 mod native;
 #[cfg(all(limen_target, target_arch = "riscv64", limen_firmware = "sbi"))]
-pub use native::{IpiRoute, Receiver, Sender};
+pub use native::{IpiIssue, IpiRoute, Receiver, Sender};
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Source<'tree> {
     scope: NodeId<'tree>,
     hart: usize,
@@ -67,13 +66,22 @@ pub struct SendState<'tree> {
         expect(dead_code, reason = "native SBI admission binds the source")
     )]
     source: Option<Source<'tree>>,
-    unconfirmed: Option<(usize, isize)>,
+    next: u64,
+    issue: Option<Record>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Record {
+    hart: usize,
+    round: u64,
+    error: Option<isize>,
 }
 
 impl<'tree> SendState<'tree> {
     pub const FRESH: Self = Self {
         source: None,
-        unconfirmed: None,
+        next: 1,
+        issue: None,
     };
 }
 
@@ -106,20 +114,33 @@ impl<'tree> SendState<'tree> {
         Ok(())
     }
 
-    fn require_available(&self) -> Result<(), Error> {
-        self.unconfirmed.is_none().then_some(()).ok_or(Error::Busy)
+    fn begin(&mut self, hart: usize) -> Result<Record, Error> {
+        if self.issue.is_some() {
+            return Err(Error::Busy);
+        }
+        let round = self.next;
+        self.next = round.checked_add(1).ok_or(Error::Busy)?;
+        let issue = Record {
+            hart,
+            round,
+            error: None,
+        };
+        self.issue = Some(issue);
+        Ok(issue)
     }
 
-    fn retain_unconfirmed(&mut self, hart: usize, error: isize) {
-        debug_assert!(self.unconfirmed.is_none());
-        self.unconfirmed = Some((hart, error));
+    fn finish(&mut self, result: Result<(), isize>) {
+        let original = self.issue.as_mut().expect("original SBI issue");
+        if let Err(error) = result {
+            original.error = Some(error);
+        } else {
+            self.issue = None;
+        }
     }
 
-    fn pending(&self, hart: usize) -> Result<Option<Issuance<Error>>, Error> {
-        match self.unconfirmed {
-            Some((original, error)) if original == hart => {
-                Ok(Some(Issuance::Unconfirmed(Error::Firmware(error))))
-            }
+    fn pending(&self, hart: usize) -> Result<Option<Record>, Error> {
+        match self.issue {
+            Some(original) if original.hart == hart => Ok(Some(original)),
             Some(_) => Err(Error::Busy),
             None => Ok(None),
         }

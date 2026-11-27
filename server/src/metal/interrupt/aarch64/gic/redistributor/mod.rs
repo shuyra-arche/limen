@@ -178,6 +178,7 @@ impl<'map> Iterator for Redistributor<'map, '_> {
             domain: self.domain,
             mapping,
             private: [input::State::Vacant; 32],
+            claim_round: 0,
         })
     }
 }
@@ -189,6 +190,8 @@ pub struct Frame<'map> {
     domain: PhysicalRange,
     mapping: DeviceWindow<'map>,
     private: [input::State; 32],
+    // CPU Interface borrows and local mappings may change while this frame lives.
+    pub(super) claim_round: u64,
 }
 
 impl<'map> Frame<'map> {
@@ -212,6 +215,7 @@ impl<'map> Frame<'map> {
             domain: self.domain,
             mapping: PhantomData,
             private: self.private,
+            claim_round: self.claim_round,
         }
     }
 
@@ -258,6 +262,7 @@ pub struct FrameHandoff<'origin> {
     domain: PhysicalRange,
     mapping: PhantomData<&'origin mut ()>,
     private: [input::State; 32],
+    claim_round: u64,
 }
 
 impl<'origin> FrameHandoff<'origin> {
@@ -292,6 +297,7 @@ impl<'origin> FrameHandoff<'origin> {
             domain: self.domain,
             mapping,
             private: self.private,
+            claim_round: self.claim_round,
         })
     }
 }

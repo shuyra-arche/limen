@@ -3,6 +3,10 @@
 
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::metal::processor::treaty::{Minor, Startup};
+use kernel::metal::{
+    processor::treaty::{LocalStorage, Stack},
+    sync::treaty::Supply,
+};
 
 use core::sync::atomic::{
     AtomicUsize,
@@ -11,7 +15,10 @@ use core::sync::atomic::{
 use kernel::{
     entry::boot,
     metal::{
-        interrupt::x86_64::internal::apic::{Failure, IpiTarget, LocalApic, Probe, Reception},
+        interrupt::{
+            treaty::{Issuance, NotifyHart},
+            x86_64::internal::apic::{Failure, IpiTarget, LocalApic, Probe, Reception},
+        },
         memory::access::treaty::device::DeviceWindow,
         platform::description::treaty::acpi::Madt,
     },
@@ -25,7 +32,9 @@ use uefi_fixture::{
 };
 
 const VECTOR: u8 = 0xf3;
-static MINOR: Minor = Minor::new();
+static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
+static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
+static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static ICR_PROBE: AtomicUsize = AtomicUsize::new(0);
 static READY: AtomicUsize = AtomicUsize::new(0);
 static CLOSED: AtomicUsize = AtomicUsize::new(0);
@@ -131,17 +140,25 @@ extern "Rust" fn limen_platform_ready(boot: boot::Boot<'_>) -> ! {
         ..
     } = &mut startup;
     let page = PhysicalAddress::new(trampoline.addr().get() as u64);
-    {
-        let issued = unsafe { controller.notify(target) }.unwrap();
+    let issue = {
+        let mut route = unsafe { controller.bind_ipi(target) }.unwrap();
+        let Issuance::Pending(issued) = route.notify().unwrap() else {
+            panic!("fixed ICR issue must be retained");
+        };
         assert_eq!(issued.target(), target);
-    }
+        issued
+    };
     // The Harts may already have observed the physical effect. Only the
     // original send observation can settle the sender's ICR obligation.
     assert!(matches!(
         controller.prepare(destination, page),
         Err(Failure::Busy)
     ));
-    controller.pending_ipi().unwrap().observe().unwrap();
+    {
+        let mut route = unsafe { controller.bind_ipi(target) }.unwrap();
+        assert_eq!(route.pending(), Ok(Some(issue)));
+        assert_eq!(route.confirm(issue), Ok(Issuance::Confirmed(issue)));
+    }
     await_phase(&ICR_PROBE, 2);
 
     assert!(matches!(

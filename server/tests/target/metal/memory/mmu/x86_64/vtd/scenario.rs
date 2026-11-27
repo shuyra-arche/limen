@@ -1,18 +1,18 @@
 //! Two q35 endpoints share one VT-d controller and retire exact bindings.
 
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-#[path = "../../../../../support/paging/retirement.rs"]
-mod retirement;
+#[path = "../../../../../support/paging/binding.rs"]
+mod binding;
 
 use super::edu::{Endpoint, REQUESTER};
 use core::arch::x86_64::{__cpuid, _mm_clflush, _mm_mfence};
 use kernel::metal::{
     memory::access::treaty::device::DeviceWindow,
     memory::mmu::{
-        treaty::Unbind,
+        treaty::{BindingControl, BindingEffect, BindingProgress, BindingRejection},
         x86_64::external::vtd::{
             Controller, Error,
-            binding::{Context, Sequence},
+            binding::{Context, Refresh, Sequence},
             command::{Change, CommandId},
             directory::{Storage, Table},
             translation::{Format, Visibility},
@@ -223,18 +223,19 @@ pub(super) fn check(unit: RemappingUnit<'_>, registers: &mut DeviceWindow<'_>) {
         _mm_clflush(leaf.cast());
         _mm_mfence();
     }
-    let command = unsafe { controller.begin_invalidate(first) }.unwrap();
+    let scope = Refresh::GlobalTranslations;
+    let command = unsafe { controller.begin_refresh(first, scope) }.unwrap();
     assert_eq!(controller.observe(first_command), Err(Error::Stale));
     assert_eq!(
-        await_change(&mut controller, command),
-        Change::Invalidated(first)
+        binding::settle(&mut controller, command),
+        BindingEffect::Refreshed(first, scope)
     );
     dma_result(&mut primary, first_word, SENTINEL);
     prove_fault(&mut controller, REQUESTER, 5);
     dma_result(&mut secondary, second_word, OTHER_PATTERN);
 
     let ticket = unsafe {
-        retirement::retire(&mut controller, second, |controller| {
+        binding::retire(&mut controller, second, |controller| {
             let (_, change) = controller.pending().expect("original VT-d retirement");
             assert_eq!(change, Change::Unbound(second));
             assert_eq!(controller.binding(SECOND), None);
@@ -244,25 +245,22 @@ pub(super) fn check(unit: RemappingUnit<'_>, registers: &mut DeviceWindow<'_>) {
     dma_result(&mut secondary, second_word, SENTINEL);
     prove_fault(&mut controller, SECOND, 2);
 
-    let command = unsafe { controller.begin_bind(second_context) }.unwrap();
-    let Change::Bound(replacement) = await_change(&mut controller, command) else {
-        panic!("rebind not completed")
-    };
+    let replacement = unsafe { binding::bind(&mut controller, second_context) };
     assert_ne!(replacement, second);
     assert!(matches!(
-        unsafe { controller.retire(second) },
-        Err(Error::Stale)
+        unsafe { controller.begin_retirement(second) },
+        Err(BindingRejection::Rejected(Error::Stale))
     ));
     assert_eq!(
-        unsafe { controller.begin_invalidate(second) },
-        Err(Error::Stale)
+        unsafe { controller.begin_refresh(second, scope) },
+        Err(BindingRejection::Rejected(Error::Stale))
     );
     dma_result(&mut secondary, second_word, OTHER_PATTERN);
     unsafe {
-        retirement::retire(&mut controller, replacement, |controller| {
-            assert_eq!(controller.observe_retirement(&ticket), Err(Error::Stale));
+        binding::retire(&mut controller, replacement, |controller| {
+            assert_eq!(controller.observe_change(ticket), BindingProgress::Stale);
         });
-        retirement::retire(&mut controller, first, |_| {});
+        binding::retire(&mut controller, first, |_| {});
     }
 
     boot_diagnostic::write(

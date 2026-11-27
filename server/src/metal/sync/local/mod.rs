@@ -49,20 +49,13 @@ pub(in crate::metal) struct LocalSync {
         reason = "resident synchronization supply is used by CPU startup"
     )
 )]
-pub(in crate::metal) struct Supply<const N: usize> {
+pub struct Supply<const N: usize> {
     local: LocalSync,
     nodes: [QueueNode; N],
 }
 
-#[cfg_attr(
-    not(any(limen_target, test)),
-    expect(
-        dead_code,
-        reason = "only CPU admission constructs and binds resident storage"
-    )
-)]
 impl<const N: usize> Supply<N> {
-    pub(in crate::metal) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             local: LocalSync {
                 current: Cell::new(Participation::Idle),
@@ -72,12 +65,41 @@ impl<const N: usize> Supply<N> {
         }
     }
 
+    #[cfg(any(limen_target, test))]
+    pub(in crate::metal) const fn material(&'static self) -> Material {
+        Material {
+            local: &self.local,
+            nodes: &self.nodes,
+        }
+    }
+}
+
+impl<const N: usize> Default for Supply<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The complete original supply, with its fixed node bound carried by the slice.
+#[cfg(any(limen_target, test))]
+pub(in crate::metal) struct Material {
+    local: &'static LocalSync,
+    nodes: &'static [QueueNode],
+}
+
+// The descriptor allows mutation only through exclusive CPU startup. Nodes
+// subsequently synchronize only through their own atomic queue links.
+#[cfg(any(limen_target, test))]
+unsafe impl Sync for Material {}
+
+#[cfg(any(limen_target, test))]
+impl Material {
     /// # Safety
     /// Bind once under exclusive startup, before the owning CPU can expose
     /// the record to ordinary operations. The supply remains fixed thereafter.
-    pub(in crate::metal) unsafe fn bind(&'static self) -> &'static LocalSync {
-        assert!(self.local.nodes.set(&self.nodes).is_ok());
-        &self.local
+    pub(in crate::metal) unsafe fn bind(&self) -> &'static LocalSync {
+        assert!(self.local.nodes.set(self.nodes).is_ok());
+        self.local
     }
 }
 

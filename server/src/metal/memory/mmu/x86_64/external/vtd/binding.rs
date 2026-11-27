@@ -4,7 +4,10 @@ use super::{
     Controller, Error, GLOBAL_IOTLB, IN_PROGRESS, State,
     command::{Change, CommandId, Operation},
 };
-use crate::metal::memory::mmu::treaty::{Retirement, Unbind, retirement::Sealed};
+use crate::metal::memory::mmu::treaty::{
+    BindingChange, BindingCommand, BindingControl, BindingEffect, BindingObservation,
+    BindingRejection, BindingSubmission, binding::Sealed,
+};
 use limen_treaty::model::PhysicalAddress;
 
 /// Resident sequence for this physical controller, preserved through resets
@@ -46,6 +49,11 @@ pub struct Context {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Refresh {
+    GlobalTranslations,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Binding {
     pub(super) publication: CommandId,
     retirement_number: u64,
@@ -63,12 +71,6 @@ impl Binding {
             number: self.retirement_number,
         }
     }
-}
-
-/// Observation of one register command sequence retiring its original binding.
-pub struct Unbinding {
-    command: CommandId,
-    binding: Binding,
 }
 
 impl Controller<'_> {
@@ -223,30 +225,64 @@ impl Controller<'_> {
 
 impl Sealed for Controller<'_> {}
 
-impl Unbind for Controller<'_> {
+impl From<Change> for BindingEffect<Binding, Refresh> {
+    fn from(change: Change) -> Self {
+        match change {
+            Change::Bound(binding) => Self::Bound(binding),
+            Change::Invalidated(binding) => Self::Refreshed(binding, Refresh::GlobalTranslations),
+            Change::Unbound(binding) => Self::Unbound(binding),
+        }
+    }
+}
+
+impl BindingControl for Controller<'_> {
+    type Context = Context;
     type Binding = Binding;
-    type Ticket = Unbinding;
+    type Refresh = Refresh;
+    type Command = CommandId;
     type Error = Error;
 
-    unsafe fn retire(&mut self, binding: Binding) -> Result<Unbinding, Error> {
-        let command = unsafe { self.begin_unbind(binding) }?;
-        Ok(Unbinding { command, binding })
+    unsafe fn begin_binding(&mut self, context: Context) -> BindingSubmission<Self> {
+        unsafe { self.begin_bind(context) }.map_err(BindingRejection::Rejected)?;
+        Ok(self.unsettled_change().expect("accepted binding"))
     }
 
-    fn pending_retirement(&self, binding: Binding) -> Option<Unbinding> {
-        let (command, change) = self.pending()?;
-        (change == Change::Unbound(binding)).then_some(Unbinding { command, binding })
+    unsafe fn begin_refresh(
+        &mut self,
+        binding: Binding,
+        scope: Refresh,
+    ) -> BindingSubmission<Self> {
+        unsafe { self.begin_invalidate(binding) }
+            .map(|command| BindingCommand::new(command, BindingEffect::Refreshed(binding, scope)))
+            .map_err(BindingRejection::Rejected)
     }
 
-    fn observe_retirement(&mut self, ticket: &Unbinding) -> Result<Retirement, Error> {
-        if self.pending() != Some((ticket.command, Change::Unbound(ticket.binding))) {
-            return Err(Error::Stale);
+    unsafe fn begin_retirement(&mut self, binding: Binding) -> BindingSubmission<Self> {
+        match unsafe { self.begin_unbind(binding) } {
+            Ok(command) => Ok(BindingCommand::new(
+                command,
+                BindingEffect::Unbound(binding),
+            )),
+            Err(error @ Error::Unconfirmed) => Err(BindingRejection::Unconfirmed {
+                change: self.pending_change(binding).expect("retained retirement"),
+                error,
+            }),
+            Err(error) => Err(BindingRejection::Rejected(error)),
         }
-        match self.observe(ticket.command) {
-            Ok(Change::Unbound(binding)) if binding == ticket.binding => Ok(Retirement::Settled),
-            Ok(_) => Err(Error::Unconfirmed),
-            Err(Error::Pending) => Ok(Retirement::Pending),
-            Err(error) => Err(error),
-        }
+    }
+
+    fn unsettled_change(&self) -> Option<BindingChange<Self>> {
+        let (command, effect) = self.pending()?;
+        Some(BindingCommand::new(command, effect.into()))
+    }
+
+    fn observe_change(&mut self, change: BindingChange<Self>) -> BindingObservation<Self> {
+        change.observe(self.unsettled_change(), |command| {
+            match self.observe(command) {
+                Ok(effect) => Ok(Some(effect.into())),
+                Err(Error::Pending) => Ok(None),
+                Err(error) => Err(error),
+            }
+        })
     }
 }

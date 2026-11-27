@@ -37,6 +37,7 @@ impl<'a> Controller<'a> {
     /// CPUs and interrupt contexts, including failures. Direct compatibility
     /// format is active, interrupt remapping cannot reinterpret these entries,
     /// and this controller's probed GSI interval is exclusive in the system.
+    /// Keep this controller live until every reserved route and effect settles.
     pub unsafe fn admit(madt: Madt<'a>, window: &'a mut DeviceWindow<'_>) -> Result<Self, Failure> {
         let address = window.physical().start();
         let IoApic { id, gsi_base, .. } = madt

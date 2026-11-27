@@ -1,6 +1,6 @@
 //! Direct STIMECMP access granted by the QEMU/OpenSBI supervisor handoff.
 use core::time::Duration;
-use kernel::metal::interrupt::treaty::AbsoluteTimer;
+use kernel::metal::interrupt::treaty::{AbsoluteTimer, TimerEffect};
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::{
     entry::boot::Boot,
@@ -31,7 +31,12 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Reception) {
     assert!(matches!(timer.state(), State::Inherited(Some(_))));
     let limit = counter.read().unwrap() + u64::from(counter.hertz());
     loop {
-        match unsafe { timer.shut() } {
+        let result = if timer.pending_effect().unwrap() == Some(TimerEffect::Clearing) {
+            timer.confirm_effect()
+        } else {
+            unsafe { timer.clear() }
+        };
+        match result {
             Err(Failure::Busy) if counter.read().unwrap() < limit => continue,
             result => result.unwrap(),
         }

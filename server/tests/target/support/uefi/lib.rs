@@ -1,7 +1,10 @@
 #![no_std]
 
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-use kernel::metal::processor::treaty::Minor;
+use kernel::metal::{
+    processor::treaty::{LocalStorage, Minor, Stack},
+    sync::treaty::{Supply, turn_capacity},
+};
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 use kernel::entry::boot;
@@ -13,6 +16,12 @@ use uefi::{
     Status,
     mem::memory_map::{MemoryMap, MemoryMapRef},
 };
+
+const MAJOR_NODES: usize = 5;
+static MAJOR_STACK: Stack<{ 40 * 1024 }> = Stack::new();
+static MAJOR_LOCAL: LocalStorage<MAJOR_NODES> = LocalStorage::new(Supply::new());
+static MAJOR: boot_diagnostic::MajorMaterial =
+    boot_diagnostic::MajorMaterial::new(&MAJOR_STACK, &MAJOR_LOCAL);
 
 static TARGET: AtomicUsize = AtomicUsize::new(usize::MAX);
 
@@ -35,8 +44,6 @@ pub fn target() -> usize {
 }
 
 pub fn check_minor(minor: &Minor, hart: usize) {
-    assert_eq!(minor.stack_range().len(), boot::stack_range().len());
-    assert_eq!(boot::stack_range().len(), 32 * 1024);
     assert_eq!(hart, target());
     assert_eq!(hart, board::hart());
     let sp: usize;
@@ -47,7 +54,7 @@ pub fn check_minor(minor: &Minor, hart: usize) {
         core::arch::asm!("mov {},rsp",out(reg) sp, options(nostack,nomem));
     }
     assert!(
-        minor.ready() && minor.stack_range().contains(&sp) && !boot::stack_range().contains(&sp)
+        minor.ready() && minor.stack_range().contains(&sp) && !MAJOR_STACK.range().contains(&sp)
     );
 }
 
@@ -129,7 +136,7 @@ pub fn load(prepare: impl FnOnce() -> Result<(), Status>) -> Status {
         #[cfg(target_arch = "aarch64")]
         acpi: None,
     };
-    unsafe { boot_diagnostic::major(board::hart(), &input, &board::SERVICES) }
+    unsafe { boot_diagnostic::major(board::hart(), &input, &board::TERMINAL, &MAJOR) }
 }
 
 pub fn extent(start: u64, end: u64) -> PhysicalRange {
@@ -140,11 +147,15 @@ pub fn check_handoff<'a>(boot: &boot::Boot<'a>, minor: Option<&Minor>) -> Memory
     assert_eq!(boot.hart(), board::hart());
     let map = boot.firmware_map().expect("final UEFI map");
     let early = boot.exclusions();
-    let major = boot::stack_range();
+    let major = boot.stack_range();
+    assert_eq!(major, MAJOR_STACK.range());
+    assert_eq!(turn_capacity(), Some(MAJOR_NODES));
     let image = boot.image();
     if let Some(minor) = minor {
         let minor = minor.stack_range();
         assert!(image.covers(extent(minor.start as u64, minor.end as u64)));
+        assert!(major.end <= minor.start || minor.end <= major.start);
+        assert!(minor.start.is_multiple_of(16) && minor.end.is_multiple_of(16));
     }
     assert!(
         early

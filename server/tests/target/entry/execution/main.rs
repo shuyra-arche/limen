@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+kernel::limen_riscv_major!(stack: 32 * 1024, nodes: 5);
+
 use kernel::metal::platform::boot::treaty::{shutdown, write};
 mod buddy;
 #[path = "../memory.rs"]
@@ -144,6 +146,7 @@ extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
     assert!(core::ptr::eq(failure.records.as_ptr(), records));
     assert!(core::ptr::eq(failure.harts, harts));
     assert!(core::ptr::eq(failure.dispatchers, dispatchers));
+    let major_stack = boot.stack_range();
     let runtime = Execution::new(
         failure.major,
         failure.terminal,
@@ -167,7 +170,7 @@ extern "Rust" fn limen_platform_ready(mut boot: Boot) -> ! {
     let mut schedule = || {
         let mark = core::hint::black_box(0u8);
         let address = core::hint::black_box(&mark) as *const u8 as usize;
-        assert!(!kernel::entry::boot::stack_range().contains(&address));
+        assert!(!major_stack.contains(&address));
         let a = unsafe { execution.create(first) }.expect("first unit");
         let dormant = unsafe { execution.create(abandoned) }.expect("dormant unit");
         assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));

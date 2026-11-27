@@ -5,7 +5,9 @@ use super::{
     Context,
     encoding::{Interrupt, Target},
 };
-use crate::metal::interrupt::treaty::{Completion, HardwareClaim, Receive, claim::Sealed};
+use crate::metal::interrupt::treaty::{
+    ClaimConfirmation, ClaimId, Completion, HardwareClaim, Receive, claim::Sealed,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Record {
@@ -20,6 +22,7 @@ enum Slot {
     Reading(u64),
     Masking(Record),
     Received(Record),
+    Settling(Record),
     Uncertain(u64, u32),
 }
 
@@ -110,7 +113,9 @@ impl Reception {
     pub(super) fn uncertain(&self) -> Option<(u64, Option<u32>)> {
         match self.slot {
             Slot::Reading(round) => Some((round, None)),
-            Slot::Masking(record) => Some((record.round, Some(record.raw))),
+            Slot::Masking(record) | Slot::Settling(record) => {
+                Some((record.round, Some(record.raw)))
+            }
             Slot::Uncertain(round, raw) => Some((round, Some(raw))),
             _ => None,
         }
@@ -187,11 +192,25 @@ impl<'access, 'description, 'resources> Receiver<'access, 'description, 'resourc
         }
         if let Err(error) = self.domain.settle_source(self.context, record.source) {
             if error == Failure::Unconfirmed {
-                self.context.reception.slot = Slot::Masking(record);
+                self.context.reception.slot = Slot::Settling(record);
             }
             return Err(error);
         }
         self.context.reception.settle(record)
+    }
+
+    fn confirm_settlement(&mut self, record: Record) -> Result<(), Failure> {
+        self.context.check()?;
+        if !matches!(self.context.reception.slot, Slot::Settling(original) if original == record) {
+            return Err(Failure::Busy);
+        }
+        if self.domain.state() != State::Open {
+            self.domain
+                .confirm_claim_mask(self.context, record.source)?;
+        }
+        self.domain.settle_source(self.context, record.source)?;
+        self.context.reception.slot = Slot::Empty;
+        Ok(())
     }
 }
 
@@ -227,12 +246,32 @@ impl Sealed for Claim<'_, '_, '_> {}
 impl HardwareClaim for Claim<'_, '_, '_> {
     type Error = Failure;
 
-    fn source_number(&self) -> u32 {
-        self.source()
+    fn identity(&self) -> ClaimId {
+        ClaimId::new(
+            self.receiver.context.domain().start(),
+            self.receiver.context.destination().index() as u64,
+            self.round(),
+            self.source(),
+        )
+    }
+
+    fn confirm(&mut self, evidence: ClaimConfirmation) -> Result<Completion, Failure> {
+        if evidence.id() != self.identity() || evidence.accepted() {
+            return Err(Failure::Scope);
+        }
+        match self.receiver.confirm_settlement(self.record) {
+            Ok(()) => Ok(Completion::Settled),
+            Err(Failure::Unconfirmed) => Ok(Completion::AwaitingObservation),
+            Err(error) => Err(error),
+        }
     }
 
     unsafe fn finish(&mut self) -> Result<Completion, Failure> {
-        unsafe { self.settle() }.map(|()| Completion::Settled)
+        match unsafe { self.settle() } {
+            Ok(()) => Ok(Completion::Settled),
+            Err(Failure::Unconfirmed) => Ok(Completion::AwaitingObservation),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -250,8 +289,15 @@ impl<'description, 'resources> Receive for Receiver<'_, 'description, 'resources
 
     fn pending_claim(&mut self) -> Result<Option<Self::Claim<'_>>, Failure> {
         self.context.check()?;
-        if self.context.uncertain_claim().is_some() {
-            return Err(Failure::Unconfirmed);
+        match self.context.reception.slot {
+            Slot::Masking(record) => {
+                self.domain
+                    .confirm_claim_mask(self.context, record.source)?;
+                self.context.reception.confirm_mask(record)?;
+            }
+            Slot::Settling(record) => return Ok(Some(self.borrow_claim(record))),
+            Slot::Reading(_) | Slot::Uncertain(_, _) => return Err(Failure::Unconfirmed),
+            Slot::Empty | Slot::Received(_) => {}
         }
         Ok(self.current())
     }

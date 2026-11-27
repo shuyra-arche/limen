@@ -5,7 +5,7 @@ use crate::metal::processor::executor::x86_64::native::Descriptor;
 use crate::metal::{
     interrupt::x86_64::internal::apic::{Failure, LocalApic},
     memory::mmu::x86_64::internal::context::Controls,
-    platform::boot::x86_64 as boot,
+    processor::execution::terminal::x86_64 as terminal,
 };
 use core::{
     arch::{asm, naked_asm},
@@ -178,13 +178,6 @@ unsafe extern "sysv64" fn minor() -> ! {
 unsafe extern "sysv64" fn finish(hart: usize, slot: &'static Minor) -> ! {
     unsafe { crate::metal::processor::executor::x86_64::native::clear_local() };
     // The major CPU has already published the complete, immutable diagnostic IDT.
-    boot::load_idt();
+    terminal::load_idt();
     launch::arrive(hart, slot)
-}
-
-impl Minor {
-    pub(in crate::metal) fn established(&self, hart: usize) -> bool {
-        hart == crate::metal::processor::executor::x86_64::native::boot_identity()
-            && boot::established()
-    }
 }

@@ -28,12 +28,13 @@ impl Mailbox {
     pub fn publish<S: NotifyHart>(&self, sender: &mut S, round: usize, duplicate: bool)
     where
         S::Error: Debug,
+        S::Issue: Debug,
     {
         assert_eq!(self.rechecked.load(Acquire), round - 1);
         self.work.store(round, Release);
-        Self::issue(sender);
+        let original = Self::issue(sender, None);
         if duplicate {
-            Self::issue(sender);
+            Self::issue(sender, Some(original));
             // The controlled duplicate round keeps the local gate masked
             // until both issues. The next round has no sender-to-receiver
             // latch and must recheck after an actual interrupt arrives.
@@ -41,26 +42,36 @@ impl Mailbox {
         }
     }
 
-    fn issue<S: NotifyHart>(sender: &mut S)
+    fn issue<S: NotifyHart>(sender: &mut S, previous: Option<S::Issue>) -> S::Issue
     where
         S::Error: Debug,
+        S::Issue: Debug,
     {
         let mut state = sender.notify().unwrap();
-        if matches!(state, Issuance::Pending) {
+        let original = state.original();
+        if let Some(previous) = previous {
+            assert_ne!(original, previous);
+            assert!(sender.confirm(previous).is_err());
+        }
+        if matches!(state, Issuance::Pending(_)) {
             assert!(
                 sender.notify().is_err(),
                 "an original issue remains pending"
             );
             for _ in 0..4096 {
-                state = sender.pending().unwrap().expect("retained issue");
-                if !matches!(state, Issuance::Pending) {
+                assert_eq!(sender.pending().unwrap(), Some(original));
+                state = sender.confirm(original).unwrap();
+                if !matches!(state, Issuance::Pending(_)) {
                     break;
                 }
                 spin_loop();
             }
         }
-        assert!(matches!(state, Issuance::Confirmed), "{state:?}");
+        assert!(matches!(state, Issuance::Confirmed(_)), "{state:?}");
+        assert_eq!(state.original(), original);
         assert!(sender.pending().unwrap().is_none());
+        assert!(sender.confirm(original).is_err());
+        original
     }
 
     pub fn wait_for_issues(&self, round: usize, wait: impl FnOnce(&AtomicUsize, usize)) {

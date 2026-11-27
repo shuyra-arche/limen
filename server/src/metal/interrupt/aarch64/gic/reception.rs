@@ -4,6 +4,7 @@
 pub enum Failure {
     Scope,
     Busy,
+    Exhausted,
     Special(u32),
 }
 
