@@ -15,7 +15,7 @@ use uefi::mem::memory_map::MemoryMap;
 
 static OLD_IDT: AtomicUsize = AtomicUsize::new(0);
 
-pub fn hart() -> usize {
+pub fn processor() -> usize {
     (core::arch::x86_64::__cpuid(1).ebx >> 24) as usize
 }
 
@@ -83,13 +83,13 @@ pub fn local_controller(
     let probe = Probe::native();
     let (window, reason) = unsafe { LocalApic::admit(usize::MAX, madt, window, probe) }
         .err()
-        .expect("wrong Hart must retain the window");
+        .expect("wrong processor must retain the window");
     assert_eq!(reason, apic::Failure::Scope);
-    let controller = unsafe { LocalApic::admit(boot.hart(), madt, window, probe) }
+    let controller = unsafe { LocalApic::admit(boot.processor(), madt, window, probe) }
         .ok()
         .expect("actual local APIC");
     assert_eq!(controller.launch_state(), apic::launch::State::Idle);
-    assert!(!controller.can_start(boot.hart()));
+    assert!(!controller.can_start(boot.processor()));
     assert!(!controller.can_start(255));
     controller
 }
@@ -174,7 +174,7 @@ impl Idtr {
 pub(super) fn check_discovery(boot: &boot::Boot<'_>, target: usize) {
     let acpi = boot.acpi().expect("real firmware ACPI");
     let madt = acpi.madt().expect("MADT describes q35 topology");
-    assert!(madt.enabled_local_apic(u8::try_from(boot.hart()).unwrap()));
+    assert!(madt.enabled_local_apic(u8::try_from(boot.processor()).unwrap()));
     assert!(madt.enabled_local_apic(u8::try_from(target).unwrap()));
     assert!(madt.io_apics().next().is_some());
     assert!(madt.source_overrides().next().is_some());

@@ -25,7 +25,7 @@ pub fn capture() -> Option<LoaderTree<'static>> {
             .ok_or(Status::NOT_FOUND)?;
         let mut candidates = cpus.candidates();
         let cpu = candidates.next().ok_or(Status::NOT_FOUND)?;
-        if !cpu.enabled || cpu.affinity != hart() || candidates.next().is_some() {
+        if !cpu.enabled || cpu.affinity != processor() || candidates.next().is_some() {
             return Err(Status::COMPROMISED_DATA);
         }
         let psci = PsciDescription::read(&tree)
@@ -45,7 +45,7 @@ pub fn capture() -> Option<LoaderTree<'static>> {
     Some(LoaderTree::Memory(bytes))
 }
 
-pub fn hart() -> usize {
+pub fn processor() -> usize {
     let affinity: usize;
     unsafe {
         asm!("mrs {}, MPIDR_EL1", out(reg) affinity, options(nomem, nostack, preserves_flags))

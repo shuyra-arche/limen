@@ -85,11 +85,11 @@ pub fn shutdown(success: bool) -> ! {
 /// reserved across delivery.
 #[cfg(limen_firmware = "uefi")]
 pub unsafe fn major(
-    hart: usize,
+    processor: usize,
     loader: &Loader<'_>,
     terminal: &'static Terminal,
     material: &'static MajorMaterial,
 ) -> ! {
     terminal.install_early();
-    unsafe { super::enter_major(hart, loader, material.stack.top(), material) }
+    unsafe { super::enter_major(processor, loader, material.stack.top(), material) }
 }

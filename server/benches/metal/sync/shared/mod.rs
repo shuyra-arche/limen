@@ -19,7 +19,7 @@ mod alternating;
 mod contention;
 
 const PEERS: usize = 3;
-const HARTS: usize = PEERS + 1;
+const PROCESSORS: usize = PEERS + 1;
 const WARMUP: usize = 512;
 const ITERATIONS: usize = 4096;
 const SAMPLES: usize = 9;
@@ -57,7 +57,7 @@ impl Mode {
 
     fn participants(self) -> usize {
         match self {
-            Self::Contention(_) => HARTS,
+            Self::Contention(_) => PROCESSORS,
             Self::Alternating(_) => 2,
         }
     }
@@ -78,7 +78,7 @@ impl Mode {
 
     fn verify(self, iterations: usize) {
         match self {
-            Self::Contention(lock) => lock.verify(iterations * HARTS),
+            Self::Contention(lock) => lock.verify(iterations * PROCESSORS),
             Self::Alternating(work) => work.verify(iterations),
         }
     }
@@ -117,7 +117,7 @@ impl Batch {
             let mode = MODES[self.mode.load(Relaxed)];
             let iterations = self.iterations.load(Relaxed);
             if slot >= mode.participants() {
-                // Inactive Harts acknowledge before timing begins.
+                // Inactive processors acknowledge before timing begins.
                 self.done[slot - 1].store(epoch, Release);
                 self.ready[slot - 1].store(epoch, Release);
             } else {
@@ -161,28 +161,28 @@ impl Batch {
     }
 }
 
-fn minor(hart: usize, slot: usize) -> ! {
-    assert!((1..HARTS).contains(&slot));
-    assert!(hart < HARTS);
+fn minor(processor: usize, slot: usize) -> ! {
+    assert!((1..PROCESSORS).contains(&slot));
+    assert!(processor < PROCESSORS);
     assert!(MINORS[slot - 1].ready());
-    let bit = 1 << hart;
+    let bit = 1 << processor;
     assert_eq!(JOINED.fetch_or(bit, Release) & bit, 0);
     BATCH.minor(slot)
 }
 
 pub fn check(boot: Boot<'_>) {
-    let major = boot.hart();
-    assert!(major < HARTS);
-    for hart in 0..HARTS {
+    let major = boot.processor();
+    assert!(major < PROCESSORS);
+    for processor in 0..PROCESSORS {
         assert!(
             boot.riscv_cpus()
-                .cpu(hart as u64)
+                .cpu(processor as u64)
                 .unwrap()
                 .unwrap()
                 .enabled()
         );
     }
-    assert!(boot.riscv_cpus().cpu(HARTS as u64).unwrap().is_none());
+    assert!(boot.riscv_cpus().cpu(PROCESSORS as u64).unwrap().is_none());
     let timebase = RiscvTimebase::describe(boot.riscv_cpus()).unwrap().unwrap();
     let counter = unsafe { Counter::admit(timebase, major as u64) }.unwrap();
     let clock = counter.clock();
@@ -194,10 +194,10 @@ pub fn check(boot: Boot<'_>) {
         .unwrap()
         .unwrap();
     let mut startup = Startup::Sbi(hsm);
-    for (index, hart) in (0..HARTS).filter(|&hart| hart != major).enumerate() {
-        unsafe { MINORS[index].start(hart, minor, index + 1, &mut startup) }.unwrap();
+    for (index, processor) in (0..PROCESSORS).filter(|&processor| processor != major).enumerate() {
+        unsafe { MINORS[index].start(processor, minor, index + 1, &mut startup) }.unwrap();
     }
-    wait(&JOINED, (1 << HARTS) - 1);
+    wait(&JOINED, (1 << PROCESSORS) - 1);
 
     let mut samples = [[0_u64; SAMPLES]; MODES.len()];
     for (index, elapsed) in samples.iter_mut().enumerate() {

@@ -1,4 +1,4 @@
-//! One consumer of real coalescible notifications on two Harts.
+//! One consumer of real coalescible notifications on two processors.
 
 use core::{
     fmt::Debug,
@@ -8,7 +8,7 @@ use core::{
         Ordering::{Acquire, Relaxed, Release},
     },
 };
-use kernel::metal::interrupt::treaty::{Issuance, NotifyHart};
+use kernel::metal::interrupt::treaty::{Issuance, NotifyProcessor};
 
 pub struct Mailbox {
     work: AtomicUsize,
@@ -25,7 +25,7 @@ impl Mailbox {
         }
     }
 
-    pub fn publish<S: NotifyHart>(&self, sender: &mut S, round: usize, duplicate: bool)
+    pub fn publish<S: NotifyProcessor>(&self, sender: &mut S, round: usize, duplicate: bool)
     where
         S::Error: Debug,
         S::Issue: Debug,
@@ -42,7 +42,7 @@ impl Mailbox {
         }
     }
 
-    fn issue<S: NotifyHart>(sender: &mut S, previous: Option<S::Issue>) -> S::Issue
+    fn issue<S: NotifyProcessor>(sender: &mut S, previous: Option<S::Issue>) -> S::Issue
     where
         S::Error: Debug,
         S::Issue: Debug,
@@ -78,7 +78,7 @@ impl Mailbox {
         wait(&self.issued, round);
     }
 
-    /// Called by the actual receiving Hart after accepting its native IRQ.
+    /// Called by the actual receiving processor after accepting its native IRQ.
     pub fn recheck(&self, round: usize, finish: impl FnOnce()) {
         assert_eq!(self.work.load(Acquire), round);
         assert_eq!(self.rechecked.load(Relaxed), round - 1);

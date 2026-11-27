@@ -1,4 +1,4 @@
-//! Two-Hart alternating access, including an explicit atomic baseline.
+//! Two-processor alternating access, including an explicit atomic baseline.
 use super::contention::Lock;
 use core::{
     hint::spin_loop,

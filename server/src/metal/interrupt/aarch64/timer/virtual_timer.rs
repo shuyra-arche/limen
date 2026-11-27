@@ -43,7 +43,7 @@ impl<'scope, 'tree, 'map> VirtualTimer<'scope, 'tree, 'map> {
             || ppi.source() != description.source()
             || ppi.domain() != description.domain()
             || ppi.intid() != description.virtual_interrupt().intid
-            || !ppi.local_to(clock.hart())
+            || !ppi.local_to(clock.processor())
             || clock.read().is_none()
         {
             return Err(Failure::Scope);
@@ -134,7 +134,7 @@ impl<'scope, 'tree, 'map> VirtualTimer<'scope, 'tree, 'map> {
     }
 
     fn now(&self) -> Result<u64, Failure> {
-        if !self.ppi.local_to(self.clock.hart()) {
+        if !self.ppi.local_to(self.clock.processor()) {
             return Err(Failure::Scope);
         }
         self.clock.read().ok_or(Failure::Scope)

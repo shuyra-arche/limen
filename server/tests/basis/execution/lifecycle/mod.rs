@@ -22,14 +22,14 @@ use core::{
 use kernel::{
     basis::{
         execution::{Current, Error, Execution, KernelBinding},
-        room::{Harts, Occupancy},
+        room::{Occupancy, Participants},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::Boot,
 };
 
 static mut STACKS: Stacks = Stacks::new();
-static mut HARTS: Harts<1> = Harts::new();
+static mut PARTICIPANTS: Participants<1> = Participants::new();
 static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy, 1> =
     kernel::metal::processor::treaty::Dispatchers::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
@@ -121,18 +121,19 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     // Each executable owns its resident supplies for exactly one admission.
     let stacks = unsafe { &mut *(&raw mut STACKS) };
     let records = unsafe { &mut *(&raw mut RECORDS) };
-    let harts = unsafe { &mut *(&raw mut HARTS) };
+    let participants = unsafe { &mut *(&raw mut PARTICIPANTS) };
     let dispatchers = unsafe { &mut *(&raw mut DISPATCHERS) };
     #[cfg(target_arch = "riscv64")]
     let runtime = {
-        assert!(boot.hart() < 4, "unexpected QEMU boot Hart");
-        let failure = admission::reject_constructor(&mut boot, stacks, records, harts, dispatchers);
+        assert!(boot.processor() < 4, "unexpected QEMU boot processor");
+        let failure =
+            admission::reject_constructor(&mut boot, stacks, records, participants, dispatchers);
         Execution::new(
             failure.major,
             failure.terminal,
             failure.stacks,
             failure.records,
-            failure.harts,
+            failure.participants,
             failure.dispatchers,
         )
     };
@@ -140,7 +141,14 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     let runtime = {
         let major = boot.take_major().expect("original native major relation");
         assert!(boot.take_major().is_none());
-        Execution::new(major, boot.terminal(), stacks, records, harts, dispatchers)
+        Execution::new(
+            major,
+            boot.terminal(),
+            stacks,
+            records,
+            participants,
+            dispatchers,
+        )
     };
     let runtime = runtime
         .map_err(|failure| failure.reason)
@@ -151,7 +159,7 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     #[cfg(target_arch = "riscv64")]
     admission::reject_attach(execution);
     assert_eq!(execution.enter(), Err(Error::Unsupported));
-    execution.attach().expect("attach actual boot Hart");
+    execution.attach().expect("attach actual boot processor");
     assert_eq!(execution.attach(), Err(Error::Busy));
     assert_eq!(execution.enter(), Err(Error::Protection));
     let mut schedule = || {

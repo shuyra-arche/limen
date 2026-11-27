@@ -2,7 +2,7 @@
 
 pub trait Sealed {}
 
-/// Evidence on the sending Hart. The recipient alone observes delivery.
+/// Evidence on the sending processor. The recipient alone observes delivery.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Issuance<I, E> {
     Confirmed(I),
@@ -27,7 +27,7 @@ impl<I: Copy, E> Issuance<I, E> {
 /// Hints can coalesce. Recipients recheck independently published work
 /// after actual reception; a confirmed send is neither an interrupt claim
 /// nor evidence that the recipient observed any work.
-pub trait NotifyHart: Sealed {
+pub trait NotifyProcessor: Sealed {
     type Error;
     /// Exact original sending scope, destination and issue round. The shape
     /// is defined by the route's native mechanism.

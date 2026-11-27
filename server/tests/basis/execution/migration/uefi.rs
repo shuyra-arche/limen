@@ -1,4 +1,4 @@
-//! UEFI admission for the cross-Hart migration test.
+//! UEFI admission for the cross-processor migration test.
 
 use kernel::entry::boot::Boot;
 use uefi::Status;

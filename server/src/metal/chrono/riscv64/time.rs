@@ -22,7 +22,7 @@ impl<'a> Counter<'a> {
     /// establishes its relationship to the described source. These conditions
     /// must remain valid throughout this use.
     pub unsafe fn admit(timebase: RiscvTimebase<'a>, hart: u64) -> Option<Self> {
-        let hart = crate::metal::processor::treaty::try_current_hart()
+        let hart = crate::metal::processor::treaty::try_current_processor()
             .filter(|local| local.get() as u64 == hart)?;
         Some(Self {
             timebase,
@@ -39,7 +39,7 @@ impl<'a> Counter<'a> {
     }
 
     pub fn hart(&self) -> u64 {
-        self.clock.hart() as u64
+        self.clock.processor() as u64
     }
 
     pub fn hertz(&self) -> u32 {

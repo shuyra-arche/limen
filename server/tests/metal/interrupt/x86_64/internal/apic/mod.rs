@@ -45,15 +45,15 @@ fn native_observation_source_is_read_again_for_each_scope_check() {
         match READS.fetch_add(1, Ordering::Relaxed) {
             0 => Some(Observation {
                 bits: 0xfee0_0900,
-                hart: 7,
+                processor: 7,
             }),
             1 => Some(Observation {
                 bits: 0xfee0_0900,
-                hart: 8,
+                processor: 8,
             }),
             2 => Some(Observation {
                 bits: 0xfee0_0d00,
-                hart: 7,
+                processor: 7,
             }),
             _ => None,
         }

@@ -106,7 +106,7 @@ fn discover(bytes: &[u8]) -> Result<(), Status> {
     Ok(())
 }
 
-pub fn hart() -> usize {
+pub fn processor() -> usize {
     let mpidr: usize;
     unsafe { asm!("mrs {}, MPIDR_EL1", out(reg) mpidr, options(nomem, nostack)) };
     mpidr & 0xff00ffffff
@@ -146,7 +146,7 @@ pub fn inspect(boot: &boot::Boot<'_>, map: &impl MemoryMap) -> Startup {
         .expect("validated UEFI virt DTB");
     assert_eq!(firmware.bytes().as_ptr().addr(), tree.start);
     assert_eq!(firmware.bytes().len(), tree.len());
-    let psci = inspect_firmware(&firmware, boot.hart());
+    let psci = inspect_firmware(&firmware, boot.processor());
 
     let description = boot.dtb_memory().expect("decoded DTB memory");
     let bank = extent(0x4000_0000, 0x5000_0000);

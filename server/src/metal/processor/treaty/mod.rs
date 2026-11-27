@@ -16,11 +16,11 @@ pub(crate) use cooperative::{
     reserve,
 };
 
-/// Physical Hart identity used to compare observations in their original scope.
+/// Hardware identity of a logical processor in its original scope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct HartId(usize);
+pub struct ProcessorId(usize);
 
-impl HartId {
+impl ProcessorId {
     pub const fn new(value: usize) -> Self {
         Self(value)
     }
@@ -30,10 +30,10 @@ impl HartId {
     }
 }
 
-/// Check the ordinary entry and return only its installed Hart identity.
+/// Check the ordinary entry and return only its installed processor identity.
 #[cfg(limen_target)]
-pub(crate) fn try_current_hart() -> Option<HartId> {
-    Some(HartId::new(local::ordinary_local()?.identity()))
+pub(crate) fn try_current_processor() -> Option<ProcessorId> {
+    Some(local::ordinary_local()?.identity())
 }
 
 /// Protect a window of execution on the current verified CPU.

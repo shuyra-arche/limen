@@ -17,7 +17,7 @@ use crate::metal::interrupt::riscv64::internal::supervisor::Supervisor;
 
 /// Original firmware facts alongside the hardware use admitted by Metal.
 pub(crate) struct Admission<'a> {
-    pub(crate) hart: usize,
+    pub(crate) processor: usize,
     pub(crate) terminal: Terminal,
     pub(crate) stack: Range<usize>,
     pub(crate) facts: Facts<'a>,
@@ -32,7 +32,7 @@ pub(crate) struct Admission<'a> {
 /// The input must satisfy the selected firmware ABI and its referenced storage
 /// must remain readable and reserved for the lifetime of the delivered Boot.
 pub(crate) unsafe fn admit<'a>(
-    hart: usize,
+    processor: usize,
     input: *const (),
     stack_top: usize,
     material: &'static MajorMaterial,
@@ -53,27 +53,27 @@ pub(crate) unsafe fn admit<'a>(
         ));
     }
 
-    let Some(facts) = (unsafe { boot::admit(hart, input, descriptions) }) else {
+    let Some(facts) = (unsafe { boot::admit(processor, input, descriptions) }) else {
         terminal.reject(format_args!("FAIL Limen boot: invalid firmware input\n"));
     };
     let Some(entry) = entry::admit(stack.clone()) else {
         terminal.reject(format_args!(
-            "FAIL Limen boot: entry changed before Hart admission\n"
+            "FAIL Limen boot: entry changed before processor admission\n"
         ));
     };
     let local = unsafe { material.local.bind() };
-    unsafe { local.install(hart, entry) };
+    unsafe { local.install(processor, entry) };
     if !can_switch() {
         terminal.reject(format_args!(
             "FAIL Limen boot: local protection is not idle\n"
         ));
     }
     #[cfg(target_arch = "riscv64")]
-    // The actual Hart and its ordinary stack are installed before using CSRs.
-    let reception = unsafe { Supervisor::admit(hart as u64) }
+    // The actual hart and its ordinary stack are installed before using CSRs.
+    let reception = unsafe { Supervisor::admit(processor as u64) }
         .unwrap_or_else(|_| terminal.reject(format_args!("FAIL Limen boot: local reception\n")));
     Admission {
-        hart,
+        processor,
         terminal,
         stack,
         facts,

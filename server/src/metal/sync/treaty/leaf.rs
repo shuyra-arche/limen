@@ -10,7 +10,7 @@ use crate::metal::sync::{
 };
 
 impl<T> LeafLock<T> {
-    /// Tries once after checking the actual Hart-local entry conditions.
+    /// Tries once after checking the actual processor-local entry conditions.
     ///
     /// From a complete Turn section, try before any irreversible effect that
     /// relies on obtaining this leaf. A failed try never invokes the callback.

@@ -19,7 +19,7 @@ guest::entry! {
         ..platform::Platform::native(1)
     },
     test: |boot| {
-        assert_eq!(boot.hart(), 0);
+        assert_eq!(boot.processor(), 0);
         assert!(boot.riscv_cpus().cpu(1).unwrap().is_none());
         assert_eq!(turn_capacity(), Some(5));
         scenario::check(boot);

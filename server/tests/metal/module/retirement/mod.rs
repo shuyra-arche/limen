@@ -292,7 +292,7 @@ pub fn check(boot: Boot<'_>) {
     let start = storage.addr().get() as u64;
     let resident = Resident::from_boot(&boot, start..start + size_of::<[Storage; 2]>() as u64);
     for (mode, image) in MODES.into_iter().zip(ROOT_IMAGES) {
-        prove_geometry(&mut translation, boot.hart(), mode, &resident);
+        prove_geometry(&mut translation, boot.processor(), mode, &resident);
         exercise(
             &mut translation,
             mode,

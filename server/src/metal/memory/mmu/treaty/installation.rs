@@ -45,7 +45,7 @@ mod bound {
     /// Installation requires the original authority, table trees and continuity.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct Context {
-        hart: usize,
+        processor: usize,
         profile: Profile,
         controls: Controls,
         root: Option<PhysicalAddress>,
@@ -61,14 +61,14 @@ mod bound {
     /// Storage, mapping and residency retirement require separate evidence.
     #[derive(Debug, Eq, PartialEq)]
     pub struct LocalInstall {
-        hart: usize,
+        processor: usize,
         previous: Context,
         installed: Context,
     }
 
     impl LocalInstall {
-        pub fn hart(&self) -> usize {
-            self.hart
+        pub fn processor(&self) -> usize {
+            self.processor
         }
 
         pub fn previous(&self) -> Context {
@@ -80,7 +80,7 @@ mod bound {
         }
     }
 
-    /// Bound access to the original Hart's supported translation controls.
+    /// Bound access to the original processor's supported translation controls.
     /// Only its native admission may establish this local installation scope.
     #[must_use]
     pub struct LocalContext<'scope> {
@@ -91,20 +91,20 @@ mod bound {
 
     impl<'scope> LocalContext<'scope> {
         pub(in crate::metal::memory::mmu) fn bind(
-            hart: usize,
+            processor: usize,
             native: Native<'scope>,
             initial: Controls,
         ) -> Self {
             Self {
                 native,
-                installation: Installation::new(hart, initial),
+                installation: Installation::new(processor, initial),
                 local: PhantomData,
             }
         }
 
         fn describe(&self, controls: Controls) -> Context {
             Context {
-                hart: self.installation.hart(),
+                processor: self.installation.processor(),
                 profile: self.native.profile(),
                 controls,
                 root: self.native.physical_root(controls),
@@ -139,7 +139,7 @@ mod bound {
             expected: Context,
             requested: Context,
         ) -> Result<LocalInstall, SwitchError> {
-            Native::check(self.installation.hart())?;
+            Native::check(self.installation.processor())?;
             let previous = self
                 .installation
                 .current()
@@ -161,19 +161,19 @@ mod bound {
         /// Confirm the installed controls of the original pending operation.
         /// Observation does not issue another native write or prove retirement.
         pub fn confirm(&mut self) -> Result<LocalInstall, SwitchError> {
-            Native::check(self.installation.hart())?;
+            Native::check(self.installation.processor())?;
             self.installation.pending().ok_or(SwitchError::Current)?;
             self.settle(unsafe { Native::observe() })
         }
 
-        /// Retry only the exact retained installation on its original Hart.
+        /// Retry only the exact retained installation on its original processor.
         /// If its target is already observed, settle the original operation.
         ///
         /// # Safety
         /// Keep the original switch's ownership, mappings and ordering live.
         /// No unrelated operation may have used its controls.
         pub unsafe fn retry(&mut self) -> Result<LocalInstall, SwitchError> {
-            Native::check(self.installation.hart())?;
+            Native::check(self.installation.processor())?;
             let observed = unsafe { Native::observe() };
             if let Some(next) = self.installation.retry(observed)? {
                 unsafe { self.apply(next) }
@@ -190,7 +190,7 @@ mod bound {
         fn settle(&mut self, observed: Controls) -> Result<LocalInstall, SwitchError> {
             let (previous, installed) = self.installation.complete(observed)?;
             Ok(LocalInstall {
-                hart: self.installation.hart(),
+                processor: self.installation.processor(),
                 previous: self.describe(previous),
                 installed: self.describe(installed),
             })
@@ -245,20 +245,20 @@ enum State<C> {
 /// Tracks a local installation and the observations needed to confirm it.
 /// Constructing the record grants no access to native controls.
 pub struct Installation<C> {
-    hart: usize,
+    processor: usize,
     state: State<C>,
 }
 
 impl<C: Copy + Eq> Installation<C> {
-    pub fn new(hart: usize, current: C) -> Self {
+    pub fn new(processor: usize, current: C) -> Self {
         Self {
-            hart,
+            processor,
             state: State::Current(current),
         }
     }
 
-    pub fn hart(&self) -> usize {
-        self.hart
+    pub fn processor(&self) -> usize {
+        self.processor
     }
 
     pub fn current(&self) -> Option<C> {

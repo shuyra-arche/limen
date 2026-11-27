@@ -29,9 +29,9 @@ mod native {
     use core::arch::{asm, x86_64::__cpuid};
 
     use super::Failure;
-    use crate::metal::{chrono::treaty::Clock, processor::treaty::try_current_hart};
+    use crate::metal::{chrono::treaty::Clock, processor::treaty::try_current_processor};
 
-    /// The original invariant TSC on the bound local Hart.
+    /// The original invariant TSC on the bound local processor.
     #[must_use]
     pub struct Tsc {
         clock: Clock,
@@ -42,11 +42,11 @@ mod native {
         ///
         /// # Safety
         /// The current execution privilege must permit TSC access. The
-        /// platform must preserve this Hart's TSC domain and its enumerated
+        /// platform must preserve this processor's TSC domain and its enumerated
         /// rate while the clock is live. TSC writes, offset or scale changes,
         /// and migration to a different time domain require a new admission.
         pub unsafe fn admit() -> Result<Self, Failure> {
-            let hart = try_current_hart().ok_or(Failure::Context)?;
+            let processor = try_current_processor().ok_or(Failure::Context)?;
             let basic = __cpuid(0).eax;
             if basic < 1 || __cpuid(1).edx & (1 << 4) == 0 {
                 return Err(Failure::Absent);
@@ -59,7 +59,7 @@ mod native {
             }
             let rate = __cpuid(0x15);
             let hertz = super::frequency(rate.eax, rate.ebx, rate.ecx).ok_or(Failure::Frequency)?;
-            let clock = Clock::bind(hart, hertz, read).ok_or(Failure::Context)?;
+            let clock = Clock::bind(processor, hertz, read).ok_or(Failure::Context)?;
             Ok(Self { clock })
         }
 

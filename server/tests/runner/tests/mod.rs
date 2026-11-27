@@ -41,7 +41,7 @@ fn platform_record_is_bounded_and_rejects_unsupported_combinations() {
         board: Board::Virt,
         firmware: Firmware::OpenSbi,
         interrupt: Interrupt::Aplic,
-        harts: 1,
+        processors: 1,
         aclint: true,
         sstc: Setting::Off,
         iommu: Iommu::None,
@@ -76,14 +76,14 @@ fn platform_record_is_bounded_and_rejects_unsupported_combinations() {
     let machine = Machine::admit(Architecture::Riscv64, BinaryFormat::Elf, original).unwrap();
     assert_eq!(machine.board, "virt,aia=aplic,aclint=on");
     assert_eq!(machine.cpu, Some("rv64,sstc=false"));
-    assert_eq!(machine.platform.harts, 1);
+    assert_eq!(machine.platform.processors, 1);
     for invalid in [
         Platform {
-            harts: 0,
+            processors: 0,
             ..original
         },
         Platform {
-            harts: 65,
+            processors: 65,
             ..original
         },
         Platform {
@@ -121,7 +121,7 @@ fn platform_device_topology_is_composed_without_test_identity() {
         board: Board::Virt,
         firmware: Firmware::OpenSbi,
         interrupt: Interrupt::Plic,
-        harts: 1,
+        processors: 1,
         aclint: false,
         sstc: Setting::Default,
         iommu: Iommu::Riscv,
@@ -164,7 +164,7 @@ fn platform_device_topology_is_composed_without_test_identity() {
     let arm = Platform {
         firmware: Firmware::Aavmf,
         interrupt: Interrupt::GicV3,
-        harts: 4,
+        processors: 4,
         iommu: Iommu::SmmuV3,
         serial: Serial::Second,
         ..original
@@ -177,7 +177,7 @@ fn platform_device_topology_is_composed_without_test_identity() {
         board: Board::Q35,
         firmware: Firmware::Ovmf,
         interrupt: Interrupt::Apic,
-        harts: 4,
+        processors: 4,
         iommu: Iommu::Vtd,
         serial: Serial::Isa,
         ..original
@@ -203,7 +203,7 @@ fn strict_nx_firmware_is_selected_by_the_guest() {
         board: Board::Virt,
         firmware: Firmware::AavmfStrictNx,
         interrupt: Interrupt::GicV3,
-        harts: 1,
+        processors: 1,
         aclint: false,
         sstc: Setting::Default,
         iommu: Iommu::None,

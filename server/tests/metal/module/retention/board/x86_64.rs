@@ -13,7 +13,7 @@ pub fn capture() -> Option<DeviceTree<'static>> {
     None
 }
 
-pub fn hart() -> usize {
+pub fn processor() -> usize {
     (__cpuid(1).ebx >> 24) as usize
 }
 

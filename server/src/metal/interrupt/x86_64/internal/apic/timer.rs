@@ -169,7 +169,9 @@ impl LocalApic<'_> {
     /// Transfer an original, already reserved vector to this idle timer.
     /// Failure returns the lease before effects can escape.
     pub fn reserve_timer(&mut self, vector: VectorLease) -> Result<(), (VectorLease, Failure)> {
-        if self.reception_context().is_err() || !vector.matches(self.hart as u8, vector.vector()) {
+        if self.reception_context().is_err()
+            || !vector.matches(self.processor as u8, vector.vector())
+        {
             return Err((vector, Failure::Scope));
         }
         if !matches!(self.timer, Slot::Vacant)
@@ -185,7 +187,7 @@ impl LocalApic<'_> {
         Ok(())
     }
 
-    /// Start a one-shot countdown on the owning Hart.
+    /// Start a one-shot countdown on the owning processor.
     ///
     /// # Safety
     /// The caller owns the original vector's handling path. Interrupts

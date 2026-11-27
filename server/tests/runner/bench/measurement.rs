@@ -10,7 +10,8 @@ const PARTICIPANT_LIMIT: usize = 64;
 #[derive(Debug, Serialize)]
 pub(super) struct Measurement {
     pub(super) environment: &'static str,
-    pub(super) hart: u64,
+    #[serde(rename = "hart")]
+    pub(super) processor: u64,
     pub(super) frequency_hz: u64,
     pub(super) series_count: usize,
     pub(super) series: Vec<Series>,
@@ -47,7 +48,7 @@ pub(super) fn decode(log: &str) -> Result<Measurement> {
         match fields.next() {
             Some("LIMEN_BENCH_V2") => {
                 require(measurement.is_none(), "duplicate benchmark header")?;
-                let hart = number(&mut fields)?;
+                let processor = number(&mut fields)?;
                 let frequency_hz = number(&mut fields)?;
                 let series_count = usize::try_from(number(&mut fields)?)?;
                 require(frequency_hz != 0, "invalid counter frequency")?;
@@ -57,7 +58,7 @@ pub(super) fn decode(log: &str) -> Result<Measurement> {
                 )?;
                 measurement = Some(Measurement {
                     environment: "qemu",
-                    hart,
+                    processor,
                     frequency_hz,
                     series_count,
                     series: Vec::with_capacity(series_count),

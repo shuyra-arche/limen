@@ -19,11 +19,11 @@ const SENDING: u32 = 1 << 12;
 const PROGRAMMABLE: u32 = MASKED | LEVEL | ACTIVE_LOW | 0xfff;
 const DESTINATION: u32 = 0xff00_0000;
 
-/// Physical fixed delivery to a reserved vector on the receiving Hart.
+/// Physical fixed delivery to a reserved vector on the receiving processor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Route {
     pub gsi: u32,
-    pub hart: u8,
+    pub processor: u8,
     pub vector: u8,
     pub active_low: bool,
     pub level: bool,
@@ -38,7 +38,7 @@ impl Route {
     }
 
     pub(super) fn high(self) -> u32 {
-        u32::from(self.hart) << 24
+        u32::from(self.processor) << 24
     }
 }
 
@@ -154,13 +154,13 @@ impl Controller<'_> {
     /// Resolve an ISA input, including a MADT source override. Conforming ISA
     /// routes are active-high, edge-triggered. An overridden GSI has no second
     /// implicit identity route for the old IRQ at that number.
-    pub fn isa_route(&self, irq: u8, hart: u8, vector: u8) -> Result<Route, Failure> {
+    pub fn isa_route(&self, irq: u8, processor: u8, vector: u8) -> Result<Route, Failure> {
         if irq >= 16 {
             return Err(Failure::Scope);
         }
         let mut route = Route {
             gsi: u32::from(irq),
-            hart,
+            processor,
             vector,
             active_low: false,
             level: false,
@@ -187,7 +187,10 @@ impl Controller<'_> {
 
     fn validate(&self, route: Route) -> Result<Pin, Failure> {
         // The common physical-destination subset excludes the legacy broadcast ID.
-        if route.hart >= 15 || route.vector < 0x20 || !self.madt.enabled_local_apic(route.hart) {
+        if route.processor >= 15
+            || route.vector < 0x20
+            || !self.madt.enabled_local_apic(route.processor)
+        {
             return Err(Failure::Scope);
         }
         self.pins.pin(route.gsi)
@@ -207,7 +210,7 @@ impl Controller<'_> {
         lease: VectorLease,
     ) -> Result<BoundRoute, (VectorLease, Failure)> {
         let pin = match self.validate(route) {
-            Ok(pin) if lease.matches(route.hart, route.vector) => pin,
+            Ok(pin) if lease.matches(route.processor, route.vector) => pin,
             _ => return Err((lease, Failure::Scope)),
         };
         let original = &mut self.routes[pin.index()];

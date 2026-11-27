@@ -2,7 +2,7 @@
 
 use super::{context::Controls, format::Format};
 use crate::metal::memory::mmu::treaty::{LocalContext, SwitchError};
-use crate::metal::processor::treaty::try_current_hart;
+use crate::metal::processor::treaty::try_current_processor;
 use core::arch::asm;
 use limen_treaty::model::PhysicalAddress;
 
@@ -37,18 +37,18 @@ impl Controls {
     }
 }
 
-/// Bind this Hart's four-level, untagged CR3 installation authority.
+/// Bind this processor's four-level, untagged CR3 installation authority.
 ///
 /// # Safety
 /// The caller owns the local root registers exclusively, with physical
 /// address modifiers excluded. Keep that ownership and all affected
 /// table storage live through actual retirement.
-pub unsafe fn admit_root(hart: usize) -> Result<(LocalContext<'static>, Format), SwitchError> {
-    NativeRoot::check(hart)?;
+pub unsafe fn admit_root(processor: usize) -> Result<(LocalContext<'static>, Format), SwitchError> {
+    NativeRoot::check(processor)?;
     let initial = unsafe { Controls::current() };
     let format = initial.local_format().ok_or(SwitchError::Scope)?;
     Ok((
-        LocalContext::bind(hart, NativeRoot { format }, initial),
+        LocalContext::bind(processor, NativeRoot { format }, initial),
         format,
     ))
 }
@@ -58,12 +58,12 @@ pub(in crate::metal::memory::mmu) struct NativeRoot {
 }
 
 impl NativeRoot {
-    pub(in crate::metal::memory::mmu) fn check(hart: usize) -> Result<(), SwitchError> {
+    pub(in crate::metal::memory::mmu) fn check(processor: usize) -> Result<(), SwitchError> {
         use crate::metal::processor::description::x86_64::status;
         let flags: usize;
         unsafe { asm!("pushfq", "pop {}", out(reg) flags) };
         if !status::interrupts_masked(flags)
-            || try_current_hart().is_none_or(|here| here.get() != hart)
+            || try_current_processor().is_none_or(|here| here.get() != processor)
         {
             return Err(SwitchError::Context);
         }

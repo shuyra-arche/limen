@@ -10,7 +10,7 @@ use limen_treaty::model::PhysicalRange;
 
 /// Facts admitted on the major CPU. These carry no allocation authority.
 pub struct Boot<'a> {
-    hart: usize,
+    processor: usize,
     image: PhysicalRange,
     descriptions: &'a Descriptions<'a>,
     firmware_map: Option<FirmwareMap<'a>>,
@@ -25,8 +25,8 @@ pub struct Boot<'a> {
 }
 
 impl<'a> Boot<'a> {
-    pub fn hart(&self) -> usize {
-        self.hart
+    pub fn processor(&self) -> usize {
+        self.processor
     }
 
     pub fn image(&self) -> PhysicalRange {
@@ -95,7 +95,7 @@ impl<'a> Boot<'a> {
         self.descriptions.sbi.expect("admitted SBI services")
     }
 
-    /// Move the major Hart's exclusive reception lines out of the handoff.
+    /// Move the major hart's exclusive RISC-V reception lines out of the handoff.
     #[cfg(all(limen_target, target_arch = "riscv64"))]
     pub fn take_reception(
         &mut self,
@@ -133,7 +133,7 @@ impl<'a> Boot<'a> {
     #[cfg(limen_target)]
     pub(super) fn from_major(admission: Admission<'a>, descriptions: &'a Descriptions<'a>) -> Self {
         Self::new(
-            admission.hart,
+            admission.processor,
             admission.facts.image,
             admission.facts.firmware_map,
             descriptions,
@@ -151,7 +151,7 @@ impl<'a> Boot<'a> {
         expect(dead_code, reason = "native entry delivers admitted boot data")
     )]
     pub(crate) fn new(
-        hart: usize,
+        processor: usize,
         image: PhysicalRange,
         firmware_map: Option<FirmwareMap<'a>>,
         descriptions: &'a Descriptions<'a>,
@@ -162,7 +162,7 @@ impl<'a> Boot<'a> {
         reception: crate::metal::interrupt::riscv64::internal::supervisor::Supervisor,
     ) -> Self {
         Self {
-            hart,
+            processor,
             image,
             descriptions,
             firmware_map,

@@ -57,7 +57,7 @@ global_asm!(
 
 fn check_discovery(boot: &Boot<'_>) {
     let cpus = boot.riscv_cpus();
-    let hart = boot.hart() as u64;
+    let hart = boot.processor() as u64;
     let cpu = cpus.cpu(hart).unwrap().expect("actual Hart description");
     assert_eq!(cpu.id(), hart);
     assert!(cpu.enabled());
@@ -98,7 +98,7 @@ fn check_discovery(boot: &Boot<'_>) {
 pub fn check(boot: Boot<'_>) {
     let original = unsafe { (&raw const FIRMWARE_HART).read_volatile() };
     assert!(
-        original < 4 && boot.hart() == original,
+        original < 4 && boot.processor() == original,
         "firmware hart ID changed"
     );
 

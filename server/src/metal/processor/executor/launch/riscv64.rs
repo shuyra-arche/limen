@@ -62,7 +62,7 @@ unsafe extern "C" fn minor(hart: usize, descriptor: usize) -> ! {
         state = const launch::STATE_OFFSET,
         published = const launch::PUBLISHED,
         entered = const launch::ENTERED,
-        hart = const launch::HART_OFFSET,
+        hart = const launch::PROCESSOR_OFFSET,
         stack = const launch::STACK_OFFSET,
         top = sym diagnostic::TOP,
         loaded = sym launch::arrive,

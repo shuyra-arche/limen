@@ -5,7 +5,7 @@ use super::{
     registers::{Destination, Icr, LEVEL_ASSERT},
 };
 use crate::metal::{
-    interrupt::treaty::{Issuance, NotifyHart, ipi::Sealed},
+    interrupt::treaty::{Issuance, NotifyProcessor, ipi::Sealed},
     platform::description::acpi::Madt,
 };
 use core::sync::atomic::{Ordering, fence};
@@ -20,8 +20,8 @@ pub struct IpiTarget {
 }
 
 impl IpiTarget {
-    pub fn describe(madt: Madt<'_>, hart: usize, vector: u8) -> Option<Self> {
-        let destination = Destination::new(hart)?;
+    pub fn describe(madt: Madt<'_>, processor: usize, vector: u8) -> Option<Self> {
+        let destination = Destination::new(processor)?;
         (madt.enabled_local_apic(destination.0) && vector >= 32).then_some(())?;
         Some(Self {
             controller: madt.local_controller_address()?,
@@ -30,7 +30,7 @@ impl IpiTarget {
         })
     }
 
-    pub fn hart(self) -> u8 {
+    pub fn processor(self) -> u8 {
         self.destination.0
     }
 
@@ -66,7 +66,7 @@ pub struct IpiRoute<'a, 'map> {
 
 impl Sealed for IpiRoute<'_, '_> {}
 
-impl NotifyHart for IpiRoute<'_, '_> {
+impl NotifyProcessor for IpiRoute<'_, '_> {
     type Error = Failure;
     type Issue = IpiIssue;
 
@@ -98,7 +98,7 @@ impl NotifyHart for IpiRoute<'_, '_> {
 impl<'map> LocalApic<'map> {
     /// # Safety
     /// If the target passes the native scope checks, it must identify the
-    /// original live remote Hart, vector, gate and reception route. Retain
+    /// original live remote processor, vector, gate and reception route. Retain
     /// that path through pending issues and independent reception.
     pub unsafe fn bind_ipi(&mut self, target: IpiTarget) -> Result<IpiRoute<'_, 'map>, Failure> {
         self.check_ipi_target(target)?;
@@ -114,7 +114,7 @@ impl<'map> LocalApic<'map> {
     fn check_ipi_target(&mut self, target: IpiTarget) -> Result<(), Failure> {
         self.reception_context()?;
         if self.base.physical.start() == target.controller
-            && self.hart != usize::from(target.hart())
+            && self.processor != usize::from(target.processor())
         {
             Ok(())
         } else {
@@ -130,7 +130,7 @@ impl<'map> LocalApic<'map> {
         }
         let round = self.ipi_round.checked_add(1).ok_or(Failure::Busy)?;
         let issue = IpiIssue {
-            source: self.hart,
+            source: self.processor,
             target,
             round,
         };

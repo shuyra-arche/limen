@@ -1,7 +1,7 @@
-//! Trusted local CPU facts and fixed storage.
+//! Trusted local execution and fixed Executor storage.
 
 #[cfg(limen_target)]
-use crate::metal::processor::treaty::HartId;
+use crate::metal::processor::treaty::ProcessorId;
 use core::cell::OnceCell;
 #[cfg(limen_cooperative)]
 use core::marker::PhantomData;
@@ -75,12 +75,12 @@ struct CooperativeBinding {
 /// The permanent local state installed by the native major entry.
 ///
 /// Startup can move this hardware relation to the cooperative constructor
-/// once. Its use must still match the actual Hart and ordinary entry.
+/// once. Its use must still match the actual processor and ordinary entry.
 #[cfg(limen_cooperative)]
 #[must_use]
 pub struct Major {
     local: &'static Executor,
-    hart_local: PhantomData<*mut ()>,
+    processor_local: PhantomData<*mut ()>,
 }
 
 #[cfg(limen_cooperative)]
@@ -141,7 +141,7 @@ impl Material {
 /// Fixed storage belonging to the verified physical CPU that took this entry.
 pub(in crate::metal) struct Executor {
     #[cfg(limen_target)]
-    identity: Cell<usize>,
+    identity: Cell<ProcessorId>,
     #[cfg(limen_target)]
     entry: Cell<Option<Entry>>,
     #[cfg(limen_cooperative)]
@@ -159,7 +159,7 @@ impl Executor {
     pub(in crate::metal) const fn new() -> Self {
         Self {
             #[cfg(limen_target)]
-            identity: Cell::new(0),
+            identity: Cell::new(ProcessorId::new(0)),
             #[cfg(limen_target)]
             entry: Cell::new(None),
             #[cfg(limen_cooperative)]
@@ -170,7 +170,7 @@ impl Executor {
     }
 
     #[cfg(limen_target)]
-    pub(in crate::metal::processor) fn identity(&self) -> usize {
+    pub(in crate::metal::processor) fn identity(&self) -> ProcessorId {
         self.identity.get()
     }
 
@@ -182,7 +182,7 @@ impl Executor {
         assert!(backend::entry().is_some_and(|observed| entry.permits(observed)));
         assert!(self.entry.get().is_none());
         self.entry.set(Some(entry));
-        self.identity.set(identity);
+        self.identity.set(ProcessorId::new(identity));
         unsafe { backend::install_local(ptr::from_ref(self).expose_provenance()) };
     }
 
@@ -194,7 +194,7 @@ impl Executor {
         assert!(ordinary_local().is_some_and(|local| ptr::eq(local, self)));
         Major {
             local: self,
-            hart_local: PhantomData,
+            processor_local: PhantomData,
         }
     }
 }
@@ -226,20 +226,20 @@ pub(in crate::metal) fn cooperative_attached() -> bool {
     ordinary_local().is_some_and(|local| local.cooperative.get().is_some())
 }
 
-/// Same-Hart discovery of the permanently associated machine record.
+/// Processor-local discovery of the permanently associated machine record.
 #[cfg(limen_cooperative)]
-pub(in crate::metal) fn cooperative_slot(scope: usize) -> Option<(HartId, usize)> {
+pub(in crate::metal) fn cooperative_slot(scope: usize) -> Option<(ProcessorId, usize)> {
     let local = ordinary_local()?;
     let binding = local.cooperative.get()?;
-    (binding.scope == scope).then_some((HartId::new(local.identity.get()), binding.slot))
+    (binding.scope == scope).then_some((local.identity(), binding.slot))
 }
 
-/// The caller has committed the current Hart's unique Room participation
+/// The caller has committed the current processor's unique Room participation
 /// under protection. The supplied machine record remains stable, is not
 /// reused, and no ordinary entry may interleave this publication.
 #[cfg(limen_cooperative)]
 pub(in crate::metal) unsafe fn bind_cooperative(scope: usize, slot: usize) {
-    let local = ordinary_local().expect("verified ordinary Hart");
+    let local = ordinary_local().expect("verified ordinary processor");
     assert!(local.cooperative.get().is_none());
     local
         .cooperative

@@ -22,7 +22,7 @@ use core::{
 use kernel::{
     basis::{
         execution::{Current, Error, Execution, KernelBinding},
-        room::{Harts, Occupancy},
+        room::{Occupancy, Participants},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::Boot,
@@ -39,7 +39,7 @@ use kernel::metal::sync::treaty::TurnLock;
 static LEAVE: TurnLock<()> = TurnLock::new(());
 
 static mut STACKS: Stacks = Stacks::new();
-static mut HARTS: Harts<3> = Harts::new();
+static mut PARTICIPANTS: Participants<3> = Participants::new();
 static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy, 3> =
     kernel::metal::processor::treaty::Dispatchers::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
@@ -113,7 +113,7 @@ fn first(current: &mut Current) -> u64 {
     } = scenario();
     let local = black_box(0x1234_5678usize);
     assert_eq!(current.id(), first);
-    assert_eq!(current.hart(), major);
+    assert_eq!(current.processor(), major);
     FIRST_STACK.store(stack_address(&local), Relaxed);
     observe(major);
     publish(Phase::FirstRunning);
@@ -125,9 +125,9 @@ fn first(current: &mut Current) -> u64 {
     assert_eq!(rejected, Err(Error::Protection));
     current
         .yield_now()
-        .expect("leave with an independent Unit on the other Hart");
+        .expect("leave with an independent Unit on the other processor");
     assert_eq!(current.id(), first);
-    assert_eq!(current.hart(), minor);
+    assert_eq!(current.processor(), minor);
     assert_eq!(stack_address(&local), FIRST_STACK.load(Relaxed));
     assert_eq!(black_box(local), 0x1234_5678);
     local as u64
@@ -136,7 +136,7 @@ fn first(current: &mut Current) -> u64 {
 fn second(current: &mut Current) -> u64 {
     let minor = scenario().minor;
     let local = black_box(41usize);
-    assert_eq!(current.hart(), minor);
+    assert_eq!(current.processor(), minor);
     assert!(stack_address(&local).abs_diff(FIRST_STACK.load(Relaxed)) >= 8 * 1024);
     observe(minor);
     publish(Phase::BothRunning);
@@ -146,14 +146,14 @@ fn second(current: &mut Current) -> u64 {
 }
 
 fn pinned(current: &mut Current) -> u64 {
-    assert_eq!(current.hart(), scenario().major);
+    assert_eq!(current.processor(), scenario().major);
     17
 }
 
-fn dispatch(execution: &'static Execution, unit: UnitId, hart: usize) -> Occupancy {
+fn dispatch(execution: &'static Execution, unit: UnitId, processor: usize) -> Occupancy {
     let occupancy = execution.enter().expect("dispatch").expect("ready unit");
     assert_eq!(occupancy.unit(), unit);
-    assert_eq!(occupancy.hart(), hart);
+    assert_eq!(occupancy.processor(), processor);
     assert_eq!(execution.pending_leave(), Ok(Some(occupancy)));
     occupancy
 }
@@ -180,7 +180,7 @@ fn launched(argument: usize) -> &'static Execution {
 fn run_minor(_: usize, argument: usize) -> ! {
     let execution = launched(argument);
     assert_eq!(execution.enter(), Err(Error::Unsupported));
-    execution.attach().expect("attach actual minor Hart");
+    execution.attach().expect("attach actual minor processor");
     assert_eq!(execution.attach(), Err(Error::Busy));
     assert_eq!(execution.enter(), Err(Error::Protection));
     let mut schedule = || {
@@ -232,23 +232,27 @@ fn run_minor(_: usize, argument: usize) -> ! {
     unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
 }
 
-fn run_third(hart: usize, argument: usize) -> ! {
+fn run_third(processor: usize, argument: usize) -> ! {
     let execution = launched(argument);
     assert_eq!(execution.enter(), Err(Error::Unsupported));
     execution
         .attach()
         .expect("third supplied participation slot");
-    observe(hart);
+    observe(processor);
     assert_eq!(execution.attach(), Err(Error::Busy));
     assert_eq!(execution.enter(), Err(Error::Protection));
     let mut schedule = || {
         let mark = core::hint::black_box(0u8);
         let address = core::hint::black_box(&mark) as *const u8 as usize;
         assert!(!THIRD.stack_range().contains(&address));
-        let unit = unsafe { execution.create(|current| current.hart() as u64) }
-            .expect("create on third Hart");
-        execution.submit(unit).expect("admit on third Hart");
-        finish(execution, dispatch(execution, unit, hart), hart as u64);
+        let unit = unsafe { execution.create(|current| current.processor() as u64) }
+            .expect("create on third processor");
+        execution.submit(unit).expect("admit on third processor");
+        finish(
+            execution,
+            dispatch(execution, unit, processor),
+            processor as u64,
+        );
         EXTRA.store(1, Release);
         loop {
             spin_loop();
@@ -275,14 +279,14 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         boot.stack_range().end <= MINOR.stack_range().start
             || MINOR.stack_range().end <= boot.stack_range().start
     );
-    let major = boot.hart();
-    assert!(major < 4, "unexpected QEMU Boot Hart");
-    for hart in 0..4 {
-        assert!(boot.riscv_cpus().cpu(hart).unwrap().unwrap().enabled());
+    let major = boot.processor();
+    assert!(major < 4, "unexpected QEMU Boot processor");
+    for processor in 0..4 {
+        assert!(boot.riscv_cpus().cpu(processor).unwrap().unwrap().enabled());
     }
     assert!(boot.riscv_cpus().cpu(4).unwrap().is_none());
-    let mut others = (0..4).filter(|&hart| hart != major);
-    let minor_hart = others.next().unwrap();
+    let mut others = (0..4).filter(|&processor| processor != major);
+    let minor_processor = others.next().unwrap();
     let third = others.next().unwrap();
     let fourth = others.next().unwrap();
     let service = boot
@@ -296,14 +300,14 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         boot.terminal(),
         unsafe { &mut *(&raw mut STACKS) },
         unsafe { &mut *(&raw mut RECORDS) },
-        unsafe { &mut *(&raw mut HARTS) },
+        unsafe { &mut *(&raw mut PARTICIPANTS) },
         unsafe { &mut *(&raw mut DISPATCHERS) },
     )
     .map_err(|failure| failure.reason)
     .expect("Bare scalar execution");
     // The platform owns the resident objects and initializes them once.
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
-    execution.attach().expect("attach actual boot Hart");
+    execution.attach().expect("attach actual boot processor");
     assert_eq!(execution.attach(), Err(Error::Busy));
     assert_eq!(execution.enter(), Err(Error::Protection));
     let mut schedule = || {
@@ -312,7 +316,7 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         assert!(!major_stack.contains(&address));
         let argument = core::ptr::from_ref(execution).expose_provenance();
         // The continuation holds scalar locals, the Unit stack and shared fixture
-        // state across Yield. It holds no Hart-local resource.
+        // state across Yield. It holds no processor-local resource.
         let a = unsafe { execution.create_migratable(first) }.expect("migratable Unit");
         let pinned = unsafe { execution.create(pinned) }.expect("create on major");
         execution.submit(pinned).expect("admit pinned Unit");
@@ -324,11 +328,16 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
             (&mut *(&raw mut SCENARIO)).write(Scenario {
                 first: a,
                 major,
-                minor: minor_hart,
+                minor: minor_processor,
             });
             MINOR
-                .start(minor_hart, run_minor, argument, &mut Startup::Sbi(service))
-                .expect("start actual minor Hart");
+                .start(
+                    minor_processor,
+                    run_minor,
+                    argument,
+                    &mut Startup::Sbi(service),
+                )
+                .expect("start actual minor processor");
         }
         turn::major::<MAJOR_NODES, { MAJOR_NODES + 1 }>();
         snapshot::publish();
@@ -359,13 +368,13 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         // stack supply still has only two positions. The fourth actual entry
         // cannot publish a partial participation or a local dispatcher locator.
         unsafe { THIRD.start(third, run_third, argument, &mut Startup::Sbi(service)) }
-            .expect("start third actual Hart");
+            .expect("start third actual processor");
         while EXTRA.load(Acquire) != 1 {
             spin_loop();
         }
         assert!(THIRD.ready());
         unsafe { FOURTH.start(fourth, run_fourth, argument, &mut Startup::Sbi(service)) }
-            .expect("start fourth actual Hart");
+            .expect("start fourth actual processor");
         while EXTRA.load(Acquire) != 2 {
             spin_loop();
         }
@@ -373,10 +382,10 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
 
         assert_eq!(
             OBSERVED.load(Acquire),
-            (1 << major) | (1 << minor_hart) | (1 << third)
+            (1 << major) | (1 << minor_processor) | (1 << third)
         );
         write(
-            "PASS kernel-execution-harts active=2 turn=1 snap=1 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1 participants=3 capacity=1\n",
+            "PASS kernel-execution-participants active=2 turn=1 snap=1 affinity=1 pending=1 migrated=1 registers=12 stale=1 ended=3 rollback=1 participants=3 capacity=1\n",
         );
         complete()
     };
@@ -392,9 +401,12 @@ impl Write for Console {
     }
 }
 
-fn observe(hart: usize) {
-    assert!(hart < 4);
-    let bit = 1 << hart;
+fn observe(processor: usize) {
+    assert!(processor < 4);
+    let bit = 1 << processor;
     assert_eq!(OBSERVED.fetch_or(bit, Release) & bit, 0);
-    let _ = writeln!(Console, "OBSERVED kernel-execution-harts hart={hart}");
+    let _ = writeln!(
+        Console,
+        "OBSERVED kernel-execution-participants processor={processor}"
+    );
 }

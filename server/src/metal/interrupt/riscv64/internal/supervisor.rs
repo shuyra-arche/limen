@@ -75,11 +75,11 @@ pub struct Supervisor {
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 mod native {
     use super::{Cause, Error, Operations, Reception, Supervisor};
-    use crate::metal::processor::{executor::riscv64, treaty::try_current_hart};
+    use crate::metal::processor::{executor::riscv64, treaty::try_current_processor};
     use core::{arch::asm, marker::PhantomData};
 
     fn valid(hart: u64) -> bool {
-        try_current_hart().is_some_and(|current| current.get() as u64 == hart)
+        try_current_processor().is_some_and(|current| current.get() as u64 == hart)
             && riscv64::native::status().masked()
     }
 

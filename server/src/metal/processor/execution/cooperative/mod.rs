@@ -56,12 +56,12 @@ pub(crate) struct Dispatcher<Occupancy> {
     pub(in crate::metal::processor) state: Cell<State<Occupancy>>,
 }
 
-// Only the LocalExecution for the corresponding physical Hart accesses the
+// Only the LocalExecution for the matching Executor accesses the
 // dispatcher and state. A suspended Unit never uses its old LocalExecution again.
 unsafe impl<Occupancy: Send> Sync for Dispatcher<Occupancy> {}
 
 pub(crate) struct LocalExecution<'a, Occupancy> {
-    pub(in crate::metal::processor) hart: &'a Dispatcher<Occupancy>,
+    pub(in crate::metal::processor) record: &'a Dispatcher<Occupancy>,
     local: PhantomData<*mut ()>,
 }
 
@@ -76,10 +76,10 @@ impl<Occupancy> Dispatcher<Occupancy> {
         }
     }
 
-    /// The caller has established that this is the current physical Hart.
+    /// The caller has established that this record belongs to the current Executor.
     pub(in crate::metal::processor) unsafe fn local(&self) -> LocalExecution<'_, Occupancy> {
         LocalExecution {
-            hart: self,
+            record: self,
             local: PhantomData,
         }
     }

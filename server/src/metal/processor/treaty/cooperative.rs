@@ -11,22 +11,22 @@ pub(crate) use crate::metal::processor::execution::cooperative::{
     Context, Dispatcher, LeaveReceipt, LocalExecution,
 };
 
-use super::{HartId, can_switch};
+use super::{ProcessorId, can_switch};
 
 pub(crate) fn cooperative_ready() -> bool {
     native::ready()
 }
 
-/// Whether the current physical Hart has already joined the cooperative prefix.
+/// Whether the current Executor has already joined the cooperative prefix.
 pub(crate) fn attached() -> bool {
     local::cooperative_attached()
 }
 
-/// Discover only the actual current Hart's bound machine record. The local
+/// Discover the current Executor's bound machine record. The local
 /// locator grants no Unit admission or Occupancy.
 pub(crate) fn current<Occupancy: 'static>(
     records: &'static [Dispatcher<Occupancy>],
-) -> Option<(HartId, LocalExecution<'static, Occupancy>)> {
+) -> Option<(ProcessorId, LocalExecution<'static, Occupancy>)> {
     let (id, slot) = local::cooperative_slot(records.as_ptr().addr())?;
     Some((id, unsafe { records.get(slot)?.local() }))
 }
@@ -76,7 +76,7 @@ pub(crate) fn reserve<Occupancy: 'static>(
 }
 
 impl<Occupancy> Reservation<Occupancy> {
-    /// Room has admitted this actual Hart and excludes competing ordinary entry
+    /// Room has admitted the current Executor and excludes competing ordinary entry
     /// until its original machine record has been published.
     pub(crate) unsafe fn bind(mut self) {
         let slot = self.slot.expect("unbound machine record");
@@ -114,15 +114,15 @@ impl<Occupancy> LeaveReceipt<Occupancy> {
 
 impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
     pub(crate) fn started(&self) -> bool {
-        self.hart.started.get()
+        self.record.started.get()
     }
 
     pub(crate) fn on_dispatcher_stack(&self) -> bool {
-        let top = self.hart.stack.top();
+        let top = self.record.stack.top();
         self.started() && (top - DISPATCH_BYTES..top).contains(&local::stack_pointer())
     }
 
-    /// The caller has excluded every previous entry and checked this Hart's
+    /// The caller has excluded every previous entry and checked this processor's
     /// ordinary profile. The previous frame stays resident with the borrowed
     /// dispatch input; this path never makes that stack reclaimable.
     pub(crate) unsafe fn start<F: FnMut() -> !>(&self, dispatch: &mut F) -> ! {
@@ -131,10 +131,10 @@ impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
             dispatch()
         }
 
-        assert!(!self.hart.started.replace(true));
+        assert!(!self.record.started.replace(true));
         unsafe {
             native::start_stack(
-                self.hart.stack.top(),
+                self.record.stack.top(),
                 enter::<F>,
                 core::ptr::from_mut(dispatch).cast(),
             )
@@ -142,7 +142,7 @@ impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
     }
 
     pub(crate) fn running(&self) -> Option<Occupancy> {
-        match self.hart.state.get() {
+        match self.record.state.get() {
             State::Running(occupancy) => Some(occupancy),
             _ => None,
         }
@@ -156,25 +156,27 @@ impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
         context: &Context,
         argument: *const (),
     ) {
-        assert!(matches!(self.hart.state.get(), State::Idle));
+        assert!(matches!(self.record.state.get(), State::Idle));
         assert!(can_switch());
-        self.hart.state.set(State::Running(occupancy));
-        unsafe { self.hart.dispatcher.switch(context, argument) };
+        self.record.state.set(State::Running(occupancy));
+        unsafe { self.record.dispatcher.switch(context, argument) };
         // The dispatcher is executing on its original stack again. The old
         // instruction and stack are saved but cannot execute without a new
         // occupancy.
-        self.hart.state.set(State::Stopped(LeaveReceipt(occupancy)));
+        self.record
+            .state
+            .set(State::Stopped(LeaveReceipt(occupancy)));
     }
 
     /// Requires invocation on the stack of this exact running occupancy.
     pub(crate) unsafe fn leave(&self, occupancy: Occupancy, context: &Context) {
         assert!(self.running() == Some(occupancy));
         assert!(can_switch());
-        unsafe { context.switch(&self.hart.dispatcher, core::ptr::null()) };
+        unsafe { context.switch(&self.record.dispatcher, core::ptr::null()) };
     }
 
     pub(crate) fn stopped(&self) -> Option<LeaveReceipt<Occupancy>> {
-        match self.hart.state.get() {
+        match self.record.state.get() {
             State::Stopped(receipt) => Some(receipt),
             _ => None,
         }
@@ -182,6 +184,6 @@ impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
 
     pub(crate) fn settle(&self, receipt: LeaveReceipt<Occupancy>) {
         assert!(self.stopped().map(LeaveReceipt::occupancy) == Some(receipt.occupancy()));
-        self.hart.state.set(State::Idle);
+        self.record.state.set(State::Idle);
     }
 }

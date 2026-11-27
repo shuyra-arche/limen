@@ -35,15 +35,15 @@ use q35 as board;
 #[cfg(target_arch = "aarch64")]
 use virt as board;
 
-pub use board::{hart, inspect, inspect_started};
+pub use board::{inspect, inspect_started, processor};
 
 pub fn target() -> usize {
     TARGET.load(Ordering::Acquire)
 }
 
-pub fn check_minor(minor: &Minor, hart: usize) {
-    assert_eq!(hart, target());
-    assert_eq!(hart, board::hart());
+pub fn check_minor(minor: &Minor, processor: usize) {
+    assert_eq!(processor, target());
+    assert_eq!(processor, board::processor());
     let sp: usize;
     unsafe {
         #[cfg(target_arch = "aarch64")]
@@ -130,7 +130,7 @@ pub fn load(prepare: impl FnOnce() -> Result<(), Status>) -> Status {
         #[cfg(target_arch = "aarch64")]
         acpi: None,
     };
-    unsafe { boot_diagnostic::major(board::hart(), &input, &board::TERMINAL, &MAJOR) }
+    unsafe { boot_diagnostic::major(board::processor(), &input, &board::TERMINAL, &MAJOR) }
 }
 
 pub fn extent(start: u64, end: u64) -> PhysicalRange {
@@ -138,7 +138,7 @@ pub fn extent(start: u64, end: u64) -> PhysicalRange {
 }
 
 pub fn check_handoff<'a>(boot: &boot::Boot<'a>, minor: Option<&Minor>) -> MemoryMapRef<'a> {
-    assert_eq!(boot.hart(), board::hart());
+    assert_eq!(boot.processor(), board::processor());
     let map = boot.firmware_map().expect("final UEFI map");
     let early = boot.exclusions();
     let major = boot.stack_range();
@@ -182,7 +182,7 @@ pub fn check_handoff<'a>(boot: &boot::Boot<'a>, minor: Option<&Minor>) -> Memory
         );
     }
     let target = target();
-    assert_ne!(target, boot.hart());
+    assert_ne!(target, boot.processor());
     #[cfg(target_arch = "x86_64")]
     board::check_discovery(boot, target);
     check_descriptors(map)

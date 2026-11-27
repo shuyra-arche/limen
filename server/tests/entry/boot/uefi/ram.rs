@@ -80,7 +80,7 @@ pub(super) fn check(boot: &Boot<'_>) {
     // The scope was granted to this guest as conventional RAM and stayed
     // conventional through the final map. It contained no firmware stack,
     // translation tables, or device buffers. The QEMU fixture never submits
-    // the grant to a device or to another Hart. The active identity view
+    // the grant to a device or to another processor. The active identity view
     // remains the canonical one, and the major is now on its resident stack.
     for condition in [
         Condition::RuntimeStack,

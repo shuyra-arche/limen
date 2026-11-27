@@ -117,7 +117,7 @@ fn wake(frame: &mut Frame<'_>) {
     assert!(frame.awake());
 }
 
-fn observe_minor(hart: usize, _: usize) -> ! {
+fn observe_minor(processor: usize, _: usize) -> ! {
     let handoff = MINOR_FRAME
         .acquire(Option::take)
         .unwrap()
@@ -128,7 +128,7 @@ fn observe_minor(hart: usize, _: usize) -> ! {
     let mut frame = handoff
         .attach(window(range))
         .unwrap_or_else(|(_, _, reason)| panic!("minor frame attachment: {reason:?}"));
-    assert_eq!(frame.affinity(), hart);
+    assert_eq!(frame.affinity(), processor);
     assert_eq!(frame.physical(), range);
     assert!(unsafe { available() });
     wake(&mut frame);
@@ -180,12 +180,12 @@ fn observe_minor(hart: usize, _: usize) -> ! {
     }
 }
 
-fn start_minor(tree: &DeviceTree<'_>, hart: usize, frame: Frame<'static>) {
+fn start_minor(tree: &DeviceTree<'_>, processor: usize, frame: Frame<'static>) {
     let psci = PsciDescription::read(tree)
         .unwrap()
         .expect("GIC fixture PSCI");
     let psci = unsafe { psci.verify() }.unwrap();
-    unsafe { psci.verify_affinity(hart, false) }.unwrap();
+    unsafe { psci.verify_affinity(processor, false) }.unwrap();
     MINOR_FRAME
         .acquire(|slot| {
             assert!(slot.is_none());
@@ -193,7 +193,7 @@ fn start_minor(tree: &DeviceTree<'_>, hart: usize, frame: Frame<'static>) {
         })
         .unwrap();
     let mut startup = Startup::Psci(psci);
-    unsafe { MINOR.start(hart, observe_minor, 0, &mut startup) }.unwrap();
+    unsafe { MINOR.start(processor, observe_minor, 0, &mut startup) }.unwrap();
     let start: u64;
     let frequency: u64;
     unsafe {
@@ -208,7 +208,7 @@ fn start_minor(tree: &DeviceTree<'_>, hart: usize, frame: Frame<'static>) {
         );
     }
     assert!(MINOR.ready());
-    unsafe { psci.verify_affinity(hart, true) }.unwrap();
+    unsafe { psci.verify_affinity(processor, true) }.unwrap();
 }
 
 fn check_signal(frame: Frame<'static>) -> Frame<'static> {

@@ -27,8 +27,8 @@ impl Machine {
         platform: Platform,
     ) -> Result<Self> {
         require(
-            (1..=64).contains(&platform.harts),
-            "invalid test Hart count",
+            (1..=64).contains(&platform.processors),
+            "invalid test processor count",
         )?;
         let (architecture, mut board, cpu) = match (
             architecture,

@@ -15,14 +15,14 @@ const ACPI_NVS: u32 = 10;
 
 #[cfg(limen_firmware = "uefi")]
 pub(crate) unsafe fn admit<'a>(
-    hart: usize,
+    processor: usize,
     observed: usize,
     input: *const (),
     descriptions: &mut Descriptions<'a>,
 ) -> Option<Facts<'a>> {
     // The current loader handoff supplies an identity checked against the
-    // physical CPU, rather than the trusted SBI entry's current-Hart ABI.
-    if hart != observed {
+    // physical CPU, rather than the trusted SBI entry's current-processor ABI.
+    if processor != observed {
         Terminal::early().reject(format_args!(
             "FAIL Limen boot: major CPU identity mismatch\n"
         ));

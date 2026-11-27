@@ -5,7 +5,7 @@ use super::{
     format::{Format, Root},
 };
 use crate::metal::memory::mmu::treaty::{LocalContext, SwitchError};
-use crate::metal::processor::treaty::try_current_hart;
+use crate::metal::processor::treaty::try_current_processor;
 use core::arch::asm;
 use limen_treaty::model::PhysicalAddress;
 
@@ -47,10 +47,10 @@ impl Controls {
 /// independently owned opposite root, and all affected table storage
 /// live through actual retirement.
 pub unsafe fn admit_root(
-    hart: usize,
+    processor: usize,
     selected: Root,
 ) -> Result<(LocalContext<'static>, Format), SwitchError> {
-    NativeRoot::check(hart)?;
+    NativeRoot::check(processor)?;
     let initial = unsafe { Controls::current() };
     let format = unsafe { initial.local_format(selected) }.ok_or(SwitchError::Scope)?;
     let native = NativeRoot { format };
@@ -58,7 +58,7 @@ pub unsafe fn admit_root(
     if initial.ttbr0 >> 48 != 0 || native.with_root(initial, root).is_none() {
         return Err(SwitchError::Scope);
     }
-    Ok((LocalContext::bind(hart, native, initial), format))
+    Ok((LocalContext::bind(processor, native, initial), format))
 }
 
 pub(in crate::metal::memory::mmu) struct NativeRoot {
@@ -66,9 +66,9 @@ pub(in crate::metal::memory::mmu) struct NativeRoot {
 }
 
 impl NativeRoot {
-    pub(in crate::metal::memory::mmu) fn check(hart: usize) -> Result<(), SwitchError> {
+    pub(in crate::metal::memory::mmu) fn check(processor: usize) -> Result<(), SwitchError> {
         if !crate::metal::processor::executor::aarch64::native::masked_stack()
-            || try_current_hart().is_none_or(|here| here.get() != hart)
+            || try_current_processor().is_none_or(|here| here.get() != processor)
         {
             return Err(SwitchError::Context);
         }

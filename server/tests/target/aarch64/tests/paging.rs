@@ -13,6 +13,6 @@ guest::entry! {
     platform: platform::Platform::native(4),
     test: |boot| {
         uefi_fixture::check_handoff(&boot, None);
-        scenario::check(uefi_fixture::hart());
+        scenario::check(uefi_fixture::processor());
     },
 }

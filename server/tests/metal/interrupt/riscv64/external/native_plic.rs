@@ -89,7 +89,7 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Supervisor) {
     let mut alarm = mapped(rtc.register(0).unwrap());
     clear_alarm(&mut alarm);
     let cpus = boot.riscv_cpus();
-    let hart = boot.hart() as u64;
+    let hart = boot.processor() as u64;
     let uart_source = Source::read(&tree, uart).unwrap();
     let rtc_source = Source::read(&tree, rtc).unwrap();
     let domain = uart_source.controller();

@@ -205,7 +205,7 @@ fn retire_group(
     assert_eq!(pool.capacity().unwrap().bytes, PAGE as usize);
 
     // All software references ended. The permanent identity view is
-    // still available. No other Hart or device used the page.
+    // still available. No other processor or device used the page.
     unsafe { pool.begin_return(group, Fast) }.unwrap();
     (pool, supply.retirement)
 }
@@ -480,7 +480,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
         check_read_write(&mut mapping, 0x5a, 0xa5);
     }
 
-    // The identity view is no longer borrowed. No other Hart or device accessed it.
+    // The identity view is no longer borrowed. No other processor or device accessed it.
     let receipt = unsafe { &mut *(&raw mut RECEIPT) };
     let retired = unsafe { allocation.retire() };
     unsafe { retired.begin_return(receipt) }.ok().unwrap();

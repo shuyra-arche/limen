@@ -1,4 +1,4 @@
-//! Cross-Hart Unit migration and its firmware-specific admission.
+//! Cross-processor Unit migration and its firmware-specific admission.
 
 #[cfg(target_arch = "riscv64")]
 mod sbi;
@@ -26,7 +26,7 @@ use kernel::metal::{
 use kernel::{
     basis::{
         execution::{Current, Error, Execution, KernelBinding},
-        room::{Harts, Occupancy},
+        room::{Occupancy, Participants},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::Boot,
@@ -49,7 +49,7 @@ mod riscv64;
 use riscv64 as registers;
 
 static mut STACKS: Stacks = Stacks::new();
-static mut HARTS: Harts<2> = Harts::new();
+static mut PARTICIPANTS: Participants<2> = Participants::new();
 static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy, 2> =
     kernel::metal::processor::treaty::Dispatchers::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
@@ -89,7 +89,7 @@ fn migratable(current: &mut Current) -> u64 {
     let value = black_box(0x1234_5678usize);
     let address = stack_address(&value);
     STACK.store(address, Relaxed);
-    assert_eq!(current.hart(), MAJOR.load(Relaxed));
+    assert_eq!(current.processor(), MAJOR.load(Relaxed));
     assert_eq!(STEP.fetch_add(1, Relaxed), 0);
     let original = registers::control();
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -103,13 +103,13 @@ fn migratable(current: &mut Current) -> u64 {
     let expected = original;
 
     registers::verify(current);
-    assert_eq!(current.hart(), PEER.load(Relaxed));
+    assert_eq!(current.processor(), PEER.load(Relaxed));
     assert_eq!(STEP.fetch_add(1, Relaxed), 1);
     assert_eq!(stack_address(&value), address);
     assert_eq!(registers::control(), expected);
 
     registers::verify(current);
-    assert_eq!(current.hart(), MAJOR.load(Relaxed));
+    assert_eq!(current.processor(), MAJOR.load(Relaxed));
     assert_eq!(STEP.fetch_add(1, Relaxed), 2);
     assert_eq!(stack_address(&value), address);
     assert_eq!(registers::control(), expected);
@@ -138,33 +138,33 @@ fn dispatch(execution: &'static Execution) -> Occupancy {
     }
 }
 
-fn minor(hart: usize, argument: usize) -> ! {
+fn minor(processor: usize, argument: usize) -> ! {
     // Minor::start publishes the borrowed, immutable launch record. The
     // nonreturning major retains it for this entire machine execution.
     let launch = unsafe { &*ptr::with_exposed_provenance::<Launch>(argument) };
     let execution = launch.execution;
     assert_eq!(execution.enter(), Err(Error::Unsupported));
-    execution.attach().expect("attach actual minor Hart");
+    execution.attach().expect("attach actual minor processor");
     assert_eq!(execution.attach(), Err(Error::Busy));
-    assert_eq!(hart, PEER.load(Relaxed));
-    (launch.observe)(&MINOR, hart);
+    assert_eq!(processor, PEER.load(Relaxed));
+    (launch.observe)(&MINOR, processor);
     synchronization::check();
     #[cfg(target_arch = "riscv64")]
     synchronization::check_enabled();
-    OBSERVED.store(hart, Release);
+    OBSERVED.store(processor, Release);
     assert_eq!(execution.enter(), Err(Error::Protection));
     let mut schedule = || {
         let mark = core::hint::black_box(0u8);
         let address = core::hint::black_box(&mark) as *const u8 as usize;
         assert!(!MINOR.stack_range().contains(&address));
         wait(1);
-        // The original Hart has not returned its occupation yet.
+        // The original processor has not returned its occupation yet.
         assert_eq!(execution.enter(), Ok(None));
         PHASE.store(2, Relaxed);
         wait(3);
         let control = registers::control();
         let receipt = dispatch(execution);
-        assert_eq!(receipt.hart(), PEER.load(Relaxed));
+        assert_eq!(receipt.processor(), PEER.load(Relaxed));
         assert_eq!(registers::control(), control);
         execution.vacate(receipt).expect("minor departure");
         PHASE.store(4, Relaxed);
@@ -195,7 +195,7 @@ fn run(
     mut started: impl FnMut(&Startup),
     complete: fn() -> !,
 ) -> ! {
-    let major = boot.hart();
+    let major = boot.processor();
     assert_ne!(target, major);
     MAJOR.store(major, Relaxed);
     PEER.store(target, Relaxed);
@@ -205,14 +205,14 @@ fn run(
         boot.terminal(),
         unsafe { &mut *(&raw mut STACKS) },
         unsafe { &mut *(&raw mut RECORDS) },
-        unsafe { &mut *(&raw mut HARTS) },
+        unsafe { &mut *(&raw mut PARTICIPANTS) },
         unsafe { &mut *(&raw mut DISPATCHERS) },
     )
     .map_err(|failure| failure.reason)
     .expect("native cooperative profile");
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     let launch = Launch { execution, observe };
-    execution.attach().expect("attach actual boot Hart");
+    execution.attach().expect("attach actual boot processor");
     assert_eq!(execution.attach(), Err(Error::Busy));
     assert_eq!(execution.enter(), Err(Error::Protection));
     let mut schedule = || {
@@ -249,7 +249,7 @@ fn run(
         let control = registers::control();
         let first = dispatch(execution);
         assert_eq!(first.unit(), unit);
-        assert_eq!(first.hart(), major);
+        assert_eq!(first.processor(), major);
         assert_eq!(registers::control(), control);
         PHASE.store(1, Relaxed);
         wait(2);
@@ -260,7 +260,7 @@ fn run(
         assert_eq!(last.unit(), unit);
         assert_ne!(last, first);
         assert_eq!(last.admission(), first.admission());
-        assert_eq!(last.hart(), major);
+        assert_eq!(last.processor(), major);
         assert_eq!(registers::control(), control);
         assert_eq!(execution.vacate(first), Err(Error::Gone));
         finish(execution, unit, last, 0x1234_5678);
@@ -273,7 +273,7 @@ fn run(
         finish(execution, reused, receipt, 41);
         assert_eq!(execution.enter(), Ok(None));
         boot_diagnostic::write(
-            "PASS cooperative-execution harts=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1\n",
+            "PASS cooperative-execution participants=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1\n",
         );
         complete()
     };

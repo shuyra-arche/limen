@@ -11,7 +11,7 @@ use core::arch::naked_asm;
 /// Keep the Loader and its immutable buffers valid across Boot delivery.
 #[unsafe(naked)]
 pub unsafe extern "sysv64" fn major(
-    hart: usize,
+    processor: usize,
     input: &Loader<'_>,
     stack_top: usize,
     material: &'static MajorMaterial,
@@ -36,12 +36,12 @@ pub unsafe extern "sysv64" fn major(
 }
 
 unsafe extern "sysv64" fn install(
-    hart: usize,
+    processor: usize,
     input: *const (),
     stack_top: usize,
     material: &'static MajorMaterial,
 ) -> ! {
     unsafe { crate::metal::processor::executor::x86_64::native::clear_local() };
     unsafe { terminal::initialize() };
-    unsafe { crate::entry::boot::start(hart, input, stack_top, material) }
+    unsafe { crate::entry::boot::start(processor, input, stack_top, material) }
 }

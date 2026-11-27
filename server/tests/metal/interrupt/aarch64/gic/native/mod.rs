@@ -3,7 +3,7 @@ use uefi_fixture as fixture;
 
 use kernel::metal::{
     chrono::aarch64::description::GenericCounter, interrupt::aarch64::gic::GicV3,
-    processor::treaty::HartId,
+    processor::treaty::ProcessorId,
 };
 
 #[path = "../../../../chrono/observation.rs"]
@@ -15,11 +15,11 @@ pub fn check(boot: boot::Boot<'_>) {
     fixture::check_handoff(&boot, None);
     let tree = boot.device_tree_description().unwrap();
     let description = GenericCounter::read(&tree).unwrap().unwrap();
-    assert!(unsafe { description.bind(boot.hart() ^ 1) }.is_err());
-    let local = unsafe { description.bind(boot.hart()) }.unwrap();
-    let distinct = unsafe { description.bind(boot.hart()) }.unwrap();
-    let hart = HartId::new(boot.hart());
-    assert_eq!(local.clock().hart(), hart.get());
+    assert!(unsafe { description.bind(boot.processor() ^ 1) }.is_err());
+    let local = unsafe { description.bind(boot.processor()) }.unwrap();
+    let distinct = unsafe { description.bind(boot.processor()) }.unwrap();
+    let processor = ProcessorId::new(boot.processor());
+    assert_eq!(local.clock().processor(), processor.get());
     assert!(
         local
             .clock()
@@ -30,5 +30,5 @@ pub fn check(boot: boot::Boot<'_>) {
     );
     clock::observe(local.clock());
     let controller = GicV3::read(&tree).unwrap().expect("GIC description");
-    scenario::check(&tree, controller, boot.hart());
+    scenario::check(&tree, controller, boot.processor());
 }

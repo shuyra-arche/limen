@@ -25,7 +25,7 @@ guest::entry! {
         dma_mask: platform::DmaMask::Full32,
     }),
     test: |boot| {
-        assert_eq!(boot.hart(), 0);
+        assert_eq!(boot.processor(), 0);
         assert!(boot.riscv_cpus().cpu(1).unwrap().is_none());
         assert_bare_translation();
         native::check(boot);

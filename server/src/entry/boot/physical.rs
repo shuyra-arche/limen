@@ -72,7 +72,7 @@ impl Retirement {
     ///
     /// The caller must have evidence from the responsible owners covering
     /// the entire scope. RuntimeStack means the permanent stack is active.
-    /// ReadersGone includes other Harts and the last relevant reader.
+    /// ReadersGone includes other processors and the last relevant reader.
     /// TranslationRetired covers old CPU translations and page-table walks.
     /// DevicesIsolated covers old DMA access, including device translations,
     /// page-table walks and in-flight transactions.

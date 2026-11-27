@@ -12,7 +12,7 @@ use core::arch::naked_asm;
 /// Other PEs must stay parked. The Loader and its immutable buffers must remain valid.
 #[unsafe(naked)]
 pub unsafe extern "C" fn major(
-    hart: usize,
+    processor: usize,
     input: &Loader<'_>,
     stack_top: usize,
     material: &'static MajorMaterial,

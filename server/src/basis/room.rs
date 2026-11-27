@@ -1,9 +1,9 @@
-//! Bounded Hart participation, Unit admission and exact execution occupancy.
+//! Bounded Executor participation, Unit admission and exact execution occupancy.
 
 use core::num::NonZeroU64;
 
 use super::unit::UnitId;
-use crate::metal::processor::treaty::{HartId, LeaveReceipt};
+use crate::metal::processor::treaty::{LeaveReceipt, ProcessorId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Error {
@@ -25,13 +25,13 @@ struct ParticipationId(usize);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct OccupancyId(NonZeroU64);
 
-/// One dispatch of an admitted Unit on a participating Hart.
+/// One dispatch of an admitted Unit on a participating processor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Occupancy {
     id: OccupancyId,
     unit: UnitId,
     admission: AdmissionId,
-    hart: HartId,
+    processor: ProcessorId,
     participation: ParticipationId,
 }
 
@@ -44,8 +44,8 @@ impl Occupancy {
         self.admission
     }
 
-    pub fn hart(self) -> usize {
-        self.hart.get()
+    pub fn processor(self) -> usize {
+        self.processor.get()
     }
 }
 
@@ -64,7 +64,7 @@ enum LeaveRequest {
 #[derive(Clone, Copy)]
 enum Placement {
     Ready(OccupancyId),
-    OnHart {
+    Occupied {
         occupancy: Occupancy,
         leave: Option<LeaveRequest>,
     },
@@ -73,30 +73,30 @@ enum Placement {
 struct UnitEntry {
     unit: UnitId,
     admission: AdmissionId,
-    affinity: Option<HartId>,
+    affinity: Option<ProcessorId>,
     placement: Placement,
 }
 
-struct HartEntry {
-    hart: HartId,
+struct Participant {
+    processor: ProcessorId,
     occupied: Option<usize>,
 }
 
-impl HartEntry {
-    const fn new(hart: HartId) -> Self {
+impl Participant {
+    const fn new(processor: ProcessorId) -> Self {
         Self {
-            hart,
+            processor,
             occupied: None,
         }
     }
 }
 
 /// Stable storage for actual Room participants.
-pub struct Harts<const CAPACITY: usize> {
-    entries: [Option<HartEntry>; CAPACITY],
+pub struct Participants<const CAPACITY: usize> {
+    entries: [Option<Participant>; CAPACITY],
 }
 
-impl<const CAPACITY: usize> Harts<CAPACITY> {
+impl<const CAPACITY: usize> Participants<CAPACITY> {
     pub const fn new() -> Self {
         Self {
             entries: [const { None }; CAPACITY],
@@ -113,7 +113,7 @@ impl<const CAPACITY: usize> Harts<CAPACITY> {
     }
 }
 
-impl<const CAPACITY: usize> Default for Harts<CAPACITY> {
+impl<const CAPACITY: usize> Default for Participants<CAPACITY> {
     fn default() -> Self {
         Self::new()
     }
@@ -121,7 +121,7 @@ impl<const CAPACITY: usize> Default for Harts<CAPACITY> {
 
 pub(crate) struct Room<const CAPACITY: usize> {
     units: [Option<UnitEntry>; CAPACITY],
-    harts: &'static mut [Option<HartEntry>],
+    participants: &'static mut [Option<Participant>],
     // Both discovery indices point to the UnitEntry that owns the placement.
     ready: [usize; CAPACITY],
     ready_len: usize,
@@ -129,39 +129,39 @@ pub(crate) struct Room<const CAPACITY: usize> {
 }
 
 impl<const CAPACITY: usize> Room<CAPACITY> {
-    fn new(harts: &'static mut [Option<HartEntry>]) -> Self {
+    fn new(participants: &'static mut [Option<Participant>]) -> Self {
         Self {
             units: [const { None }; CAPACITY],
-            harts,
+            participants,
             ready: [0; CAPACITY],
             ready_len: 0,
             next_admission: Some(AdmissionId(NonZeroU64::MIN)),
         }
     }
 
-    /// Called after the trusted entry has established the Hart's local state.
-    pub(super) fn attach(&mut self, hart: HartId) -> Result<(), Error> {
-        if self.participation(hart).is_some() {
+    /// Called after the trusted entry has established the Executor.
+    pub(super) fn attach(&mut self, processor: ProcessorId) -> Result<(), Error> {
+        if self.participation(processor).is_some() {
             return Err(Error::Busy);
         }
         let index = self
-            .harts
+            .participants
             .iter()
             .position(Option::is_none)
             .ok_or(Error::Capacity)?;
-        self.harts[index] = Some(HartEntry::new(hart));
+        self.participants[index] = Some(Participant::new(processor));
         Ok(())
     }
 
     pub(crate) fn submit(
         &mut self,
         unit: UnitId,
-        affinity: Option<HartId>,
+        affinity: Option<ProcessorId>,
     ) -> Result<AdmissionId, Error> {
         if self.admitted(unit) {
             return Err(Error::Busy);
         }
-        if affinity.is_some_and(|hart| self.participation(hart).is_none()) {
+        if affinity.is_some_and(|processor| self.participation(processor).is_none()) {
             return Err(Error::Unsupported);
         }
         let slot = self
@@ -191,43 +191,52 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         self.units.iter().flatten().any(|entry| entry.unit == unit)
     }
 
-    fn participation(&self, hart: HartId) -> Option<ParticipationId> {
-        self.harts
+    fn participation(&self, processor: ProcessorId) -> Option<ParticipationId> {
+        self.participants
             .iter()
-            .position(|slot| slot.as_ref().is_some_and(|attached| attached.hart == hart))
+            .position(|slot| {
+                slot.as_ref()
+                    .is_some_and(|attached| attached.processor == processor)
+            })
             .map(ParticipationId)
     }
 
-    fn available(&self, hart: HartId) -> Result<ParticipationId, Error> {
-        let participation = self.participation(hart).ok_or(Error::Unsupported)?;
-        let participant = self.harts[participation.0].as_ref().expect("attached Hart");
+    fn available(&self, processor: ProcessorId) -> Result<ParticipationId, Error> {
+        let participation = self.participation(processor).ok_or(Error::Unsupported)?;
+        let participant = self.participants[participation.0]
+            .as_ref()
+            .expect("participant");
         if participant.occupied.is_some() {
             return Err(Error::Busy);
         }
         Ok(participation)
     }
 
-    fn first_ready(&self, hart: HartId) -> Option<(usize, usize)> {
+    fn first_ready(&self, processor: ProcessorId) -> Option<(usize, usize)> {
         self.ready[..self.ready_len]
             .iter()
             .copied()
             .enumerate()
             .find(|&(_, slot)| {
                 let entry = self.units[slot].as_ref().expect("ready Unit");
-                entry.affinity.is_none_or(|target| target == hart)
+                entry.affinity.is_none_or(|target| target == processor)
             })
     }
 
-    pub(crate) fn candidate(&self, hart: HartId) -> Result<Option<UnitId>, Error> {
-        self.available(hart)?;
+    pub(crate) fn candidate(&self, processor: ProcessorId) -> Result<Option<UnitId>, Error> {
+        self.available(processor)?;
         Ok(self
-            .first_ready(hart)
+            .first_ready(processor)
             .map(|(_, slot)| self.units[slot].as_ref().expect("ready Unit").unit))
     }
 
-    pub(crate) fn occupy(&mut self, hart: HartId, unit: UnitId) -> Result<Occupancy, Error> {
-        let participation = self.available(hart)?;
-        let (index, slot) = self.first_ready(hart).ok_or(Error::State)?;
+    pub(crate) fn occupy(
+        &mut self,
+        processor: ProcessorId,
+        unit: UnitId,
+    ) -> Result<Occupancy, Error> {
+        let participation = self.available(processor)?;
+        let (index, slot) = self.first_ready(processor).ok_or(Error::State)?;
         let entry = self.units[slot].as_mut().expect("ready Unit");
         if entry.unit != unit {
             return Err(Error::State);
@@ -239,36 +248,36 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
             id,
             unit,
             admission: entry.admission,
-            hart,
+            processor,
             participation,
         };
-        entry.placement = Placement::OnHart {
+        entry.placement = Placement::Occupied {
             occupancy,
             leave: None,
         };
         self.ready.copy_within(index + 1..self.ready_len, index);
         self.ready_len -= 1;
-        self.harts[participation.0]
+        self.participants[participation.0]
             .as_mut()
-            .expect("attached Hart")
+            .expect("participant")
             .occupied = Some(slot);
         Ok(occupancy)
     }
 
-    pub(crate) fn on_hart(&self, occupancy: Occupancy) -> Result<(), Error> {
+    pub(crate) fn check_occupied(&self, occupancy: Occupancy) -> Result<(), Error> {
         self.active(occupancy).map(|_| ())
     }
 
     fn active(&self, occupancy: Occupancy) -> Result<usize, Error> {
         let slot = self
-            .harts
+            .participants
             .get(occupancy.participation.0)
             .and_then(Option::as_ref)
-            .and_then(|hart| hart.occupied)
+            .and_then(|participant| participant.occupied)
             .ok_or(Error::Gone)?;
         let entry = self.units[slot].as_ref().expect("occupied Unit");
         match entry.placement {
-            Placement::OnHart {
+            Placement::Occupied {
                 occupancy: current, ..
             } if current == occupancy => Ok(slot),
             _ => Err(Error::Gone),
@@ -282,7 +291,7 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
     ) -> Result<(), Error> {
         let slot = self.active(occupancy)?;
         let entry = self.units[slot].as_mut().expect("occupied Unit");
-        let Placement::OnHart { leave, .. } = &mut entry.placement else {
+        let Placement::Occupied { leave, .. } = &mut entry.placement else {
             unreachable!("validated occupancy");
         };
         if leave.is_some() {
@@ -302,7 +311,7 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         let occupancy = receipt.occupancy();
         let slot = self.active(occupancy)?;
         let entry = self.units[slot].as_mut().expect("occupied Unit");
-        let Placement::OnHart { leave, .. } = entry.placement else {
+        let Placement::Occupied { leave, .. } = entry.placement else {
             unreachable!("validated occupancy");
         };
         match leave.ok_or(Error::State)? {
@@ -312,9 +321,9 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
             }
             LeaveRequest::Release => self.units[slot] = None,
         }
-        self.harts[occupancy.participation.0]
+        self.participants[occupancy.participation.0]
             .as_mut()
-            .expect("attached Hart")
+            .expect("participant")
             .occupied = None;
         Ok(())
     }

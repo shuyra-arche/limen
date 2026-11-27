@@ -2,7 +2,7 @@
 
 use core::{marker::PhantomData, num::NonZeroU64};
 
-use crate::metal::processor::treaty::HartId;
+use crate::metal::processor::treaty::ProcessorId;
 
 pub(super) mod rate;
 
@@ -14,10 +14,10 @@ pub(super) mod rate;
     )
 )]
 pub(super) struct Counter {
-    hart: HartId,
+    processor: ProcessorId,
     frequency: NonZeroU64,
     read: fn() -> u64,
-    same_hart: PhantomData<*mut ()>,
+    same_processor: PhantomData<*mut ()>,
 }
 
 #[cfg_attr(
@@ -28,24 +28,28 @@ pub(super) struct Counter {
     )
 )]
 impl Counter {
-    pub(super) const fn new(hart: HartId, frequency: NonZeroU64, read: fn() -> u64) -> Self {
+    pub(super) const fn new(
+        processor: ProcessorId,
+        frequency: NonZeroU64,
+        read: fn() -> u64,
+    ) -> Self {
         Self {
-            hart,
+            processor,
             frequency,
             read,
-            same_hart: PhantomData,
+            same_processor: PhantomData,
         }
     }
 
-    pub(super) const fn hart(&self) -> HartId {
-        self.hart
+    pub(super) const fn processor(&self) -> ProcessorId {
+        self.processor
     }
 
     pub(super) const fn frequency(&self) -> NonZeroU64 {
         self.frequency
     }
 
-    pub(super) fn observe(&self, current: HartId) -> Option<u64> {
-        (self.hart == current).then(self.read)
+    pub(super) fn observe(&self, current: ProcessorId) -> Option<u64> {
+        (self.processor == current).then(self.read)
     }
 }

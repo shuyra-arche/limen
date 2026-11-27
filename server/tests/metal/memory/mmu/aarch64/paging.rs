@@ -13,7 +13,7 @@ mod installation;
 
 static EMPTY: Page = Page([0; 512]);
 
-pub(crate) fn check(hart: usize) {
+pub(crate) fn check(processor: usize) {
     let original = unsafe { Controls::current() };
     // AAVMF runs the fixture entirely through TTBR0. The unattached upper
     // root can be lent to this scenario before any other PE starts.
@@ -26,10 +26,10 @@ pub(crate) fn check(hart: usize) {
             disabled=in(reg) disabled, empty=in(reg) physical(&raw const EMPTY).get(),
             enabled=in(reg) enabled, options(nostack));
         assert!(matches!(
-            admit_root(hart.wrapping_add(1), Root::Upper),
+            admit_root(processor.wrapping_add(1), Root::Upper),
             Err(SwitchError::Context)
         ));
-        let (mut control, format) = admit_root(hart, Root::Upper).unwrap();
+        let (mut control, format) = admit_root(processor, Root::Upper).unwrap();
         let current = Controls::current();
         TOP.0[0] = format.branch(physical(&raw const NEXT)).unwrap();
         NEXT.0[0] = format.branch(physical(&raw const MIDDLE)).unwrap();
@@ -51,7 +51,7 @@ pub(crate) fn check(hart: usize) {
             control.prepare_root(PhysicalAddress::new(root.get() + 1)),
             Err(SwitchError::Scope)
         ));
-        installation::roundtrip(&mut control, hart, candidate, |_| {
+        installation::roundtrip(&mut control, processor, candidate, |_| {
             assert_eq!(Controls::current().ttbr0, current.ttbr0);
             let data: u64;
             asm!("ldr {}, [{}]", out(reg) data, in(reg) alias, options(nostack, readonly));

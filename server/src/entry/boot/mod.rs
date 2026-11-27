@@ -29,7 +29,7 @@ pub use regions::{RegionError, Regions};
 /// The firmware adapter supplies a stable DTB (OpenSBI) or Loader (UEFI).
 /// All referenced storage and mappings remain reserved until the consumer is done.
 pub(crate) unsafe extern "C" fn start(
-    hart: usize,
+    processor: usize,
     input: *const (),
     stack_top: usize,
     material: &'static crate::metal::platform::boot::treaty::MajorMaterial,
@@ -37,7 +37,8 @@ pub(crate) unsafe extern "C" fn start(
     // The nonreturning platform callback borrows the original descriptions
     // from here. Keep a single retained copy off the nested admission frames.
     let mut descriptions = Descriptions::new();
-    let admission = unsafe { major::admit(hart, input, stack_top, material, &mut descriptions) };
+    let admission =
+        unsafe { major::admit(processor, input, stack_top, material, &mut descriptions) };
     let boot = Boot::from_major(admission, &descriptions);
     if !boot.stacks_in_image() {
         boot.terminal().reject(format_args!(

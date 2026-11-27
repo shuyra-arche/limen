@@ -212,7 +212,7 @@ fn bss_clear_traps_on_the_original_major_stack() {
     let hash = evidence::digest(&image).unwrap();
     let platform = platform::read(&image, platform::Purpose::Test).unwrap();
     assert_eq!(platform.architecture, "riscv64");
-    assert_eq!(platform.platform.harts, 4);
+    assert_eq!(platform.platform.processors, 4);
 
     // The normal run and the fault run use the same actual Cargo artifact.
     let normal = native::run(
