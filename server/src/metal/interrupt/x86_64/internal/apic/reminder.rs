@@ -54,11 +54,10 @@ pub use native::CountdownTimer;
 
 #[cfg(all(limen_target, target_arch = "x86_64"))]
 mod native {
-    use super::{Observation, Rate};
     use super::super::{
-        Countdown, Divider, Failure, LocalApic, Reception, TimerState,
-        timer::CURRENT,
+        Countdown, Divider, Failure, LocalApic, Reception, TimerState, timer::CURRENT,
     };
+    use super::{Observation, Rate};
     use crate::metal::{
         chrono::treaty::{Clock, Deadline},
         interrupt::treaty::{
@@ -160,7 +159,12 @@ mod native {
         }
 
         pub fn vector(&self) -> u8 {
-            self.owner.timer.bound().expect("original countdown").vector.vector()
+            self.owner
+                .timer
+                .bound()
+                .expect("original countdown")
+                .vector
+                .vector()
         }
 
         /// Observe the last confirmed actual countdown, not an absolute
@@ -251,8 +255,7 @@ mod native {
 
         fn stop(&mut self) -> Result<Progress, Failure> {
             self.owner.stop_timer()?;
-            if self.owner.vector_pending(self.vector())
-                || self.owner.reception() != Reception::Idle
+            if self.owner.vector_pending(self.vector()) || self.owner.reception() != Reception::Idle
             {
                 // Keep the old identity through a raced expiration. Its
                 // late vector must be received before the next arm.

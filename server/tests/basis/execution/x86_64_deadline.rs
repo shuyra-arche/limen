@@ -98,10 +98,8 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     uefi_fixture::check_handoff(&boot, None);
     let description = boot.acpi().unwrap().hpet().unwrap().expect("original HPET");
     let range = description.registers();
-    let window = unsafe {
-        DeviceWindow::admit(range, InternalAddress::new(range.start().get()))
-    }
-    .unwrap();
+    let window =
+        unsafe { DeviceWindow::admit(range, InternalAddress::new(range.start().get())) }.unwrap();
     let hpet = unsafe { Hpet::prepare(description, window) }
         .unwrap_or_else(|(_, reason)| panic!("HPET preparation: {reason:?}"))
         .start()
@@ -149,7 +147,11 @@ fn schedule(initial: &'static Initial) -> ! {
     unsafe { asm!("mov {}, rsp", out(reg) stack, options(nomem, nostack)) };
     assert!(!initial.major_stack.contains(&stack));
     let execution = unsafe { (&*(&raw const EXECUTION)).assume_init_ref() };
-    let owner = initial.owner.borrow_mut().take().expect("original APIC owner");
+    let owner = initial
+        .owner
+        .borrow_mut()
+        .take()
+        .expect("original APIC owner");
     unsafe { TRAP.install() }.unwrap();
     let timer = unsafe { CountdownTimer::calibrate(owner, hpet().clock()) }
         .unwrap_or_else(|(_, reason)| panic!("APIC calibration: {reason:?}"));
@@ -186,7 +188,12 @@ fn schedule(initial: &'static Initial) -> ! {
                     break progress;
                 }
                 assert!(
-                    hpet().clock().sample().unwrap().elapsed_since(origin).unwrap()
+                    hpet()
+                        .clock()
+                        .sample()
+                        .unwrap()
+                        .elapsed_since(origin)
+                        .unwrap()
                         < Duration::from_secs(4)
                 );
             };
@@ -198,7 +205,12 @@ fn schedule(initial: &'static Initial) -> ! {
                 DeadlineProgress::Armed | DeadlineProgress::AwaitInterrupt
             ));
             assert!(
-                hpet().clock().sample().unwrap().elapsed_since(origin).unwrap()
+                hpet()
+                    .clock()
+                    .sample()
+                    .unwrap()
+                    .elapsed_since(origin)
+                    .unwrap()
                     < Duration::from_secs(4)
             );
         };
@@ -237,10 +249,7 @@ fn schedule(initial: &'static Initial) -> ! {
 
 fn service(execution: &Execution) -> DeadlineProgress {
     RECEPTION.owner().with_timer(|timer| {
-        unsafe {
-            execution.service_deadlines(sign(), timer, NonZeroUsize::MIN)
-        }
-        .unwrap()
+        unsafe { execution.service_deadlines(sign(), timer, NonZeroUsize::MIN) }.unwrap()
     })
 }
 
@@ -265,7 +274,11 @@ fn park(execution: &'static Execution, entry: fn(&mut Current) -> u64) -> Parked
     assert_eq!(leave.admission(), admission);
     assert_eq!(execution.pending_leave(), Ok(Some(leave)));
     assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Live));
-    Parked { unit, admission, leave }
+    Parked {
+        unit,
+        admission,
+        leave,
+    }
 }
 
 fn finish(execution: &Execution, parked: Parked, returned: Occupancy, value: u64) {

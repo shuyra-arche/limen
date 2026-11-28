@@ -29,16 +29,47 @@ fn rate_rejects_overlapping_reversed_and_exhausted_observations() {
         after: 110,
     };
     for last in [
-        Observation { before: 109, current: 900, after: 220 },
-        Observation { before: 210, current: 1001, after: 220 },
-        Observation { before: 210, current: 999, after: 220 },
-        Observation { before: 210, current: 0, after: 220 },
-        Observation { before: 220, current: 900, after: 210 },
+        Observation {
+            before: 109,
+            current: 900,
+            after: 220,
+        },
+        Observation {
+            before: 210,
+            current: 1001,
+            after: 220,
+        },
+        Observation {
+            before: 210,
+            current: 999,
+            after: 220,
+        },
+        Observation {
+            before: 210,
+            current: 0,
+            after: 220,
+        },
+        Observation {
+            before: 220,
+            current: 900,
+            after: 210,
+        },
     ] {
         assert!(Rate::observe(first, last).is_none());
     }
-    assert!(Rate::observe(
-        Observation { before: 0, current: 1000, after: 1 },
-        Observation { before: 2, current: 900, after: u64::MAX },
-    ).is_none());
+    assert!(
+        Rate::observe(
+            Observation {
+                before: 0,
+                current: 1000,
+                after: 1
+            },
+            Observation {
+                before: 2,
+                current: 900,
+                after: u64::MAX
+            },
+        )
+        .is_none()
+    );
 }

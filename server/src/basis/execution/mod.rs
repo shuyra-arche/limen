@@ -412,10 +412,12 @@ impl Execution {
         } else {
             next.map(|count| sign.clock.deadline(count))
         };
-        let progress = timer.recheck(sign.clock, next).map_err(|error| match error {
-            ReminderError::Timing => DeadlineError::Execution(Error::Timing),
-            ReminderError::Timer(error) => DeadlineError::Timer(error),
-        })?;
+        let progress = timer
+            .recheck(sign.clock, next)
+            .map_err(|error| match error {
+                ReminderError::Timing => DeadlineError::Execution(Error::Timing),
+                ReminderError::Timer(error) => DeadlineError::Timer(error),
+            })?;
         Ok(match progress {
             ReminderProgress::AwaitInterrupt => DeadlineProgress::AwaitInterrupt,
             ReminderProgress::Recheck => DeadlineProgress::Recheck,
