@@ -66,7 +66,9 @@ impl TableFormat {
         memory: Memory,
     ) -> Option<u64> {
         match self {
-            Self::Riscv64(format) if memory == Memory::Normal => format.leaf(address, level, access),
+            Self::Riscv64(format) if memory == Memory::Normal => {
+                format.leaf(address, level, access)
+            }
             Self::Aarch64(format) => format.leaf(address, level, Privilege::Kernel, access, memory),
             // IA-32e requires an admitted PAT and memory attribute relation.
             _ => None,

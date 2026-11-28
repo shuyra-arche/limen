@@ -50,9 +50,7 @@ impl TableStore {
         }
         let next = self.with_node(id, mode, |node, held| {
             let page = node.private()?;
-            let next = unsafe {
-                control.prepare_table(self.format, page.cell.physical().start())
-            }
+            let next = unsafe { control.prepare_table(self.format, page.cell.physical().start()) }
                 .map_err(|_| TableError::Scope)?;
             page.cell.freeze(held, &page.access)?;
             page.exposure = Exposure::Local;

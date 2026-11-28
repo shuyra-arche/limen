@@ -22,7 +22,9 @@ use kernel::{
                     format::Format,
                     installation::admit_context,
                 },
-                treaty::{LeafAccess, Memory, TableBranch, TableError, TableFormat, TableId, TableStore},
+                treaty::{
+                    LeafAccess, Memory, TableBranch, TableError, TableFormat, TableId, TableStore,
+                },
             },
         },
         sync::treaty::TurnMode::Fast,
@@ -88,9 +90,11 @@ impl Tree<'_> {
     }
 
     fn find(&self, level: usize, address: u64) -> Option<Node> {
-        self.nodes.iter().flatten().copied().find(|node| {
-            node.level == level && node.prefix == Self::prefix(level, address)
-        })
+        self.nodes
+            .iter()
+            .flatten()
+            .copied()
+            .find(|node| node.level == level && node.prefix == Self::prefix(level, address))
     }
 
     fn node(&mut self, level: usize, address: u64) -> Node {
@@ -136,16 +140,26 @@ impl Tree<'_> {
         // Each slot is constructed once. Never borrow the enclosing arrays
         // again after publishing shared references to earlier elements.
         let table = unsafe {
-            &mut *(&raw mut TABLES).cast::<MaybeUninit<TableStore>>().add(slot)
+            &mut *(&raw mut TABLES)
+                .cast::<MaybeUninit<TableStore>>()
+                .add(slot)
         };
         let branches = unsafe {
-            &mut *(&raw mut BRANCHES).cast::<[TableBranch; CAPACITY]>().add(slot)
+            &mut *(&raw mut BRANCHES)
+                .cast::<[TableBranch; CAPACITY]>()
+                .add(slot)
         };
-        let links = if level == 0 { &mut branches[..0] } else { &mut branches[..] };
-        let store = table.write(
-            TableStore::for_level(TableFormat::Riscv64(FORMAT), level, links).unwrap(),
-        );
-        let id = store.publish_cell(&CELLS[slot], self.handle, material, Fast).ok().unwrap();
+        let links = if level == 0 {
+            &mut branches[..0]
+        } else {
+            &mut branches[..]
+        };
+        let store =
+            table.write(TableStore::for_level(TableFormat::Riscv64(FORMAT), level, links).unwrap());
+        let id = store
+            .publish_cell(&CELLS[slot], self.handle, material, Fast)
+            .ok()
+            .unwrap();
         store.prepare(id, Fast).unwrap();
         store.accept(id, Fast).unwrap();
         store.initialize(id, Fast).unwrap();
@@ -169,8 +183,11 @@ impl Tree<'_> {
         let index = FORMAT.index(InternalAddress::new(address), 0).unwrap();
         // The guest owns the exact fixed-image, retained description or
         // qualified RAM extent that this particular leaf is allowed to reach.
-        unsafe { leaf.store.map_leaf(leaf.id, index, physical, access, Memory::Normal, Fast) }
-            .unwrap();
+        unsafe {
+            leaf.store
+                .map_leaf(leaf.id, index, physical, access, Memory::Normal, Fast)
+        }
+        .unwrap();
         assert_eq!(
             leaf.store.descriptor(leaf.id, index, Fast).unwrap(),
             FORMAT.leaf(physical, 0, access).unwrap()
@@ -187,16 +204,29 @@ impl Tree<'_> {
 
     fn parent(&self, child: Node) -> (Node, usize) {
         let address = child.prefix << (12 + 9 * (child.level + 1));
-        let parent = self.find(child.level + 1, address).expect("original prepared parent");
-        let index = FORMAT.index(InternalAddress::new(address), parent.level).unwrap();
+        let parent = self
+            .find(child.level + 1, address)
+            .expect("original prepared parent");
+        let index = FORMAT
+            .index(InternalAddress::new(address), parent.level)
+            .unwrap();
         (parent, index)
     }
 
     fn link(&self) {
         for level in 0..FORMAT.levels() - 1 {
-            for child in self.nodes.iter().flatten().copied().filter(|node| node.level == level) {
+            for child in self
+                .nodes
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|node| node.level == level)
+            {
                 let (parent, index) = self.parent(child);
-                parent.store.link_child(parent.id, index, child.store, child.id, Fast).unwrap();
+                parent
+                    .store
+                    .link_child(parent.id, index, child.store, child.id, Fast)
+                    .unwrap();
             }
         }
     }
@@ -205,9 +235,18 @@ impl Tree<'_> {
         // The original native root has already been withdrawn. Work from
         // its root toward leaves so every parent becomes unreachable first.
         for level in (0..FORMAT.levels() - 1).rev() {
-            for child in self.nodes.iter().flatten().copied().filter(|node| node.level == level) {
+            for child in self
+                .nodes
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|node| node.level == level)
+            {
                 let (parent, index) = self.parent(child);
-                assert_eq!(parent.store.unlink_child(parent.id, index, Fast), Ok(child.id));
+                assert_eq!(
+                    parent.store.unlink_child(parent.id, index, Fast),
+                    Ok(child.id)
+                );
             }
         }
         for node in self.nodes.iter().flatten() {
@@ -215,7 +254,9 @@ impl Tree<'_> {
             let mut retired = None;
             unsafe { node.store.retire_private(node.id, &mut retired, Fast) }.unwrap();
             let mut receipt = None;
-            unsafe { retired.take().unwrap().begin_return(&mut receipt) }.ok().unwrap();
+            unsafe { retired.take().unwrap().begin_return(&mut receipt) }
+                .ok()
+                .unwrap();
             let receipt = receipt.take().unwrap();
             assert_eq!(receipt.finish(Fast).unwrap().allocation, node.allocation);
             receipt.acknowledge().unwrap();
@@ -226,7 +267,11 @@ impl Tree<'_> {
 
 pub fn check(boot: &Boot<'_>) {
     assert_eq!(Context::current(), Some(Context::BARE));
-    let cpu = boot.riscv_cpus().cpu(boot.processor() as u64).unwrap().unwrap();
+    let cpu = boot
+        .riscv_cpus()
+        .cpu(boot.processor() as u64)
+        .unwrap()
+        .unwrap();
     let mmu = RiscvMmu::describe(&cpu).unwrap().unwrap();
     assert!(matches!(mmu.maximum(), MaximumMode::Paged(mode) if mode >= FORMAT));
     let mut control = unsafe { admit_context(mmu) }.unwrap();
@@ -234,7 +279,9 @@ pub fn check(boot: &Boot<'_>) {
     let range = extent(BASE, BASE + PAGES as u64 * PAGE);
     let evidence = retirement(boot, range);
     let mut storage = [None; 1];
-    let mut regions = boot.regions(ByteLength::new(PAGE), Some(&evidence), &mut storage).unwrap();
+    let mut regions = boot
+        .regions(ByteLength::new(PAGE), Some(&evidence), &mut storage)
+        .unwrap();
     assert!(regions.entries().map(|region| region.physical).eq([range]));
     let backing = extent(BASE, BASE + BACKING as u64 * PAGE);
     let mut allowance = None;
@@ -300,9 +347,16 @@ pub fn check(boot: &Boot<'_>) {
     // Its whole pages belong to the retained, independently described RAM.
     let dtb = boot.device_tree().expect("retained DTB");
     let first = PhysicalAddress::new(dtb.start as u64).align_down(Alignment::new(PAGE).unwrap());
-    let end = PhysicalAddress::new(dtb.end as u64).align_up(Alignment::new(PAGE).unwrap()).unwrap();
+    let end = PhysicalAddress::new(dtb.end as u64)
+        .align_up(Alignment::new(PAGE).unwrap())
+        .unwrap();
     let retained = PhysicalRange::new(first, end).unwrap();
-    assert!(boot.dtb_memory().unwrap().ram().any(|ram| ram.covers(retained)));
+    assert!(
+        boot.dtb_memory()
+            .unwrap()
+            .ram()
+            .any(|ram| ram.covers(retained))
+    );
     assert!(!image.overlaps(retained) && !range.overlaps(retained));
     tree.identity(retained, LeafAccess::ReadOnly);
 
@@ -332,7 +386,10 @@ pub fn check(boot: &Boot<'_>) {
         assert_eq!((&raw const WRITABLE).read_volatile(), 0x5678);
     }
     let index = FORMAT.index(InternalAddress::new(text), 2).unwrap();
-    assert_eq!(root.store.unlink_child(root.id, index, Fast), Err(TableError::State));
+    assert_eq!(
+        root.store.unlink_child(root.id, index, Fast),
+        Err(TableError::State)
+    );
     assert_eq!(active.finish(Fast), Err(TableError::State));
     assert_eq!(allowance.balance(), Ok(charged));
 

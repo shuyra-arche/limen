@@ -55,7 +55,6 @@ mod bound {
         pub fn root(self) -> Option<PhysicalAddress> {
             self.root
         }
-
     }
 
     /// Hardware readback of this local installation and its original context.
@@ -226,9 +225,7 @@ mod bound {
             table: crate::metal::memory::mmu::table::TableFormat,
             root: PhysicalAddress,
         ) -> Result<Context, SwitchError> {
-            use crate::metal::memory::mmu::{
-                aarch64::internal::format::Root, table::TableFormat,
-            };
+            use crate::metal::memory::mmu::{aarch64::internal::format::Root, table::TableFormat};
             let previous = self.current().ok_or(SwitchError::Unconfirmed)?;
             let format = self.native.profile();
             if previous.root().is_some()
@@ -260,7 +257,6 @@ mod bound {
             let next = Controls::paged(format, root).ok_or(SwitchError::Scope)?;
             unsafe { self.prepare_context(next) }
         }
-
 
         /// Qualify the exact retained Bare or ASID-zero paged context.
         ///
