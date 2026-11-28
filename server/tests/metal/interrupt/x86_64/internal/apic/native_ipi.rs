@@ -285,7 +285,10 @@ fn retained_vector() {
             .take()
             .expect("original receiver")
     };
-    let (original, reason) = receiver.controller.release_vector(receiver.original).unwrap_err();
+    let (original, reason) = receiver
+        .controller
+        .release_vector(receiver.original)
+        .unwrap_err();
     assert_eq!(reason, Failure::Busy);
     receiver.original = original;
     unsafe { RECEPTION.owner().0.get().write(Some(receiver)) };

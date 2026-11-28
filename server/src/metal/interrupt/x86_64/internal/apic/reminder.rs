@@ -255,8 +255,7 @@ mod native {
 
         fn stop(&mut self) -> Result<Progress, Failure> {
             self.owner.stop_timer()?;
-            if self.owner.vector_busy(self.vector()) || self.owner.reception() != Reception::Idle
-            {
+            if self.owner.vector_busy(self.vector()) || self.owner.reception() != Reception::Idle {
                 // Keep the old identity through a raced expiration. Its
                 // late vector must be received before the next arm.
                 return Ok(Progress::AwaitInterrupt);

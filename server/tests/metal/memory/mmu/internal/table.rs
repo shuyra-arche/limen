@@ -45,7 +45,11 @@ fn format(boot: &Boot<'_>) -> TableFormat {
         description::{MaximumMode, RiscvMmu},
         format::Format,
     };
-    let cpu = boot.riscv_cpus().cpu(boot.processor() as u64).unwrap().unwrap();
+    let cpu = boot
+        .riscv_cpus()
+        .cpu(boot.processor() as u64)
+        .unwrap()
+        .unwrap();
     let MaximumMode::Paged(mode) = RiscvMmu::describe(&cpu).unwrap().unwrap().maximum() else {
         panic!("no physical table format on the original Hart");
     };
@@ -78,7 +82,8 @@ fn format(_: &Boot<'_>) -> TableFormat {
 #[cfg(target_arch = "x86_64")]
 fn format(boot: &Boot<'_>) -> TableFormat {
     use kernel::metal::memory::mmu::x86_64::internal::installation::admit_root;
-    let (_, format) = unsafe { admit_root(boot.processor()) }.expect("original IA-32e table format");
+    let (_, format) =
+        unsafe { admit_root(boot.processor()) }.expect("original IA-32e table format");
     TableFormat::X86_64(format)
 }
 
