@@ -62,6 +62,13 @@ pub fn prepare() -> Result<(), Status> {
     WINDOW.prepare()
 }
 
+struct Prepared {
+    owner: LocalNest<'static, 'static>,
+    tree: Tree,
+    original: Controls,
+    span: nest::SpanId,
+}
+
 struct Initial {
     owner: RefCell<LocalNest<'static, 'static>>,
     tree: RefCell<Option<Tree>>,
@@ -110,9 +117,18 @@ fn continuation(current: &mut Current) -> u64 {
     core::hint::black_box(local)
 }
 
-pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
-    uefi_fixture::check_handoff(&boot, None);
-    let physical = WINDOW.inspect(&boot);
+pub fn check(boot: Boot<'_>, complete: fn() -> !) -> ! {
+    let prepared = construct(&boot);
+    uefi_fixture::check_major_guard();
+    execute(boot, prepared, complete)
+}
+
+// Finish the native memory scenario before reserving the large Debug stack
+// frame needed to construct Execution and its resident runtime receiver.
+#[inline(never)]
+fn construct(boot: &Boot<'_>) -> Prepared {
+    uefi_fixture::check_handoff(boot, None);
+    let physical = WINDOW.inspect(boot);
     let mut evidence = Retirement::new(physical);
     unsafe {
         evidence.record(Condition::NoEarlyBorrow);
@@ -130,7 +146,7 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         .find(|&index| unsafe { old.as_ptr().add(index).read_volatile() } == 0)
         .expect("unused original PML4 slot");
     let mut tree =
-        unsafe { Tree::prepare(&boot, physical, &evidence, TableFormat::X86_64(format), 3) };
+        unsafe { Tree::prepare(boot, physical, &evidence, TableFormat::X86_64(format), 3) };
     let [leaf, _, _, root] = tree.nodes;
     let witness = ptr::from_ref(&WITNESS).addr() as u64;
     assert!(boot.image().covers(memory::extent(witness, witness + 4096)));
@@ -235,7 +251,25 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     // The original Nest retirement must close and settle this reservation
     // before it can withdraw its native root.
     let remaining = owner.reserve_span(range(base, base + 4096)).unwrap();
+    uefi_fixture::check_major_guard();
+    Prepared {
+        owner,
+        tree,
+        original,
+        span: remaining,
+    }
+}
 
+#[inline(never)]
+fn execute(mut boot: Boot<'_>, prepared: Prepared, complete: fn() -> !) -> ! {
+    let Prepared {
+        mut owner,
+        tree,
+        original,
+        span: remaining,
+    } = prepared;
+    let id = owner.id();
+    let base = owner.observe_span(remaining).unwrap().range.start().get();
     let mut execution = Execution::new(
         boot.take_major().unwrap(),
         boot.terminal(),
@@ -296,6 +330,7 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         complete,
     };
     let entry = unsafe { (&mut *(&raw mut RUNTIME)).write(RuntimeEntry::new(schedule, initial)) };
+    uefi_fixture::check_major_guard();
     unsafe { execution.run(entry) }.expect("resident dispatcher")
 }
 
@@ -409,6 +444,7 @@ fn schedule(initial: &'static Initial) -> ! {
         Err(Error::Nest(nest::Error::Gone))
     );
     tree.settle();
+    uefi_fixture::check_major_guard();
     kernel::metal::platform::boot::treaty::write(
         "PASS local-nest installed=1 rollback=1 shut=1 dormant=1 yield=1 ending=1 leave=1 refs=0 withdrawn=1 refund=5 retired=1 stale=1 span=1\n",
     );

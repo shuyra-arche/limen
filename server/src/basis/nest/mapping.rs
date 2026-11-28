@@ -9,7 +9,7 @@ use crate::{
     metal::{
         identity::treaty::{Entry, GenerationTable, Key, ReserveError},
         index::{Insertion, Link, Tree},
-        memory::mmu::treaty::{LocalTranslation, TranslationPhase},
+        memory::mmu::treaty::{LocalTranslation, TableError, TranslationPhase},
         sync::treaty::{TurnAcquireError, TurnMode, TurnWorkspace},
     },
 };
@@ -238,7 +238,13 @@ impl LocalNest<'_, '_> {
         })??;
         let translation = self
             .root
-            .prepare_translation(address, physical.start(), physical.length(), input.leaf(), mode)
+            .prepare_translation(
+                address,
+                physical.start(),
+                physical.length(),
+                input.leaf(),
+                mode,
+            )
             .map_err(Error::Table)?;
         self.work.prepared = Some(translation);
 
@@ -301,8 +307,7 @@ impl LocalNest<'_, '_> {
             // At most four original, never-written leaves. A failed step
             // retains the exact remaining claims for a later cancellation.
             while translation.phase() != TranslationPhase::Removed {
-                unsafe { self.root.remove_translation(translation, mode) }
-                    .map_err(Error::Table)?;
+                unsafe { self.root.remove_translation(translation, mode) }.map_err(Error::Table)?;
             }
             self.work.prepared = None;
         }

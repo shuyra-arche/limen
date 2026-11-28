@@ -6,7 +6,7 @@ use kernel::metal::{
     sync::treaty::{Supply, turn_capacity},
 };
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use kernel::entry::boot;
 #[cfg(target_arch = "x86_64")]
 use kernel::metal::platform::firmware::uefi::AcpiInput;
@@ -18,10 +18,42 @@ use uefi::{
 };
 
 const MAJOR_NODES: usize = 5;
-static MAJOR_STACK: Stack<{ 40 * 1024 }> = Stack::new();
+const MAJOR_BYTES: usize = 40 * 1024;
+const GUARD_WORD: u64 = 0x7bd3_0ca9_e164_58f2;
+
+// Test-only diagnostic storage immediately below the actual downward
+// growing stack. This is not a hardware guard page and does not increase
+// the stack extent that Metal admits.
+#[repr(C, align(16))]
+struct MajorStack {
+    guard: [AtomicU64; 512],
+    stack: Stack<MAJOR_BYTES>,
+}
+
+static MAJOR_STACK: MajorStack = MajorStack {
+    guard: [const { AtomicU64::new(GUARD_WORD) }; 512],
+    stack: Stack::new(),
+};
 static MAJOR_LOCAL: LocalStorage<MAJOR_NODES> = LocalStorage::new(Supply::new());
 static MAJOR: boot_diagnostic::MajorMaterial =
-    boot_diagnostic::MajorMaterial::new(&MAJOR_STACK, &MAJOR_LOCAL);
+    boot_diagnostic::MajorMaterial::new(&MAJOR_STACK.stack, &MAJOR_LOCAL);
+
+/// Detect writes immediately below the original guest major stack. Call
+/// only from a quiescent test checkpoint, never as a stack safety proof.
+pub fn check_major_guard() {
+    assert_eq!(
+        core::ptr::from_ref(&MAJOR_STACK.guard).addr()
+            + core::mem::size_of_val(&MAJOR_STACK.guard),
+        MAJOR_STACK.stack.range().start,
+    );
+    assert!(
+        MAJOR_STACK
+            .guard
+            .iter()
+            .all(|word| word.load(Ordering::Relaxed) == GUARD_WORD),
+        "guest major stack boundary overwritten"
+    );
+}
 
 static TARGET: AtomicUsize = AtomicUsize::new(usize::MAX);
 
@@ -52,7 +84,7 @@ pub fn check_minor(minor: &Minor, processor: usize) {
         core::arch::asm!("mov {},rsp",out(reg) sp, options(nostack,nomem));
     }
     assert!(
-        minor.ready() && minor.stack_range().contains(&sp) && !MAJOR_STACK.range().contains(&sp)
+        minor.ready() && minor.stack_range().contains(&sp) && !MAJOR_STACK.stack.range().contains(&sp)
     );
 }
 
@@ -142,7 +174,8 @@ pub fn check_handoff<'a>(boot: &boot::Boot<'a>, minor: Option<&Minor>) -> Memory
     let map = boot.firmware_map().expect("final UEFI map");
     let early = boot.exclusions();
     let major = boot.stack_range();
-    assert_eq!(major, MAJOR_STACK.range());
+    assert_eq!(major, MAJOR_STACK.stack.range());
+    check_major_guard();
     assert_eq!(turn_capacity(), Some(MAJOR_NODES));
     let image = boot.image();
     if let Some(minor) = minor {

@@ -1,6 +1,8 @@
 //! Bounded base-page translation within an installed, exclusively owned tree.
 
-use limen_treaty::model::{ByteLength, InternalAddress, InternalRange, PhysicalAddress, PhysicalRange};
+use limen_treaty::model::{
+    ByteLength, InternalAddress, InternalRange, PhysicalAddress, PhysicalRange,
+};
 
 use super::{
     LocalRoot, TableError, TableId, TablePage,
@@ -130,7 +132,10 @@ impl LocalRoot<'_, '_> {
         for (offset, target) in leaves.iter_mut().take(pages as usize).enumerate() {
             let offset = ByteLength::new(offset as u64 * PAGE);
             let address = range.start().advance(offset).expect("checked range");
-            let physical = physical.start().advance(offset).expect("checked physical range");
+            let physical = physical
+                .start()
+                .advance(offset)
+                .expect("checked physical range");
             let Path::Leaf(position) = self.path(address, mode)? else {
                 return Err(TableError::Scope);
             };
@@ -164,7 +169,9 @@ impl LocalRoot<'_, '_> {
                 let (state, mut cell) = leaf.slot.together(held, &position.store.state);
                 position.store.check(state, position.id)?;
                 let page = position.page(&mut state.node)?;
-                let word = page.cell.retained_word(&mut cell, &page.access, leaf.index)?;
+                let word = page
+                    .cell
+                    .retained_word(&mut cell, &page.access, leaf.index)?;
                 if claim(page, leaf.index) || unsafe { word.as_ptr().read_volatile() } != 0 {
                     return Err(TableError::Occupied);
                 }
@@ -221,7 +228,10 @@ impl LocalRoot<'_, '_> {
         let offset = translation
             .leaves
             .iter()
-            .position(|leaf| leaf.as_ref().is_some_and(|leaf| leaf.phase != TranslationPhase::Active))
+            .position(|leaf| {
+                leaf.as_ref()
+                    .is_some_and(|leaf| leaf.phase != TranslationPhase::Active)
+            })
             .expect("original unfinished leaf");
         let address = translation.address(offset);
         let leaf = translation.leaves[offset].as_mut().expect("original leaf");
@@ -243,8 +253,7 @@ impl LocalRoot<'_, '_> {
             TranslationPhase::Installing => {}
             _ => return Err(TableError::State),
         }
-        unsafe { self.control.synchronize_leaf(self.next, address) }
-            .map_err(TableError::Switch)?;
+        unsafe { self.control.synchronize_leaf(self.next, address) }.map_err(TableError::Switch)?;
         leaf.phase = TranslationPhase::Active;
         if translation
             .leaves
@@ -282,12 +291,18 @@ impl LocalRoot<'_, '_> {
         let offset = translation
             .leaves
             .iter()
-            .rposition(|leaf| leaf.as_ref().is_some_and(|leaf| leaf.phase != TranslationPhase::Removed))
+            .rposition(|leaf| {
+                leaf.as_ref()
+                    .is_some_and(|leaf| leaf.phase != TranslationPhase::Removed)
+            })
             .expect("original unfinished retirement");
         let address = translation.address(offset);
         let leaf = translation.leaves[offset].as_mut().expect("original leaf");
         let position = leaf.position;
-        if matches!(leaf.phase, TranslationPhase::Installing | TranslationPhase::Active) {
+        if matches!(
+            leaf.phase,
+            TranslationPhase::Installing | TranslationPhase::Active
+        ) {
             position.store.with_node(position.id, mode, |node, held| {
                 let page = position.page(node)?;
                 let word = page.cell.retained_word(held, &page.access, leaf.index)?;

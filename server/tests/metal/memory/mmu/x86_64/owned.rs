@@ -133,11 +133,23 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     let address = InternalAddress::new(alias + PAGE);
     let target = PhysicalAddress::new(witness);
     let mut edit = active
-        .prepare_translation(address, target, ByteLength::new(PAGE), LeafAccess::ReadOnly, Fast)
+        .prepare_translation(
+            address,
+            target,
+            ByteLength::new(PAGE),
+            LeafAccess::ReadOnly,
+            Fast,
+        )
         .unwrap();
     assert_eq!(edit.phase(), TranslationPhase::Prepared);
     assert!(matches!(
-        active.prepare_translation(address, target, ByteLength::new(PAGE), LeafAccess::ReadOnly, Fast),
+        active.prepare_translation(
+            address,
+            target,
+            ByteLength::new(PAGE),
+            LeafAccess::ReadOnly,
+            Fast
+        ),
         Err(kernel::metal::memory::mmu::treaty::TableError::Occupied)
     ));
     assert_eq!(unsafe { active.restore() }, Err(SwitchError::Current));
@@ -175,7 +187,13 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     assert_eq!(value, REPLACEMENT.0[0]);
     unsafe { active.remove_translation(&mut replacement, Fast) }.unwrap();
     let mut cancelled = active
-        .prepare_translation(address, target, ByteLength::new(PAGE), LeafAccess::ReadOnly, Fast)
+        .prepare_translation(
+            address,
+            target,
+            ByteLength::new(PAGE),
+            LeafAccess::ReadOnly,
+            Fast,
+        )
         .unwrap();
     unsafe { active.remove_translation(&mut cancelled, Fast) }.unwrap();
     assert_eq!(cancelled.phase(), TranslationPhase::Removed);
