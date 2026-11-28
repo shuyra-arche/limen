@@ -1,6 +1,13 @@
 //! Bounded Executor participation, Unit admission and exact execution occupancy.
 
-use core::num::NonZeroU64;
+use core::{
+    marker::PhantomData,
+    num::NonZeroU64,
+    sync::atomic::{
+        AtomicU64,
+        Ordering::{Acquire, Relaxed, Release},
+    },
+};
 
 use super::unit::UnitId;
 use crate::metal::processor::treaty::{LeaveReceipt, ProcessorId};
@@ -94,12 +101,14 @@ impl Participant {
 /// Stable storage for actual Room participants.
 pub struct Participants<const CAPACITY: usize> {
     entries: [Option<Participant>; CAPACITY],
+    ready_revision: AtomicU64,
 }
 
 impl<const CAPACITY: usize> Participants<CAPACITY> {
     pub const fn new() -> Self {
         Self {
             entries: [const { None }; CAPACITY],
+            ready_revision: AtomicU64::new(0),
         }
     }
 
@@ -109,7 +118,7 @@ impl<const CAPACITY: usize> Participants<CAPACITY> {
 
     pub(super) fn room<const UNITS: usize>(&'static mut self) -> Room<UNITS> {
         assert!(self.accepts());
-        Room::new(&mut self.entries)
+        Room::new(&mut self.entries, &self.ready_revision)
     }
 }
 
@@ -119,22 +128,43 @@ impl<const CAPACITY: usize> Default for Participants<CAPACITY> {
     }
 }
 
+/// The Room had no compatible Ready Unit for the observing dispatcher.
+/// A change requests a fresh observation under Room protection.
+pub struct IdleObservation {
+    ready_revision: &'static AtomicU64,
+    observed: u64,
+    local: PhantomData<*mut ()>,
+}
+
+impl IdleObservation {
+    /// Check for a Ready publication with one atomic read.
+    /// Exhaustion conservatively requests a recheck.
+    pub fn changed(&self) -> bool {
+        self.observed == u64::MAX || self.ready_revision.load(Acquire) != self.observed
+    }
+}
+
 pub(crate) struct Room<const CAPACITY: usize> {
     units: [Option<UnitEntry>; CAPACITY],
     participants: &'static mut [Option<Participant>],
     // Both discovery indices point to the UnitEntry that owns the placement.
     ready: [usize; CAPACITY],
     ready_len: usize,
+    ready_revision: &'static AtomicU64,
     next_admission: Option<AdmissionId>,
 }
 
 impl<const CAPACITY: usize> Room<CAPACITY> {
-    fn new(participants: &'static mut [Option<Participant>]) -> Self {
+    fn new(
+        participants: &'static mut [Option<Participant>],
+        ready_revision: &'static AtomicU64,
+    ) -> Self {
         Self {
             units: [const { None }; CAPACITY],
             participants,
             ready: [0; CAPACITY],
             ready_len: 0,
+            ready_revision,
             next_admission: Some(AdmissionId(NonZeroU64::MIN)),
         }
     }
@@ -185,6 +215,11 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         // Each Ready entry has one index. The admitted slot reserves its space.
         self.ready[self.ready_len] = slot;
         self.ready_len += 1;
+        // Room's Turn serializes every Ready publication. Saturation prevents
+        // an old idle observation from becoming current again.
+        let revision = self.ready_revision.load(Relaxed);
+        self.ready_revision
+            .store(revision.saturating_add(1), Release);
     }
 
     pub(crate) fn admitted(&self, unit: UnitId) -> bool {
@@ -228,6 +263,20 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         Ok(self
             .first_ready(processor)
             .map(|(_, slot)| self.units[slot].as_ref().expect("ready Unit").unit))
+    }
+
+    pub(super) fn observe_idle(
+        &self,
+        processor: ProcessorId,
+    ) -> Result<Option<IdleObservation>, Error> {
+        Ok(self
+            .candidate(processor)?
+            .is_none()
+            .then(|| IdleObservation {
+                ready_revision: self.ready_revision,
+                observed: self.ready_revision.load(Relaxed),
+                local: PhantomData,
+            }))
     }
 
     pub(crate) fn occupy(

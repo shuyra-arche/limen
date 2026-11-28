@@ -46,12 +46,27 @@ in canonical order. Unit-only and Room-only operations acquire their own Turn. M
 active synchronization participation. The acquisition ends its
 borrows, settles all queue nodes and restores the original interrupt state
 before a continuation can be entered or handed off.
+
 A yielded continuation becomes available to another compatible processor only
 after settlement. An Ending Unit keeps its binding until the
 admission is released. `finish_end` clears and returns the stack before the
 Ended result becomes visible. Its Unit identity and result persist until
 `reap` releases the identity slot. A replacement can reuse an available
 stack while a prior result remains observable.
+
+## Idle dispatch
+
+An attached dispatcher calls `Execution::observe_idle` in ordinary execution
+to check the compatible Ready queue under Room's Turn. If the queue is empty,
+the returned observation can check for another Ready publication with one
+atomic read during the native wait. A publication for a different dispatcher
+may also request a recheck. A saturated revision always requests a recheck.
+The native return leads back to Room to choose and occupy an actual Unit.
+
+The caller must keep an effective wake path to the dispatcher until the wait
+returns. The publisher commits Ready before issuing a native notification.
+RISC-V migration verification uses the real Ready publication from `vacate`
+and a peer SBI IPI, then dispatches the original Unit from Room.
 
 ## Same-level IRQ entry
 

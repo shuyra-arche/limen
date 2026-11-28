@@ -73,7 +73,7 @@ static STEP: AtomicUsize = AtomicUsize::new(0);
 static STACK: AtomicUsize = AtomicUsize::new(0);
 
 fn wait(phase: usize) {
-    while PHASE.load(Relaxed) != phase {
+    while PHASE.load(Acquire) != phase {
         spin_loop();
     }
 }
@@ -158,16 +158,28 @@ fn minor(processor: usize, argument: usize) -> ! {
         let address = core::hint::black_box(&mark) as *const u8 as usize;
         assert!(!MINOR.stack_range().contains(&address));
         wait(1);
-        // The original processor has not returned its occupation yet.
+        // The original processor still owns its Occupancy.
         assert_eq!(execution.enter(), Ok(None));
-        PHASE.store(2, Relaxed);
-        wait(3);
+        #[cfg(target_arch = "riscv64")]
+        {
+            let idle = execution
+                .observe_idle()
+                .unwrap()
+                .expect("compatible queue empty");
+            sbi::await_ready(processor, idle, || PHASE.store(2, Release));
+        }
+        #[cfg(not(target_arch = "riscv64"))]
+        {
+            PHASE.store(2, Release);
+            wait(3);
+        }
         let control = registers::control();
-        let receipt = dispatch(execution);
+        let receipt = execution.enter().unwrap().expect("original Ready Unit");
+        assert_eq!(execution.pending_leave(), Ok(Some(receipt)));
         assert_eq!(receipt.processor(), PEER.load(Relaxed));
         assert_eq!(registers::control(), control);
         execution.vacate(receipt).expect("minor departure");
-        PHASE.store(4, Relaxed);
+        PHASE.store(4, Release);
         loop {
             spin_loop();
         }
@@ -236,6 +248,10 @@ fn run(
             Err(StartError::Busy)
         );
 
+        let empty = execution
+            .observe_idle()
+            .unwrap()
+            .expect("initial queue empty");
         let unit = unsafe { execution.create_migratable(migratable) }.expect("migratable Unit");
         let dormant = unsafe { execution.create(never) }.expect("dormant Unit");
         execution
@@ -244,17 +260,23 @@ fn run(
         assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
         execution.finish_end(dormant).unwrap();
         assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
+        assert!(!empty.changed());
         execution.submit(unit).unwrap();
+        assert!(empty.changed());
+        assert!(execution.observe_idle().unwrap().is_none());
 
         let control = registers::control();
         let first = dispatch(execution);
         assert_eq!(first.unit(), unit);
         assert_eq!(first.processor(), major);
         assert_eq!(registers::control(), control);
-        PHASE.store(1, Relaxed);
+        PHASE.store(1, Release);
         wait(2);
         execution.vacate(first).expect("major departure");
-        PHASE.store(3, Relaxed);
+        #[cfg(target_arch = "riscv64")]
+        sbi::notify(&boot, target);
+        #[cfg(not(target_arch = "riscv64"))]
+        PHASE.store(3, Release);
         wait(4);
         let last = dispatch(execution);
         assert_eq!(last.unit(), unit);
@@ -272,6 +294,10 @@ fn run(
         let receipt = dispatch(execution);
         finish(execution, reused, receipt, 41);
         assert_eq!(execution.enter(), Ok(None));
+        let idle = execution.observe_idle().unwrap().expect("queue drained");
+        assert!(!idle.changed());
+        #[cfg(target_arch = "riscv64")]
+        boot_diagnostic::write("PASS room-idle original_ready=1 sbi_ipi=1 ack=1 dispatched=1\n");
         boot_diagnostic::write(
             "PASS cooperative-execution participants=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1\n",
         );

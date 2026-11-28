@@ -4,7 +4,9 @@ use core::marker::PhantomData;
 
 use crate::{
     basis::{
-        room::{self, AdmissionId, LeaveDestination, Occupancy, Participants, Room},
+        room::{
+            self, AdmissionId, IdleObservation, LeaveDestination, Occupancy, Participants, Room,
+        },
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, UnitRecord, Units},
     },
     metal::{
@@ -264,9 +266,7 @@ impl Execution {
         unsafe { local.start(dispatch) }
     }
 
-    /// Run one ready Unit until it yields or returns on its own stack.
-    /// The original admission remains occupied until `vacate`.
-    pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
+    fn dispatcher(&self) -> Result<(ProcessorId, LocalExecution<'_, Occupancy>), Error> {
         let (id, local) = self.local()?;
         if !treaty::cooperative_ready() {
             return Err(Error::Unsupported);
@@ -281,6 +281,23 @@ impl Execution {
                 Error::Protection
             });
         }
+        Ok((id, local))
+    }
+
+    /// Observe an attached dispatcher's empty compatible queue in ordinary execution.
+    /// The later hardware wait can check the observation without retaining a Turn.
+    /// The caller supplies valid wake coverage for subsequent Ready publications.
+    pub fn observe_idle(&self) -> Result<Option<IdleObservation>, Error> {
+        let (processor, _) = self.dispatcher()?;
+        self.room
+            .acquire(|room| room.observe_idle(processor))?
+            .map_err(Error::from)
+    }
+
+    /// Run one ready Unit until it yields or returns on its own stack.
+    /// The original admission remains occupied until `vacate`.
+    pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
+        let (id, local) = self.dispatcher()?;
         let Some((occupancy, context, entry)) = self.with_unit_room(|units, room| {
             let Some(unit) = room.candidate(id)? else {
                 return Ok(None);
