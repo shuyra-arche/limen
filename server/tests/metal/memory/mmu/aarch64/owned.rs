@@ -61,7 +61,6 @@ fn verify_lower_writable(range: PhysicalRange) {
     }
 }
 
-
 /// # Safety
 /// The fixture owns the original unexposed grant and its writable lower
 /// mapping. The lower walk remains resident and is the only live walk.
@@ -95,7 +94,10 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     let root_address = root.store.cell(root.id).unwrap().1.start().get();
     let mut active = unsafe { root.store.prepare_local(root.id, &mut control, Fast) }.unwrap();
     let mut retired = None;
-    assert!(unsafe { root.store.retire_private(root.id, &mut retired, Fast) }.is_err() && retired.is_none());
+    assert!(
+        unsafe { root.store.retire_private(root.id, &mut retired, Fast) }.is_err()
+            && retired.is_none()
+    );
     unsafe { active.install() }.unwrap();
     let current = unsafe { Controls::current() };
     assert_eq!(current.ttbr1, root_address);
@@ -127,7 +129,6 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     active.finish(Fast).unwrap();
     drop(active);
     assert_eq!(control.current().unwrap().root(), None);
-
 
     unsafe { tree.finish([0, 0, 0]) };
     kernel::metal::platform::boot::treaty::write(

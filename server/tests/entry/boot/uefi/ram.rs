@@ -7,8 +7,14 @@ use uefi::{Status, boot::PAGE_SIZE};
 
 use super::{foundation, window::Window};
 
-#[cfg_attr(target_arch = "aarch64", path = "../../../metal/memory/mmu/aarch64/owned.rs")]
-#[cfg_attr(target_arch = "x86_64", path = "../../../metal/memory/mmu/x86_64/owned.rs")]
+#[cfg_attr(
+    target_arch = "aarch64",
+    path = "../../../metal/memory/mmu/aarch64/owned.rs"
+)]
+#[cfg_attr(
+    target_arch = "x86_64",
+    path = "../../../metal/memory/mmu/x86_64/owned.rs"
+)]
 mod owned;
 
 const PAGES: usize = foundation::PAGES + owned::PAGES;

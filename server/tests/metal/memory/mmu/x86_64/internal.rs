@@ -21,7 +21,14 @@ fn controls() -> Controls {
 #[test]
 fn rejects_uncovered_control_modes_and_width() {
     let active = controls();
-    assert!(Controls { pat: None, ..active }.format(48, true).is_none());
+    assert!(
+        Controls {
+            pat: None,
+            ..active
+        }
+        .format(48, true)
+        .is_none()
+    );
     for bit in [7, 12, 17, 22, 23, 24] {
         assert!(
             Controls {
@@ -77,10 +84,7 @@ fn qualified_leaf_sizes_pat_bits_and_authority() {
     );
     assert_eq!(format.branch(zero, User), Some(7));
     assert_eq!(format.branch(PhysicalAddress::new(1 << 48), Kernel), None);
-    assert_eq!(
-        format.leaf(zero, 0, User, ReadExecute, Normal),
-        Some(0x85)
-    );
+    assert_eq!(format.leaf(zero, 0, User, ReadExecute, Normal), Some(0x85));
     assert_eq!(
         format.leaf(zero, 1, Kernel, ReadWrite, Normal),
         Some((1 << 63) | 0x1083)
@@ -124,7 +128,10 @@ fn native_non_leaf_retains_only_the_original_branch() {
     assert!(!format.matches_branch(physical, encoded | (1 << 6)));
     assert!(!format.matches_branch(physical, encoded | 4));
     assert!(!format.matches_branch(PhysicalAddress::new(0x4000), encoded));
-    assert_eq!(format.inherited_branch(encoded | 4 | (1 << 5)), Some(encoded | (1 << 5)));
+    assert_eq!(
+        format.inherited_branch(encoded | 4 | (1 << 5)),
+        Some(encoded | (1 << 5))
+    );
     assert_eq!(format.inherited_branch(encoded | (1 << 7)), None);
     assert_eq!(format.inherited_branch(encoded & !1), None);
     assert_eq!(format.inherited_branch(encoded | (1 << 48)), None);

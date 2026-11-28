@@ -1,11 +1,11 @@
 //! Retain an owned tree through its original local native root installation.
 
 use super::{Exposure, Node, TableError, TableId, TablePage, TableStore};
-use limen_treaty::model::PhysicalAddress;
 use crate::metal::{
     memory::mmu::treaty::{Context, LocalContext, SwitchError},
     sync::treaty::TurnMode,
 };
+use limen_treaty::model::PhysicalAddress;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Stage {
@@ -79,8 +79,8 @@ impl TableStore {
     ) -> Result<LocalRoot<'control, 'scope>, TableError> {
         let previous = control.current().ok_or(TableError::State)?;
         let root = previous.root().ok_or(TableError::Scope)?;
-        let descriptor = unsafe { control.original_branch(original, index) }
-            .map_err(|_| TableError::Scope)?;
+        let descriptor =
+            unsafe { control.original_branch(original, index) }.map_err(|_| TableError::Scope)?;
         let borrowed = BorrowedBranch {
             original: root,
             index,
@@ -117,7 +117,8 @@ impl TableStore {
             if let Err(error) = page.cell.freeze(held, &page.access) {
                 if let Some(branch) = borrowed {
                     TablePage::write(
-                        page.entry(held, branch.index).expect("unchanged private root"),
+                        page.entry(held, branch.index)
+                            .expect("unchanged private root"),
                         0,
                     );
                 }
@@ -205,7 +206,8 @@ impl LocalRoot<'_, '_> {
             unsafe { page.cell.thaw(held, &page.access) }?;
             if let Some(branch) = borrowed {
                 TablePage::write(
-                    page.entry(held, branch.index).expect("original retained branch"),
+                    page.entry(held, branch.index)
+                        .expect("original retained branch"),
                     0,
                 );
             }

@@ -1,6 +1,9 @@
 //! Retain the original firmware subtree while installing a real owned CR3 root.
 
-use core::{arch::asm, ptr::{self, NonNull}};
+use core::{
+    arch::asm,
+    ptr::{self, NonNull},
+};
 
 use kernel::{
     entry::boot::{Boot, Retirement},
@@ -40,7 +43,10 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     let original = unsafe { Controls::current() };
     let (mut control, format) = unsafe { admit_root(boot.processor()) }.unwrap();
     let original_context = control.current().unwrap();
-    assert_eq!(original_context.root(), Some(PhysicalAddress::new(original.cr3 as u64)));
+    assert_eq!(
+        original_context.root(),
+        Some(PhysicalAddress::new(original.cr3 as u64))
+    );
     assert!(original.pat.is_some());
     let old = NonNull::new(ptr::with_exposed_provenance_mut::<u64>(original.cr3)).unwrap();
     let before = unsafe { old.as_ptr().add(INHERITED).read_volatile() };
@@ -62,36 +68,61 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     assert!(boot.image().covers(extent(witness, witness + PAGE)));
     unsafe {
         leaf.store.map_leaf(
-            leaf.id, 0, PhysicalAddress::new(witness),
-            LeafAccess::ReadOnly, Memory::Normal, Fast,
+            leaf.id,
+            0,
+            PhysicalAddress::new(witness),
+            LeafAccess::ReadOnly,
+            Memory::Normal,
+            Fast,
         )
-    }.unwrap();
+    }
+    .unwrap();
     tree.link([0, 0, slot]);
     let charged = tree.allowance.balance().unwrap();
     let physical = root.store.cell(root.id).unwrap().1.start();
 
     // Wrong source and empty original slot cannot publish a shared
     // relation or freeze the private root.
-    let wrong = NonNull::new(ptr::with_exposed_provenance_mut::<u64>(original.cr3 + PAGE as usize)).unwrap();
+    let wrong = NonNull::new(ptr::with_exposed_provenance_mut::<u64>(
+        original.cr3 + PAGE as usize,
+    ))
+    .unwrap();
     assert!(matches!(
-        unsafe { root.store.prepare_shared(root.id, &mut control, wrong, INHERITED, Fast) },
+        unsafe {
+            root.store
+                .prepare_shared(root.id, &mut control, wrong, INHERITED, Fast)
+        },
         Err(TableError::Scope)
     ));
     assert!(matches!(
-        unsafe { root.store.prepare_shared(root.id, &mut control, old, slot, Fast) },
+        unsafe {
+            root.store
+                .prepare_shared(root.id, &mut control, old, slot, Fast)
+        },
         Err(TableError::Scope)
     ));
     assert_eq!(root.store.descriptor(root.id, INHERITED, Fast), Ok(0));
 
     let mut active = unsafe {
-        root.store.prepare_shared(root.id, &mut control, old, INHERITED, Fast)
-    }.unwrap();
+        root.store
+            .prepare_shared(root.id, &mut control, old, INHERITED, Fast)
+    }
+    .unwrap();
     let mut retired = None;
-    assert_eq!(unsafe { root.store.retire_private(root.id, &mut retired, Fast) }, Err(TableError::State));
+    assert_eq!(
+        unsafe { root.store.retire_private(root.id, &mut retired, Fast) },
+        Err(TableError::State)
+    );
     assert!(retired.is_none());
     unsafe { active.install() }.unwrap();
     let current = unsafe { Controls::current() };
-    assert_eq!(current, Controls { cr3: physical.get() as usize, ..original });
+    assert_eq!(
+        current,
+        Controls {
+            cr3: physical.get() as usize,
+            ..original
+        }
+    );
     let value: u64;
     unsafe { asm!("mov {}, [{}]", out(reg) value, in(reg) alias, options(nostack, readonly)) };
     assert_eq!(value, WITNESS.0[0]);
@@ -99,7 +130,10 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
         (&raw mut WRITABLE).write_volatile(0x5678);
         assert_eq!((&raw const WRITABLE).read_volatile(), 0x5678);
     }
-    assert_eq!(root.store.unlink_child(root.id, slot, Fast), Err(TableError::State));
+    assert_eq!(
+        root.store.unlink_child(root.id, slot, Fast),
+        Err(TableError::State)
+    );
     assert_eq!(active.finish(Fast), Err(TableError::State));
     assert_eq!(tree.allowance.balance(), Ok(charged));
 
@@ -116,7 +150,10 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
 
     // This owned branch really was traversed. The original hardware
     // Accessed bit may be set, without changing its child identity.
-    assert_ne!(root.store.descriptor(root.id, slot, Fast).unwrap() & ACCESSED, 0);
+    assert_ne!(
+        root.store.descriptor(root.id, slot, Fast).unwrap() & ACCESSED,
+        0
+    );
     unsafe { tree.finish([0, 0, slot]) };
     kernel::metal::platform::boot::treaty::write(
         "PASS owned x86 tables=4 cr3=1 pat=1 borrowed=1 alias=1 original=1 accessed=1 refund=4\n",

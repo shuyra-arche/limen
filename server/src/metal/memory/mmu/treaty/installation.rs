@@ -248,8 +248,7 @@ mod bound {
         ) -> Result<Context, SwitchError> {
             use crate::metal::memory::mmu::table::TableFormat;
             let previous = self.current().ok_or(SwitchError::Unconfirmed)?;
-            if table != TableFormat::X86_64(self.native.profile())
-                || previous.root() == Some(root)
+            if table != TableFormat::X86_64(self.native.profile()) || previous.root() == Some(root)
             {
                 return Err(SwitchError::Scope);
             }
@@ -264,7 +263,10 @@ mod bound {
             index: usize,
         ) -> Result<u64, SwitchError> {
             Native::check(self.installation.processor())?;
-            let previous = self.installation.current().ok_or(SwitchError::Unconfirmed)?;
+            let previous = self
+                .installation
+                .current()
+                .ok_or(SwitchError::Unconfirmed)?;
             let observed = unsafe { Native::observe() };
             if previous != observed {
                 return Err(SwitchError::Current);
@@ -280,7 +282,10 @@ mod bound {
                 // Recursive roots are not independent retained subtrees.
                 return Err(SwitchError::Scope);
             }
-            self.native.profile().inherited_branch(entry).ok_or(SwitchError::Scope)
+            self.native
+                .profile()
+                .inherited_branch(entry)
+                .ok_or(SwitchError::Scope)
         }
     }
 

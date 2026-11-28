@@ -41,7 +41,6 @@ static mut ALLOCATION: Option<Allocation> = None;
 static mut RETIRED: Option<Retired> = None;
 static mut RETURNED: Option<ReturnReceipt> = None;
 
-
 unsafe fn make_table(
     store: &'static TableStore,
     allowance: &Allowance,
@@ -89,7 +88,6 @@ unsafe fn make_table(
     assert_eq!(store.locate(allocation_id), Ok(Some(id)));
     (id, allocation_id)
 }
-
 
 #[derive(Clone, Copy)]
 pub(super) struct Node {
@@ -187,7 +185,11 @@ impl Tree {
             });
 
         Self {
-            nodes: nodes.map(|(store, id, allocation)| Node { store, id, allocation }),
+            nodes: nodes.map(|(store, id, allocation)| Node {
+                store,
+                id,
+                allocation,
+            }),
             allowance,
             handle,
             closing: closing.as_ref().unwrap(),
@@ -200,9 +202,15 @@ impl Tree {
         for (level, index) in indexes.into_iter().enumerate() {
             let child = self.nodes[level];
             let parent = self.nodes[level + 1];
-            parent.store.link_child(parent.id, index, child.store, child.id, Fast).unwrap();
+            parent
+                .store
+                .link_child(parent.id, index, child.store, child.id, Fast)
+                .unwrap();
         }
-        assert_eq!(self.allowance.balance().unwrap().occupied().get(), PAGE * LEVELS as u64);
+        assert_eq!(
+            self.allowance.balance().unwrap().occupied().get(),
+            PAGE * LEVELS as u64
+        );
     }
 
     /// # Safety
@@ -212,14 +220,24 @@ impl Tree {
         for (level, index) in indexes.into_iter().enumerate().rev() {
             let child = self.nodes[level];
             let parent = self.nodes[level + 1];
-            assert_eq!(parent.store.unlink_child(parent.id, index, Fast), Ok(child.id));
+            assert_eq!(
+                parent.store.unlink_child(parent.id, index, Fast),
+                Ok(child.id)
+            );
         }
         let retired = unsafe { &mut *(&raw mut RETIRED) };
         let receipt = unsafe { &mut *(&raw mut RETURNED) };
-        for Node { store, id, allocation } in self.nodes.into_iter().rev() {
+        for Node {
+            store,
+            id,
+            allocation,
+        } in self.nodes.into_iter().rev()
+        {
             assert_eq!(store.locate(allocation), Ok(Some(id)));
             unsafe { store.retire_private(id, retired, Fast) }.unwrap();
-            unsafe { retired.take().unwrap().begin_return(receipt) }.ok().unwrap();
+            unsafe { retired.take().unwrap().begin_return(receipt) }
+                .ok()
+                .unwrap();
             let returned = receipt.take().unwrap();
             assert_eq!(returned.finish(Fast).unwrap().allocation, allocation);
             returned.acknowledge().unwrap();
