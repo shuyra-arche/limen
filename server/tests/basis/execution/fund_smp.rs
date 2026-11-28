@@ -39,7 +39,9 @@ use kernel::{
         platform::{boot::treaty::write, description::treaty::devicetree::DeviceTree},
         processor::{
             description::riscv64::{cpu::RiscvCpus, isa::RiscvIsa},
-            treaty::{Dispatchers, LocalStorage, Minor, RuntimeTrap, Stack, Startup, TimerInterrupt},
+            treaty::{
+                Dispatchers, LocalStorage, Minor, RuntimeTrap, Stack, Startup, TimerInterrupt,
+            },
         },
         sync::treaty::Supply,
     },
@@ -167,7 +169,10 @@ pub(crate) fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     let retained = DeviceTree::new(retained).unwrap();
     unsafe { (&mut *(&raw mut DESCRIPTION)).write(retained) };
 
-    let line = boot.take_reception().expect("original major delivery").timer;
+    let line = boot
+        .take_reception()
+        .expect("original major delivery")
+        .timer;
     assert!(matches!(Supervisor::take(), Err(ReceptionError::Busy)));
     unsafe { (&mut *LOCALS[0].line.get()).write(line) };
     let execution = Execution::new(
@@ -364,10 +369,7 @@ fn schedule(index: usize) {
     assert_eq!(closed.spent + closed.free, quota(index));
     assert_eq!(closed.excess, Duration::ZERO);
     execution.finish_end(unit).unwrap();
-    assert_eq!(
-        execution.reap(unit),
-        Ok(End::Returned { value: RETURNED })
-    );
+    assert_eq!(execution.reap(unit), Ok(End::Returned { value: RETURNED }));
     assert_eq!(
         execution.service_funded_deadlines(fund, sign, NonZeroUsize::MIN),
         Ok(DeadlineProgress::Idle),
@@ -385,7 +387,10 @@ fn settle(
     loop {
         match execution.vacate_funded(fund, occupancy) {
             Err(FundError::Timer(Failure::Busy)) => {
-                assert!(counter.read().unwrap() < limit, "original timer did not drain");
+                assert!(
+                    counter.read().unwrap() < limit,
+                    "original timer did not drain"
+                );
                 spin_loop();
             }
             result => return result.unwrap(),
