@@ -7,7 +7,7 @@ use kernel::{
     metal::{
         memory::mmu::{
             aarch64::internal::{context::Controls, installation::admit_inactive_upper},
-            treaty::{LeafAccess, Memory, TableFormat},
+            treaty::{LeafAccess, Memory, TableFormat, TableProgress},
         },
         sync::treaty::TurnMode::Fast,
     },
@@ -126,11 +126,15 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     unsafe { active.restore() }.unwrap();
     assert_eq!(unsafe { Controls::current() }, original);
     assert_ne!(translation(UPPER) & 1, 0);
-    active.finish(Fast).unwrap();
+    for _ in 0..32 {
+        if unsafe { active.advance_retirement(Fast) }.unwrap() == TableProgress::Complete {
+            break;
+        }
+    }
+    assert_eq!(unsafe { active.advance_retirement(Fast) }, Ok(TableProgress::Complete));
     drop(active);
     assert_eq!(control.current().unwrap().root(), None);
-
-    unsafe { tree.finish([0, 0, 0]) };
+    tree.settle();
     kernel::metal::platform::boot::treaty::write(
         "PASS owned upper tables=4 active=1 access=1 original=1 retire=1 refund=4\n",
     );

@@ -7,10 +7,12 @@ use crate::{
 };
 
 #[derive(Clone, Copy)]
-struct Branch {
-    index: usize,
-    child: &'static TableStore,
-    id: TableId,
+pub(super) struct Branch {
+    pub(super) index: usize,
+    pub(super) child: &'static TableStore,
+    pub(super) id: TableId,
+    #[cfg(limen_cooperative)]
+    pub(super) detached: bool,
 }
 
 /// Prepaid custody for one actual child, held by its original parent.
@@ -25,7 +27,12 @@ impl TableBranch {
 }
 
 impl State {
-    fn branch(&self, index: usize) -> Option<(usize, Branch)> {
+    #[cfg(limen_cooperative)]
+    pub(super) fn first_branch(&self) -> Option<Branch> {
+        self.branches.as_deref()?.iter().find_map(|slot| slot.0)
+    }
+
+    pub(super) fn branch(&self, index: usize) -> Option<(usize, Branch)> {
         self.branches
             .as_deref()?
             .iter()
@@ -44,7 +51,7 @@ impl State {
             .position(|slot| slot.0.is_none())
     }
 
-    fn set_branch(&mut self, position: usize, branch: Option<Branch>) {
+    pub(super) fn set_branch(&mut self, position: usize, branch: Option<Branch>) {
         self.branches
             .as_deref_mut()
             .expect("prepaid branch custody")[position]
@@ -53,7 +60,7 @@ impl State {
 }
 
 impl TableStore {
-    fn with_branch<R>(
+    pub(super) fn with_branch<R>(
         &self,
         id: TableId,
         branch: Branch,
@@ -96,6 +103,8 @@ impl TableStore {
             index,
             child,
             id: child_id,
+            #[cfg(limen_cooperative)]
+            detached: false,
         };
         self.with_branch(id, branch, mode, |held, parent_slot, child_slot| {
             let (parent, mut cell) = parent_slot.together(held, &self.state);

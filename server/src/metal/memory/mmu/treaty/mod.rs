@@ -2,6 +2,8 @@
 
 #[cfg(limen_target)]
 pub use super::table::LocalRoot;
+#[cfg(limen_cooperative)]
+pub use super::table::TableProgress;
 pub use super::table::{TableBranch, TableError, TableFormat, TableId, TableStore};
 
 mod installation;

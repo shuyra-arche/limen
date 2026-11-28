@@ -9,7 +9,7 @@ use kernel::{
     entry::boot::{Boot, Retirement},
     metal::{
         memory::mmu::{
-            treaty::{LeafAccess, Memory, TableError, TableFormat},
+            treaty::{LeafAccess, Memory, TableError, TableFormat, TableProgress},
             x86_64::internal::{context::Controls, installation::admit_root},
         },
         sync::treaty::TurnMode::Fast,
@@ -139,23 +139,27 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
 
     unsafe { active.restore() }.unwrap();
     assert_eq!(unsafe { Controls::current() }, original);
-    active.finish(Fast).unwrap();
-    drop(active);
-    assert_eq!(control.current(), Some(original_context));
-    assert_eq!(root.store.descriptor(root.id, INHERITED, Fast), Ok(0));
+    // Restoration settles the hardware access, but the private root
+    // must remain closed until its original retirement is complete.
+    assert_eq!(unsafe { active.advance_retirement(Fast) }, Ok(TableProgress::Pending));
+    assert_eq!(root.store.descriptor(root.id, INHERITED, Fast), Err(TableError::State));
     let after = unsafe { old.as_ptr().add(INHERITED).read_volatile() };
     assert_eq!(after & !ACCESSED, before & !ACCESSED);
     assert_eq!(unsafe { old.as_ptr().add(slot).read_volatile() }, 0);
     assert_eq!(unsafe { (&raw const WRITABLE).read_volatile() }, 0x5678);
 
-    // This owned branch really was traversed. The original hardware
-    // Accessed bit may be set, without changing its child identity.
-    assert_ne!(
-        root.store.descriptor(root.id, slot, Fast).unwrap() & ACCESSED,
-        0
-    );
-    unsafe { tree.finish([0, 0, slot]) };
+    // Native traversal sets Accessed on the retained owned branches.
+    // The original branch matcher, not a fresh address, permits retirement.
+    for _ in 0..32 {
+        if unsafe { active.advance_retirement(Fast) }.unwrap() == TableProgress::Complete {
+            break;
+        }
+    }
+    assert_eq!(unsafe { active.advance_retirement(Fast) }, Ok(TableProgress::Complete));
+    drop(active);
+    assert_eq!(control.current(), Some(original_context));
+    tree.settle();
     kernel::metal::platform::boot::treaty::write(
-        "PASS owned x86 tables=4 cr3=1 pat=1 borrowed=1 alias=1 original=1 accessed=1 refund=4\n",
+        "PASS owned x86 tables=4 cr3=1 pat=1 borrowed=1 alias=1 original=1 retired-tree=1 refund=4\n",
     );
 }

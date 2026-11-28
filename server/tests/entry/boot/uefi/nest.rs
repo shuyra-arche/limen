@@ -10,14 +10,14 @@ use core::{
 use kernel::{
     basis::{
         execution::{Current, Error, Execution, KernelBinding, RuntimeEntry},
-        nest::{self, LocalNest, Nest, NestId, Phase},
+        nest::{self, LocalNest, Nest, NestId, Phase, Progress},
         room::{Occupancy, Participants},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::{Boot, Condition, Retirement},
     metal::{
         memory::mmu::{
-            treaty::{LeafAccess, LocalContext, Memory, TableFormat},
+            treaty::{LeafAccess, LocalContext, Memory, TableError, TableFormat},
             x86_64::internal::{context::Controls, installation::admit_root},
         },
         processor::treaty::Dispatchers,
@@ -61,7 +61,6 @@ struct Initial {
     tree: RefCell<Option<Tree>>,
     original: Controls,
     id: NestId,
-    slot: usize,
     unit: UnitId,
     complete: fn() -> !,
 }
@@ -169,6 +168,7 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     owner.begin_delete().unwrap();
     check_refs(id, Phase::Shutting, 2);
     assert_eq!(owner.begin_drain(), Err(nest::Error::Busy));
+    assert_eq!(unsafe { owner.advance_retirement() }, Err(nest::Error::Busy));
     assert_eq!(
         unsafe { execution.create(never) },
         Err(Error::Nest(nest::Error::Shut))
@@ -189,7 +189,6 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         tree: RefCell::new(Some(tree)),
         original,
         id,
-        slot,
         unit,
         complete,
     };
@@ -231,21 +230,65 @@ fn schedule(initial: &'static Initial) -> ! {
     owner.begin_drain().unwrap();
     check_refs(initial.id, Phase::Draining, 0);
     assert_eq!(execution.enter(), Err(Error::Nest(nest::Error::Shut)));
-    unsafe { owner.withdraw() }.unwrap();
-    assert_eq!(unsafe { Controls::current() }, initial.original);
     let tree = initial.tree.borrow_mut().take().unwrap();
     let root = tree.nodes[3];
-    assert_eq!(root.store.descriptor(root.id, 0, Fast), Ok(0));
-    unsafe { tree.finish([0, 0, initial.slot]) };
-    // Local withdrawal and even this fixture's page refunds do not
-    // authorize generic instance removal without whole-tree settlement.
+    let mut retired = None;
+    assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Pending));
+    assert_eq!(unsafe { Controls::current() }, initial.original);
+    // The native predecessor is back, but the entire old tree still
+    // belongs to its Draining Nest and cannot be made private.
     check_refs(initial.id, Phase::Draining, 0);
+    assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Pending));
+    assert_eq!(root.store.descriptor(root.id, 0, Fast), Err(TableError::State));
+    assert_eq!(
+        unsafe { root.store.retire_private(root.id, &mut retired, Fast) },
+        Err(TableError::State)
+    );
+    assert!(retired.is_none());
+    let mut previous = tree.allowance.balance().unwrap().occupied().get();
+    let mut refunded = 0;
+    let mut complete = false;
+    for _ in 0..32 {
+        let progress = unsafe { owner.advance_retirement() }.unwrap();
+        let occupied = tree.allowance.balance().unwrap().occupied().get();
+        assert!(occupied <= previous);
+        if occupied < previous {
+            assert_eq!(previous - occupied, 4096);
+            let node = tree.nodes[refunded];
+            assert_eq!(node.store.locate(node.allocation), Ok(Some(node.id)));
+            assert_eq!(
+                unsafe { node.store.retire_private(node.id, &mut retired, Fast) },
+                Err(TableError::State)
+            );
+            assert!(retired.is_none());
+            refunded += 1;
+            // Even the final physical refund is not the final receipt
+            // acknowledgement or the original table-position release.
+            assert_eq!(progress, Progress::Pending);
+        }
+        previous = occupied;
+        if progress == Progress::Retired {
+            complete = true;
+            break;
+        }
+        check_refs(initial.id, Phase::Draining, 0);
+        assert_eq!(
+            unsafe { execution.create(never) },
+            Err(Error::Nest(nest::Error::Shut))
+        );
+    }
+    assert!(complete);
+    assert_eq!(refunded, 4);
+    assert_eq!(NEST.observe(initial.id), Err(nest::Error::Gone));
+    assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Retired));
+    assert_eq!(owner.begin_delete(), Err(nest::Error::Gone));
     assert_eq!(
         unsafe { execution.create(never) },
-        Err(Error::Nest(nest::Error::Shut))
+        Err(Error::Nest(nest::Error::Gone))
     );
+    tree.settle();
     kernel::metal::platform::boot::treaty::write(
-        "PASS local-nest installed=1 rollback=1 shut=1 dormant=1 yield=1 ending=1 leave=1 refs=0 withdrawn=1 refund=4\n",
+        "PASS local-nest installed=1 rollback=1 shut=1 dormant=1 yield=1 ending=1 leave=1 refs=0 withdrawn=1 refund=4 retired=1 stale=1\n",
     );
     (initial.complete)()
 }

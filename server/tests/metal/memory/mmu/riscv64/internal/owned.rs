@@ -23,7 +23,7 @@ use kernel::{
                     installation::admit_context,
                 },
                 treaty::{
-                    LeafAccess, Memory, TableBranch, TableError, TableFormat, TableId, TableStore,
+                    LeafAccess, Memory, TableBranch, TableError, TableFormat, TableProgress, TableId, TableStore,
                 },
             },
         },
@@ -231,38 +231,7 @@ impl Tree<'_> {
         }
     }
 
-    fn retire(&self) {
-        // The original native root has already been withdrawn. Work from
-        // its root toward leaves so every parent becomes unreachable first.
-        for level in (0..FORMAT.levels() - 1).rev() {
-            for child in self
-                .nodes
-                .iter()
-                .flatten()
-                .copied()
-                .filter(|node| node.level == level)
-            {
-                let (parent, index) = self.parent(child);
-                assert_eq!(
-                    parent.store.unlink_child(parent.id, index, Fast),
-                    Ok(child.id)
-                );
-            }
-        }
-        for node in self.nodes.iter().flatten() {
-            assert_eq!(node.store.locate(node.allocation), Ok(Some(node.id)));
-            let mut retired = None;
-            unsafe { node.store.retire_private(node.id, &mut retired, Fast) }.unwrap();
-            let mut receipt = None;
-            unsafe { retired.take().unwrap().begin_return(&mut receipt) }
-                .ok()
-                .unwrap();
-            let receipt = receipt.take().unwrap();
-            assert_eq!(receipt.finish(Fast).unwrap().allocation, node.allocation);
-            receipt.acknowledge().unwrap();
-            assert_eq!(node.store.locate(node.allocation), Ok(None));
-        }
-    }
+
 }
 
 pub fn check(boot: &Boot<'_>) {
@@ -395,11 +364,20 @@ pub fn check(boot: &Boot<'_>) {
 
     unsafe { active.restore() }.unwrap();
     assert_eq!(Context::current(), Some(Context::BARE));
-    active.finish(Fast).unwrap();
+    // More than one real subtree is owned by this root. Each refund
+    // must settle before its detached original branch can disappear.
+    for _ in 0..(CAPACITY * 6 + 2) {
+        if unsafe { active.advance_retirement(Fast) }.unwrap() == TableProgress::Complete {
+            break;
+        }
+    }
+    assert_eq!(unsafe { active.advance_retirement(Fast) }, Ok(TableProgress::Complete));
     drop(active);
     assert_eq!(control.current().unwrap().root(), None);
     assert_eq!(unsafe { (&raw const WRITABLE).read_volatile() }, 0x5678);
-    tree.retire();
+    for node in tree.nodes.iter().flatten() {
+        assert_eq!(node.store.locate(node.allocation), Ok(None));
+    }
     assert_eq!(allowance.balance(), Ok(original));
     closing.as_ref().unwrap().revoke().unwrap();
     handle.release().unwrap();

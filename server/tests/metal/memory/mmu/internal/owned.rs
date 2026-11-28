@@ -12,8 +12,7 @@ use kernel::{
         memory::{
             allocator::treaty::{
                 Allocation, AllocationConstruction, AllocationId, Allowance, Balance, Config,
-                LookupObservation, MappedStorage, RamPurpose, Request, Retired, ReturnReceipt,
-                Search,
+                LookupObservation, MappedStorage, RamPurpose, Request, Search,
             },
             mmu::treaty::{TableBranch, TableFormat, TableId, TableStore},
         },
@@ -38,8 +37,6 @@ static mut ALLOWANCE: Option<Allowance> = None;
 static mut HANDLE: Option<pend::Handle> = None;
 static mut REVOCATION: Option<Revoker> = None;
 static mut ALLOCATION: Option<Allocation> = None;
-static mut RETIRED: Option<Retired> = None;
-static mut RETURNED: Option<ReturnReceipt> = None;
 
 unsafe fn make_table(
     store: &'static TableStore,
@@ -93,7 +90,7 @@ unsafe fn make_table(
 pub(super) struct Node {
     pub(super) store: &'static TableStore,
     pub(super) id: TableId,
-    allocation: AllocationId,
+    pub(super) allocation: AllocationId,
 }
 
 pub(super) struct Tree {
@@ -213,35 +210,10 @@ impl Tree {
         );
     }
 
-    /// # Safety
-    /// Actual native retirement has settled, and the private tree has no
-    /// possible hardware path or other owner. Return only its original pages.
-    pub(super) unsafe fn finish(self, indexes: [usize; LEVELS - 1]) {
-        for (level, index) in indexes.into_iter().enumerate().rev() {
-            let child = self.nodes[level];
-            let parent = self.nodes[level + 1];
-            assert_eq!(
-                parent.store.unlink_child(parent.id, index, Fast),
-                Ok(child.id)
-            );
-        }
-        let retired = unsafe { &mut *(&raw mut RETIRED) };
-        let receipt = unsafe { &mut *(&raw mut RETURNED) };
-        for Node {
-            store,
-            id,
-            allocation,
-        } in self.nodes.into_iter().rev()
-        {
-            assert_eq!(store.locate(allocation), Ok(Some(id)));
-            unsafe { store.retire_private(id, retired, Fast) }.unwrap();
-            unsafe { retired.take().unwrap().begin_return(receipt) }
-                .ok()
-                .unwrap();
-            let returned = receipt.take().unwrap();
-            assert_eq!(returned.finish(Fast).unwrap().allocation, allocation);
-            returned.acknowledge().unwrap();
-            assert_eq!(store.locate(allocation), Ok(None));
+    /// The actual root owner has settled every original node and refund.
+    pub(super) fn settle(self) {
+        for node in self.nodes {
+            assert_eq!(node.store.locate(node.allocation), Ok(None));
         }
         assert_eq!(self.allowance.balance(), Ok(self.balance));
         self.closing.revoke().unwrap();

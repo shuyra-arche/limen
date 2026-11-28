@@ -6,7 +6,7 @@ use core::ptr;
 
 use crate::metal::{
     identity::treaty::Generation,
-    memory::mmu::treaty::{Context, LocalRoot, TableError, TableId},
+    memory::mmu::treaty::{Context, LocalRoot, TableError, TableId, TableProgress},
     sync::treaty::{TurnAcquireError, TurnLock, TurnMode},
 };
 
@@ -21,6 +21,12 @@ pub enum Phase {
     Open,
     Shutting,
     Draining,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Progress {
+    Pending,
+    Retired,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,9 +54,8 @@ impl From<TurnAcquireError> for Error {
     }
 }
 
-/// The original stable Nest instance position. Its identity is retained
-/// during Draining, including after local withdrawal, until the actual
-/// whole-tree retirement and refund contract can remove the instance.
+/// Stable storage for the original Nest. Its identity remains discoverable
+/// during Draining until the original whole-tree returns are acknowledged.
 pub struct Nest {
     state: TurnLock<State>,
 }
@@ -198,6 +203,7 @@ impl Nest {
             Ok(id) => Ok(LocalNest {
                 binding: Binding { nest: self, id },
                 root,
+                retired: false,
             }),
             Err(error) => Err((root, error)),
         }
@@ -228,6 +234,7 @@ impl Default for Nest {
 pub struct LocalNest<'control, 'scope> {
     binding: Binding,
     root: LocalRoot<'control, 'scope>,
+    retired: bool,
 }
 
 impl LocalNest<'_, '_> {
@@ -270,15 +277,20 @@ impl LocalNest<'_, '_> {
         })?
     }
 
-    /// Withdraw the exact native root and detach its retained installation.
-    /// Keep the instance in Draining: local withdrawal cannot prove that
-    /// all original table-page Return duties have settled.
+    /// Advance a bounded original retirement step. A local root withdrawal
+    /// does not remove the instance. Only the original root owner's complete
+    /// tree settlement can authorize removing it from stable storage.
     ///
     /// # Safety
-    /// The trusted platform has ended all independent uses of this root
-    /// apart from the actual restore path. All working mappings and
-    /// retirement supplies remain live; the original control is exclusive.
-    pub unsafe fn withdraw(&mut self) -> Result<(), Error> {
+    /// The trusted platform has ended every independent use of this root
+    /// except the actual restore path. Keep both working mappings and the
+    /// original exclusive control live until native withdrawal is settled.
+    /// The receiving LocalNest remains resident through all outstanding
+    /// table-page Return duties. No other owner may use its private tables.
+    pub unsafe fn advance_retirement(&mut self) -> Result<Progress, Error> {
+        if self.retired {
+            return Ok(Progress::Retired);
+        }
         self.binding.state().acquire(|state| {
             let record = state.record(self.id())?;
             if record.phase != Phase::Draining || record.recoverable_refs != 0 {
@@ -286,8 +298,21 @@ impl LocalNest<'_, '_> {
             }
             Ok(())
         })??;
-        // Never retain the Nest Turn across native changes or nested table
-        // ownership. Draining excludes every new recoverable reference.
-        unsafe { self.root.withdraw(TurnMode::Slow) }.map_err(Error::Table)
+        // Draining closes new admission. Never retain the Nest Turn across
+        // native root installation or an independently protected refund.
+        if unsafe { self.root.advance_retirement(TurnMode::Slow) }.map_err(Error::Table)?
+            == TableProgress::Pending
+        {
+            return Ok(Progress::Pending);
+        }
+        self.binding.state().acquire(|state| {
+            let record = state.record(self.id())?;
+            assert_eq!(record.phase, Phase::Draining);
+            assert_eq!(record.recoverable_refs, 0);
+            state.record = None;
+            Ok::<(), Error>(())
+        })??;
+        self.retired = true;
+        Ok(Progress::Retired)
     }
 }

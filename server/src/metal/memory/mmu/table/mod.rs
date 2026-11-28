@@ -34,6 +34,10 @@ pub use branch::TableBranch;
 mod local;
 #[cfg(limen_target)]
 pub use local::LocalRoot;
+#[cfg(limen_cooperative)]
+mod retirement;
+#[cfg(limen_cooperative)]
+pub use retirement::TableProgress;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TableFormat {
@@ -107,6 +111,7 @@ pub enum TableError {
     Pend(pend::Error),
     Cell(cell::Error),
     Switch(super::treaty::SwitchError),
+    Return(crate::metal::memory::allocator::treaty::Error),
     Layout,
     Scope,
     State,
@@ -180,12 +185,19 @@ enum Exposure {
     Local {
         borrowed: Option<local::BorrowedBranch>,
     },
+    #[cfg(limen_cooperative)]
+    Retiring(TableId),
 }
 
 enum Node {
     Vacant,
     Constructing(Construction),
     Admitted(TablePage),
+    #[cfg(limen_cooperative)]
+    Returning {
+        root: TableId,
+        allocation: AllocationId,
+    },
 }
 
 impl Node {
@@ -194,6 +206,8 @@ impl Node {
             Self::Vacant => Err(TableError::State),
             Self::Constructing(construction) => Ok(&construction.cell),
             Self::Admitted(page) => Ok(&page.cell),
+            #[cfg(limen_cooperative)]
+            Self::Returning { .. } => Err(TableError::State),
         }
     }
 
@@ -409,8 +423,15 @@ impl TableStore {
     /// A later generation at the same address is a separate material.
     pub fn locate(&self, allocation: AllocationId) -> Result<Option<TableId>, TableError> {
         Ok(self.state.acquire(|state| {
-            let cell = state.node.cell().ok()?;
-            (cell.allocation() == allocation).then(|| TableId {
+            #[cfg(limen_cooperative)]
+            let retained = if let Node::Returning { allocation, .. } = &state.node {
+                *allocation
+            } else {
+                state.node.cell().ok()?.allocation()
+            };
+            #[cfg(not(limen_cooperative))]
+            let retained = state.node.cell().ok()?.allocation();
+            (retained == allocation).then(|| TableId {
                 store: ptr::from_ref(self).addr(),
                 generation: state.generation.expect("live node generation"),
             })
@@ -505,6 +526,8 @@ impl TableStore {
                 }
                 Node::Admitted(_) => return Err(TableError::State),
                 Node::Vacant => return Err(TableError::State),
+                #[cfg(limen_cooperative)]
+                Node::Returning { .. } => return Err(TableError::State),
             };
             *receiver = Some(cell.retire_private(held, id, access)?);
             *node = Node::Vacant;

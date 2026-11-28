@@ -6,6 +6,8 @@ use crate::metal::{
     sync::treaty::TurnMode,
 };
 use limen_treaty::model::PhysicalAddress;
+#[cfg(limen_cooperative)]
+use super::retirement::{Retirement, TableProgress};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Stage {
@@ -15,6 +17,10 @@ enum Stage {
     Restoring,
     Restored,
     Finished,
+    #[cfg(limen_cooperative)]
+    Retiring,
+    #[cfg(limen_cooperative)]
+    Retired,
 }
 
 /// An actual original firmware subtree retained through a local successor.
@@ -36,6 +42,8 @@ pub struct LocalRoot<'control, 'scope> {
     previous: Context,
     next: Context,
     stage: Stage,
+    #[cfg(limen_cooperative)]
+    retirement: Retirement,
 }
 
 impl TableStore {
@@ -134,6 +142,8 @@ impl TableStore {
             previous,
             next,
             stage: Stage::Prepared,
+            #[cfg(limen_cooperative)]
+            retirement: Retirement::new(self, id),
         })
     }
 }
@@ -148,23 +158,37 @@ impl LocalRoot<'_, '_> {
         .then_some((self.id, self.next))
     }
 
-    /// Withdraw and settle this original root, retrying only its existing
-    /// installation or retirement responsibility. No new effects after Finished.
+    /// Advance the actual native withdrawal and whole-tree settlement.
+    /// This owner is exclusive and must remain in its durable receiving
+    /// position through every unfinished effect and return.
     ///
     /// # Safety
-    /// The caller has closed all recoverable users and native access except
-    /// the verified continuity needed to restore the previous root.
+    /// All recoverable users have ended. The platform has independently
+    /// excluded other native/software/device access to the owned tree,
+    /// apart from the verified continuity needed to restore its predecessor.
     #[cfg(limen_cooperative)]
-    pub(crate) unsafe fn withdraw(&mut self, mode: TurnMode) -> Result<(), TableError> {
+    pub unsafe fn advance_retirement(
+        &mut self,
+        mode: TurnMode,
+    ) -> Result<TableProgress, TableError> {
         match self.stage {
             Stage::Installed | Stage::Restoring => {
                 unsafe { self.restore() }.map_err(TableError::Switch)?;
             }
-            Stage::Restored => {}
-            Stage::Finished => return Ok(()),
-            _ => return Err(TableError::Switch(SwitchError::Current)),
+            Stage::Restored => {
+                self.release_exposure(mode, Exposure::Retiring(self.id))?;
+                self.stage = Stage::Retiring;
+            }
+            Stage::Retiring => {
+                if self.retirement.advance(mode)? == TableProgress::Complete {
+                    self.stage = Stage::Retired;
+                    return Ok(TableProgress::Complete);
+                }
+            }
+            Stage::Retired => return Ok(TableProgress::Complete),
+            _ => return Err(TableError::State),
         }
-        self.finish(mode)
+        Ok(TableProgress::Pending)
     }
 
     /// Publish the original tree and settle its native installation.
@@ -218,6 +242,12 @@ impl LocalRoot<'_, '_> {
         if !matches!(self.stage, Stage::Prepared | Stage::Restored) {
             return Err(TableError::State);
         }
+        self.release_exposure(mode, Exposure::Private)?;
+        self.stage = Stage::Finished;
+        Ok(())
+    }
+
+    fn release_exposure(&mut self, mode: TurnMode, next: Exposure) -> Result<(), TableError> {
         self.table.with_node(self.id, mode, |node, held| {
             let Node::Admitted(page) = node else {
                 return Err(TableError::State);
@@ -239,10 +269,8 @@ impl LocalRoot<'_, '_> {
                     0,
                 );
             }
-            page.exposure = Exposure::Private;
+            page.exposure = next;
             Ok(())
-        })?;
-        self.stage = Stage::Finished;
-        Ok(())
+        })
     }
 }
