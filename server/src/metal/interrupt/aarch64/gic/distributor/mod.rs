@@ -2,12 +2,15 @@
 
 use super::{GicV3, Trigger};
 
+mod retirement;
 mod route;
 use crate::metal::{
     interrupt::treaty::{RouteControl, RouteOperation, RouteState},
     memory::access::treaty::device::DeviceWindow,
     processor::description::aarch64::cpu::AFFINITY_MASK,
 };
+use retirement::RetirementKey;
+pub use retirement::{Destination, RetirementReceipt, RetirementRequest};
 pub use route::Route;
 
 const SPI_LIMIT: usize = 988;
@@ -48,16 +51,23 @@ pub enum State {
     Enabled,
     Masking,
     Quiesced,
+    Retiring,
 }
 
 /// Bounded storage for one live SPI. Keep it with the Distributor until
 /// every admitted route has been retired.
 pub struct Slot<'tree> {
     route: Option<(Route<'tree>, State)>,
+    generation: u64,
+    destination: Option<Destination>,
 }
 
 impl Slot<'_> {
-    pub const EMPTY: Self = Self { route: None };
+    pub const EMPTY: Self = Self {
+        route: None,
+        generation: 0,
+        destination: None,
+    };
 }
 
 /// The exclusive reference to an admitted SPI binding. Keep it until the
@@ -66,6 +76,7 @@ impl Slot<'_> {
 pub struct BoundRoute<'tree> {
     route: Option<Route<'tree>>,
     slot: usize,
+    generation: u64,
 }
 
 /// Ordering for an admitted GIC Distributor window.
@@ -121,6 +132,7 @@ impl RouteControl for Control<'_, '_, '_> {
             Some(State::Enabled) => RouteState::Open,
             Some(State::Masking) => RouteState::Unconfirmed(RouteOperation::Mask),
             Some(State::Quiesced) => RouteState::Masked,
+            Some(State::Retiring) => RouteState::Unconfirmed(RouteOperation::Retire),
             Some(State::Masked | State::Configuring { .. }) => {
                 unreachable!("SPI control requires a configured route")
             }
@@ -145,7 +157,7 @@ impl RouteControl for Control<'_, '_, '_> {
 
     unsafe fn retire(&mut self) -> Result<(), Failure> {
         let slot = self.owner.bound_slot(self.binding)?;
-        unsafe { self.owner.retire(slot) }?;
+        self.owner.retire_unpublished(slot)?;
         self.binding.route = None;
         Ok(())
     }
@@ -203,12 +215,15 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
         let slot = self
             .slots
             .iter()
-            .position(|slot| slot.route.is_none())
+            .position(|slot| slot.route.is_none() && slot.generation < u64::MAX)
             .ok_or(Failure::Capacity)?;
-        self.slots[slot].route = Some((route, State::Masked));
+        let original = &mut self.slots[slot];
+        original.generation += 1;
+        original.route = Some((route, State::Masked));
         Ok(BoundRoute {
             route: Some(route),
             slot,
+            generation: original.generation,
         })
     }
 
@@ -221,11 +236,11 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
 
     fn bound_slot(&self, binding: &BoundRoute<'tree>) -> Result<usize, Failure> {
         let route = binding.route.ok_or(Failure::State)?;
-        let (original, _) = self
-            .slots
-            .get(binding.slot)
-            .and_then(|slot| slot.route)
-            .ok_or(Failure::State)?;
+        let slot = self.slots.get(binding.slot).ok_or(Failure::State)?;
+        let (original, _) = slot.route.ok_or(Failure::State)?;
+        if slot.generation != binding.generation {
+            return Err(Failure::State);
+        }
         if route.controller.source() != self.gic.source()
             || route.intid != original.intid
             || route.device() != original.device()
@@ -259,7 +274,7 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
         if self.slots[slot].route.unwrap().1 != State::Masked {
             return Err(Failure::State);
         }
-        self.slots[slot].route = None;
+        self.clear(slot);
         binding.route = None;
         Ok(())
     }
@@ -306,27 +321,34 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
     ///
     /// # Safety
     /// The admitted source remains quiescent while its route is changed.
-    /// Affinity names a present PE in the same domain whose Group 1
-    /// reception will be available before unmasking.
+    /// Preserve the original destination's live Group 1 interface before
+    /// enabling this route and through all of its native reception effects.
     pub unsafe fn configure<'route>(
         &'route mut self,
         binding: &'route mut BoundRoute<'tree>,
-        affinity: u64,
+        destination: Destination,
         priority: u8,
     ) -> Result<impl RouteControl<Failure = Failure, Retired = ()> + 'route, Failure> {
         let slot = self.bound_slot(binding)?;
         let (route, state) = self.slots[slot].route.unwrap();
         let id = route.intid;
+        let affinity = destination.affinity as u64;
         let operation = State::Configuring { affinity, priority };
-        if state != State::Masked && state != operation {
+        if state != State::Masked
+            && (state != operation || self.slots[slot].destination != Some(destination))
+        {
             return Err(Failure::State);
         }
-        if affinity & !AFFINITY_MASK != 0 {
+        if destination.domain != self.gic.redistributor()
+            || !destination.domain.covers(destination.frame)
+            || affinity & !AFFINITY_MASK != 0
+        {
             return Err(Failure::Profile);
         }
         if !self.available(id) {
             return Err(Failure::Busy);
         }
+        self.slots[slot].destination = Some(destination);
         self.slots[slot].route = Some((route, operation));
         if self.word(CTLR) & SINGLE_SECURITY_STATE != 0 {
             let group = Self::bank(GROUP, id);
@@ -409,16 +431,83 @@ impl<'map, 'tree> Distributor<'map, 'tree> {
         Ok(())
     }
 
+    /// Close the original masked route against re-enablement while its
+    /// independently owned destination settles. Already accepted delivery
+    /// can still complete at the original receiver. A pending input must
+    /// drain under the existing binding before this irreversible step.
+    ///
     /// # Safety
-    /// Exclude future assertions and old writes, and settle the original
-    /// source and CPU interface reception. Distributor bits cannot prove
-    /// the separately owned software and device obligations.
-    unsafe fn retire(&mut self, slot: usize) -> Result<(), Failure> {
+    /// The original source owner has stopped new assertions and excluded
+    /// prior in-flight effects that could make this route pending. Preserve
+    /// that condition and the linear request through retirement.
+    pub unsafe fn begin_retirement(
+        &mut self,
+        binding: &BoundRoute<'tree>,
+    ) -> Result<RetirementRequest, Failure> {
+        let slot = self.bound_slot(binding)?;
         let (route, state) = self.slots[slot].route.unwrap();
-        if !matches!(state, State::Configured | State::Quiesced) || !self.available(route.intid) {
+        if state != State::Quiesced
+            || self.word(CTLR) & WRITE_PENDING != 0
+            || self.bit(ENABLE, route.intid)
+            || self.bit(PENDING, route.intid)
+        {
             return Err(Failure::Busy);
         }
-        self.slots[slot].route = None;
+        let key = self.retirement_key(slot)?;
+        self.slots[slot].route = Some((route, State::Retiring));
+        Ok(RetirementRequest(key))
+    }
+
+    /// Release exactly this closed SPI after its destination has settled
+    /// active reception and the native Distributor no longer holds effects.
+    ///
+    /// # Safety
+    /// Exclude future assertions and old in-flight writes. Retain the
+    /// original device and settle any separately retained software delivery.
+    pub unsafe fn finish_retirement(
+        &mut self,
+        binding: &mut BoundRoute<'tree>,
+        receipt: RetirementReceipt,
+    ) -> Result<(), (RetirementReceipt, Failure)> {
+        let result = (|| {
+            let slot = self.bound_slot(binding)?;
+            let (route, state) = self.slots[slot].route.unwrap();
+            if self.retirement_key(slot)? != receipt.key {
+                return Err(Failure::Profile);
+            }
+            if state != State::Retiring || !self.available(route.intid) {
+                return Err(Failure::Busy);
+            }
+            self.clear(slot);
+            binding.route = None;
+            Ok(())
+        })();
+        result.map_err(|error| (receipt, error))
+    }
+
+    fn retirement_key(&self, slot: usize) -> Result<RetirementKey, Failure> {
+        let original = &self.slots[slot];
+        let (route, _) = original.route.ok_or(Failure::State)?;
+        Ok(RetirementKey {
+            distributor: self.gic.distributor(),
+            slot,
+            generation: original.generation,
+            intid: route.intid,
+            destination: original.destination.ok_or(Failure::State)?,
+        })
+    }
+
+    fn retire_unpublished(&mut self, slot: usize) -> Result<(), Failure> {
+        let (route, state) = self.slots[slot].route.unwrap();
+        if state != State::Configured || !self.available(route.intid) {
+            return Err(Failure::Busy);
+        }
+        self.clear(slot);
         Ok(())
+    }
+
+    fn clear(&mut self, slot: usize) {
+        self.slots[slot].route = None;
+        self.slots[slot].destination = None;
     }
 }

@@ -7,9 +7,9 @@ use crate::metal::processor::treaty::Irq;
 
 const ISR: usize = 0x100;
 const EOI: usize = 0xb0;
-const SPURIOUS: usize = 0xf0;
-const SOFTWARE_ENABLE: u32 = 1 << 8;
-const SUPPRESS_BROADCAST: u32 = 1 << 12;
+pub(super) const SPURIOUS: usize = 0xf0;
+pub(super) const SOFTWARE_ENABLE: u32 = 1 << 8;
+pub(super) const SUPPRESS_BROADCAST: u32 = 1 << 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Reception {
@@ -152,7 +152,7 @@ impl<'map> LocalApic<'map> {
         Ok(())
     }
 
-    fn top(&mut self) -> Option<u8> {
+    pub(super) fn top(&mut self) -> Option<u8> {
         // The caller retains this processor with ordinary interrupts masked.
         for bank in (0..8).rev() {
             let word = unsafe { self.window.read_u32(ISR + 16 * bank) }.expect("xAPIC ISR bank");

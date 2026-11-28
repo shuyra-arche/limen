@@ -3,7 +3,9 @@
 use core::arch::asm;
 use kernel::{
     basis::{
-        execution::{Error, EstablishError, EstablishFailure, Execution, KernelBinding},
+        execution::{
+            Error, EstablishError, EstablishFailure, Execution, KernelBinding, RuntimeEntry,
+        },
         room::{Occupancy, Participants},
         unit::{Stacks, UnitRecord},
     },
@@ -51,9 +53,9 @@ pub(super) fn reject_constructor(
     failure
 }
 
-pub(super) fn reject_attach(execution: &Execution) {
+pub(super) fn reject_runtime<T>(execution: &'static Execution, entry: &'static RuntimeEntry<T>) {
     unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-    assert_eq!(execution.attach(), Err(Error::Unsupported));
+    assert_eq!(unsafe { execution.run(entry) }, Err(Error::Unsupported));
     unsafe { asm!("csrci sstatus, 2", options(nostack)) };
 }
 

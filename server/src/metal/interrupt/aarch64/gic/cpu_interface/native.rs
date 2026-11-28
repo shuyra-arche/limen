@@ -3,6 +3,7 @@
 use core::arch::asm;
 
 use super::super::{
+    distributor::{Destination, RetirementReceipt, RetirementRequest},
     reception::{Failure, Mode, State},
     redistributor::{
         self, Frame,
@@ -12,7 +13,11 @@ use super::super::{
 };
 use crate::metal::{
     interrupt::treaty::{ClaimConfirmation, ClaimId, Completion, HardwareClaim},
-    processor::{description::aarch64::status, executor::aarch64::native::boot_identity},
+    processor::{
+        description::aarch64::status,
+        executor::aarch64::native::boot_identity,
+        treaty::{can_switch, wait_for_interrupt},
+    },
 };
 
 pub(in crate::metal::interrupt::aarch64::gic) fn local(affinity: usize) -> bool {
@@ -52,6 +57,14 @@ fn mode() -> Option<Mode> {
     })
 }
 
+/// Observation after consulting the work owner and optionally waiting once.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Wake {
+    Ready,
+    Pending,
+    Recheck,
+}
+
 /// One preallocated reception slot for this CPU Interface and its live frame.
 #[must_use]
 pub struct CpuInterface<'map> {
@@ -86,6 +99,35 @@ impl<'map> CpuInterface<'map> {
 
     pub fn state(&self) -> State {
         self.state
+    }
+
+    /// Observe the original locally admitted destination of an SPI.
+    pub fn destination(&self) -> Result<Destination, Failure> {
+        self.context()?;
+        Ok(Destination {
+            domain: self.frame.domain(),
+            frame: self.frame.physical(),
+            affinity: self.frame.affinity(),
+        })
+    }
+
+    /// Observe the exact route closed by its Distributor after all local
+    /// acknowledge, priority drop and deactivation effects have settled.
+    pub fn observe_retirement(
+        &self,
+        request: RetirementRequest,
+    ) -> Result<RetirementReceipt, (RetirementRequest, Failure)> {
+        let destination = match self.destination() {
+            Ok(destination) => destination,
+            Err(error) => return Err((request, error)),
+        };
+        if destination != request.destination() {
+            return Err((request, Failure::Scope));
+        }
+        if self.state != State::Empty {
+            return Err((request, Failure::Busy));
+        }
+        Ok(request.observed(self.frame.claim_round))
     }
 
     /// Return the original frame after all local receptions settle.
@@ -131,6 +173,49 @@ impl<'map> CpuInterface<'map> {
         };
         signal.phase = Phase::Sent;
         Ok(())
+    }
+
+    /// Consult the original work owner and wait once with the given admitted
+    /// Group 1 SGI live. Recheck without reading IAR or dropping priority.
+    /// The original owner retains pending delivery, even after a spurious WFI.
+    ///
+    /// # Safety
+    /// WFI and wake are supported by the installed EL1 profile. The live SGI
+    /// targets this Frame and its distributor routing stays enabled. Work
+    /// retains a wake path and discoverable state across the final check;
+    /// `ready` is bounded and retains no ordinary protection or owner borrow.
+    pub unsafe fn wait_for_sgi(
+        &mut self,
+        id: u8,
+        mut ready: impl FnMut() -> bool,
+    ) -> Result<Wake, Failure> {
+        self.context()?;
+        if self.state != State::Empty || !can_switch() || !self.frame.awake() {
+            return Err(Failure::Busy);
+        }
+        let priority = self.frame.signal_priority(id).ok_or(Failure::Scope)?;
+        let (mask, running): (u64, u64);
+        unsafe {
+            asm!("mrs {}, ICC_PMR_EL1", "mrs {}, ICC_RPR_EL1", out(reg) mask, out(reg) running,
+                 options(nostack, nomem, preserves_flags));
+        }
+        if u64::from(priority) >= (mask & 0xff) || running & 0xff != 0xff {
+            return Err(Failure::Busy);
+        }
+        if ready() {
+            return Ok(Wake::Ready);
+        }
+        if self.frame.signal_pending(id) {
+            return Ok(Wake::Pending);
+        }
+        unsafe { wait_for_interrupt() };
+        if ready() {
+            Ok(Wake::Ready)
+        } else if self.frame.signal_pending(id) {
+            Ok(Wake::Pending)
+        } else {
+            Ok(Wake::Recheck)
+        }
     }
 
     /// Prepare the exact PPI for a producer after the original input is quiet.

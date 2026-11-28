@@ -124,6 +124,16 @@ impl RuntimeTrap {
     pub(in crate::metal::processor) fn original_launch(&self) -> Option<(native::Descriptor, u16)> {
         self.tables.original_launch()
     }
+
+    /// Verify the original entry and exact vector in an ordinary masked window.
+    pub(in crate::metal) fn idle_entry(
+        processor: ProcessorId,
+        vector: u8,
+    ) -> Option<&'static Self> {
+        let local = local::ordinary_local()?;
+        let runtime = local.runtime()?;
+        (local.identity() == processor && runtime.vector == vector && masked()).then_some(runtime)
+    }
 }
 
 fn masked() -> bool {

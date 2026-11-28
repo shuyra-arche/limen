@@ -41,6 +41,16 @@ pub(crate) fn stack_pointer() -> usize {
     sp
 }
 
+/// Wait once from a masked ordinary entry. Interrupt delivery begins after
+/// HLT because STI delays maskable delivery through the next instruction.
+///
+/// # Safety
+/// The original runtime entry and its wake sources remain admitted. The
+/// caller retains no protection or borrow which the IRQ can reach.
+pub(in crate::metal) unsafe fn wait_for_interrupt() {
+    unsafe { asm!("sti", "hlt", "cli", options(nostack)) };
+}
+
 /// Clear the inherited local register before installing the trusted entry.
 pub(in crate::metal) unsafe fn clear_local() {
     unsafe { install_local(0) };

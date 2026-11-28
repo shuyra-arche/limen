@@ -12,8 +12,8 @@ mod cooperative;
 pub use cooperative::Dispatchers;
 #[cfg(limen_cooperative)]
 pub(crate) use cooperative::{
-    Context, Dispatcher, LeaveReceipt, LocalExecution, attached, cooperative_ready, current,
-    reserve,
+    Context, Dispatcher, LeaveReceipt, LocalExecution, RuntimeError, cooperative_ready, current,
+    start_runtime,
 };
 
 /// Hardware identity of a logical processor in its original scope.
@@ -63,8 +63,12 @@ pub use super::execution::runtime::{Entry, InstallError, RuntimeTrap};
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 pub use super::execution::runtime::{SoftwareInterrupt, TimerInterrupt};
 
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+pub(in crate::metal) use super::executor::aarch64::native::wait_for_interrupt;
 #[cfg(all(limen_target, target_arch = "riscv64", limen_firmware = "sbi"))]
 pub(in crate::metal) use super::executor::riscv64::native::wait_for_interrupt;
+#[cfg(all(limen_target, target_arch = "x86_64"))]
+pub(in crate::metal) use super::executor::x86_64::native::wait_for_interrupt;
 
 pub use super::execution::terminal::Console;
 #[cfg(limen_target)]

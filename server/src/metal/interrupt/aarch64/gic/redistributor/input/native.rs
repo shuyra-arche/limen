@@ -272,6 +272,27 @@ impl<'map> Frame<'map> {
         })
     }
 
+    pub(in crate::metal::interrupt::aarch64::gic) fn signal_priority(
+        &mut self,
+        id: u8,
+    ) -> Option<u8> {
+        if id >= 16 {
+            return None;
+        }
+        let State::Enabled(setup) = self.private[usize::from(id)] else {
+            return None;
+        };
+        let bit = 1 << id;
+        (self.private_word(ENABLE) & bit != 0
+            && self.private_word(GROUP) & bit != 0
+            && self.private_priority(id.into()) == setup.priority)
+            .then_some(setup.priority)
+    }
+
+    pub(in crate::metal::interrupt::aarch64::gic) fn signal_pending(&mut self, id: u8) -> bool {
+        self.private_word(PENDING) & (1 << id) != 0
+    }
+
     /// Restore the original private input after its exact remote claim settles.
     pub fn retire_sgi<'source>(
         &mut self,
