@@ -206,7 +206,10 @@ impl<'clock> Fund<'clock> {
             return Err(Error::Gone);
         }
         let count = sign.clock.count_for(deadline).ok_or(Error::Timing)?;
-        let shuts = sign.clock.count_for(self.config.shuts).ok_or(Error::Timing)?;
+        let shuts = sign
+            .clock
+            .count_for(self.config.shuts)
+            .ok_or(Error::Timing)?;
         if count >= shuts {
             return Err(Error::Timing);
         }

@@ -292,7 +292,10 @@ fn shared_deadline(
     let returned_charge = settle(execution, owner, returned);
     check_charge(&returned_charge);
     execution.finish_end(runner).unwrap();
-    assert_eq!(execution.reap(runner), Ok(End::Returned { value: RETURNED }));
+    assert_eq!(
+        execution.reap(runner),
+        Ok(End::Returned { value: RETURNED })
+    );
 
     let resumed = execution.enter_funded(owner, sign).unwrap().unwrap();
     assert_eq!(resumed.unit(), waiter);
@@ -306,7 +309,10 @@ fn shared_deadline(
         returned_charge.spent + resumed_charge.evidence.maximum,
     );
     execution.finish_end(waiter).unwrap();
-    assert_eq!(execution.reap(waiter), Ok(End::Returned { value: RETURNED }));
+    assert_eq!(
+        execution.reap(waiter),
+        Ok(End::Returned { value: RETURNED })
+    );
     assert_eq!(service(execution, owner, sign), DeadlineProgress::Idle);
 
     // The same owner must also accept a native Sign IRQ while no Charge
@@ -328,7 +334,10 @@ fn shared_deadline(
     assert_ne!(idle_resumed, idle_parked);
     check_charge(&settle(execution, owner, idle_resumed));
     execution.finish_end(idle_waiter).unwrap();
-    assert_eq!(execution.reap(idle_waiter), Ok(End::Returned { value: RETURNED }));
+    assert_eq!(
+        execution.reap(idle_waiter),
+        Ok(End::Returned { value: RETURNED })
+    );
     assert_eq!(service(execution, owner, sign), DeadlineProgress::Idle);
 }
 

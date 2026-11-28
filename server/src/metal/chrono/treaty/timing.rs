@@ -249,7 +249,8 @@ impl<'clock> LocalTiming<'clock> {
         let Some(confirmed) = self.clock.count_for(confirmed) else {
             return false;
         };
-        self.bounds.covers_start(count, opens, planned, confirmed, start)
+        self.bounds
+            .covers_start(count, opens, planned, confirmed, start)
     }
 
     /// Bound the elapsed occupancy interval using its two actual readings.
