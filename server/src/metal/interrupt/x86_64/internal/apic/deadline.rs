@@ -106,7 +106,10 @@ mod native {
 
     use super::{Failure, State, TimerEffect};
     use crate::metal::{
-        chrono::{treaty::{Clock, Deadline}, x86_64::tsc::Tsc},
+        chrono::{
+            treaty::{Clock, Deadline},
+            x86_64::tsc::Tsc,
+        },
         interrupt::treaty::{AbsoluteTimer, absolute::Sealed},
         processor::treaty::Irq,
     };
@@ -245,12 +248,16 @@ mod native {
         }
 
         fn now(&self) -> Result<u64, Failure> {
-            self.clock.sample().map(|sample| sample.count()).ok_or(Failure::Scope)
+            self.clock
+                .sample()
+                .map(|sample| sample.count())
+                .ok_or(Failure::Scope)
         }
 
         fn mode(&mut self) -> Result<(), Failure> {
             let configuration = DEADLINE_MODE | u32::from(self.vector());
-            self.owner.timer_matches(LVT, LVT_FIELDS, configuration)
+            self.owner
+                .timer_matches(LVT, LVT_FIELDS, configuration)
                 .then_some(())
                 .ok_or(Failure::Unconfirmed)
         }
@@ -287,10 +294,7 @@ mod native {
         /// # Safety
         /// The caller durably retains the ordinary deadline recheck for
         /// every accepted IRQ, even if EOI confirmation must be retried.
-        pub unsafe fn accept_interrupt(
-            &mut self,
-            irq: &mut Irq<'_>,
-        ) -> Result<bool, Failure> {
+        pub unsafe fn accept_interrupt(&mut self, irq: &mut Irq<'_>) -> Result<bool, Failure> {
             self.owner.interrupt_context(irq)?;
             if irq.vector() != self.vector() || !supported() {
                 return Err(Failure::Scope);
@@ -326,9 +330,7 @@ mod native {
                     let mut claim = self.owner.current().ok_or(Failure::Busy)?;
                     unsafe { claim.complete() }
                 }
-                Reception::Unconfirmed(_) => {
-                    self.owner.current().ok_or(Failure::Busy)?.confirm()
-                }
+                Reception::Unconfirmed(_) => self.owner.current().ok_or(Failure::Busy)?.confirm(),
                 Reception::Exhausted(_) => Err(Failure::Busy),
             }
         }
@@ -383,7 +385,11 @@ mod native {
         fn confirmed_deadline(&self) -> Result<Option<Deadline<'_>>, Failure> {
             self.context()?;
             self.reception_idle()?;
-            Ok(self.record().state.confirmed()?.map(|count| self.clock.deadline(count)))
+            Ok(self
+                .record()
+                .state
+                .confirmed()?
+                .map(|count| self.clock.deadline(count)))
         }
 
         fn due(&self) -> Result<bool, Failure> {
