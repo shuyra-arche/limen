@@ -145,7 +145,7 @@ impl LocalRoot<'_, '_> {
         (self.stage == Stage::Installed
             && self.control.current() == Some(self.next)
             && self.next.is_current())
-            .then_some((self.id, self.next))
+        .then_some((self.id, self.next))
     }
 
     /// Withdraw and settle this original root, retrying only its existing
@@ -155,10 +155,7 @@ impl LocalRoot<'_, '_> {
     /// The caller has closed all recoverable users and native access except
     /// the verified continuity needed to restore the previous root.
     #[cfg(limen_cooperative)]
-    pub(crate) unsafe fn withdraw(
-        &mut self,
-        mode: TurnMode,
-    ) -> Result<(), TableError> {
+    pub(crate) unsafe fn withdraw(&mut self, mode: TurnMode) -> Result<(), TableError> {
         match self.stage {
             Stage::Installed | Stage::Restoring => {
                 unsafe { self.restore() }.map_err(TableError::Switch)?;

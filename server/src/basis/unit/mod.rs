@@ -113,7 +113,9 @@ impl<Binding: 'static> Units<Binding> {
     }
 
     pub(super) fn fresh(&self) -> bool {
-        self.records.iter().all(|record| record.generation.is_none())
+        self.records
+            .iter()
+            .all(|record| record.generation.is_none())
     }
 
     pub(crate) fn vacant(&self) -> Result<UnitId, Error> {

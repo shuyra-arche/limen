@@ -333,7 +333,9 @@ impl Execution {
         plan.insert(&self.units).expect("Unit owner");
         plan.insert(nest.state()).expect("original Nest owner");
         plan.acquire(TurnMode::Slow, |held| {
-            let (units, state) = held.access_pair(&self.units, nest.state()).expect("joint creation");
+            let (units, state) = held
+                .access_pair(&self.units, nest.state())
+                .expect("joint creation");
             let unit = units.vacant()?;
             let affinity = binding.affinity.ok_or(Error::Unsupported)?;
             // The initial Nest is local. No remote or migratable admission
@@ -342,7 +344,9 @@ impl Execution {
             binding.nest = Some(reference);
             if let Err(error) = units.publish(unit, binding, start) {
                 // The attempted binding was never published or observable.
-                state.release(nest.id()).expect("original unpublished reference");
+                state
+                    .release(nest.id())
+                    .expect("original unpublished reference");
                 return Err(error.into());
             }
             Ok(unit)
@@ -352,7 +356,9 @@ impl Execution {
     /// The exact execution relation while the Unit is recoverable, including Ending.
     pub fn unit_nest(&self, unit: UnitId) -> Result<Option<NestId>, Error> {
         self.units.acquire(|units| {
-            Ok(units.binding(unit)?.and_then(|binding| binding.nest.as_ref().map(NestRef::id)))
+            Ok(units
+                .binding(unit)?
+                .and_then(|binding| binding.nest.as_ref().map(NestRef::id)))
         })?
     }
 
@@ -703,7 +709,9 @@ impl Execution {
         plan.insert(&self.room).expect("Room owner");
         plan.insert(nest.state()).expect("original Nest owner");
         plan.acquire(TurnMode::Slow, |held| {
-            let (units, room) = held.access_pair(&self.units, &self.room).expect("original owners");
+            let (units, room) = held
+                .access_pair(&self.units, &self.room)
+                .expect("original owners");
             units.lifecycle(unit)?;
             if room.admitted(unit) {
                 return Err(Error::Busy);
@@ -714,8 +722,10 @@ impl Execution {
             if let Some(binding) = binding {
                 let reference = binding.nest.expect("bound Unit retains its original Nest");
                 assert_eq!(reference.id(), nest.id());
-                held.access(nest.state()).expect("original Nest protection")
-                    .release(reference.id()).expect("original retained reference");
+                held.access(nest.state())
+                    .expect("original Nest protection")
+                    .release(reference.id())
+                    .expect("original retained reference");
             }
             Ok(())
         })?

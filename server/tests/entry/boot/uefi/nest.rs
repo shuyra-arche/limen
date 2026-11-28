@@ -29,10 +29,10 @@ use uefi::Status;
 
 #[path = "../material/memory.rs"]
 mod memory;
-#[path = "../material/window.rs"]
-mod window;
 #[path = "../../../metal/memory/mmu/internal/owned.rs"]
 mod tree;
+#[path = "../material/window.rs"]
+mod window;
 
 use tree::Tree;
 
@@ -121,10 +121,15 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     assert!(boot.image().covers(memory::extent(witness, witness + 4096)));
     unsafe {
         leaf.store.map_leaf(
-            leaf.id, 0, PhysicalAddress::new(witness),
-            LeafAccess::ReadOnly, Memory::Normal, Fast,
+            leaf.id,
+            0,
+            PhysicalAddress::new(witness),
+            LeafAccess::ReadOnly,
+            Memory::Normal,
+            Fast,
         )
-    }.unwrap();
+    }
+    .unwrap();
     tree.link([0, 0, slot]);
     ALIAS.store(slot << 39, Ordering::Relaxed);
     let prepared = unsafe { root.store.prepare_shared(root.id, control, old, 0, Fast) }.unwrap();
@@ -144,7 +149,9 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         unsafe { &mut *(&raw mut RECORDS) },
         unsafe { &mut *(&raw mut PARTICIPANTS) },
         unsafe { &mut *(&raw mut DISPATCHERS) },
-    ).map_err(|failure| failure.reason).unwrap();
+    )
+    .map_err(|failure| failure.reason)
+    .unwrap();
     execution.bind_nest(&owner).unwrap();
     let dormant = unsafe { execution.create(never) }.unwrap();
     let unit = unsafe { execution.create(continuation) }.unwrap();
@@ -153,13 +160,19 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     check_refs(id, Phase::Open, 2);
     assert_eq!(unsafe { execution.create(never) }, Err(Error::Capacity));
     // This local root cannot provide a migratable execution profile.
-    assert_eq!(unsafe { execution.create_migratable(never) }, Err(Error::Unsupported));
+    assert_eq!(
+        unsafe { execution.create_migratable(never) },
+        Err(Error::Unsupported)
+    );
     check_refs(id, Phase::Open, 2);
 
     owner.begin_delete().unwrap();
     check_refs(id, Phase::Shutting, 2);
     assert_eq!(owner.begin_drain(), Err(nest::Error::Busy));
-    assert_eq!(unsafe { execution.create(never) }, Err(Error::Nest(nest::Error::Shut)));
+    assert_eq!(
+        unsafe { execution.create(never) },
+        Err(Error::Nest(nest::Error::Shut))
+    );
     execution.stop_dormant(dormant).unwrap();
     assert_eq!(execution.unit_nest(dormant), Ok(Some(id)));
     check_refs(id, Phase::Shutting, 2);
@@ -209,7 +222,10 @@ fn schedule(initial: &'static Initial) -> ! {
     execution.finish_end(initial.unit).unwrap();
     execution.finish_end(initial.unit).unwrap();
     assert_eq!(execution.unit_nest(initial.unit), Ok(None));
-    assert_eq!(execution.reap(initial.unit), Ok(End::Returned { value: 42 }));
+    assert_eq!(
+        execution.reap(initial.unit),
+        Ok(End::Returned { value: 42 })
+    );
     check_refs(initial.id, Phase::Shutting, 0);
 
     owner.begin_drain().unwrap();
@@ -224,7 +240,10 @@ fn schedule(initial: &'static Initial) -> ! {
     // Local withdrawal and even this fixture's page refunds do not
     // authorize generic instance removal without whole-tree settlement.
     check_refs(initial.id, Phase::Draining, 0);
-    assert_eq!(unsafe { execution.create(never) }, Err(Error::Nest(nest::Error::Shut)));
+    assert_eq!(
+        unsafe { execution.create(never) },
+        Err(Error::Nest(nest::Error::Shut))
+    );
     kernel::metal::platform::boot::treaty::write(
         "PASS local-nest installed=1 rollback=1 shut=1 dormant=1 yield=1 ending=1 leave=1 refs=0 withdrawn=1 refund=4\n",
     );

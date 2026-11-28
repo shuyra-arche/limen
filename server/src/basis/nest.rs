@@ -70,7 +70,10 @@ struct Record {
 
 impl State {
     fn record(&mut self, id: NestId) -> Result<&mut Record, Error> {
-        self.record.as_mut().filter(|record| record.id == id).ok_or(Error::Gone)
+        self.record
+            .as_mut()
+            .filter(|record| record.id == id)
+            .ok_or(Error::Gone)
     }
 
     pub(super) fn retain(&mut self, id: NestId, processor: usize) -> Result<NestRef, Error> {
@@ -81,7 +84,10 @@ impl State {
         if record.context.processor() != processor || !record.context.is_current() {
             return Err(Error::Scope);
         }
-        record.recoverable_refs = record.recoverable_refs.checked_add(1).ok_or(Error::Exhausted)?;
+        record.recoverable_refs = record
+            .recoverable_refs
+            .checked_add(1)
+            .ok_or(Error::Exhausted)?;
         Ok(NestRef(id))
     }
 
@@ -165,24 +171,34 @@ impl Nest {
         let Some((table, context)) = root.installed() else {
             return Err((root, Error::State));
         };
-        let published = self.state.acquire(|state| {
-            if state.record.is_some() {
-                return Err(Error::Busy);
-            }
-            let generation = Generation::next(state.generation).ok_or(Error::Exhausted)?;
-            let id = NestId { scope: ptr::from_ref(self).addr(), generation };
-            state.generation = Some(generation);
-            state.record = Some(Record {
-                id,
-                root: table,
-                context,
-                phase: Phase::Open,
-                recoverable_refs: 0,
-            });
-            Ok(id)
-        }).map_err(Error::from).and_then(core::convert::identity);
+        let published = self
+            .state
+            .acquire(|state| {
+                if state.record.is_some() {
+                    return Err(Error::Busy);
+                }
+                let generation = Generation::next(state.generation).ok_or(Error::Exhausted)?;
+                let id = NestId {
+                    scope: ptr::from_ref(self).addr(),
+                    generation,
+                };
+                state.generation = Some(generation);
+                state.record = Some(Record {
+                    id,
+                    root: table,
+                    context,
+                    phase: Phase::Open,
+                    recoverable_refs: 0,
+                });
+                Ok(id)
+            })
+            .map_err(Error::from)
+            .and_then(core::convert::identity);
         match published {
-            Ok(id) => Ok(LocalNest { binding: Binding { nest: self, id }, root }),
+            Ok(id) => Ok(LocalNest {
+                binding: Binding { nest: self, id },
+                root,
+            }),
             Err(error) => Err((root, error)),
         }
     }
