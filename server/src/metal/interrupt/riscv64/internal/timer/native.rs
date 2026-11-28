@@ -262,6 +262,15 @@ impl AbsoluteTimer for Timer<'_> {
         self.drive()
     }
 
+    fn confirmed_deadline(&self) -> Result<Option<Deadline<'_>>, Failure> {
+        self.context()?;
+        match self.state {
+            State::Idle => Ok(None),
+            State::Armed(target) => Ok(Some(self.counter.deadline(target))),
+            _ => Err(Failure::Busy),
+        }
+    }
+
     fn due(&self) -> Result<bool, Failure> {
         self.context()?;
         let deadline = self.state.deadline().ok_or(Failure::Busy)?;

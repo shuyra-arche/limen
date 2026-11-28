@@ -9,7 +9,7 @@ use core::{
     },
 };
 
-use super::unit::UnitId;
+use super::{sign::TockId, unit::UnitId};
 use crate::metal::processor::treaty::{LeaveReceipt, ProcessorId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,12 +59,14 @@ impl Occupancy {
 #[derive(Clone, Copy)]
 pub(crate) enum LeaveDestination {
     Ready,
+    Wait(TockId),
     Release,
 }
 
 #[derive(Clone, Copy)]
 enum LeaveRequest {
     Ready(OccupancyId),
+    Wait { tock: TockId, next: OccupancyId },
     Release,
 }
 
@@ -74,6 +76,11 @@ enum Placement {
     Occupied {
         occupancy: Occupancy,
         leave: Option<LeaveRequest>,
+    },
+    Waiting {
+        occupancy: Occupancy,
+        tock: TockId,
+        next: OccupancyId,
     },
 }
 
@@ -349,6 +356,10 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
                 // Exhaustion still permits a terminal leave from this occupancy.
                 occupancy.id.0.checked_add(1).ok_or(Error::Capacity)?,
             )),
+            LeaveDestination::Wait(tock) => LeaveRequest::Wait {
+                tock,
+                next: OccupancyId(occupancy.id.0.checked_add(1).ok_or(Error::Capacity)?),
+            },
             LeaveDestination::Release => LeaveRequest::Release,
         });
         Ok(())
@@ -367,11 +378,51 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
                 self.enqueue(slot);
             }
             LeaveRequest::Release => self.units[slot] = None,
+            LeaveRequest::Wait { tock, next } => {
+                entry.placement = Placement::Waiting {
+                    occupancy,
+                    tock,
+                    next,
+                };
+            }
         }
         self.participants[occupancy.participation.0]
             .as_mut()
             .expect("participant")
             .occupied = None;
         Ok(())
+    }
+
+    pub(super) fn settle_timeout(
+        &mut self,
+        occupancy: Occupancy,
+        tock: TockId,
+    ) -> Result<(), Error> {
+        let slot = self
+            .units
+            .iter()
+            .position(|entry| {
+                entry.as_ref().is_some_and(|entry| {
+                    entry.unit == occupancy.unit && entry.admission == occupancy.admission
+                })
+            })
+            .ok_or(Error::Gone)?;
+        let entry = self.units[slot].as_mut().expect("indexed admission");
+        match entry.placement {
+            Placement::Occupied {
+                occupancy: original,
+                leave: Some(LeaveRequest::Wait { tock: waiting, .. }),
+            } if original == occupancy && waiting == tock => Err(Error::Busy),
+            Placement::Waiting {
+                occupancy: original,
+                tock: waiting,
+                next,
+            } if original == occupancy && waiting == tock => {
+                entry.placement = Placement::Ready(next);
+                self.enqueue(slot);
+                Ok(())
+            }
+            _ => Err(Error::Gone),
+        }
     }
 }

@@ -24,8 +24,7 @@ use core::{
     arch::asm,
     cell::UnsafeCell,
     fmt::Write,
-    ptr,
-    sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,
 };
 use kernel::metal::{
@@ -498,75 +497,6 @@ fn check_signal(frame: Frame<'static>) -> Frame<'static> {
         .unwrap_or_else(|_| panic!("major SGI interface busy"))
 }
 
-struct TimerRoute<'local, 'clock, 'tree> {
-    receiver: &'local mut CpuInterface<'static>,
-    timer: &'local mut VirtualTimer<'clock, 'tree, 'static>,
-}
-
-struct LocalTimerRoute {
-    active: AtomicPtr<()>,
-    returned: AtomicBool,
-}
-
-static TIMER_ROUTE: Binding<LocalTimerRoute> = Binding::new(
-    LocalTimerRoute {
-        active: AtomicPtr::new(ptr::null_mut()),
-        returned: AtomicBool::new(false),
-    },
-    handle_timer,
-);
-static MAJOR_VECTORS: RuntimeTrap = RuntimeTrap::new(TIMER_ROUTE.entry());
-
-fn handle_timer(owner: &LocalTimerRoute, interrupt: Irq<'_>) {
-    assert_eq!(IRQ_TURN.acquire(|_| ()), Err(TurnAcquireError::Context));
-    let pointer = owner
-        .active
-        .load(Ordering::Acquire)
-        .cast::<TimerRoute<'_, '_, '_>>();
-    // Only the major processor enters here, while receive_timer exclusively
-    // transfers the fixture's two original owners to this handler.
-    let route = unsafe { pointer.as_mut() }.expect("live timer route");
-    let mut claim = route.receiver.receive().unwrap().expect("real timer PPI");
-    route.timer.stop_in_interrupt(&interrupt, &claim).unwrap();
-    claim
-        .complete_ppi(route.timer.stopped_ppi().unwrap())
-        .unwrap();
-    owner.returned.store(true, Ordering::Release);
-}
-
-fn receive_timer(mut route: TimerRoute<'_, '_, '_>, until: u64) {
-    let owner = TIMER_ROUTE.owner();
-    assert!(
-        owner
-            .active
-            .swap(ptr::from_mut(&mut route).cast(), Ordering::Release)
-            .is_null()
-    );
-    let restored: usize;
-    unsafe {
-        asm!(
-            "msr daifclr, #2",
-            "isb",
-            "2: ldarb w8, [{observed}]",
-            "cbnz w8, 3f",
-            "mrs x8, CNTVCT_EL0",
-            "cmp x8, {until}",
-            "b.lo 2b",
-            "3: mrs {restored}, DAIF",
-            "msr daifset, #2",
-            "isb",
-            observed = in(reg) owner.returned.as_ptr(),
-            until = in(reg) until,
-            restored = out(reg) restored,
-            out("x8") _,
-            options(nostack),
-        );
-    }
-    owner.active.store(ptr::null_mut(), Ordering::Relaxed);
-    assert_eq!(restored & 0x80, 0);
-    assert!(owner.returned.swap(false, Ordering::Acquire));
-}
-
 fn check_virtual_timer(
     tree: &DeviceTree<'_>,
     domain: GicV3<'_>,
@@ -601,15 +531,11 @@ fn check_virtual_timer(
         }
         assert!(timer.stopped_ppi().is_none());
         if delay == Duration::from_millis(10) {
-            unsafe { MAJOR_VECTORS.install() }.unwrap();
-            let now: u64;
-            unsafe { asm!("mrs {}, CNTVCT_EL0", out(reg) now, options(nostack, nomem)) };
-            receive_timer(
-                TimerRoute {
-                    receiver: &mut receiver,
-                    timer: &mut timer,
-                },
-                now + clock.frequency().get() * 3,
+            super::timer::install();
+            super::timer::receive(
+                &mut receiver,
+                &mut timer,
+                time_count() + clock.frequency().get() * 3,
             );
             assert!(timer.stopped_ppi().is_none());
             assert_eq!(receiver.state(), State::Empty);

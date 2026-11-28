@@ -75,6 +75,25 @@ attachment and notify the minor through the original SBI, GIC, or xAPIC
 route. The minor attaches on its permanent dispatcher stack, acknowledges
 the IRQ and runs the Unit from the same Room.
 
+## Local deadline waits
+
+A fixed-processor Kernel Unit can use `Current::wait_until` with the local
+Sign and a deadline from its exact Chrono clock. Reached deadlines complete
+inside the original occupancy. A future deadline publishes one preallocated
+Tock and the matching Room leave destination under the joint Turn. The
+dispatcher must consume the original native leave before a timed-out Tock
+can return that Unit to Ready.
+
+The resident dispatcher calls `Execution::service_deadlines` with a
+comparator dedicated to this Sign. The service uses a fresh same-clock
+sample and bounded Scheduled and Due work. It advances a still-live
+comparison to an earlier target and confirms outstanding native effects
+before using a new comparison. An expired comparison stays asserted until
+its native receiver can acquire and complete the interrupt. Sign retains
+any Due work that still owes the exact machine leave. This local
+configuration takes deadline publications from Units fixed to the same
+processor.
+
 ## Same-level IRQ entry
 
 The trusted image builds an `entry::hook::Binding` with the resident receiver

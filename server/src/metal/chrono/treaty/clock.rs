@@ -49,8 +49,7 @@ impl Clock {
         Sample::reported(&self.counter, try_current_processor()?)
     }
 
-    #[cfg(target_arch = "riscv64")]
-    pub(in crate::metal::chrono) fn deadline(&self, count: u64) -> Deadline<'_> {
+    pub(crate) fn deadline(&self, count: u64) -> Deadline<'_> {
         Deadline::issued(&self.counter, count)
     }
 
@@ -67,8 +66,7 @@ impl Clock {
     }
 
     /// Recover the comparison count for this exact native counter.
-    #[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
-    pub(in crate::metal) fn count_for(&self, deadline: Deadline<'_>) -> Option<u64> {
+    pub(crate) fn count_for(&self, deadline: Deadline<'_>) -> Option<u64> {
         deadline.count_for(&self.counter)
     }
 }
@@ -95,7 +93,7 @@ impl<'clock> Sample<'clock> {
         })
     }
 
-    pub(super) fn count(self) -> u64 {
+    pub(crate) fn count(self) -> u64 {
         self.count
     }
 
@@ -121,10 +119,7 @@ impl<'clock> Sample<'clock> {
 
 /// An exact comparison target for its original counter.
 #[cfg_attr(
-    not(any(
-        test,
-        all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64"))
-    )),
+    not(any(test, limen_target)),
     expect(
         dead_code,
         reason = "only an available native comparator or its controlled observation inspects the target"
@@ -143,10 +138,7 @@ impl<'clock> Deadline<'clock> {
 
     /// Recover a comparison only within its original counter.
     #[cfg_attr(
-        not(any(
-            test,
-            all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64"))
-        )),
+        not(any(test, limen_target)),
         expect(
             dead_code,
             reason = "only an available native comparator or its controlled observation inspects the target"

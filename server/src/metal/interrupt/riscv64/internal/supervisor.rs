@@ -156,3 +156,15 @@ mod native {
 pub(in crate::metal) fn all_masked() -> bool {
     native::enabled() == 0
 }
+
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+pub(in crate::metal) fn enabled_covered(software: bool, timer: bool) -> bool {
+    let mut covered = 0;
+    if software {
+        covered |= Cause::Software.mask();
+    }
+    if timer {
+        covered |= Cause::Timer.mask();
+    }
+    native::enabled() & !covered == 0
+}

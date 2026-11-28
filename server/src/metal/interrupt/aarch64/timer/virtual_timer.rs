@@ -180,6 +180,15 @@ impl AbsoluteTimer for VirtualTimer<'_, '_, '_> {
         self.rearm_at(target)
     }
 
+    fn confirmed_deadline(&self) -> Result<Option<Deadline<'_>>, Failure> {
+        self.now()?;
+        match self.state {
+            State::Idle => Ok(None),
+            State::Armed(target) => Ok(Some(self.clock.deadline(target))),
+            _ => Err(Failure::Busy),
+        }
+    }
+
     fn due(&self) -> Result<bool, Failure> {
         let now = self.now()?;
         let State::Armed(target) = self.state else {

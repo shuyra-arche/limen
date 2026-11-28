@@ -1,15 +1,18 @@
 //! Coordinates the existing cooperative Unit, Room and machine handoff.
 
-use core::marker::PhantomData;
+use core::{marker::PhantomData, num::NonZeroUsize};
 
 use crate::{
     basis::{
         room::{
             self, AdmissionId, IdleObservation, LeaveDestination, Occupancy, Participants, Room,
         },
+        sign::{Deadlines, Sign},
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, UnitRecord, Units},
     },
     metal::{
+        chrono::treaty::Deadline,
+        interrupt::treaty::AbsoluteTimer,
         processor::treaty::{
             self, Dispatcher, Dispatchers, LeaveReceipt, LocalExecution, Major, ProcessorId,
             Terminal,
@@ -30,8 +33,24 @@ pub enum Error {
     UnitNotEnding,
     UnitNotEnded,
     Protection,
+    Timing,
     State,
     Unsupported,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeadlineProgress {
+    Idle,
+    Armed,
+    /// The original receiver must accept the expired comparator's interrupt.
+    AwaitInterrupt,
+    Recheck,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeadlineError<T> {
+    Execution(Error),
+    Timer(T),
 }
 
 impl From<unit::Error> for Error {
@@ -316,6 +335,181 @@ impl Execution {
             .map_err(Error::from)
     }
 
+    /// Progress local pure-deadline waits and adjust their dedicated comparator.
+    ///
+    /// The dispatcher owns this timer for Sign and must arrange a native wake
+    /// path while armed. Retry Recheck and retained timer effects before
+    /// sleeping. AwaitInterrupt leaves the original comparator asserted
+    /// for its native receiver, which must accept and finish that claim
+    /// before the next comparison can be committed.
+    ///
+    /// # Safety
+    /// The supplied comparator is dedicated to this Sign, is in the same
+    /// local clock domain, and has no stop or wake obligations outside it.
+    /// Reuse its original receiver through any unsettled native effects.
+    /// Keep its interrupt handler from borrowing the comparator during this
+    /// ordinary exclusive access.
+    pub unsafe fn service_deadlines<T: AbsoluteTimer, const N: usize>(
+        &self,
+        sign: &Sign<'_, N>,
+        timer: &mut T,
+        budget: NonZeroUsize,
+    ) -> Result<DeadlineProgress, DeadlineError<T::Failure>> {
+        let (processor, _) = self.dispatcher().map_err(DeadlineError::Execution)?;
+        if processor.get() != sign.clock.processor() {
+            return Err(DeadlineError::Execution(Error::Timing));
+        }
+
+        let (next, due) = self
+            .settle_deadlines(sign, budget.get().min(N))
+            .map_err(DeadlineError::Execution)?;
+        let timer_error = DeadlineError::Timer;
+        if timer.pending_effect().map_err(timer_error)?.is_some() {
+            timer.confirm_effect().map_err(timer_error)?;
+            return Ok(DeadlineProgress::Recheck);
+        }
+        let armed = timer
+            .confirmed_deadline()
+            .map_err(timer_error)?
+            .map(|deadline| sign.clock.count_for(deadline).ok_or(Error::Timing))
+            .transpose()
+            .map_err(DeadlineError::Execution)?;
+        let now = sign
+            .clock
+            .sample()
+            .ok_or(DeadlineError::Execution(Error::Timing))?
+            .count();
+        if armed.is_some_and(|count| count <= now) {
+            // Preserve the source until its receiver acquires the original
+            // IRQ. Deasserting a level source earlier can lose its claim.
+            return Ok(DeadlineProgress::AwaitInterrupt);
+        }
+        if due || next.is_some_and(|count| count <= now) {
+            return Ok(DeadlineProgress::Recheck);
+        }
+
+        let (result, count) = match (armed, next) {
+            (None, Some(count)) => (timer.arm_at(sign.clock.deadline(count)), count),
+            (Some(old), Some(count)) if count < old => {
+                (timer.advance_deadline(sign.clock.deadline(count)), count)
+            }
+            (None, None) => return Ok(DeadlineProgress::Idle),
+            _ => return Ok(DeadlineProgress::Armed),
+        };
+        if let Err(error) = result {
+            // The backend samples again just before programming. If the
+            // deadline was crossed and no effect escaped, ordinary expiry
+            // can take over without retrying the obsolete write.
+            let reached = sign
+                .clock
+                .sample()
+                .is_some_and(|sample| sample.count() >= count);
+            if reached && matches!(timer.pending_effect(), Ok(None)) {
+                return Ok(DeadlineProgress::Recheck);
+            }
+            return Err(timer_error(error));
+        }
+        Ok(DeadlineProgress::Armed)
+    }
+
+    fn settle_deadlines<const N: usize>(
+        &self,
+        sign: &Sign<'_, N>,
+        budget: usize,
+    ) -> Result<(Option<u64>, bool), Error> {
+        self.with_room_sign(sign, |room, deadlines| {
+            let lower = sign.clock.sample().ok_or(Error::Timing)?.count();
+            deadlines.discover_due(lower, budget);
+            for _ in 0..budget {
+                let Some((tock, occupancy, _)) = deadlines.due() else {
+                    break;
+                };
+                match room.settle_timeout(occupancy, tock) {
+                    Ok(()) => deadlines
+                        .retire_due(tock, occupancy)
+                        .expect("observed exact Due"),
+                    Err(room::Error::Busy) => deadlines
+                        .rotate_due(tock, occupancy)
+                        .expect("observed exact Due"),
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Ok((deadlines.earliest(), deadlines.due().is_some()))
+        })
+    }
+
+    fn with_room_sign<const N: usize, R>(
+        &self,
+        sign: &Sign<'_, N>,
+        operation: impl FnOnce(&mut Room<STACK_CAPACITY>, &mut Deadlines<N>) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        let mut workspace = TurnWorkspace::<2>::new();
+        let mut plan = workspace.plan();
+        plan.insert(&self.room).expect("Room owner");
+        plan.insert(&sign.deadlines).expect("Sign owner");
+        plan.acquire(TurnMode::Slow, |held| {
+            let (room, deadlines) = held
+                .access_pair(&self.room, &sign.deadlines)
+                .expect("complete Room and Sign plan");
+            operation(room, deadlines)
+        })?
+    }
+
+    fn wait_until<const N: usize>(
+        &self,
+        unit: UnitId,
+        sign: &Sign<'_, N>,
+        deadline: Deadline<'_>,
+    ) -> Result<(), Error> {
+        let (processor, local) = self.local()?;
+        if !treaty::cooperative_ready() || !treaty::can_switch() {
+            return Err(Error::Protection);
+        }
+        if processor.get() != sign.clock.processor() {
+            return Err(Error::Timing);
+        }
+        let count = sign.clock.count_for(deadline).ok_or(Error::Timing)?;
+        if count == u64::MAX {
+            return Err(Error::Timing);
+        }
+        let occupancy = local
+            .running()
+            .filter(|active| active.unit() == unit)
+            .ok_or(Error::Gone)?;
+        let mut workspace = TurnWorkspace::<3>::new();
+        let mut plan = workspace.plan();
+        plan.insert(&self.units).expect("Unit owner");
+        plan.insert(&self.room).expect("Room owner");
+        plan.insert(&sign.deadlines).expect("Sign owner");
+        let context = plan.acquire(TurnMode::Slow, |held| {
+            let units = held.access(&self.units).expect("Unit protection");
+            let (binding, context) = units.live(unit)?;
+            if binding.affinity != Some(processor) {
+                return Err(Error::Unsupported);
+            }
+            let (room, deadlines) = held
+                .access_pair(&self.room, &sign.deadlines)
+                .expect("Room and Sign protection");
+            room.check_occupied(occupancy)?;
+            if sign.clock.sample().ok_or(Error::Timing)?.count() >= count {
+                return Ok(None);
+            }
+            let tock = deadlines
+                .arm(occupancy, count)
+                .map_err(|_| Error::Capacity)?;
+            if let Err(error) = room.request_leave(occupancy, LeaveDestination::Wait(tock)) {
+                deadlines.unarm(tock, occupancy).expect("just armed Tock");
+                return Err(error.into());
+            }
+            Ok(Some(context))
+        })??;
+        if let Some(context) = context {
+            // Resume only after the original receipt and timeout have settled.
+            unsafe { local.leave(occupancy, context) };
+        }
+        Ok(())
+    }
+
     /// Run one ready Unit until it yields or returns on its own stack.
     /// The original admission remains occupied until `vacate`.
     pub fn enter(&'static self) -> Result<Option<Occupancy>, Error> {
@@ -448,6 +642,21 @@ impl Current {
     /// continuation.
     pub fn yield_now(&mut self) -> Result<(), Error> {
         self.execution.leave(self.unit, None)
+    }
+
+    /// Wait for a deadline in this fixed processor's Sign clock domain.
+    /// Success follows a trustworthy local sample reaching the original target.
+    ///
+    /// # Safety
+    /// The resident dispatcher retains this exact Sign and its dedicated
+    /// comparator. It must be able to service every accepted wait, even
+    /// while this Unit is off the processor, and keep a valid native wake path.
+    pub unsafe fn wait_until<const N: usize>(
+        &mut self,
+        sign: &Sign<'_, N>,
+        deadline: Deadline<'_>,
+    ) -> Result<(), Error> {
+        self.execution.wait_until(self.unit, sign, deadline)
     }
 }
 

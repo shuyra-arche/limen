@@ -108,6 +108,10 @@ impl RuntimeTrap {
         !self.stack().contains(&native::stack_pointer())
     }
 
+    pub(in crate::metal::processor) fn covers_enabled(&self) -> bool {
+        supervisor::enabled_covered(self.entry.software, self.entry.timer)
+    }
+
     pub(in crate::metal::processor) fn interrupt_context(&self, observed: native::Entry) -> bool {
         observed.vector == self.ordinary_entry().vector && observed.scratch == 0
     }

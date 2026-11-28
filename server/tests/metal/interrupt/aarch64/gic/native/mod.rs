@@ -11,6 +11,7 @@ mod clock;
 
 mod occupied;
 mod scenario;
+mod timer;
 
 pub fn check(mut boot: boot::Boot<'_>) {
     fixture::check_handoff(&boot, None);

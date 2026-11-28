@@ -3,8 +3,9 @@
 use core::{arch::global_asm, mem::offset_of};
 
 use crate::metal::{
-    interrupt::riscv64::internal::supervisor, memory::mmu::riscv64::internal::context::Context,
-    processor::executor::riscv64::native,
+    interrupt::riscv64::internal::supervisor,
+    memory::mmu::riscv64::internal::context::Context,
+    processor::executor::{local, riscv64::native},
 };
 
 /// The native integer-only switch is valid in the verified Bare environment.
@@ -12,8 +13,13 @@ pub(in crate::metal::processor) fn ready() -> bool {
     let status = native::status();
     status.masked()
         && status.extensions_off()
-        && supervisor::all_masked()
         && Context::current() == Some(Context::BARE)
+        // The switch keeps SIE masked. An individually enabled source needs
+        // the verified, permanent runtime entry to receive it on either side.
+        && (supervisor::all_masked()
+            || local::ordinary_local()
+                .and_then(|local| local.runtime())
+                .is_some_and(|runtime| runtime.covers_enabled()))
 }
 
 #[repr(C)]
