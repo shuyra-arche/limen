@@ -7,14 +7,28 @@ use uefi::{Status, boot::PAGE_SIZE};
 
 use super::{foundation, window::Window};
 
-static WINDOW: Window<{ foundation::PAGES }> = Window::new();
+#[cfg(target_arch = "aarch64")]
+#[path = "../../../metal/memory/mmu/aarch64/owned.rs"]
+mod upper;
+
+#[cfg(target_arch = "aarch64")]
+const UPPER_PAGES: usize = upper::PAGES;
+#[cfg(target_arch = "x86_64")]
+const UPPER_PAGES: usize = 0;
+const PAGES: usize = foundation::PAGES + UPPER_PAGES;
+static WINDOW: Window<PAGES> = Window::new();
 
 pub(super) fn prepare() -> Result<(), Status> {
     WINDOW.prepare()
 }
 
 pub(super) fn check(boot: &Boot<'_>) {
-    let scope = WINDOW.inspect(boot);
+    let window = WINDOW.inspect(boot);
+    let scope = window
+        .start()
+        .range(ByteLength::new((foundation::PAGES * PAGE_SIZE) as u64))
+        .unwrap();
+    assert!(window.covers(scope));
     let mut evidence = Retirement::new(scope);
     let mut descriptions = [None; 1];
     // The scope was granted to this guest as conventional RAM and stayed
@@ -50,4 +64,18 @@ pub(super) fn check(boot: &Boot<'_>) {
     ));
 
     unsafe { foundation::check(boot, scope.start().get(), &evidence) };
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        let range = limen_treaty::model::PhysicalRange::new(scope.end(), window.end()).unwrap();
+        let mut evidence = Retirement::new(range);
+        // The original allocator never admitted these independently
+        // inspected pages of the same private conventional RAM extent.
+        unsafe {
+            evidence.record(Condition::NoEarlyBorrow);
+            evidence.record(Condition::TranslationRetired);
+            evidence.record(Condition::DevicesIsolated);
+            upper::check(boot, range, &evidence);
+        }
+    }
 }

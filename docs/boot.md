@@ -88,6 +88,24 @@ Allocator validates the root layout, reserved supply and initial receivers
 before Entry consumes the mapping. A delayed region is admitted through the
 original owner's `Retirement::grant` and its unique allocator `Grant`.
 
+Boot can supply a permanent `PendSpace::for_page_tables` spending position.
+Its trusted issuer supplies the actual Allowance, request-size bound and
+alignment bound. It accepts the PageTable purpose and records a read/write
+ceiling for first access. The issued Allocation carries the original slot
+through take and return. Cell publication must revalidate the live holding
+and the actual receiver. Metadata, boot reservations and allocations
+created by conversion have an empty first-access ceiling.
+
+An Internal root's `TableStore` reserves its own stable identity before
+native publication. It accepts the original mapped allocation and a
+resident `CellSlot` jointly with the live page-table issuer. That commit
+gives the private construction one typed Pend. The store consumes that
+holding when the Cell's prepared access becomes accepted. The original
+read/write ceiling covers initialization to invalid descriptors. A root
+withdrawn in this private state returns its exact allocation through the
+normal prepaid Allocator receipt. Native root installation requires a
+separate effect and retirement contract.
+
 An owner starting with a raw pointer from the original identity mapping can
 use `MappedRange::from_identity`. It checks both machine-width endpoints,
 nonempty slice length and the base address before borrowing. It derives the

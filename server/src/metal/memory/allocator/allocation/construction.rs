@@ -333,9 +333,16 @@ impl Allocator {
         let amount = physical.length().get();
         balance.issue(amount);
         held.access(slot).expect("Allowance").state = SlotState::Open(balance);
+        let issuer = reservation.permit_slot;
+        let initial_issuer = issuer.initial_access().map(|_| issuer);
         *held.access(&construction.state).expect("receiver") = Preparation::Issued(
             reservation.id,
-            Some(Allocation::issued(self, reservation.id, physical)),
+            Some(Allocation::issued(
+                self,
+                reservation.id,
+                physical,
+                initial_issuer,
+            )),
         );
         Ok(reservation.id)
     }

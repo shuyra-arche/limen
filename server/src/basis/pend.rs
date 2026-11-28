@@ -5,9 +5,9 @@ use limen_treaty::model::{Alignment, ByteLength};
 use crate::metal::{
     memory::allocator::treaty::{
         self as allocator, AllocationConstruction, AllocationId, AllocationPermit,
-        AllocationPermitSlot, Allowance, Candidate, LayoutLimit,
+        AllocationPermitSlot, Allowance, Candidate, InitialAccess, LayoutLimit, MappedStorage,
     },
-    sync::treaty::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
+    sync::treaty::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,18 +38,43 @@ enum Admission {
     Shut,
 }
 
-struct Pend {
-    holding: Option<AllocationPermit>,
+pub(crate) struct Pend<Permit> {
+    holding: Option<Permit>,
     branch: Admission,
+}
+
+impl<Permit: Copy> Pend<Permit> {
+    pub(crate) fn held(permit: Permit) -> Self {
+        Self {
+            holding: Some(permit),
+            branch: Admission::Open,
+        }
+    }
+
+    pub(crate) fn resolve(&self) -> Result<Permit, Error> {
+        let permit = self.holding.ok_or(Error::Exhausted)?;
+        match self.branch {
+            Admission::Open => Ok(permit),
+            Admission::Shut => Err(Error::Revoked),
+        }
+    }
+
+    pub(crate) fn consume(&mut self) -> Result<Permit, Error> {
+        self.holding.take().ok_or(Error::Exhausted)
+    }
+
+    pub(crate) fn shut(&mut self) {
+        self.branch = Admission::Shut;
+    }
 }
 
 enum State {
     Fresh,
-    Published(Pend),
+    Published(Pend<AllocationPermit>),
 }
 
 impl State {
-    fn published(&mut self) -> &mut Pend {
+    fn published(&mut self) -> &mut Pend<AllocationPermit> {
         match self {
             Self::Fresh => unreachable!("roles are issued only after publication"),
             Self::Published(pend) => pend,
@@ -57,12 +82,7 @@ impl State {
     }
 
     fn resolve(&mut self) -> Result<AllocationPermit, Error> {
-        let pend = self.published();
-        let permit = pend.holding.ok_or(Error::Exhausted)?;
-        match pend.branch {
-            Admission::Open => Ok(permit),
-            Admission::Shut => Err(Error::Revoked),
-        }
+        self.published().resolve()
     }
 }
 
@@ -82,8 +102,18 @@ pub struct Initial<'receiver> {
 
 impl PendSpace {
     pub const fn new() -> Self {
+        Self::with_permit(AllocationPermitSlot::metadata())
+    }
+
+    /// Supply the permanent initial spending position for table pages.
+    /// The trusted boot issuer supplies the actual source and layout bounds.
+    pub const fn for_page_tables() -> Self {
+        Self::with_permit(AllocationPermitSlot::page_tables())
+    }
+
+    const fn with_permit(permit_slot: AllocationPermitSlot) -> Self {
         Self {
-            permit_slot: AllocationPermitSlot::metadata(),
+            permit_slot,
             state: TurnLock::new(State::Fresh),
         }
     }
@@ -122,10 +152,7 @@ impl PendSpace {
                     Error::Exhausted
                 });
             }
-            *receiver = State::Published(Pend {
-                holding: Some(permit),
-                branch: Admission::Open,
-            });
+            *receiver = State::Published(Pend::held(permit));
             *roles.spending = Some(Handle { space: self });
             *roles.closing = Some(Revoker { space: self });
             Ok(())
@@ -147,7 +174,7 @@ pub struct Revoker {
 impl Revoker {
     pub fn revoke(&self) -> Result<(), Error> {
         Ok(self.space.state.acquire(|state| {
-            state.published().branch = Admission::Shut;
+            state.published().shut();
         })?)
     }
 
@@ -171,6 +198,25 @@ impl Handle {
         held.access(&self.space.state)
             .ok_or(Error::Protection)?
             .resolve()
+    }
+
+    pub(crate) fn plan_initial_access(self, plan: &mut TurnPlan<'_, '_>) -> Result<(), Error> {
+        let permit = self.space.state.acquire(|state| state.resolve())??;
+        plan.insert(&self.space.state)
+            .expect("original spending position");
+        permit.plan_allowance(plan)?;
+        Ok(())
+    }
+
+    pub(crate) fn initial_access(
+        self,
+        held: &mut TurnAccess<'_>,
+        storage: &MappedStorage<'_>,
+    ) -> Result<InitialAccess, Error> {
+        let permit = self.resolve(held)?;
+        let initial = storage.initial_access(permit)?;
+        permit.check_allowance(held)?;
+        Ok(initial)
     }
 
     pub fn reserve(
@@ -225,7 +271,7 @@ impl Handle {
     /// in their original construction and source records.
     pub fn release(self) -> Result<(), Error> {
         self.space.state.acquire(|state| {
-            state.published().holding.take().ok_or(Error::Exhausted)?;
+            state.published().consume()?;
             Ok(())
         })?
     }
