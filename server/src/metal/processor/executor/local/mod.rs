@@ -247,11 +247,17 @@ pub(in crate::metal::processor) fn ordinary_local() -> Option<&'static Executor>
 #[cfg(limen_target)]
 pub(in crate::metal::processor) fn interrupt_local() -> Option<(ProcessorId, &'static RuntimeTrap)>
 {
+    let (local, runtime) = interrupt_executor()?;
+    Some((local.identity(), runtime))
+}
+
+#[cfg(limen_target)]
+fn interrupt_executor() -> Option<(&'static Executor, &'static RuntimeTrap)> {
     let observed = backend::entry()?;
     let local = installed()?;
     let runtime = local.runtime()?;
     (runtime.interrupt_context(observed) && runtime.stack().contains(&backend::stack_pointer()))
-        .then(|| (local.identity(), runtime))
+        .then_some((local, runtime))
 }
 
 #[cfg(all(test, not(limen_target)))]
@@ -270,6 +276,17 @@ pub(in crate::metal) fn cooperative_slot(scope: usize) -> Option<(ProcessorId, u
     let local = ordinary_local()?;
     let binding = local.cooperative.get()?;
     (binding.scope == scope).then_some((local.identity(), binding.slot))
+}
+
+#[cfg(all(limen_cooperative, target_arch = "riscv64"))]
+pub(in crate::metal::processor) fn interrupt_cooperative_slot(
+    scope: usize,
+    processor: ProcessorId,
+) -> Option<usize> {
+    let (local, _) = interrupt_executor()?;
+    let binding = local.cooperative.get()?;
+    (binding.scope == scope && local.identity() == processor && local.protection.inactive())
+        .then_some(binding.slot)
 }
 
 /// The caller has reserved a unique machine record for this Executor. The record

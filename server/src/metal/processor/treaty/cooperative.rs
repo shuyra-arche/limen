@@ -1,5 +1,7 @@
 //! Cooperative construction, original continuations and departure receipts.
 
+#[cfg(target_arch = "riscv64")]
+use core::ops::Range;
 use core::sync::atomic::Ordering::Relaxed;
 
 use crate::metal::processor::{
@@ -11,7 +13,11 @@ pub(crate) use crate::metal::processor::execution::cooperative::{
     Context, Dispatcher, LeaveReceipt, LocalExecution,
 };
 
+#[cfg(target_arch = "riscv64")]
+use super::TimerInterrupt;
 use super::{ProcessorId, can_switch};
+#[cfg(target_arch = "riscv64")]
+use crate::metal::processor::execution::cooperative::Stop;
 
 pub(crate) fn cooperative_ready() -> bool {
     native::ready()
@@ -24,6 +30,15 @@ pub(crate) fn current<Occupancy: 'static>(
 ) -> Option<(ProcessorId, LocalExecution<'static, Occupancy>)> {
     let (id, slot) = local::cooperative_slot(records.as_ptr().addr())?;
     Some((id, unsafe { records.get(slot)?.local() }))
+}
+
+#[cfg(target_arch = "riscv64")]
+pub(crate) fn current_in_interrupt<Occupancy: 'static>(
+    records: &'static [Dispatcher<Occupancy>],
+    interrupt: &TimerInterrupt<'_>,
+) -> Option<LocalExecution<'static, Occupancy>> {
+    let slot = local::interrupt_cooperative_slot(records.as_ptr().addr(), interrupt.processor())?;
+    Some(unsafe { records.get(slot)?.local() })
 }
 
 /// Resident storage for the machine records, supplied by the trusted image.
@@ -94,7 +109,12 @@ impl Context {
 
 impl<Occupancy> LeaveReceipt<Occupancy> {
     pub(crate) fn occupancy(self) -> Occupancy {
-        self.0
+        self.occupancy
+    }
+
+    #[cfg(target_arch = "riscv64")]
+    pub(crate) fn discarded(self) -> bool {
+        self.discarded
     }
 }
 
@@ -123,12 +143,13 @@ impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
         assert!(can_switch());
         self.record.state.set(State::Running(occupancy));
         unsafe { self.record.dispatcher.switch(context, argument) };
-        // The dispatcher is executing on its original stack again. The old
-        // instruction and stack are saved but cannot execute without a new
-        // occupancy.
-        self.record
-            .state
-            .set(State::Stopped(LeaveReceipt(occupancy)));
+        // The dispatcher is executing on its original stack again. Only now
+        // does it publish a Leave receipt for the original occupancy.
+        self.record.state.set(State::Stopped(LeaveReceipt {
+            occupancy,
+            #[cfg(target_arch = "riscv64")]
+            discarded: matches!(self.record.stop.replace(Stop::Closed), Stop::Returning),
+        }));
     }
 
     /// Requires invocation on the stack of this exact running occupancy.
@@ -146,7 +167,37 @@ impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
     }
 
     pub(crate) fn settle(&self, receipt: LeaveReceipt<Occupancy>) {
-        assert!(self.stopped().map(LeaveReceipt::occupancy) == Some(receipt.occupancy()));
+        let stopped = self.stopped().expect("pending Leave receipt");
+        assert!(stopped.occupancy() == receipt.occupancy());
+        #[cfg(target_arch = "riscv64")]
+        assert_eq!(stopped.discarded(), receipt.discarded());
         self.record.state.set(State::Idle);
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+impl<Occupancy: Copy + Eq> LocalExecution<'static, Occupancy> {
+    pub(crate) fn allow_stop_in(&self, span: Range<usize>) -> bool {
+        if span.is_empty() || !matches!(self.record.stop.get(), Stop::Closed) {
+            return false;
+        }
+        self.record.stop.set(Stop::Allowed {
+            start: span.start,
+            end: span.end,
+        });
+        true
+    }
+
+    pub(crate) fn request_stop(&self, occupancy: Occupancy, interrupt: TimerInterrupt<'_>) -> bool {
+        let Stop::Allowed { start, end } = self.record.stop.get() else {
+            return false;
+        };
+        if self.running() != Some(occupancy)
+            || !interrupt.request_return(&(start..end), &self.record.dispatcher)
+        {
+            return false;
+        }
+        self.record.stop.set(Stop::Returning);
+        true
     }
 }

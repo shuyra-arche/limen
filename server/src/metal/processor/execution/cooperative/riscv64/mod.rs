@@ -46,6 +46,20 @@ impl Saved {
             ..Self::EMPTY
         }
     }
+
+    /// Restore the suspended dispatcher across its native switch call.
+    pub(in crate::metal::processor) fn return_address(&self, registers: &mut [usize; 32]) -> usize {
+        let global = registers[3];
+        let local = registers[4];
+        *registers = [0; 32];
+        registers[1] = self.resume;
+        registers[2] = self.stack;
+        registers[3] = global;
+        registers[4] = local;
+        registers[8..10].copy_from_slice(&self.preserved[..2]);
+        registers[18..28].copy_from_slice(&self.preserved[2..]);
+        self.resume
+    }
 }
 
 global_asm!(

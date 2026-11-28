@@ -94,6 +94,26 @@ any Due work that still owes the exact machine leave. This local
 configuration takes deadline publications from Units fixed to the same
 processor.
 
+## RV64 terminal stop
+
+A trusted Kernel Unit may admit a native code span for terminal stop
+within its current occupancy. The entire interrupted continuation must
+be safe to discard at every instruction in the span. Any live obligations
+must already be settled or owned by an independent resident record.
+
+The timer Hook can request terminal stop using the original capture
+after the bound timer has accepted its expired comparison. The machine
+checks the exact local occupancy and the interrupted continuation against
+the admitted span. At final return it restores the dispatcher's saved
+integer continuation with supervisor interrupts masked. The dispatcher
+publishes a machine leave receipt after it resumes on its own stack.
+
+Room settles the original admission and the Unit's cancellation in one
+Turn after receiving that receipt. The Unit's stack becomes reusable
+through the ordinary end and reap path. Fund authorization also requires
+calibrated timing, a verified bound on the stop tail and settlement of
+the original Charge and Meter.
+
 ## Same-level IRQ entry
 
 The trusted image builds an `entry::hook::Binding` with the resident receiver

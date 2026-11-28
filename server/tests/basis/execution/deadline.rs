@@ -44,6 +44,8 @@ use kernel::{
     },
 };
 
+#[path = "native_stop.rs"]
+mod native_stop;
 #[path = "../../metal/interrupt/riscv64/internal/timer/reception.rs"]
 mod reception;
 
@@ -213,6 +215,9 @@ fn schedule(initial: &'static Initial) -> ! {
     assert_eq!(execution.enter(), Ok(None));
     write("PASS sign-deadline armed=2 advanced=1 irq=2 resumed=2 leaves=4 route=");
     write(if direct { "sstc\n" } else { "sbi-time\n" });
+    if direct {
+        native_stop::check(execution, &mut timer);
+    }
     (initial.complete)()
 }
 

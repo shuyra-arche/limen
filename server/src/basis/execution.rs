@@ -1,5 +1,9 @@
 //! Coordinates the existing cooperative Unit, Room and machine handoff.
 
+#[cfg(target_arch = "riscv64")]
+use crate::metal::processor::treaty::TimerInterrupt;
+#[cfg(target_arch = "riscv64")]
+use core::ops::Range;
 use core::{marker::PhantomData, num::NonZeroUsize};
 
 use crate::{
@@ -204,7 +208,7 @@ impl Execution {
         })?
     }
 
-    fn local(&self) -> Result<(ProcessorId, LocalExecution<'_, Occupancy>), Error> {
+    fn local(&self) -> Result<(ProcessorId, LocalExecution<'static, Occupancy>), Error> {
         treaty::try_current_processor().ok_or(Error::Protection)?;
         treaty::current(self.dispatchers).ok_or(Error::Unsupported)
     }
@@ -539,8 +543,50 @@ impl Execution {
         Ok(self.local()?.1.stopped().map(LeaveReceipt::occupancy))
     }
 
+    /// Select the dispatcher as the return target of the accepted local timer.
+    /// The IRQ handler retains any unfinished native acknowledgement. A stale
+    /// occupancy, unaccepted interrupt or instruction outside the allowed span
+    /// leaves the original Unit frame unchanged. Only the resumed dispatcher
+    /// can publish the corresponding Leave receipt.
+    #[cfg(target_arch = "riscv64")]
+    pub fn request_stop(
+        &self,
+        interrupt: TimerInterrupt<'_>,
+        occupancy: Occupancy,
+    ) -> Result<(), Error> {
+        let local =
+            treaty::current_in_interrupt(self.dispatchers, &interrupt).ok_or(Error::Protection)?;
+        if local.running() != Some(occupancy) {
+            return Err(Error::Gone);
+        }
+        local
+            .request_stop(occupancy, interrupt)
+            .then_some(())
+            .ok_or(Error::Unsupported)
+    }
+
     pub fn vacate(&self, occupancy: Occupancy) -> Result<(), Error> {
         let (_, local) = self.local()?;
+        #[cfg(target_arch = "riscv64")]
+        if let Some(receipt) = local
+            .stopped()
+            .filter(|receipt| receipt.occupancy() == occupancy && receipt.discarded())
+        {
+            return self.with_unit_room(|units, room| {
+                room.check_occupied(occupancy)?;
+                units.live(occupancy.unit())?;
+                // The terminal machine return has already left the discarded
+                // stack. In the same Turn, close the Unit and its original
+                // admission so there is no later entry to that continuation.
+                room.request_leave(occupancy, LeaveDestination::Release)?;
+                units
+                    .begin_end(occupancy.unit(), End::Cancelled)
+                    .expect("original live Unit");
+                room.vacate(receipt).expect("original terminal departure");
+                local.settle(receipt);
+                Ok(())
+            });
+        }
         self.room.acquire(|room| {
             room.check_occupied(occupancy)?;
             let receipt = local
@@ -636,6 +682,34 @@ impl Current {
         treaty::try_current_processor()
             .expect("ordinary processor entry")
             .get()
+    }
+
+    /// Allow the original accepted local timer to stop this dispatch while
+    /// executing in the half-open native instruction span. A native return
+    /// outside the span preserves the current Unit; the caller still owns
+    /// ordinary progress and any unsettled timer effects.
+    ///
+    /// # Safety
+    /// Every execution at these resident instruction addresses during the
+    /// original occupancy must allow abandoning its whole Unit stack without
+    /// leaving guards, live external borrows or owed cleanup. The native
+    /// unmask must order this publication before an IRQ can be delivered, for
+    /// example by using an assembly unmask with a compiler memory clobber.
+    /// A switch or terminal return closes this permission.
+    #[cfg(target_arch = "riscv64")]
+    pub unsafe fn allow_stop_in(&mut self, span: Range<usize>) -> Result<Occupancy, Error> {
+        if !treaty::cooperative_ready() || !treaty::can_switch() {
+            return Err(Error::Protection);
+        }
+        let (_, local) = self.execution.local()?;
+        let occupancy = local
+            .running()
+            .filter(|active| active.unit() == self.unit)
+            .ok_or(Error::Gone)?;
+        local
+            .allow_stop_in(span)
+            .then_some(occupancy)
+            .ok_or(Error::State)
     }
 
     /// Yield the processor. Success is returned after a new dispatch resumes this

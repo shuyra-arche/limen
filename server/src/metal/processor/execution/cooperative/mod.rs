@@ -37,7 +37,11 @@ impl Context {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct LeaveReceipt<Occupancy>(pub(in crate::metal::processor) Occupancy);
+pub(crate) struct LeaveReceipt<Occupancy> {
+    pub(in crate::metal::processor) occupancy: Occupancy,
+    #[cfg(target_arch = "riscv64")]
+    pub(in crate::metal::processor) discarded: bool,
+}
 
 #[derive(Clone, Copy)]
 pub(in crate::metal::processor) enum State<Occupancy> {
@@ -48,11 +52,21 @@ pub(in crate::metal::processor) enum State<Occupancy> {
 
 pub(in crate::metal::processor) const DISPATCH_BYTES: usize = 32 * 1024;
 
+#[cfg(target_arch = "riscv64")]
+#[derive(Clone, Copy)]
+pub(in crate::metal::processor) enum Stop {
+    Closed,
+    Allowed { start: usize, end: usize },
+    Returning,
+}
+
 pub(crate) struct Dispatcher<Occupancy> {
     pub(in crate::metal::processor) reserved: AtomicBool,
     pub(in crate::metal::processor) stack: Stack<DISPATCH_BYTES>,
     pub(in crate::metal::processor) dispatcher: Context,
     pub(in crate::metal::processor) state: Cell<State<Occupancy>>,
+    #[cfg(target_arch = "riscv64")]
+    pub(in crate::metal::processor) stop: Cell<Stop>,
 }
 
 // Only the LocalExecution for the matching Executor accesses the
@@ -71,6 +85,8 @@ impl<Occupancy> Dispatcher<Occupancy> {
             stack: Stack::new(),
             dispatcher: Context::new(),
             state: Cell::new(State::Idle),
+            #[cfg(target_arch = "riscv64")]
+            stop: Cell::new(Stop::Closed),
         }
     }
 

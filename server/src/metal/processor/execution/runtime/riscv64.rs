@@ -2,6 +2,7 @@
 
 use core::{
     arch::{asm, naked_asm},
+    cell::Cell,
     marker::PhantomData,
     mem::offset_of,
     ops::Range,
@@ -11,7 +12,8 @@ use core::{
 use crate::metal::{
     interrupt::riscv64::internal::supervisor,
     processor::{
-        description::riscv64::status::Status,
+        description::riscv64::status::{SIE, Status},
+        execution::cooperative::Context,
         executor::{local, riscv64::native},
         treaty::ProcessorId,
     },
@@ -24,6 +26,7 @@ use super::{
 
 const STACK_BYTES: usize = 16 * 1024;
 const SUPERVISOR_PREVIOUS: usize = 1 << 8;
+const INTERRUPTS_PREVIOUS: usize = 1 << 5;
 const INTERRUPT: usize = 1 << (usize::BITS - 1);
 const SOFTWARE_CAUSE: usize = INTERRUPT | 1;
 const TIMER_CAUSE: usize = INTERRUPT | 5;
@@ -124,19 +127,43 @@ impl RuntimeTrap {
 /// This layer of an actual local supervisor timer interrupt.
 pub struct TimerInterrupt<'frame> {
     processor: ProcessorId,
-    frame: PhantomData<&'frame mut *mut ()>,
+    instruction: usize,
+    received: Cell<bool>,
+    dispatcher: &'frame mut Option<&'static Context>,
 }
 
 impl<'frame> TimerInterrupt<'frame> {
-    fn new(_frame: &'frame mut Frame, processor: ProcessorId) -> Self {
+    fn new(
+        processor: ProcessorId,
+        instruction: usize,
+        dispatcher: &'frame mut Option<&'static Context>,
+    ) -> Self {
         Self {
             processor,
-            frame: PhantomData,
+            instruction,
+            received: Cell::new(false),
+            dispatcher,
         }
     }
 
     pub fn processor(&self) -> ProcessorId {
         self.processor
+    }
+
+    pub(in crate::metal) fn confirm_receipt(&self) {
+        self.received.set(true);
+    }
+
+    pub(in crate::metal::processor) fn request_return(
+        self,
+        span: &Range<usize>,
+        dispatcher: &'static Context,
+    ) -> bool {
+        if !self.received.get() || !span.contains(&self.instruction) {
+            return false;
+        }
+        *self.dispatcher = Some(dispatcher);
+        true
     }
 }
 
@@ -177,14 +204,24 @@ extern "C" fn dispatch(frame: &mut Frame, cause: usize) -> bool {
     let Some((processor, runtime)) = local::interrupt_local() else {
         return false;
     };
+    let mut dispatcher = None;
     let capture = match cause {
         SOFTWARE_CAUSE if runtime.entry.software => {
             Capture::Software(SoftwareInterrupt::new(frame, processor))
         }
-        TIMER_CAUSE if runtime.entry.timer => Capture::Timer(TimerInterrupt::new(frame, processor)),
+        TIMER_CAUSE if runtime.entry.timer => {
+            Capture::Timer(TimerInterrupt::new(processor, frame.pc, &mut dispatcher))
+        }
         _ => return false,
     };
     runtime.entry.handle(capture);
+    if let Some(dispatcher) = dispatcher {
+        // The linear request established an actual suspended local dispatcher.
+        // The regular epilogue restores the trap stack before returning there.
+        let continuation = unsafe { &*dispatcher.0.get() };
+        frame.pc = continuation.return_address(&mut frame.registers);
+        frame.status &= !(SIE | INTERRUPTS_PREVIOUS);
+    }
     true
 }
 

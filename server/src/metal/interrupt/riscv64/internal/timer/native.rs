@@ -189,6 +189,7 @@ impl<'a> Timer<'a> {
         self.state.advance(Event::Shut)?;
         self.local.set(false);
         self.state.advance(Event::Masked(!self.local.enabled()))?;
+        interrupt.confirm_receipt();
         Ok(true)
     }
 
