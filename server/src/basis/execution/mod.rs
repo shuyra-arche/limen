@@ -782,7 +782,8 @@ impl Current {
     /// its ordinary Turn and all failure paths to the covered span or actual
     /// departure. A single attempt or Fast mode alone does not prove this
     /// bound. The initial single-processor profile excludes all competing
-    /// access to those owners during the masked path.
+    /// access to those owners during the masked path. A shared dispatcher
+    /// scope currently rejects funded Wait before taking any Turn.
     pub unsafe fn wait_until<const N: usize>(
         &mut self,
         sign: &Sign<'_, N>,

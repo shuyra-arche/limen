@@ -251,6 +251,13 @@ impl<'clock> Fund<'clock> {
         if active.occupancy.unit() != current.unit || local.running() != Some(active.occupancy) {
             return Err(Error::Gone);
         }
+        // Shared dispatch supplies permit other processors to contend for
+        // the Unit/Room Turn. Until a bounded Arm/exit protocol is admitted,
+        // do not start that masked operation during a shared Fund occupancy.
+        // A single supplied dispatcher is not itself a timing certificate.
+        if current.execution.dispatchers.len() != 1 {
+            return Err(Error::Unsupported);
+        }
         let count = sign.clock.count_for(deadline).ok_or(Error::Timing)?;
         let (_, last) =
             Self::window_for(&self.timing, &self.config, self.windows).ok_or(Error::Timing)?;

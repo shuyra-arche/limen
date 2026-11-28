@@ -38,6 +38,14 @@ pub(crate) fn try_current_processor() -> Option<ProcessorId> {
     Some(local::ordinary_local()?.identity())
 }
 
+/// The original local entry grants at most one supervisor line delivery.
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+pub(in crate::metal) fn claim_supervisor_reception(processor: ProcessorId) -> bool {
+    local::ordinary_local().is_some_and(|local| {
+        local.identity() == processor && local.claim_supervisor_reception()
+    })
+}
+
 /// Protect a window of execution on the current verified CPU.
 #[cfg(any(limen_target, test))]
 pub(in crate::metal) fn protect() -> Option<Protection> {

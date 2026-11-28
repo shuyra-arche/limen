@@ -70,7 +70,7 @@ pub(crate) unsafe fn admit<'a>(
     }
     #[cfg(target_arch = "riscv64")]
     // The actual hart and its ordinary stack are installed before using CSRs.
-    let reception = unsafe { Supervisor::admit(processor as u64) }
+    let reception = Supervisor::take()
         .unwrap_or_else(|_| terminal.reject(format_args!("FAIL Limen boot: local reception\n")));
     Admission {
         processor,

@@ -150,6 +150,8 @@ pub(in crate::metal) struct Executor {
     cooperative: Cell<Option<CooperativeBinding>>,
     #[cfg(limen_target)]
     runtime: Cell<Option<&'static RuntimeTrap>>,
+    #[cfg(all(limen_target, target_arch = "riscv64"))]
+    supervisor_reception: Cell<bool>,
     protection: protection::LocalProtection,
     synchronization: OnceCell<&'static LocalSync>,
 }
@@ -170,6 +172,8 @@ impl Executor {
             cooperative: Cell::new(None),
             #[cfg(limen_target)]
             runtime: Cell::new(None),
+            #[cfg(all(limen_target, target_arch = "riscv64"))]
+            supervisor_reception: Cell::new(false),
             protection: protection::LocalProtection::new(),
             synchronization: OnceCell::new(),
         }
@@ -178,6 +182,13 @@ impl Executor {
     #[cfg(limen_target)]
     pub(in crate::metal::processor) fn identity(&self) -> ProcessorId {
         self.identity.get()
+    }
+
+    /// Consume the one original supervisor reception delivery. Only the
+    /// verified local ordinary entry may reach this field.
+    #[cfg(all(limen_target, target_arch = "riscv64"))]
+    pub(in crate::metal::processor) fn claim_supervisor_reception(&self) -> bool {
+        !self.supervisor_reception.replace(true)
     }
 
     /// The caller owns this freshly initialized CPU and permanent local storage.
