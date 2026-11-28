@@ -205,8 +205,7 @@ impl<'access, 'description, 'resources> Receiver<'access, 'description, 'resourc
             return Err(Failure::Busy);
         }
         if self.domain.state() != State::Open {
-            self.domain
-                .confirm_claim_mask(self.context, record.source)?;
+            self.domain.confirm_mask(self.context, record.source)?;
         }
         self.domain.settle_source(self.context, record.source)?;
         self.context.reception.slot = Slot::Empty;
@@ -291,8 +290,7 @@ impl<'description, 'resources> Receive for Receiver<'_, 'description, 'resources
         self.context.check()?;
         match self.context.reception.slot {
             Slot::Masking(record) => {
-                self.domain
-                    .confirm_claim_mask(self.context, record.source)?;
+                self.domain.confirm_mask(self.context, record.source)?;
                 self.context.reception.confirm_mask(record)?;
             }
             Slot::Settling(record) => return Ok(Some(self.borrow_claim(record))),

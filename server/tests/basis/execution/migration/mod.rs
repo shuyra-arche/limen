@@ -1,4 +1,4 @@
-//! Cross-Hart Unit migration and its firmware-specific admission.
+//! Cross-processor Unit migration and its firmware-specific admission.
 
 #[cfg(target_arch = "riscv64")]
 mod sbi;
@@ -12,6 +12,7 @@ pub use uefi::{check, prepare};
 use core::{
     hint::{black_box, spin_loop},
     mem::{MaybeUninit, size_of},
+    ops::Range,
     ptr,
     sync::atomic::{
         AtomicUsize,
@@ -25,8 +26,8 @@ use kernel::metal::{
 };
 use kernel::{
     basis::{
-        execution::{Current, Error, Execution, KernelBinding},
-        room::{Harts, Occupancy},
+        execution::{Current, Error, Execution, KernelBinding, RuntimeEntry},
+        room::{Occupancy, Participants},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::Boot,
@@ -49,11 +50,14 @@ mod riscv64;
 use riscv64 as registers;
 
 static mut STACKS: Stacks = Stacks::new();
-static mut HARTS: Harts<2> = Harts::new();
+static mut PARTICIPANTS: Participants<2> = Participants::new();
 static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy, 2> =
     kernel::metal::processor::treaty::Dispatchers::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
+static mut MAJOR_RUNTIME: MaybeUninit<RuntimeEntry<Initial>> = MaybeUninit::uninit();
+static mut LAUNCH: MaybeUninit<Launch> = MaybeUninit::uninit();
+static MINOR_RUNTIME: RuntimeEntry<()> = RuntimeEntry::new(schedule_minor, ());
 static MAJOR: AtomicUsize = AtomicUsize::new(usize::MAX);
 static PEER: AtomicUsize = AtomicUsize::new(usize::MAX);
 static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
@@ -73,7 +77,7 @@ static STEP: AtomicUsize = AtomicUsize::new(0);
 static STACK: AtomicUsize = AtomicUsize::new(0);
 
 fn wait(phase: usize) {
-    while PHASE.load(Relaxed) != phase {
+    while PHASE.load(Acquire) != phase {
         spin_loop();
     }
 }
@@ -89,7 +93,7 @@ fn migratable(current: &mut Current) -> u64 {
     let value = black_box(0x1234_5678usize);
     let address = stack_address(&value);
     STACK.store(address, Relaxed);
-    assert_eq!(current.hart(), MAJOR.load(Relaxed));
+    assert_eq!(current.processor(), MAJOR.load(Relaxed));
     assert_eq!(STEP.fetch_add(1, Relaxed), 0);
     let original = registers::control();
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -103,13 +107,13 @@ fn migratable(current: &mut Current) -> u64 {
     let expected = original;
 
     registers::verify(current);
-    assert_eq!(current.hart(), PEER.load(Relaxed));
+    assert_eq!(current.processor(), PEER.load(Relaxed));
     assert_eq!(STEP.fetch_add(1, Relaxed), 1);
     assert_eq!(stack_address(&value), address);
     assert_eq!(registers::control(), expected);
 
     registers::verify(current);
-    assert_eq!(current.hart(), MAJOR.load(Relaxed));
+    assert_eq!(current.processor(), MAJOR.load(Relaxed));
     assert_eq!(STEP.fetch_add(1, Relaxed), 2);
     assert_eq!(stack_address(&value), address);
     assert_eq!(registers::control(), expected);
@@ -138,41 +142,52 @@ fn dispatch(execution: &'static Execution) -> Occupancy {
     }
 }
 
-fn minor(hart: usize, argument: usize) -> ! {
-    // Minor::start publishes the borrowed, immutable launch record. The
-    // nonreturning major retains it for this entire machine execution.
+fn execution() -> &'static Execution {
+    // The trusted platform initializes this before releasing the minor.
+    unsafe { (&*(&raw const EXECUTION)).assume_init_ref() }
+}
+
+fn minor(processor: usize, argument: usize) -> ! {
+    // Minor::start publishes the resident, immutable launch record.
     let launch = unsafe { &*ptr::with_exposed_provenance::<Launch>(argument) };
     let execution = launch.execution;
     assert_eq!(execution.enter(), Err(Error::Unsupported));
-    execution.attach().expect("attach actual minor Hart");
-    assert_eq!(execution.attach(), Err(Error::Busy));
-    assert_eq!(hart, PEER.load(Relaxed));
-    (launch.observe)(&MINOR, hart);
+    assert_eq!(execution.attach(), Err(Error::Unsupported));
+    assert_eq!(processor, PEER.load(Relaxed));
+    (launch.observe)(&MINOR, processor);
     synchronization::check();
     #[cfg(target_arch = "riscv64")]
     synchronization::check_enabled();
-    OBSERVED.store(hart, Release);
-    assert_eq!(execution.enter(), Err(Error::Protection));
-    let mut schedule = || {
-        let mark = core::hint::black_box(0u8);
-        let address = core::hint::black_box(&mark) as *const u8 as usize;
-        assert!(!MINOR.stack_range().contains(&address));
-        wait(1);
-        // The original Hart has not returned its occupation yet.
-        assert_eq!(execution.enter(), Ok(None));
-        PHASE.store(2, Relaxed);
-        wait(3);
-        let control = registers::control();
-        let receipt = dispatch(execution);
-        assert_eq!(receipt.hart(), PEER.load(Relaxed));
-        assert_eq!(registers::control(), control);
-        execution.vacate(receipt).expect("minor departure");
-        PHASE.store(4, Relaxed);
-        loop {
-            spin_loop();
-        }
-    };
-    unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
+    unsafe { execution.run(&MINOR_RUNTIME) }.expect("resident dispatcher")
+}
+
+fn schedule_minor(_: &'static ()) -> ! {
+    let execution = execution();
+    let mark = black_box(0u8);
+    let address = ptr::from_ref(black_box(&mark)).addr();
+    assert!(!MINOR.stack_range().contains(&address));
+    assert_eq!(execution.enter(), Err(Error::Unsupported));
+    execution.attach().expect("attach actual minor processor");
+    assert_eq!(execution.attach(), Err(Error::Busy));
+    OBSERVED.store(PEER.load(Relaxed), Release);
+
+    #[cfg(target_arch = "riscv64")]
+    sbi::dispatch_notified(execution, PEER.load(Relaxed));
+
+    wait(1);
+    // The original processor has not returned its occupation yet.
+    assert_eq!(execution.enter(), Ok(None));
+    PHASE.store(2, Release);
+    wait(3);
+    let control = registers::control();
+    let receipt = dispatch(execution);
+    assert_eq!(receipt.processor(), PEER.load(Relaxed));
+    assert_eq!(registers::control(), control);
+    execution.vacate(receipt).expect("minor departure");
+    PHASE.store(4, Release);
+    loop {
+        spin_loop();
+    }
 }
 
 fn finish(execution: &Execution, unit: UnitId, receipt: Occupancy, value: u64) {
@@ -190,12 +205,12 @@ fn finish(execution: &Execution, unit: UnitId, receipt: Occupancy, value: u64) {
 fn run(
     mut boot: Boot<'_>,
     target: usize,
-    startup: &mut Startup,
+    mut startup: Startup,
     observe: fn(&Minor, usize),
-    mut started: impl FnMut(&Startup),
+    started: impl FnOnce(&Startup),
     complete: fn() -> !,
 ) -> ! {
-    let major = boot.hart();
+    let major = boot.processor();
     assert_ne!(target, major);
     MAJOR.store(major, Relaxed);
     PEER.store(target, Relaxed);
@@ -205,77 +220,105 @@ fn run(
         boot.terminal(),
         unsafe { &mut *(&raw mut STACKS) },
         unsafe { &mut *(&raw mut RECORDS) },
-        unsafe { &mut *(&raw mut HARTS) },
+        unsafe { &mut *(&raw mut PARTICIPANTS) },
         unsafe { &mut *(&raw mut DISPATCHERS) },
     )
     .map_err(|failure| failure.reason)
     .expect("native cooperative profile");
     let execution: &'static Execution = unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
-    let launch = Launch { execution, observe };
-    execution.attach().expect("attach actual boot Hart");
-    assert_eq!(execution.attach(), Err(Error::Busy));
-    assert_eq!(execution.enter(), Err(Error::Protection));
-    let mut schedule = || {
-        let mark = core::hint::black_box(0u8);
-        let address = core::hint::black_box(&mark) as *const u8 as usize;
-        assert!(!major_stack.contains(&address));
-        let argument = ptr::from_ref(&launch).expose_provenance();
+    let launch = unsafe { (&mut *(&raw mut LAUNCH)).write(Launch { execution, observe }) };
+    let argument = ptr::from_ref(launch).expose_provenance();
+    assert_eq!(
+        unsafe { MINOR.start(major, minor, argument, &mut startup) },
+        Err(StartError::Busy)
+    );
+    unsafe { MINOR.start(target, minor, argument, &mut startup) }.expect("minor startup");
+    while OBSERVED.load(Acquire) != target {
+        spin_loop();
+    }
+    assert!(MINOR.ready());
+    started(&startup);
+    assert_eq!(
+        unsafe { MINOR.start(target, minor, argument, &mut startup) },
+        Err(StartError::Busy)
+    );
 
-        assert_eq!(
-            unsafe { MINOR.start(major, minor, argument, startup) },
-            Err(StartError::Busy)
-        );
-        unsafe { MINOR.start(target, minor, argument, startup) }.expect("minor startup");
-        while OBSERVED.load(Acquire) != target {
-            spin_loop();
-        }
-        assert!(MINOR.ready());
-        started(startup);
-        assert_eq!(
-            unsafe { MINOR.start(target, minor, argument, startup) },
-            Err(StartError::Busy)
-        );
+    #[cfg(target_arch = "riscv64")]
+    sbi::submit_and_notify(&boot, execution, target);
 
-        let unit = unsafe { execution.create_migratable(migratable) }.expect("migratable Unit");
-        let dormant = unsafe { execution.create(never) }.expect("dormant Unit");
-        execution
-            .stop_dormant(dormant)
-            .expect("cancel before admission");
-        assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
-        execution.finish_end(dormant).unwrap();
-        assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
-        execution.submit(unit).unwrap();
-
-        let control = registers::control();
-        let first = dispatch(execution);
-        assert_eq!(first.unit(), unit);
-        assert_eq!(first.hart(), major);
-        assert_eq!(registers::control(), control);
-        PHASE.store(1, Relaxed);
-        wait(2);
-        execution.vacate(first).expect("major departure");
-        PHASE.store(3, Relaxed);
-        wait(4);
-        let last = dispatch(execution);
-        assert_eq!(last.unit(), unit);
-        assert_ne!(last, first);
-        assert_eq!(last.admission(), first.admission());
-        assert_eq!(last.hart(), major);
-        assert_eq!(registers::control(), control);
-        assert_eq!(execution.vacate(first), Err(Error::Gone));
-        finish(execution, unit, last, 0x1234_5678);
-        assert_eq!(STEP.load(Relaxed), 3);
-
-        let reused = unsafe { execution.create(replacement) }.expect("returned stack");
-        assert_ne!(reused, unit);
-        execution.submit(reused).unwrap();
-        let receipt = dispatch(execution);
-        finish(execution, reused, receipt, 41);
-        assert_eq!(execution.enter(), Ok(None));
-        boot_diagnostic::write(
-            "PASS cooperative-execution harts=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1\n",
-        );
-        complete()
+    let initial = Initial {
+        major,
+        major_stack,
+        complete,
     };
-    unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
+    let entry = unsafe {
+        (&mut *(&raw mut MAJOR_RUNTIME)).write(RuntimeEntry::new(schedule_major, initial))
+    };
+    unsafe { execution.run(entry) }.expect("resident dispatcher")
+}
+
+struct Initial {
+    major: usize,
+    major_stack: Range<usize>,
+    complete: fn() -> !,
+}
+
+fn schedule_major(initial: &'static Initial) -> ! {
+    let execution = execution();
+    let mark = black_box(0u8);
+    let address = ptr::from_ref(black_box(&mark)).addr();
+    assert!(!initial.major_stack.contains(&address));
+    assert_eq!(execution.enter(), Err(Error::Unsupported));
+    execution.attach().expect("attach actual boot processor");
+    assert_eq!(execution.attach(), Err(Error::Busy));
+    let major = initial.major;
+
+    let idle = execution
+        .observe_idle()
+        .unwrap()
+        .expect("initial queue empty");
+    let unit = unsafe { execution.create_migratable(migratable) }.expect("migratable Unit");
+    let dormant = unsafe { execution.create(never) }.expect("dormant Unit");
+    execution
+        .stop_dormant(dormant)
+        .expect("cancel before admission");
+    assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
+    execution.finish_end(dormant).unwrap();
+    assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
+    execution.submit(unit).unwrap();
+    assert!(idle.changed());
+    assert!(execution.observe_idle().unwrap().is_none());
+
+    let control = registers::control();
+    let first = dispatch(execution);
+    assert_eq!(first.unit(), unit);
+    assert_eq!(first.processor(), major);
+    assert_eq!(registers::control(), control);
+    PHASE.store(1, Release);
+    wait(2);
+    execution.vacate(first).expect("major departure");
+    PHASE.store(3, Release);
+    wait(4);
+    let last = dispatch(execution);
+    assert_eq!(last.unit(), unit);
+    assert_ne!(last, first);
+    assert_eq!(last.admission(), first.admission());
+    assert_eq!(last.processor(), major);
+    assert_eq!(registers::control(), control);
+    assert_eq!(execution.vacate(first), Err(Error::Gone));
+    finish(execution, unit, last, 0x1234_5678);
+    assert_eq!(STEP.load(Relaxed), 3);
+
+    let reused = unsafe { execution.create(replacement) }.expect("returned stack");
+    assert_ne!(reused, unit);
+    execution.submit(reused).unwrap();
+    let receipt = dispatch(execution);
+    finish(execution, reused, receipt, 41);
+    assert_eq!(execution.enter(), Ok(None));
+    let idle = execution.observe_idle().unwrap().expect("queue drained");
+    assert!(!idle.changed());
+    boot_diagnostic::write(
+        "PASS cooperative-execution processors=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1\n",
+    );
+    (initial.complete)()
 }

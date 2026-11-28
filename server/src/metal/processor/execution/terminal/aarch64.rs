@@ -9,11 +9,19 @@ pub(in crate::metal) unsafe extern "C" fn vectors() -> ! {
         ".set slot, 0",
         ".rept 16",
         "mov x0, #slot",
-        "b 2f",
+        "b {accept}",
         ".balign 128",
         ".set slot, slot + 1",
         ".endr",
-        "2: msr daifset, #{exceptions}",
+        accept = sym accept,
+    );
+}
+
+/// Enter the original terminal stack with the hardware vector slot in x0.
+#[unsafe(naked)]
+pub(in crate::metal) unsafe extern "C" fn accept() -> ! {
+    naked_asm!(
+        "msr daifset, #{exceptions}",
         "adrp x2, {top}",
         "add x2, x2, :lo12:{top}",
         "3: ldaxr x3, [x2]",

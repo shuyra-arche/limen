@@ -3,8 +3,10 @@
 use core::arch::asm;
 use kernel::{
     basis::{
-        execution::{Error, EstablishError, EstablishFailure, Execution, KernelBinding},
-        room::{Harts, Occupancy},
+        execution::{
+            Error, EstablishError, EstablishFailure, Execution, KernelBinding, RuntimeEntry,
+        },
+        room::{Occupancy, Participants},
         unit::{Stacks, UnitRecord},
     },
     entry::boot::Boot,
@@ -15,14 +17,14 @@ pub(super) fn reject_constructor(
     boot: &mut Boot<'_>,
     stacks: &'static mut Stacks,
     records: &'static mut [UnitRecord<KernelBinding>],
-    harts: &'static mut Harts<1>,
+    participants: &'static mut Participants<1>,
     dispatchers: &'static mut Dispatchers<Occupancy, 1>,
 ) -> EstablishFailure<1> {
-    let major = boot.hart();
+    let major = boot.processor();
     let device_tree = boot.device_tree();
     let stack_address = core::ptr::from_mut(&mut *stacks);
     let record_address = records.as_ptr();
-    let hart_address = core::ptr::from_mut(&mut *harts);
+    let participants_address = core::ptr::from_mut(&mut *participants);
     let dispatcher_address = core::ptr::from_mut(&mut *dispatchers);
     let admitted = boot.take_major().expect("original native major relation");
     assert!(boot.take_major().is_none());
@@ -34,7 +36,7 @@ pub(super) fn reject_constructor(
         boot.terminal(),
         stacks,
         records,
-        harts,
+        participants,
         dispatchers,
     );
     unsafe { asm!("csrci sstatus, 2", options(nostack)) };
@@ -42,18 +44,18 @@ pub(super) fn reject_constructor(
         panic!("execution admitted with interrupts enabled");
     };
     assert_eq!(failure.reason, EstablishError::Unsupported);
-    assert_eq!(boot.hart(), major);
+    assert_eq!(boot.processor(), major);
     assert_eq!(boot.device_tree(), device_tree);
     assert!(core::ptr::eq(failure.stacks, stack_address));
     assert!(core::ptr::eq(failure.records.as_ptr(), record_address));
-    assert!(core::ptr::eq(failure.harts, hart_address));
+    assert!(core::ptr::eq(failure.participants, participants_address));
     assert!(core::ptr::eq(failure.dispatchers, dispatcher_address));
     failure
 }
 
-pub(super) fn reject_attach(execution: &Execution) {
+pub(super) fn reject_runtime<T>(execution: &'static Execution, entry: &'static RuntimeEntry<T>) {
     unsafe { asm!("csrsi sstatus, 2", options(nostack)) };
-    assert_eq!(execution.attach(), Err(Error::Unsupported));
+    assert_eq!(unsafe { execution.run(entry) }, Err(Error::Unsupported));
     unsafe { asm!("csrci sstatus, 2", options(nostack)) };
 }
 

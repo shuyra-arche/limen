@@ -98,7 +98,7 @@ extern "win64" fn launch(argument: *const (), entry: extern "C" fn(*const ()) ->
 
 /// Save a normal call continuation (including the Win64 nonvolatile
 /// integers and the complete base floating/SIMD environment). GS and the
-/// interrupt configuration belong to the executing Hart, not the Unit.
+/// interrupt configuration belong to the executing processor, not the Unit.
 #[unsafe(naked)]
 pub(in crate::metal::processor) unsafe extern "win64" fn switch(
     outgoing: *mut Saved,

@@ -15,7 +15,7 @@ guest::entry! {
         ..platform::Platform::native(4)
     },
     test: |boot| {
-        assert_ne!(uefi_fixture::target(), uefi_fixture::hart());
+        assert_ne!(uefi_fixture::target(), uefi_fixture::processor());
         native::check(boot);
     },
 }

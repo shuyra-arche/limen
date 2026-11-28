@@ -7,6 +7,7 @@ use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
 pub struct Format {
     pub(super) physical_bits: u8,
     pub(super) gigabyte: bool,
+    pub(super) pat: u64,
 }
 
 /// Exact cache encoding selected by the original PAT. MTRR and alias
@@ -42,8 +43,38 @@ impl Format {
             .then_some(raw | 3 | privilege_bit(privilege))
     }
 
-    /// An initialized leaf for an offline table. The caller supplies the
-    /// matching PAT and physical memory type for the whole leaf.
+    /// Retain a present native root branch, excluding user access at the
+    /// new root. The original subtree remains under its actual owner.
+    /// This encoding check grants no ownership or mapping authority.
+    pub fn inherited_branch(self, original: u64) -> Option<u64> {
+        const PRESENT: u64 = 1;
+        const LARGE: u64 = 1 << 7;
+        const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
+        let address = original & ADDRESS;
+        (original & PRESENT != 0
+            && original & LARGE == 0
+            && address != 0
+            && address < 1 << self.physical_bits)
+            .then_some(original & !privilege_bit(Privilege::User))
+    }
+
+    /// Verify an original owned non-leaf descriptor after actual traversal.
+    /// The native Accessed bit is the only admitted hardware mutation.
+    pub fn matches_branch(self, address: PhysicalAddress, observed: u64) -> bool {
+        self.branch(address, Privilege::Kernel) == Some(observed & !(1 << 5))
+    }
+
+    /// Verify the exact installed leaf, allowing native A/D updates only.
+    pub fn matches_leaf(self, expected: u64, observed: u64) -> bool {
+        const ACCESSED: u64 = 1 << 5;
+        const DIRTY: u64 = 1 << 6;
+        const WRITABLE: u64 = 1 << 1;
+        let mutable = ACCESSED | if expected & WRITABLE != 0 { DIRTY } else { 0 };
+        expected & !mutable == observed & !mutable
+    }
+
+    /// An initialized leaf for an offline table using the admitted PAT.
+    /// The caller retains the physical memory-type and alias relation.
     pub fn leaf(
         self,
         address: PhysicalAddress,
@@ -51,7 +82,6 @@ impl Format {
         privilege: Privilege,
         access: LeafAccess,
         memory: Memory,
-        pat: u64,
     ) -> Option<u64> {
         if level > 2
             || level == 2 && !self.gigabyte
@@ -63,7 +93,7 @@ impl Format {
         if !raw.is_multiple_of(1 << (12 + 9 * level)) || raw >= 1u64 << self.physical_bits {
             return None;
         }
-        let index = pat_index(pat, memory)?;
+        let index = pat_index(self.pat, memory)?;
         let cache = ((index & 3) << 3) | ((index >> 2) << if level == 0 { 7 } else { 12 });
         let large = if level == 0 { 0 } else { 1 << 7 };
         let rights = match access {

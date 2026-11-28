@@ -47,7 +47,7 @@ pub enum Stage {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Effect {
-    pub hart: u8,
+    pub processor: u8,
     pub page: PhysicalAddress,
     pub stage: Stage,
 }
@@ -70,32 +70,32 @@ impl<'map> LocalApic<'map> {
     }
 
     /// Pure target geometry and original scope, not live startup authority.
-    pub fn can_start(&self, hart: usize) -> bool {
-        self.base.major && hart != self.hart && Destination::new(hart).is_some()
+    pub fn can_start(&self, processor: usize) -> bool {
+        self.base.major && processor != self.processor && Destination::new(processor).is_some()
     }
 
     /// Borrow the exact controller for the requested target and page.
     /// Preparation neither writes ICR nor establishes target arrival.
     pub fn prepare(
         &mut self,
-        hart: usize,
+        processor: usize,
         page: PhysicalAddress,
     ) -> Result<Prepared<'_, 'map>, Failure> {
-        self.preflight(hart, page)?;
+        self.preflight(processor, page)?;
         if !self.wait_icr() {
             return Err(Failure::Busy);
         }
         Ok(Prepared {
             controller: self,
-            hart,
+            processor,
             page,
         })
     }
 
-    fn preflight(&self, hart: usize, page: PhysicalAddress) -> Result<(), Failure> {
-        if !self.can_start(hart)
+    fn preflight(&self, processor: usize, page: PhysicalAddress) -> Result<(), Failure> {
+        if !self.can_start(processor)
             || Vector::new(page).is_none()
-            || self.probe.base_for(self.hart) != Some(self.base)
+            || self.probe.base_for(self.processor) != Some(self.base)
         {
             return Err(Failure::Scope);
         }
@@ -113,17 +113,17 @@ impl<'map> LocalApic<'map> {
     /// # Safety
     /// The caller owns the exact inactive target, published entry and its
     /// physical trampoline. All inputs remain valid until target arrival
-    /// and all old accesses settle. The delay keeps the trusted Hart and
+    /// and all old accesses settle. The delay keeps the trusted processor and
     /// masked state, never reenters ICR control, and reports a full interval.
     /// An uncertain sequence must retain this owner and its mapping.
     unsafe fn start(
         &mut self,
-        hart: usize,
+        processor: usize,
         page: PhysicalAddress,
         delay: fn(u32) -> bool,
     ) -> Result<(), Failure> {
-        self.preflight(hart, page)?;
-        let destination = Destination::new(hart).expect("checked destination");
+        self.preflight(processor, page)?;
+        let destination = Destination::new(processor).expect("checked destination");
         let vector = Vector::new(page).expect("checked vector");
         if !self.wait_icr() || !delay(1) {
             return Err(Failure::Busy);
@@ -134,7 +134,7 @@ impl<'map> LocalApic<'map> {
             (Stage::Second, Command::Startup(vector), 200),
         ] {
             let effect = Effect {
-                hart: destination.0,
+                processor: destination.0,
                 page,
                 stage,
             };
@@ -156,7 +156,7 @@ impl<'map> LocalApic<'map> {
 #[must_use]
 pub struct Prepared<'a, 'map> {
     controller: &'a mut LocalApic<'map>,
-    hart: usize,
+    processor: usize,
     page: PhysicalAddress,
 }
 
@@ -165,9 +165,9 @@ impl Prepared<'_, '_> {
     /// The original target is inactive and exclusively owned, and its
     /// prepared trampoline and entry have been published. Preserve their
     /// mappings and lifetimes until arrival and all old effects settle.
-    /// The delay preserves the current Hart, masked state and exclusive
+    /// The delay preserves the current processor, masked state and exclusive
     /// ICR ownership and reports the full requested interval.
     pub unsafe fn start(self, delay: fn(u32) -> bool) -> Result<(), Failure> {
-        unsafe { self.controller.start(self.hart, self.page, delay) }
+        unsafe { self.controller.start(self.processor, self.page, delay) }
     }
 }

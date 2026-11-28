@@ -23,6 +23,9 @@ use kernel::{
 
 use super::memory::{extent, mapped};
 
+#[path = "../../metal/memory/mmu/internal/table.rs"]
+mod table;
+
 use limen_treaty::model::{Alignment, ByteLength, PhysicalAddress, PhysicalRange};
 
 const PAGE: u64 = 4096;
@@ -205,7 +208,7 @@ fn retire_group(
     assert_eq!(pool.capacity().unwrap().bytes, PAGE as usize);
 
     // All software references ended. The permanent identity view is
-    // still available. No other Hart or device used the page.
+    // still available. No other processor or device used the page.
     unsafe { pool.begin_return(group, Fast) }.unwrap();
     (pool, supply.retirement)
 }
@@ -351,6 +354,10 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
     let revoker = closing.as_ref().unwrap();
 
     let physical = pages(4, 5);
+    unsafe { table::check(boot, allowance, physical) };
+    boot_diagnostic::write(
+        "PASS table-page issuer=1 private=1 initialized=1 generation=1 refund=1\n",
+    );
     let material = unsafe { &mut *(&raw mut MATERIAL) };
     let candidate = search(source, PAGE, physical).unwrap();
     let reserved = handle.reserve(candidate, &ABANDONED, Fast).unwrap();
@@ -480,7 +487,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, start: u64, evidence: &PhysicalRetir
         check_read_write(&mut mapping, 0x5a, 0xa5);
     }
 
-    // The identity view is no longer borrowed. No other Hart or device accessed it.
+    // The identity view is no longer borrowed. No other processor or device accessed it.
     let receipt = unsafe { &mut *(&raw mut RECEIPT) };
     let retired = unsafe { allocation.retire() };
     unsafe { retired.begin_return(receipt) }.ok().unwrap();

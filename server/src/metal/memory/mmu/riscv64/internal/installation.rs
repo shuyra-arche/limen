@@ -9,7 +9,7 @@ use super::{
 };
 use crate::metal::{
     memory::mmu::treaty::{LocalContext, SwitchError},
-    processor::{executor::riscv64::native, treaty::try_current_hart},
+    processor::{executor::riscv64::native, treaty::try_current_processor},
 };
 
 impl Context {
@@ -41,7 +41,7 @@ pub(in crate::metal::memory::mmu) struct NativeRoot<'a> {
 
 impl NativeRoot<'_> {
     pub(in crate::metal::memory::mmu) fn check(hart: usize) -> Result<(), SwitchError> {
-        if try_current_hart().is_none_or(|binding| binding.get() != hart)
+        if try_current_processor().is_none_or(|binding| binding.get() != hart)
             || !native::status().masked()
         {
             return Err(SwitchError::Context);
@@ -74,6 +74,33 @@ impl NativeRoot<'_> {
         requested
             .mode()
             .is_none_or(|mode| self.profile().supports(mode))
+    }
+
+    #[cfg(limen_cooperative)]
+    pub(in crate::metal::memory::mmu) unsafe fn order_table() {
+        unsafe { asm!("fence rw, w", options(nostack)) };
+    }
+
+    #[cfg(limen_cooperative)]
+    pub(in crate::metal::memory::mmu) unsafe fn synchronize_tree() {
+        unsafe {
+            asm!(
+                "fence rw, rw",
+                "sfence.vma x0, x0",
+                "fence rw, rw",
+                options(nostack)
+            );
+        }
+    }
+
+    #[cfg(limen_cooperative)]
+    pub(in crate::metal::memory::mmu) unsafe fn synchronize_leaf(
+        address: limen_treaty::model::InternalAddress,
+    ) {
+        unsafe {
+            asm!("fence rw, rw", "sfence.vma {address}, x0", "fence rw, rw",
+                address = in(reg) address.get(), options(nostack));
+        }
     }
 
     pub(in crate::metal::memory::mmu) unsafe fn install(&self, next: Context) {

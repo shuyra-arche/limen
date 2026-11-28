@@ -7,17 +7,43 @@ use crate::metal::sync::treaty::{TurnAccess, TurnPlan};
 
 use super::super::{Allocator, Allowance, AllowanceId, Candidate, Error, RamPurpose};
 
+/// Access ceiling recorded by the original issuer for first publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InitialAccess {
+    ReadWrite,
+}
+
 /// Immutable purpose of one permanently supplied initial Pend receiver.
 /// Pend controls whether its single holding is installed or can still spend.
 pub(crate) struct AllocationPermitSlot {
     purpose: RamPurpose,
+    initial: Option<InitialAccess>,
 }
 
 impl AllocationPermitSlot {
     pub(crate) const fn metadata() -> Self {
         Self {
             purpose: RamPurpose::Metadata,
+            initial: None,
         }
+    }
+
+    pub(crate) const fn page_tables() -> Self {
+        Self {
+            purpose: RamPurpose::PageTable,
+            initial: Some(InitialAccess::ReadWrite),
+        }
+    }
+
+    pub(crate) const fn cells() -> Self {
+        Self {
+            purpose: RamPurpose::Cell,
+            initial: Some(InitialAccess::ReadWrite),
+        }
+    }
+
+    pub(in crate::metal::memory::allocator) fn initial_access(&self) -> Option<InitialAccess> {
+        self.initial
     }
 
     pub(in crate::metal::memory::allocator) fn matches(&self, other: &Self) -> bool {
@@ -57,6 +83,22 @@ impl AllocationPermit {
 
     pub(crate) fn allowance(self) -> AllowanceId {
         self.allowance
+    }
+
+    pub(crate) fn purpose(self) -> RamPurpose {
+        self.slot.purpose
+    }
+
+    pub(crate) fn plan_allowance(self, plan: &mut TurnPlan<'_, '_>) -> Result<(), Error> {
+        plan.insert(self.source.slot(self.allowance)?)
+            .map_err(|_| Error::Capacity)
+    }
+
+    pub(crate) fn check_allowance(self, held: &mut TurnAccess<'_>) -> Result<(), Error> {
+        held.access(self.source.slot(self.allowance)?)
+            .ok_or(Error::Protection)?
+            .open(self.allowance)?;
+        Ok(())
     }
 
     pub(in crate::metal::memory::allocator) fn slot(self) -> &'static AllocationPermitSlot {

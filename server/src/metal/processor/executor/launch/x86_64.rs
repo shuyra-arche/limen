@@ -1,7 +1,7 @@
 //! Legacy xAPIC startup. The loader reserves one executable SIPI page
 //! below 1 MiB. Its contents and the BSP's identity mappings stay resident.
 use super::{self as launch, Minor, StartError};
-use crate::metal::processor::executor::x86_64::native::Descriptor;
+use crate::metal::processor::executor::{local, x86_64::native::Descriptor};
 use crate::metal::{
     interrupt::x86_64::internal::apic::{Failure, LocalApic},
     memory::mmu::x86_64::internal::context::Controls,
@@ -57,7 +57,7 @@ fn failure(error: Failure) -> StartError {
 
 pub(super) unsafe fn wake_minor(
     slot: &Minor,
-    hart: usize,
+    processor: usize,
     method: &mut Startup,
 ) -> Result<(), StartError> {
     let Startup::Xapic {
@@ -68,14 +68,22 @@ pub(super) unsafe fn wake_minor(
     let page = PhysicalAddress::new(trampoline.addr().get() as u64);
     // Reject conflicting or uncertain old ICR effects before rewriting
     // the original trampoline.
-    let prepared = controller.prepare(hart, page).map_err(failure)?;
-    let mut gdt = Descriptor { limit: 0, base: 0 };
+    let prepared = controller.prepare(processor, page).map_err(failure)?;
     let controls = unsafe { Controls::current() };
-    let cs: u16;
-    unsafe {
-        asm!("sgdt [{}]",in(reg) &mut gdt,options(nostack));
-        asm!("mov {:x},cs",out(reg) cs,options(nomem,nostack));
-    }
+    let current = local::ordinary_local().ok_or(StartError::Rejected(-2))?;
+    let (gdt, cs) = if let Some(runtime) = current.runtime() {
+        // Runtime tables may be above the legacy reset stub's 32-bit
+        // addressing limit. The admitted original GDT remains resident.
+        runtime.original_launch().ok_or(StartError::Rejected(-2))?
+    } else {
+        let mut gdt = Descriptor { limit: 0, base: 0 };
+        let cs: u16;
+        unsafe {
+            asm!("sgdt [{}]", in(reg) &mut gdt, options(nostack));
+            asm!("mov {:x}, cs", out(reg) cs, options(nomem, nostack));
+        }
+        (gdt, cs)
+    };
     let low = |v: usize| u32::try_from(v).map_err(|_| StartError::Rejected(-2));
     // The reset stub uses a 32-bit far pointer and four-level identity mappings.
     if !controls.four_level_untagged() {
@@ -156,7 +164,7 @@ unsafe extern "sysv64" fn minor() -> ! {
         "mov edi,ebx",
         "cmp dword ptr [rsi+{state}],{published}",
         "jne 2f",
-        "cmp rdi,[rsi+{hart}]",
+        "cmp rdi,[rsi+{processor}]",
         "jne 2f",
         "mov eax,{published}",
         "mov ecx,{entered}",
@@ -167,7 +175,7 @@ unsafe extern "sysv64" fn minor() -> ! {
         "2: cli",
         "hlt",
         "jmp 2b",
-        hart = const launch::HART_OFFSET,
+        processor = const launch::PROCESSOR_OFFSET,
         state = const launch::STATE_OFFSET,
         stack = const launch::STACK_OFFSET,
         published = const launch::PUBLISHED,
@@ -175,9 +183,9 @@ unsafe extern "sysv64" fn minor() -> ! {
         finish = sym finish,
     )
 }
-unsafe extern "sysv64" fn finish(hart: usize, slot: &'static Minor) -> ! {
+unsafe extern "sysv64" fn finish(processor: usize, slot: &'static Minor) -> ! {
     unsafe { crate::metal::processor::executor::x86_64::native::clear_local() };
     // The major CPU has already published the complete, immutable diagnostic IDT.
     terminal::load_idt();
-    launch::arrive(hart, slot)
+    launch::arrive(processor, slot)
 }

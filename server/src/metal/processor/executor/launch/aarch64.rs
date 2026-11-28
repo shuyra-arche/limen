@@ -42,7 +42,7 @@ pub(super) const fn minor_context() -> MinorContext {
 
 pub(super) unsafe fn wake_minor(
     slot: &Minor,
-    hart: usize,
+    processor: usize,
     Startup::Psci(service): &mut Startup,
 ) -> Result<(), StartError> {
     let translation = unsafe { Controls::current() };
@@ -69,7 +69,7 @@ pub(super) unsafe fn wake_minor(
     for address in ((ptr & !(line - 1))..ptr + size_of::<Minor>()).step_by(line) {
         unsafe { asm!("dc cvac, {}", in(reg) address,options(nostack)) }
     }
-    unsafe { service.cpu_on(hart, minor as *const (), ptr) }.map_err(StartError::Rejected)
+    unsafe { service.cpu_on(processor, minor as *const (), ptr) }.map_err(StartError::Rejected)
 }
 
 #[unsafe(naked)]
@@ -91,7 +91,7 @@ unsafe extern "C" fn minor(slot: *const Minor) -> ! {
         "ldar w3, [x2]",
         "cmp w3, #{published}",
         "b.ne 3f",
-        "ldr x2, [x1, #{hart}]",
+        "ldr x2, [x1, #{processor}]",
         "cmp x0, x2",
         "b.ne 3f",
         "mov x2, #{ctx}",
@@ -132,7 +132,7 @@ unsafe extern "C" fn minor(slot: *const Minor) -> ! {
         affinity_low = const (AFFINITY_MASK & 0xffff_ffff),
         affinity_high = const (AFFINITY_MASK >> 32),
         ctx = const offset_of!(Minor,context),
-        hart = const launch::HART_OFFSET,
+        processor = const launch::PROCESSOR_OFFSET,
         stack = const launch::STACK_OFFSET,
         state = const launch::STATE_OFFSET,
         published = const launch::PUBLISHED,

@@ -1,8 +1,11 @@
 //! Exclusive mapped storage for one ordinary issued Allocation.
 
+use core::mem::MaybeUninit;
+
 use crate::metal::memory::access::treaty::ram::MappedRange;
 use limen_treaty::model::PhysicalRange;
 
+use super::super::allowance::permit::{AllocationPermit, InitialAccess};
 use super::super::{Allocation, AllocationId, Error};
 
 /// The unique original Allocation paired with its exact exclusive mapping.
@@ -41,6 +44,19 @@ impl<'a> MappedStorage<'a> {
 
     pub fn physical(&self) -> PhysicalRange {
         self.mapping.physical()
+    }
+
+    pub(crate) fn initial_access(&self, permit: AllocationPermit) -> Result<InitialAccess, Error> {
+        self.allocation.access_from(permit)
+    }
+
+    /// Initialize all private bytes before first ordinary Cell publication.
+    pub(crate) fn clear(&mut self) {
+        self.mapping.bytes().fill(MaybeUninit::new(0));
+    }
+
+    pub(crate) fn mapped_address(&self) -> usize {
+        self.mapping.address()
     }
 
     /// Recover the two original inputs from a private preparation. This

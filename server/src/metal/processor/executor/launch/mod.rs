@@ -56,7 +56,7 @@ enum State {
 
 #[repr(C)]
 struct Launch {
-    hart: usize,
+    processor: usize,
     stack: usize,
     entry: fn(usize, usize) -> !,
     argument: usize,
@@ -73,14 +73,14 @@ pub struct Minor {
 }
 
 // The state word grants exactly one writer and releases the descriptor to
-// exactly one entering hart. The hardware entry is the sole stack user.
+// exactly one entering processor. The hardware entry is the sole stack user.
 unsafe impl Sync for Minor {}
 
 pub(in crate::metal) const PUBLISHED: u32 = State::Published as u32;
 pub(in crate::metal) const ENTERED: u32 = State::Entered as u32;
 pub(in crate::metal) const STATE_OFFSET: usize = offset_of!(Minor, state);
-pub(in crate::metal) const HART_OFFSET: usize =
-    offset_of!(Minor, launch) + offset_of!(Launch, hart);
+pub(in crate::metal) const PROCESSOR_OFFSET: usize =
+    offset_of!(Minor, launch) + offset_of!(Launch, processor);
 pub(in crate::metal) const STACK_OFFSET: usize =
     offset_of!(Minor, launch) + offset_of!(Launch, stack);
 impl Minor {
@@ -128,14 +128,14 @@ impl Minor {
     /// delay that waits at least the requested microseconds after firmware exit.
     pub unsafe fn start(
         &'static self,
-        hart: usize,
+        processor: usize,
         entry: fn(usize, usize) -> !,
         argument: usize,
         method: &mut Startup,
     ) -> Result<(), StartError> {
-        if hart
-            == crate::metal::processor::treaty::try_current_hart()
-                .expect("ordinary Hart entry")
+        if processor
+            == crate::metal::processor::treaty::try_current_processor()
+                .expect("ordinary processor entry")
                 .get()
         {
             return Err(StartError::Busy);
@@ -150,14 +150,14 @@ impl Minor {
             .map_err(|_| StartError::Busy)?;
         unsafe {
             self.launch.get().write(MaybeUninit::new(Launch {
-                hart,
+                processor,
                 stack: self.stack.top(),
                 entry,
                 argument,
             }));
         }
         // Each native path completes its actual machine inputs before publishing.
-        let result = unsafe { native::wake_minor(self, hart, method) };
+        let result = unsafe { native::wake_minor(self, processor, method) };
         if matches!(result, Err(StartError::Rejected(_))) {
             self.state.store(State::Idle as u32, Ordering::Release);
         }
@@ -165,16 +165,16 @@ impl Minor {
     }
 }
 
-pub(crate) extern "C" fn arrive(hart: usize, minor: &'static Minor) -> ! {
+pub(crate) extern "C" fn arrive(processor: usize, minor: &'static Minor) -> ! {
     let launch = unsafe { (&*minor.launch.get()).assume_init_ref() };
-    assert_eq!(hart, launch.hart);
+    assert_eq!(processor, launch.processor);
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    assert!(entry::matches_identity(hart));
+    assert!(entry::matches_identity(processor));
     // `Entered` identifies this CPU as the sole initializer of this resident
     // local record. The terminal vectors cannot observe its partial setup.
     let entry = entry::admit(minor.stack_range()).expect("verified minor entry");
-    unsafe { minor.local.bind().install(hart, entry) };
-    assert!(can_switch(), "minor Hart protection is not idle");
+    unsafe { minor.local.bind().install(processor, entry) };
+    assert!(can_switch(), "minor processor protection is not idle");
     minor.state.store(State::Ready as u32, Ordering::Release);
-    (launch.entry)(hart, launch.argument)
+    (launch.entry)(processor, launch.argument)
 }

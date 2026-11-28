@@ -56,7 +56,7 @@ static ENCODER: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static RETURNS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 
 pub fn check<'a>(boot: &Boot<'a>, modes: &[Format]) -> [RiscvMmu<'a>; 2] {
-    let major = boot.hart();
+    let major = boot.processor();
     assert!(major < 2);
     let minor = 1 - major;
     let tree = boot.device_tree_description().unwrap();

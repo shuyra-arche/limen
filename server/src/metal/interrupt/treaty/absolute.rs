@@ -29,6 +29,10 @@ pub trait AbsoluteTimer: Sealed {
     /// Set the active comparison to an equal or earlier future deadline.
     fn advance_deadline(&mut self, target: Deadline<'_>) -> Result<(), Self::Failure>;
 
+    /// Report the last confirmed native target, or an admitted idle comparator.
+    /// Inherited or unsettled programming is an error.
+    fn confirmed_deadline(&self) -> Result<Option<Deadline<'_>>, Self::Failure>;
+
     fn due(&self) -> Result<bool, Self::Failure>;
 
     /// Inspect the original uncertain effect held by this comparator.

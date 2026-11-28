@@ -24,16 +24,19 @@ pub(super) unsafe fn install(
 /// Exercise exact local installation, actual access, and restoration.
 pub(super) unsafe fn roundtrip(
     control: &mut LocalContext<'_>,
-    hart: usize,
+    processor: usize,
     candidate: Context,
     observe: impl FnOnce(&mut LocalContext<'_>),
 ) {
     let original = control.current().unwrap();
     assert_eq!(
-        unsafe { install(control, original, candidate) }.hart(),
-        hart
+        unsafe { install(control, original, candidate) }.processor(),
+        processor
     );
     observe(control);
     let previous = control.current().unwrap();
-    assert_eq!(unsafe { install(control, previous, original) }.hart(), hart);
+    assert_eq!(
+        unsafe { install(control, previous, original) }.processor(),
+        processor
+    );
 }

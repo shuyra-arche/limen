@@ -9,9 +9,13 @@ use crate::metal::{
         treaty::{Clock, Deadline},
     },
     interrupt::{
-        aarch64::gic::redistributor::input::{Ppi, StoppedPpi},
+        aarch64::gic::{
+            cpu_interface::Claim,
+            redistributor::input::{Ppi, StoppedPpi},
+        },
         treaty::{AbsoluteTimer, TimerEffect, absolute::Sealed},
     },
+    processor::treaty::Irq,
 };
 
 const ENABLE: u64 = 1;
@@ -43,7 +47,7 @@ impl<'scope, 'tree, 'map> VirtualTimer<'scope, 'tree, 'map> {
             || ppi.source() != description.source()
             || ppi.domain() != description.domain()
             || ppi.intid() != description.virtual_interrupt().intid
-            || !ppi.local_to(clock.hart())
+            || !ppi.local_to(clock.processor())
             || clock.read().is_none()
         {
             return Err(Failure::Scope);
@@ -115,7 +119,27 @@ impl<'scope, 'tree, 'map> VirtualTimer<'scope, 'tree, 'map> {
     /// Disable the expired original comparator. The GIC PPI remains owed
     /// until the separate original claim is completed on its CPU Interface.
     pub fn stop(&mut self) -> Result<(), Failure> {
-        let now = self.now()?;
+        self.stop_at(self.now()?)
+    }
+
+    /// Stop the exact comparator in its trusted IRQ context. The caller still
+    /// owns the GIC claim and must complete it with the resulting stopped PPI.
+    pub fn stop_in_interrupt(
+        &mut self,
+        interrupt: &Irq<'_>,
+        claim: &Claim<'_, '_>,
+    ) -> Result<(), Failure> {
+        if !claim.matches_ppi(self.ppi) || !self.ppi.local_to(interrupt.processor().get()) {
+            return Err(Failure::Scope);
+        }
+        let now = self
+            .clock
+            .read_on_interrupt(interrupt)
+            .ok_or(Failure::Scope)?;
+        self.stop_at(now)
+    }
+
+    fn stop_at(&mut self, now: u64) -> Result<(), Failure> {
         if !matches!(self.state, State::Masking(_)) {
             self.state.begin_stop(now)?;
             unsafe {
@@ -126,7 +150,6 @@ impl<'scope, 'tree, 'map> VirtualTimer<'scope, 'tree, 'map> {
     }
 
     fn confirm_stop(&mut self) -> Result<(), Failure> {
-        self.now()?;
         self.state
             .finish_stop(control() & (ENABLE | MASK) == MASK)?;
         self.ppi.stopped();
@@ -134,7 +157,7 @@ impl<'scope, 'tree, 'map> VirtualTimer<'scope, 'tree, 'map> {
     }
 
     fn now(&self) -> Result<u64, Failure> {
-        if !self.ppi.local_to(self.clock.hart()) {
+        if !self.ppi.local_to(self.clock.processor()) {
             return Err(Failure::Scope);
         }
         self.clock.read().ok_or(Failure::Scope)
@@ -155,6 +178,15 @@ impl AbsoluteTimer for VirtualTimer<'_, '_, '_> {
 
     fn advance_deadline(&mut self, target: Deadline<'_>) -> Result<(), Failure> {
         self.rearm_at(target)
+    }
+
+    fn confirmed_deadline(&self) -> Result<Option<Deadline<'_>>, Failure> {
+        self.now()?;
+        match self.state {
+            State::Idle => Ok(None),
+            State::Armed(target) => Ok(Some(self.clock.deadline(target))),
+            _ => Err(Failure::Busy),
+        }
     }
 
     fn due(&self) -> Result<bool, Failure> {
@@ -183,7 +215,10 @@ impl AbsoluteTimer for VirtualTimer<'_, '_, '_> {
     fn confirm_effect(&mut self) -> Result<(), Failure> {
         match self.state {
             State::Programming { .. } => self.confirm_program(),
-            State::Masking(_) => self.confirm_stop(),
+            State::Masking(_) => {
+                self.now()?;
+                self.confirm_stop()
+            }
             State::Idle | State::Armed(_) => Err(Failure::Busy),
         }
     }

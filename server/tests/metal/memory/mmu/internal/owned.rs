@@ -1,0 +1,258 @@
+//! Common material for the two real four-level owned-root UEFI scenarios.
+
+use core::{mem::MaybeUninit, ptr};
+
+use kernel::{
+    basis::{
+        cell::CellSlot,
+        pend::{self, Initial, PendSpace, Revoker},
+    },
+    entry::boot::{Boot, Retirement},
+    metal::{
+        memory::{
+            allocator::treaty::{
+                Allocation, AllocationConstruction, AllocationId, Allowance, Balance, Config,
+                LookupObservation, MappedStorage, RamPurpose, Request, Search,
+            },
+            mmu::treaty::{TableBranch, TableFormat, TableId, TableStore},
+        },
+        sync::treaty::TurnMode::Fast,
+    },
+};
+use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
+
+use super::memory::{extent, mapped};
+
+pub(super) const PAGES: usize = 12;
+const PAGE: u64 = 4096;
+const LEVELS: usize = 4;
+
+static SPENDING: PendSpace = PendSpace::for_page_tables();
+static CONSTRUCTION: [AllocationConstruction; LEVELS + 1] =
+    [const { AllocationConstruction::new() }; LEVELS + 1];
+static CELLS: [CellSlot; LEVELS + 1] = [const { CellSlot::new() }; LEVELS + 1];
+static mut BRANCHES: [[TableBranch; 2]; LEVELS] = [const { [TableBranch::EMPTY; 2] }; LEVELS];
+static mut SPARE_TABLE: MaybeUninit<TableStore> = MaybeUninit::uninit();
+static mut SPARE_BRANCHES: [TableBranch; 0] = [];
+static mut TABLES: [MaybeUninit<TableStore>; LEVELS] = [const { MaybeUninit::uninit() }; LEVELS];
+static mut ALLOWANCE: Option<Allowance> = None;
+static mut HANDLE: Option<pend::Handle> = None;
+static mut REVOCATION: Option<Revoker> = None;
+static mut ALLOCATION: Option<Allocation> = None;
+
+unsafe fn make_table(
+    store: &'static TableStore,
+    allowance: &Allowance,
+    handle: pend::Handle,
+    slot: usize,
+    range: PhysicalRange,
+) -> (TableId, AllocationId) {
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(PAGE).unwrap(),
+        range,
+        None,
+        RamPurpose::PageTable,
+    )
+    .unwrap();
+    let mut observations = [LookupObservation::EMPTY; 1];
+    let mut lookup = allowance
+        .source()
+        .lookup(request, None, &mut observations)
+        .unwrap();
+    let candidate = loop {
+        match lookup.step().unwrap() {
+            Search::Candidate(value) => break value,
+            Search::Pending => {}
+            Search::NoRange => panic!("owned table page is available"),
+        }
+    };
+    assert_eq!(candidate.physical(), range);
+    let construction = &CONSTRUCTION[slot];
+    let allocation_id = handle.reserve(candidate, construction, Fast).unwrap();
+    assert_eq!(handle.issue(construction, Fast), Ok(allocation_id));
+    let original = unsafe { &mut *(&raw mut ALLOCATION) };
+    unsafe { construction.take(original) }.unwrap();
+    // Exact Allocation and its independently retained lower CPU mapping.
+    let material = unsafe { MappedStorage::prepare(original.take().unwrap(), mapped(range)) }
+        .ok()
+        .unwrap();
+    let id = store
+        .publish_cell(&CELLS[slot], handle, material, Fast)
+        .ok()
+        .unwrap();
+    store.prepare(id, Fast).unwrap();
+    store.accept(id, Fast).unwrap();
+    store.initialize(id, Fast).unwrap();
+    assert_eq!(store.locate(allocation_id), Ok(Some(id)));
+    (id, allocation_id)
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Node {
+    pub(super) store: &'static TableStore,
+    pub(super) id: TableId,
+    pub(super) allocation: AllocationId,
+}
+
+pub(super) struct Tree {
+    pub(super) nodes: [Node; LEVELS],
+    pub(super) spare: Option<Node>,
+    pub(super) allowance: &'static Allowance,
+    handle: pend::Handle,
+    closing: &'static Revoker,
+    balance: Balance,
+}
+
+impl Tree {
+    /// # Safety
+    /// The fixture exclusively owns the original qualified RAM and keeps
+    /// its real writable identity view throughout construction and use.
+    pub(super) unsafe fn prepare(
+        boot: &Boot<'_>,
+        range: PhysicalRange,
+        evidence: &Retirement,
+        format: TableFormat,
+        additional_pages: usize,
+    ) -> Self {
+        let pages = LEVELS
+            .checked_add(additional_pages)
+            .expect("fixture capacity");
+        assert!(pages <= PAGES - 2);
+        let start = range.start().get();
+        let mut scratch = [None; 1];
+        let mut regions = boot
+            .regions(ByteLength::new(PAGE), Some(evidence), &mut scratch)
+            .unwrap();
+        assert!(regions.entries().map(|entry| entry.physical).eq([range]));
+        let config = Config {
+            granule: ByteLength::new(PAGE),
+            maximum: ByteLength::new(range.length().get()),
+            regions: 1,
+            grains: PAGES,
+            roots: 8,
+            allocations: pages,
+            returns: pages,
+            allowances: 1,
+            edits: 64,
+        };
+        let backing = extent(start, start + 2 * PAGE);
+        let allowance = unsafe { &mut *(&raw mut ALLOWANCE) };
+        let source = unsafe {
+            regions.allocator(
+                &mut Some(mapped(backing)),
+                config,
+                pages as u64 * PAGE,
+                allowance,
+                &mut [],
+            )
+        }
+        .unwrap()
+        .unwrap();
+        let allowance = allowance.as_ref().unwrap();
+        assert!(ptr::eq(source, allowance.source()));
+        let spending = unsafe { &mut *(&raw mut HANDLE) };
+        let closing = unsafe { &mut *(&raw mut REVOCATION) };
+        let granule = Alignment::new(PAGE).unwrap();
+        unsafe {
+            SPENDING.publish_initial(
+                allowance,
+                ByteLength::new(PAGE),
+                granule,
+                Initial { spending, closing },
+                Fast,
+            )
+        }
+        .unwrap();
+        let handle = spending.unwrap();
+        let balance = allowance.balance().unwrap();
+
+        let tables = unsafe { &mut *(&raw mut TABLES) };
+        let branches = unsafe { &mut *(&raw mut BRANCHES) };
+        let mut material = tables.iter_mut().zip(branches).enumerate();
+        let nodes: [(&'static TableStore, TableId, AllocationId); LEVELS] =
+            core::array::from_fn(|_| {
+                let (level, (table, links)) = material.next().expect("one real table page");
+                let links = &mut links[..2 * usize::from(level != 0)];
+                let store: &'static TableStore =
+                    table.write(TableStore::for_level(format, level, links).unwrap());
+                let physical = start + (level as u64 + 2) * PAGE;
+                let (id, allocation) = unsafe {
+                    make_table(
+                        store,
+                        allowance,
+                        handle,
+                        level,
+                        extent(physical, physical + PAGE),
+                    )
+                };
+                (store, id, allocation)
+            });
+
+        Self {
+            nodes: nodes.map(|(store, id, allocation)| Node {
+                store,
+                id,
+                allocation,
+            }),
+            spare: None,
+            allowance,
+            handle,
+            closing: closing.as_ref().unwrap(),
+            balance,
+        }
+    }
+
+    /// Obtain an actual additional private leaf page from the same
+    /// source, before handing it to the installed root owner.
+    ///
+    /// # Safety
+    /// The exact supplied RAM is private, identity mapped and retained
+    /// through all native traversal and retirement.
+    pub(super) unsafe fn prepare_leaf(
+        &mut self,
+        format: TableFormat,
+        range: PhysicalRange,
+    ) -> Node {
+        assert!(self.spare.is_none());
+        let store: &'static TableStore = unsafe {
+            (&mut *(&raw mut SPARE_TABLE))
+                .write(TableStore::for_level(format, 0, &mut *(&raw mut SPARE_BRANCHES)).unwrap())
+        };
+        let (id, allocation) =
+            unsafe { make_table(store, self.allowance, self.handle, LEVELS, range) };
+        let node = Node {
+            store,
+            id,
+            allocation,
+        };
+        self.spare = Some(node);
+        node
+    }
+
+    /// Indexes from the bottom branch to the root branch.
+    pub(super) fn link(&self, indexes: [usize; LEVELS - 1]) {
+        for (level, index) in indexes.into_iter().enumerate() {
+            let child = self.nodes[level];
+            let parent = self.nodes[level + 1];
+            parent
+                .store
+                .link_child(parent.id, index, child.store, child.id, Fast)
+                .unwrap();
+        }
+        assert_eq!(
+            self.allowance.balance().unwrap().occupied().get(),
+            PAGE * LEVELS as u64
+        );
+    }
+
+    /// The actual root owner has settled every original node and refund.
+    pub(super) fn settle(self) {
+        for node in self.nodes.into_iter().chain(self.spare) {
+            assert_eq!(node.store.locate(node.allocation), Ok(None));
+        }
+        assert_eq!(self.allowance.balance(), Ok(self.balance));
+        self.closing.revoke().unwrap();
+        self.handle.release().unwrap();
+    }
+}

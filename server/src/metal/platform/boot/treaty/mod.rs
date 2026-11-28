@@ -1,5 +1,19 @@
 //! Trusted image entry and early diagnostics.
 
+pub(crate) use super::handoff::Descriptions;
+#[cfg(limen_target)]
+pub(crate) use super::major::Admission;
+
+#[cfg(limen_target)]
+pub(super) fn deliver(admission: Admission<'_>) -> ! {
+    unsafe { limen_major_admitted(admission) }
+}
+
+#[cfg(limen_target)]
+unsafe extern "Rust" {
+    fn limen_major_admitted(admission: Admission<'_>) -> !;
+}
+
 #[cfg(limen_firmware = "uefi")]
 use crate::metal::platform::firmware::uefi::Loader;
 #[cfg(limen_target)]
@@ -18,6 +32,7 @@ use crate::metal::processor::executor::local::{
 pub struct MajorMaterial {
     pub(in crate::metal::platform::boot) stack: StackExtent,
     pub(in crate::metal::platform::boot) local: local::Material,
+    pub(in crate::metal::platform::boot) descriptions: super::handoff::DescriptionStorage,
 }
 
 #[cfg(limen_target)]
@@ -29,6 +44,7 @@ impl MajorMaterial {
         Self {
             stack: stack.extent(),
             local: local.material(),
+            descriptions: super::handoff::DescriptionStorage::new(),
         }
     }
 }
@@ -81,15 +97,17 @@ pub fn shutdown(success: bool) -> ! {
 /// Run once on the major CPU in ring 0 with paging (x86) or non-secure EL1 (Arm).
 /// The image must exclusively supply this stack and local storage for the
 /// major CPU and ensure it can hold the complete boot and platform callback.
-/// Keep the image, identity mappings, loader stack and inputs
-/// reserved across delivery.
+/// Keep the image and identity mappings reserved. The loader and its ACPI
+/// read function must remain valid through admission. Descriptor, DTB and
+/// ACPI bytes used by admitted consumers remain independently reserved for
+/// those borrows.
 #[cfg(limen_firmware = "uefi")]
 pub unsafe fn major(
-    hart: usize,
+    processor: usize,
     loader: &Loader<'_>,
     terminal: &'static Terminal,
     material: &'static MajorMaterial,
 ) -> ! {
     terminal.install_early();
-    unsafe { super::enter_major(hart, loader, material.stack.top(), material) }
+    unsafe { super::enter_major(processor, loader, material.stack.top(), material) }
 }

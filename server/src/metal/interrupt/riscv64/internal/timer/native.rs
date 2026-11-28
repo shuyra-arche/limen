@@ -1,4 +1,4 @@
-use super::{ClearStep, Effect, Event, Failure, Prior, ProgramStep, State};
+use super::{ClearStep, Clearing, Effect, Event, Failure, Prior, ProgramStep, State};
 #[cfg(limen_firmware = "sbi")]
 use crate::metal::platform::firmware::treaty::sbi::TimerService;
 use crate::metal::{
@@ -7,9 +7,12 @@ use crate::metal::{
         riscv64::internal::supervisor::{Cause, Reception},
         treaty::{AbsoluteTimer, TimerEffect, absolute::Sealed},
     },
-    processor::description::riscv64::{
-        cpu::RiscvCpu,
-        isa::{RiscvExtension, RiscvIsa},
+    processor::{
+        description::riscv64::{
+            cpu::RiscvCpu,
+            isa::{RiscvExtension, RiscvIsa},
+        },
+        treaty::TimerInterrupt,
     },
 };
 use core::arch::asm;
@@ -63,6 +66,10 @@ pub struct Timer<'a> {
 }
 
 impl<'a> Timer<'a> {
+    pub(crate) fn clock(&self) -> &crate::metal::chrono::treaty::Clock {
+        self.counter.clock()
+    }
+
     /// # Safety
     /// The actual Hart grants stimecmp and time access to this supervisor
     /// and delegates STIP. The original comparison and wake obligations
@@ -160,6 +167,36 @@ impl<'a> Timer<'a> {
         self.drive()
     }
 
+    /// Record the due original comparison and stop its interrupt delivery.
+    /// An early or stale pending hint leaves the confirmed comparison live.
+    /// Ordinary execution settles the retained comparison via `stop_due`.
+    ///
+    /// # Safety
+    /// The caller can make ordinary progress on this owner after IRQ return.
+    /// Masking this line preserves any independent stop or wake obligations.
+    pub unsafe fn accept_interrupt(
+        &mut self,
+        interrupt: &TimerInterrupt<'_>,
+    ) -> Result<bool, Failure> {
+        if interrupt.processor().get() as u64 != self.local.hart() || !self.local.enabled() {
+            return Err(Failure::Context);
+        }
+        let target = self.state.deadline().ok_or(Failure::Busy)?;
+        let now = self
+            .counter
+            .clock()
+            .read_on_interrupt(interrupt)
+            .ok_or(Failure::Context)?;
+        if now < target || !self.local.pending() {
+            return Ok(false);
+        }
+        self.state.advance(Event::Shut)?;
+        self.local.set(false);
+        self.state.advance(Event::Masked(!self.local.enabled()))?;
+        interrupt.confirm_receipt();
+        Ok(true)
+    }
+
     fn drive(&mut self) -> Result<(), Failure> {
         loop {
             let event = match self.state {
@@ -230,6 +267,15 @@ impl AbsoluteTimer for Timer<'_> {
         self.drive()
     }
 
+    fn confirmed_deadline(&self) -> Result<Option<Deadline<'_>>, Failure> {
+        self.context()?;
+        match self.state {
+            State::Idle => Ok(None),
+            State::Armed(target) => Ok(Some(self.counter.deadline(target))),
+            _ => Err(Failure::Busy),
+        }
+    }
+
     fn due(&self) -> Result<bool, Failure> {
         self.context()?;
         let deadline = self.state.deadline().ok_or(Failure::Busy)?;
@@ -274,7 +320,7 @@ impl AbsoluteTimer for Timer<'_> {
                         .ok_or(Failure::Unconfirmed),
                 ),
             },
-            State::AwaitingClear(_) => return self.drive(),
+            State::Clearing(_) | State::AwaitingClear(_) => return self.drive(),
             _ => return Err(Failure::Busy),
         };
         self.state.advance(event)?;
@@ -298,7 +344,11 @@ impl AbsoluteTimer for Timer<'_> {
     unsafe fn stop_due(&mut self) -> Result<(), Failure> {
         let deadline = match self.state {
             State::Armed(target) => target,
-            State::AwaitingClear(Prior::Armed(_)) => return self.confirm_effect(),
+            State::Clearing(Clearing {
+                prior: Prior::Armed(_),
+                ..
+            })
+            | State::AwaitingClear(Prior::Armed(_)) => return self.confirm_effect(),
             State::Uncertain(Effect::Clearing(clear)) if matches!(clear.prior, Prior::Armed(_)) => {
                 return self.confirm_effect();
             }

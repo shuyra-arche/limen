@@ -5,25 +5,15 @@ use core::{
     marker::PhantomData,
     sync::atomic::{AtomicU32, Ordering},
 };
-use kernel::metal::memory::access::treaty::device::DeviceWindow;
 
-use uefi_fixture::q35::{Idtr, io};
+use uefi_fixture::q35::Idtr;
+
+#[path = "prepare.rs"]
+mod hardware;
+pub use hardware::prepare;
 
 static RECEIVED: AtomicU32 = AtomicU32::new(0);
 static mut GATES: [[u8; 16]; 256] = [[0; 16]; 256];
-
-/// Prepare the exclusive local APIC window for an IRQ in priority class 15.
-///
-/// # Safety
-/// The guest owns both legacy PICs and its original Hart's UC xAPIC mapping.
-pub unsafe fn prepare(window: &mut DeviceWindow<'_>) {
-    unsafe {
-        io::write8(0x21, 0xff);
-        io::write8(0xa1, 0xff);
-        window.write_u32(0x80, 0xe0).unwrap();
-        window.write_u32(0xf0, 0x1ff).unwrap();
-    }
-}
 
 #[unsafe(naked)]
 unsafe extern "C" fn receive() -> ! {
@@ -39,12 +29,12 @@ unsafe extern "C" fn receive() -> ! {
 /// Restores the original table when the test leaves the reception window.
 pub struct Window {
     original: Idtr,
-    hart_local: PhantomData<*mut ()>,
+    processor_local: PhantomData<*mut ()>,
 }
 
 impl Window {
     /// # Safety
-    /// The current Hart owns the diagnostic table and the single static
+    /// The current processor owns the diagnostic table and the single static
     /// fixture table. Leave interrupts masked outside this window. Set up
     /// the test's actual IRQ source with this exact vector.
     pub unsafe fn install(vector: u8) -> Self {
@@ -66,7 +56,7 @@ impl Window {
         unsafe { asm!("lidt [{}]", in(reg) &temporary, options(nostack, preserves_flags)) };
         Self {
             original,
-            hart_local: PhantomData,
+            processor_local: PhantomData,
         }
     }
 

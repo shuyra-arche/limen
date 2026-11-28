@@ -14,7 +14,7 @@ pub fn check(boot: boot::Boot<'_>) {
     let mut controller = q35::local_controller(&boot, window);
     scenario::check(
         boot.acpi().unwrap().madt().unwrap(),
-        boot.hart(),
+        boot.processor(),
         &mut controller,
     );
 }

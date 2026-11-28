@@ -65,8 +65,9 @@ fn sorts_sources_clips_the_evidence_and_excludes_partial_reserved_pages() {
         image(),
         image(),
         image(),
-        Some(0x4301..0x4500),
+        Some(range(0x4301, 0x4500)),
         Some(map),
+        Some(range(0xb000, 0xb078)),
         None,
     );
     let evidence = retired(range(0x2fff, 0xa001));

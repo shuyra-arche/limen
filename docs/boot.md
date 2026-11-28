@@ -5,15 +5,19 @@
 The firmware or loader enters one major CPU. The trusted image provides its
 ordinary stack and local storage with a fixed Sync node supply. Metal enters
 the supplied stack, masks interrupts and installs the architecture's terminal
-vectors. All three backends then call `entry::boot::start`.
+vectors. All three backends then enter the shared Metal admission path.
 
 Common major admission checks the hardware stack pointer against the reserved
 range, reads back the installed CPU state and compares the CPU identity with
 the supplied ID. The selected firmware adapter validates its input. The entry
 calls the image-defined `limen_platform_ready(Boot)` once. The image receives the
 major ID and the admitted device-tree extent or firmware map when available.
-A rejected handoff uses early diagnostics and requests failure shutdown.
-[Entry](../server/src/entry/boot/mod.rs) · [Admission](../server/src/metal/platform/boot/major.rs)
+Metal validates the resident stack ranges against the image under the original
+trusted identity mapping. It delivers a single owned Admission through the
+Boot Treaty. Entry then calls the image; it uses the physical stack and
+firmware-buffer ranges carried by admission. A rejected handoff uses early
+diagnostics and requests failure shutdown.
+[Entry](../server/src/entry/boot/mod.rs) · [Boot Treaty](../server/src/metal/platform/boot/treaty/mod.rs)
 
 On RV64 the image links its materials with `limen_riscv_major!`. OpenSBI enters
 one major Hart. The entry loads the linked stack pointer and installs the
@@ -24,6 +28,14 @@ trusted caller's actual frames. HSM starts minors only after the major handoff.
 The stack resides in the
 reserved image range. Any later return of early physical memory requires a
 runtime stack handoff, departure of its old users and translation retirement.
+
+Major material reserves one image-resident slot for the parsed DTB, CPU and
+ACPI descriptions. The firmware adapter prepares it once. The full slot
+must lie inside the retained image and outside both startup stacks.
+Independent borrows keep the lifetime of the original descriptor bytes.
+The UEFI ACPI reader is used during parsing and is gone before delivery.
+The backing DTB, ACPI and memory-map ranges retain their own retirement
+conditions.
 
 ## Minor launch
 
@@ -75,6 +87,24 @@ the permanent `RootStorage` and the resulting `RegionDescription` values.
 Allocator validates the root layout, reserved supply and initial receivers
 before Entry consumes the mapping. A delayed region is admitted through the
 original owner's `Retirement::grant` and its unique allocator `Grant`.
+
+Boot can supply a permanent `PendSpace::for_page_tables` spending position.
+Its trusted issuer supplies the actual Allowance, request-size bound and
+alignment bound. It accepts the PageTable purpose and records a read/write
+ceiling for first access. The issued Allocation carries the original slot
+through take and return. Cell publication must revalidate the live holding
+and the actual receiver. Metadata, boot reservations and allocations
+created by conversion have an empty first-access ceiling.
+
+An Internal root's `TableStore` reserves its own stable identity before
+native publication. It accepts the original mapped allocation and a
+resident `CellSlot` jointly with the live page-table issuer. That commit
+gives the private construction one typed Pend. The store consumes that
+holding when the Cell's prepared access becomes accepted. The original
+read/write ceiling covers initialization to invalid descriptors. A root
+withdrawn in this private state returns its exact allocation through the
+normal prepaid Allocator receipt. Native root installation requires a
+separate effect and retirement contract.
 
 An owner starting with a raw pointer from the original identity mapping can
 use `MappedRange::from_identity`. It checks both machine-width endpoints,

@@ -22,6 +22,7 @@ impl Cause {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     Context,
+    Busy,
 }
 
 /// Native operations belonging to the original supervisor reception source.
@@ -75,11 +76,14 @@ pub struct Supervisor {
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 mod native {
     use super::{Cause, Error, Operations, Reception, Supervisor};
-    use crate::metal::processor::{executor::riscv64, treaty::try_current_hart};
+    use crate::metal::processor::{
+        executor::riscv64,
+        treaty::{claim_supervisor_reception, try_current_processor},
+    };
     use core::{arch::asm, marker::PhantomData};
 
     fn valid(hart: u64) -> bool {
-        try_current_hart().is_some_and(|current| current.get() as u64 == hart)
+        try_current_processor().is_some_and(|current| current.get() as u64 == hart)
             && riscv64::native::status().masked()
     }
 
@@ -137,14 +141,20 @@ mod native {
     }
 
     impl Supervisor {
-        /// # Safety
-        /// The trusted major entry owns this Hart's local lines and calls
-        /// this exactly once, before delivering them to any consumer.
-        pub(crate) unsafe fn admit(hart: u64) -> Result<Self, Error> {
+        /// Take the original local timer and external reception lines once.
+        /// Major and Minor use the same installed Executor qualification.
+        /// A failed check does not consume it; dropping a delivered line
+        /// does not permit a second delivery or prove hardware retirement.
+        pub fn take() -> Result<Self, Error> {
+            let processor = try_current_processor().ok_or(Error::Context)?;
+            let hart = processor.get() as u64;
             let timer = Reception::new(hart, Cause::Timer);
             let external = Reception::new(hart, Cause::External);
             if !timer.valid() || timer.enabled() || external.enabled() {
                 return Err(Error::Context);
+            }
+            if !claim_supervisor_reception(processor) {
+                return Err(Error::Busy);
             }
             Ok(Self { timer, external })
         }
@@ -155,4 +165,16 @@ mod native {
 #[cfg(all(limen_target, target_arch = "riscv64"))]
 pub(in crate::metal) fn all_masked() -> bool {
     native::enabled() == 0
+}
+
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+pub(in crate::metal) fn enabled_covered(software: bool, timer: bool) -> bool {
+    let mut covered = 0;
+    if software {
+        covered |= Cause::Software.mask();
+    }
+    if timer {
+        covered |= Cause::Timer.mask();
+    }
+    native::enabled() & !covered == 0
 }

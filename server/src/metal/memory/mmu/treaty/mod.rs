@@ -1,5 +1,11 @@
 //! Shared CPU translation and I/O binding contracts.
 
+#[cfg(limen_target)]
+pub use super::table::LocalRoot;
+#[cfg(limen_cooperative)]
+pub use super::table::{LocalTranslation, TableProgress, TranslationPhase};
+pub use super::table::{TableBranch, TableError, TableFormat, TableId, TableStore};
+
 mod installation;
 pub use installation::Installation;
 #[cfg(all(

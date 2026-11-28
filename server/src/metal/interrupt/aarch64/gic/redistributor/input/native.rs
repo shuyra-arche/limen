@@ -62,8 +62,16 @@ impl<'tree, 'map> Ppi<'tree, 'map> {
         self.intid
     }
 
-    pub(in crate::metal::interrupt::aarch64) fn local_to(&self, hart: usize) -> bool {
-        self.affinity == hart && local(self.affinity)
+    pub(in crate::metal::interrupt::aarch64) fn local_to(&self, processor: usize) -> bool {
+        self.affinity == processor && local(self.affinity)
+    }
+
+    pub(in crate::metal::interrupt::aarch64::gic) fn matches(
+        &self,
+        frame: &Frame<'_>,
+        intid: u32,
+    ) -> bool {
+        frame.ppi_index(self).is_ok() && self.intid == intid
     }
 
     pub(in crate::metal::interrupt::aarch64) fn permits_programming(
@@ -105,7 +113,7 @@ impl StoppedPpi<'_, '_, '_> {
         frame: &Frame<'_>,
         intid: u32,
     ) -> bool {
-        frame.ppi_index(self.0).is_ok() && self.0.intid == intid
+        self.0.matches(frame, intid)
     }
 
     pub(in crate::metal::interrupt::aarch64::gic) fn complete(self) {
@@ -262,6 +270,27 @@ impl<'map> Frame<'map> {
             phase: Phase::Prepared,
             mapping: PhantomData,
         })
+    }
+
+    pub(in crate::metal::interrupt::aarch64::gic) fn signal_priority(
+        &mut self,
+        id: u8,
+    ) -> Option<u8> {
+        if id >= 16 {
+            return None;
+        }
+        let State::Enabled(setup) = self.private[usize::from(id)] else {
+            return None;
+        };
+        let bit = 1 << id;
+        (self.private_word(ENABLE) & bit != 0
+            && self.private_word(GROUP) & bit != 0
+            && self.private_priority(id.into()) == setup.priority)
+            .then_some(setup.priority)
+    }
+
+    pub(in crate::metal::interrupt::aarch64::gic) fn signal_pending(&mut self, id: u8) -> bool {
+        self.private_word(PENDING) & (1 << id) != 0
     }
 
     /// Restore the original private input after its exact remote claim settles.

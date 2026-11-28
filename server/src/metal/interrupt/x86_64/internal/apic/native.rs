@@ -4,10 +4,14 @@ use core::arch::{asm, x86_64::__cpuid};
 
 use crate::metal::{
     platform::description::acpi::Madt,
-    processor::{description::x86_64::status, executor::x86_64::native, treaty::try_current_hart},
+    processor::{
+        description::x86_64::status,
+        executor::x86_64::native,
+        treaty::{Irq, try_current_processor},
+    },
 };
 
-use super::{Base, Observation, Probe};
+use super::{Base, Failure, LocalApic, Observation, Probe};
 
 const APIC_BASE: u32 = 0x1b;
 const FEATURE_MSR: u32 = 1 << 5;
@@ -37,20 +41,20 @@ fn masked() -> bool {
     status::interrupts_masked(flags)
 }
 
-/// Early discovery precedes installation of the ordinary Hart-local record.
-pub(crate) fn matches_madt(hart: usize, madt: Madt<'_>) -> bool {
+/// Early discovery precedes installation of the ordinary processor-local record.
+pub(crate) fn matches_madt(processor: usize, madt: Madt<'_>) -> bool {
     base_bits().and_then(Base::decode).is_some_and(|base| {
-        base.major && native::boot_identity() == hart && base.matches(hart, madt)
+        base.major && native::boot_identity() == processor && base.matches(processor, madt)
     })
 }
 
 fn observe() -> Option<Observation> {
     let bits = base_bits()?;
-    let hart = native::boot_identity();
-    if !masked() || try_current_hart().is_none_or(|current| current.get() != hart) {
+    let processor = native::boot_identity();
+    if !masked() || try_current_processor().is_none_or(|current| current.get() != processor) {
         return None;
     }
-    Some(Observation { bits, hart })
+    Some(Observation { bits, processor })
 }
 
 impl Probe {
@@ -58,5 +62,19 @@ impl Probe {
     /// asserted until the source is read in the current ordinary environment.
     pub const fn native() -> Self {
         Self { read: observe }
+    }
+}
+
+impl LocalApic<'_> {
+    /// The actual captured interrupt grants the local protected borrow. The
+    /// ordinary Probe stays unavailable while the Trap frame is authoritative.
+    pub(super) fn interrupt_context(&self, irq: &Irq<'_>) -> Result<(), Failure> {
+        if !irq.is_current()
+            || irq.processor().get() != self.processor
+            || base_bits().and_then(Base::decode) != Some(self.base)
+        {
+            return Err(Failure::Scope);
+        }
+        Ok(())
     }
 }

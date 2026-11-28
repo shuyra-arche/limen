@@ -3,7 +3,7 @@
 use super::super::acpi::ivrs;
 
 pub use super::super::acpi::{
-    Acpi, Dmar, Error, IoApic, Ivhd, Madt, Polarity, Processor, Record, RemappingUnit,
+    Acpi, Dmar, Error, Hpet, IoApic, Ivhd, Madt, Polarity, Processor, Record, RemappingUnit,
     SourceOverride, Table, Trigger,
 };
 
@@ -11,6 +11,12 @@ impl<'a> Acpi<'a> {
     pub fn dmar(&self) -> Result<Option<Dmar<'a>>, Error> {
         self.unique_v1_table(*b"DMAR")?
             .map(Dmar::validate)
+            .transpose()
+    }
+
+    pub fn hpet(&self) -> Result<Option<Hpet<'a>>, Error> {
+        self.unique_v1_table(*b"HPET")?
+            .map(Hpet::validate)
             .transpose()
     }
 

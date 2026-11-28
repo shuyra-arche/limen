@@ -1,37 +1,41 @@
 //! Trusted UEFI admission and retained description construction.
 
+#[cfg(any(limen_firmware = "uefi", test))]
+use super::identity_extent;
+#[cfg(any(limen_firmware = "uefi", test))]
 use super::{Descriptions, Facts};
+#[cfg(any(limen_firmware = "uefi", test))]
 use crate::metal::platform::{
     description::{acpi, devicetree},
     firmware::uefi::{DeviceTree, Loader, map::FirmwareMap},
 };
 #[cfg(limen_firmware = "uefi")]
 use crate::metal::processor::treaty::Terminal;
-use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
+#[cfg(any(limen_firmware = "uefi", test))]
 const LOADER_DATA: u32 = 2;
+#[cfg(any(limen_firmware = "uefi", test))]
 const ACPI_RECLAIM: u32 = 9;
+#[cfg(any(limen_firmware = "uefi", test))]
 const ACPI_NVS: u32 = 10;
 
 #[cfg(limen_firmware = "uefi")]
 pub(crate) unsafe fn admit<'a>(
-    hart: usize,
+    processor: usize,
     observed: usize,
     input: *const (),
     descriptions: &mut Descriptions<'a>,
 ) -> Option<Facts<'a>> {
     // The current loader handoff supplies an identity checked against the
-    // physical CPU, rather than the trusted SBI entry's current-Hart ABI.
-    if hart != observed {
+    // physical CPU, rather than the trusted SBI entry's current-processor ABI.
+    if processor != observed {
         Terminal::early().reject(format_args!(
             "FAIL Limen boot: major CPU identity mismatch\n"
         ));
     }
-    // The trusted loader keeps this value and its buffers resident.
-    describe(
-        unsafe { input.cast::<Loader<'a>>().as_ref() }?,
-        descriptions,
-    )
+    // Read the loader once. Acpi::new consumes the read function and
+    // retains only the original validated byte slices.
+    unsafe { describe(input.cast::<Loader<'a>>().as_ref()?, descriptions) }
 }
 
 #[cfg(limen_firmware = "uefi")]
@@ -39,7 +43,10 @@ pub(crate) fn terminal_on_entry() -> Terminal {
     Terminal::early()
 }
 
-pub(crate) fn describe<'a, 'b>(
+// The trusted loader supplies the original identity mapping for the retained
+// descriptor and DTB buffers. Host parser tests provide that relation in fixtures.
+#[cfg(any(limen_firmware = "uefi", test))]
+pub(crate) unsafe fn describe<'a, 'b>(
     loader: &Loader<'a>,
     descriptions: &mut Descriptions<'b>,
 ) -> Option<Facts<'b>>
@@ -53,6 +60,7 @@ where
         loader.descriptor_limit,
     )
     .ok()?;
+    descriptions.device_tree_physical = None;
     descriptions.device_tree = match loader.device_tree.as_ref() {
         Some(tree) => {
             let bytes = match tree {
@@ -62,10 +70,7 @@ where
                 return None;
             }
             let pointers = bytes.as_ptr_range();
-            let physical = PhysicalRange::new(
-                PhysicalAddress::new(pointers.start.addr() as u64),
-                PhysicalAddress::new(pointers.end.addr() as u64),
-            )?;
+            let physical = unsafe { identity_extent(pointers.start.addr()..pointers.end.addr()) }?;
             if !map
                 .regions()
                 .any(|region| region.kind == LOADER_DATA && region.physical.covers(physical))
@@ -82,6 +87,7 @@ where
                 }
             }
             .ok()?;
+            descriptions.device_tree_physical = Some(physical);
             Some(description)
         }
         None => None,
@@ -100,8 +106,15 @@ where
             .ok()?,
         );
     }
+    #[cfg(limen_firmware = "uefi")]
+    let map_storage = {
+        let bytes = loader.descriptors.as_ptr_range();
+        unsafe { identity_extent(bytes.start.addr()..bytes.end.addr()) }?
+    };
     Some(Facts {
         image: loader.image,
         firmware_map: Some(map),
+        #[cfg(limen_firmware = "uefi")]
+        map_storage: Some(map_storage),
     })
 }

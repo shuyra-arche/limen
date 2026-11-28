@@ -1,4 +1,4 @@
-use super::{Counter, HartId, Sample, duration, later_count};
+use super::{Counter, ProcessorId, Sample, duration, later_count};
 use core::{num::NonZeroU64, time::Duration};
 
 #[test]
@@ -32,27 +32,29 @@ fn deadline_conversion_rounds_up_and_refuses_empty_or_wrapping_targets() {
 
 #[test]
 fn samples_and_deadlines_keep_their_exact_clock_domain() {
-    let hart = HartId::new(1);
+    let processor = ProcessorId::new(1);
     let hertz = NonZeroU64::new(1_000).unwrap();
     use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
     static COUNT: AtomicU64 = AtomicU64::new(10);
-    let clock = Counter::new(hart, hertz, || COUNT.load(Relaxed));
-    let other = Counter::new(hart, hertz, || 12);
-    let foreign = Counter::new(hart, hertz, || panic!("foreign Hart must not be sampled"));
-    assert_eq!(clock.hart(), hart);
+    let clock = Counter::new(processor, hertz, || COUNT.load(Relaxed));
+    let other = Counter::new(processor, hertz, || 12);
+    let foreign = Counter::new(processor, hertz, || {
+        panic!("foreign processor must not be sampled")
+    });
+    assert_eq!(clock.processor(), processor);
     assert_eq!(clock.frequency(), hertz);
-    assert!(Sample::reported(&foreign, HartId::new(2)).is_none());
+    assert!(Sample::reported(&foreign, ProcessorId::new(2)).is_none());
 
-    let earlier = Sample::reported(&clock, hart).unwrap();
+    let earlier = Sample::reported(&clock, processor).unwrap();
     COUNT.store(12, Relaxed);
-    let later = Sample::reported(&clock, hart).unwrap();
-    let other_sample = Sample::reported(&other, hart).unwrap();
+    let later = Sample::reported(&clock, processor).unwrap();
+    let other_sample = Sample::reported(&other, processor).unwrap();
     assert_eq!(later.elapsed_since(earlier), Some(Duration::from_millis(2)));
     assert_eq!(earlier.elapsed_since(later), None);
     assert_eq!(later.elapsed_since(other_sample), None);
     COUNT.store(0, Relaxed);
-    let wrapped = Sample::reported(&clock, hart).unwrap();
+    let wrapped = Sample::reported(&clock, processor).unwrap();
     assert_eq!(wrapped.elapsed_since(later), None);
 
     let deadline = earlier.after(Duration::from_millis(2)).unwrap();

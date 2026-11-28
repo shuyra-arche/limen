@@ -1,9 +1,12 @@
 //! Native SBI notification issuance and supervisor software reception.
 
 use crate::metal::{
-    interrupt::treaty::{Issuance, NotifyHart, ipi::Sealed},
+    interrupt::treaty::{Issuance, NotifyProcessor, ipi::Sealed},
     platform::firmware::treaty::sbi::{HartService, IpiService},
-    processor::{description::riscv64::cpu::RiscvCpus, treaty::try_current_hart},
+    processor::{
+        description::riscv64::cpu::RiscvCpus,
+        treaty::{SoftwareInterrupt, can_switch, try_current_processor, wait_for_interrupt},
+    },
 };
 
 use super::super::supervisor::Reception;
@@ -44,7 +47,7 @@ impl<'tree> IpiIssue<'tree> {
 
 impl Sealed for IpiRoute<'_, '_, '_> {}
 
-impl<'tree> NotifyHart for IpiRoute<'_, '_, 'tree> {
+impl<'tree> NotifyProcessor for IpiRoute<'_, '_, 'tree> {
     type Error = Error;
     type Issue = IpiIssue<'tree>;
 
@@ -94,7 +97,7 @@ impl<'state, 'tree> Sender<'state, 'tree> {
         harts: HartService,
         interrupts: IpiService,
     ) -> Result<Self, Error> {
-        if try_current_hart().is_none_or(|current| current.get() != hart) {
+        if try_current_processor().is_none_or(|current| current.get() != hart) {
             return Err(Error::Scope);
         }
         if !cpus
@@ -137,7 +140,7 @@ impl<'state, 'tree> Sender<'state, 'tree> {
     }
 
     fn check_source(&self) -> Result<(), Error> {
-        if try_current_hart().is_some_and(|hart| hart.get() == self.source.hart) {
+        if try_current_processor().is_some_and(|hart| hart.get() == self.source.hart) {
             Ok(())
         } else {
             Err(Error::Scope)
@@ -179,6 +182,14 @@ impl<'state, 'tree> Sender<'state, 'tree> {
     }
 }
 
+/// The retained observations of one idle check and optional local WFI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Wake {
+    Ready,
+    Pending,
+    Recheck,
+}
+
 /// The original Hart's supervisor software-interrupt line.
 #[must_use]
 pub struct Receiver(Reception);
@@ -210,11 +221,64 @@ impl Receiver {
         Ok(self.0.pending())
     }
 
+    /// Consult the original work owner, then wait once with this software
+    /// reception enabled and supervisor IRQ dispatch masked. Both a pending
+    /// hint and a return without a hint leave the ready decision to the caller.
+    ///
+    /// # Safety
+    /// WFI must be permitted in the selected supervisor execution profile.
+    /// Any work that can become the only progress obligation after `ready`
+    /// returns false remains discoverable and has a live wake path through
+    /// this receiver or another admitted source throughout the wait. No
+    /// ordinary protection or private owner borrow may depend on this processor
+    /// before it becomes runnable again. `ready` must be a bounded observation.
+    pub unsafe fn wait(&self, mut ready: impl FnMut() -> bool) -> Result<Wake, Error> {
+        self.current()?;
+        if !self.0.enabled() || !can_switch() {
+            return Err(Error::Busy);
+        }
+        if ready() {
+            return Ok(Wake::Ready);
+        }
+        if self.0.pending() {
+            return Ok(Wake::Pending);
+        }
+
+        // Locally enabled pending interrupts wake WFI regardless of SIE.
+        // No IRQ handler can consume the only hint in this window. WFI may
+        // also return without an interrupt, so recheck the original owners.
+        unsafe { wait_for_interrupt() };
+
+        if ready() {
+            Ok(Wake::Ready)
+        } else if self.0.pending() {
+            Ok(Wake::Pending)
+        } else {
+            Ok(Wake::Recheck)
+        }
+    }
+
     /// Clear a pending doorbell. Multiple sends can share the same bit.
     /// A concurrent notification can reassert it before observation and must
     /// be handled via the original mailbox protocol.
     pub fn acknowledge(&mut self) -> Result<(), Error> {
-        if !self.pending()? {
+        self.current()?;
+        self.acknowledge_pending()
+    }
+
+    /// Clear the same admitted software line from its actual trap layer.
+    pub fn acknowledge_interrupt(
+        &mut self,
+        interrupt: &SoftwareInterrupt<'_>,
+    ) -> Result<(), Error> {
+        if interrupt.processor().get() as u64 != self.0.hart() {
+            return Err(Error::Scope);
+        }
+        self.acknowledge_pending()
+    }
+
+    fn acknowledge_pending(&mut self) -> Result<(), Error> {
+        if !self.0.pending() {
             return Err(Error::Busy);
         }
         self.0.clear_software();

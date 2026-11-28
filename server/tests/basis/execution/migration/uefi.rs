@@ -1,4 +1,4 @@
-//! UEFI admission for the cross-Hart migration test.
+//! UEFI admission for the cross-processor migration test.
 
 use kernel::entry::boot::Boot;
 use uefi::Status;
@@ -13,11 +13,11 @@ pub fn prepare() -> Result<(), Status> {
 pub fn check(boot: Boot<'_>, complete: fn() -> !) -> ! {
     let view = fixture::check_handoff(&boot, Some(&super::MINOR));
     let target = fixture::target();
-    let mut startup = fixture::inspect(&boot, &view);
+    let startup = fixture::inspect(&boot, &view);
     super::run(
         boot,
         target,
-        &mut startup,
+        startup,
         fixture::check_minor,
         |startup| fixture::inspect_started(startup, target),
         complete,

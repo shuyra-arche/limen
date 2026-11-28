@@ -1,18 +1,15 @@
-//! Major CPU handoff. Metal installs the kernel stack and exception entry before
-//! calling the common admission gate. The trusted image receives Boot exactly once.
+//! Major CPU handoff. Consume the completed Metal admission and deliver Boot
+//! once to the trusted image.
 mod handoff;
 mod physical;
 mod regions;
-use crate::metal::memory::allocator::bootstrap::bump;
 #[cfg(limen_target)]
 use crate::metal::memory::allocator::treaty::RegionDescription;
 #[cfg(limen_target)]
-use crate::metal::platform::boot::major;
+use crate::metal::platform::boot::treaty::Admission;
 #[cfg(limen_target)]
 use limen_treaty::model::ByteLength;
 
-#[cfg(limen_target)]
-use crate::metal::platform::boot::handoff::Descriptions;
 use crate::metal::platform::description::treaty::acpi;
 use crate::metal::platform::{
     description::treaty::devicetree::{
@@ -26,25 +23,9 @@ pub use physical::{Condition, Exclusion, Exclusions, Occupant, Retirement};
 pub use regions::{RegionError, Regions};
 
 #[cfg(limen_target)]
-/// The firmware adapter supplies a stable DTB (OpenSBI) or Loader (UEFI).
-/// All referenced storage and mappings remain reserved until the consumer is done.
-pub(crate) unsafe extern "C" fn start(
-    hart: usize,
-    input: *const (),
-    stack_top: usize,
-    material: &'static crate::metal::platform::boot::treaty::MajorMaterial,
-) -> ! {
-    // The nonreturning platform callback borrows the original descriptions
-    // from here. Keep a single retained copy off the nested admission frames.
-    let mut descriptions = Descriptions::new();
-    let admission = unsafe { major::admit(hart, input, stack_top, material, &mut descriptions) };
-    let boot = Boot::from_major(admission, &descriptions);
-    if !boot.stacks_in_image() {
-        boot.terminal().reject(format_args!(
-            "FAIL Limen boot: stacks outside physical image\n"
-        ));
-    }
-    unsafe { limen_platform_ready(boot) }
+#[unsafe(no_mangle)]
+extern "Rust" fn limen_major_admitted(admission: Admission<'_>) -> ! {
+    unsafe { limen_platform_ready(Boot::from_major(admission)) }
 }
 
 #[cfg(limen_target)]
@@ -60,18 +41,8 @@ impl Boot<'_> {
     }
 
     pub fn exclusions(&self) -> Exclusions<'_> {
-        self.exclusions_for(
-            physical::extent(self.stack_range()),
-            physical::extent(crate::metal::processor::execution::terminal::trap::stack_range()),
-        )
-    }
-
-    fn stacks_in_image(&self) -> bool {
-        let image = self.image();
-        image.covers(physical::extent(self.stack_range()))
-            && image.covers(physical::extent(
-                crate::metal::processor::execution::terminal::trap::stack_range(),
-            ))
+        let [major, trap] = self.physical_stacks();
+        self.exclusions_for(major, trap)
     }
 }
 

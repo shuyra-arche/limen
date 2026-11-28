@@ -17,7 +17,7 @@ impl<'a> ModuleImage<'a> {
     /// describes the bytes and intended permissions for the supplied Internal
     /// start. Before calling any entry, the mapping owner must publish the
     /// permissions, close conflicting aliases and establish instruction
-    /// visibility for the target Hart.
+    /// visibility for the target processor.
     pub fn prepare(
         &self,
         storage: &mut MappedRange<'_>,

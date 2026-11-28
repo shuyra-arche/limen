@@ -30,7 +30,7 @@ pub struct LeafLock<T> {
 }
 
 // A successful acquire CAS and the matching release are the sole path to the
-// value. Moving exclusive access between Harts requires T: Send.
+// value. Moving exclusive access between processors requires T: Send.
 unsafe impl<T: Send> Sync for LeafLock<T> {}
 
 impl<T> LeafLock<T> {

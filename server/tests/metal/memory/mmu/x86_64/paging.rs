@@ -18,12 +18,13 @@ static mut ALTERNATE_MIDDLE: Page = Page([0; 512]);
 static mut ALTERNATE_LAST: Page = Page([0; 512]);
 static ALTERNATE_DATA: Page = Page([0x7654_3210_abcd_dcba; 512]);
 
-fn roundtrip(hart: usize, apic: PhysicalRange, version: u32) {
+fn roundtrip(processor: usize, apic: PhysicalRange, version: u32) {
     assert!(matches!(
-        unsafe { admit_root(hart.wrapping_add(1)) },
+        unsafe { admit_root(processor.wrapping_add(1)) },
         Err(SwitchError::Context)
     ));
-    let (mut control, format) = unsafe { admit_root(hart) }.expect("q35 four-level CPU paging");
+    let (mut control, format) =
+        unsafe { admit_root(processor) }.expect("q35 four-level CPU paging");
     let original = unsafe { Controls::current() };
     assert_eq!(original.cr3 & 0xfff, 0);
     // The fixture retains the identity-mapped firmware table pages.
@@ -31,10 +32,8 @@ fn roundtrip(hart: usize, apic: PhysicalRange, version: u32) {
     let top = unsafe { &raw mut TOP.0 };
     let root = physical(&raw const TOP);
     let alternate = physical(&raw const ALTERNATE_TOP);
-    let (low, high): (u32, u32);
+    assert!(original.pat.is_some());
     unsafe {
-        asm!("rdmsr", in("ecx") 0x277u32, out("eax") low, out("edx") high, options(nomem, nostack));
-        let pat = u64::from(high) << 32 | u64::from(low);
         for i in 0..512 {
             (*top)[i] = old.add(i).read_volatile();
             ALTERNATE_TOP.0[i] = (*top)[i];
@@ -58,7 +57,6 @@ fn roundtrip(hart: usize, apic: PhysicalRange, version: u32) {
                 Privilege::Kernel,
                 LeafAccess::ReadOnly,
                 Memory::Normal,
-                pat,
             )
             .unwrap();
         LAST.0[1] = format
@@ -68,7 +66,6 @@ fn roundtrip(hart: usize, apic: PhysicalRange, version: u32) {
                 Privilege::Kernel,
                 LeafAccess::ReadOnly,
                 Memory::Device,
-                pat,
             )
             .unwrap();
         ALTERNATE_TOP.0[slot] = format
@@ -87,7 +84,6 @@ fn roundtrip(hart: usize, apic: PhysicalRange, version: u32) {
                 Privilege::Kernel,
                 LeafAccess::ReadOnly,
                 Memory::Normal,
-                pat,
             )
             .unwrap();
         let first = control.prepare_root(root).unwrap();
@@ -97,7 +93,7 @@ fn roundtrip(hart: usize, apic: PhysicalRange, version: u32) {
             control.prepare_root(PhysicalAddress::new(root.get() + 1)),
             Err(SwitchError::Scope)
         ));
-        installation::roundtrip(&mut control, hart, first, |control| {
+        installation::roundtrip(&mut control, processor, first, |control| {
             let data: u64;
             asm!("mov {}, [{}]", out(reg) data, in(reg) slot << 39, options(nostack, readonly));
             assert_eq!(data, DATA.0[0]);
@@ -149,5 +145,5 @@ pub fn check(boot: kernel::entry::boot::Boot<'_>) {
         let mut fixed = uefi_fixture::q35::local_window(&boot);
         (fixed.physical(), unsafe { fixed.read_u32(0x30) }.unwrap())
     };
-    roundtrip(boot.hart(), apic, version);
+    roundtrip(boot.processor(), apic, version);
 }

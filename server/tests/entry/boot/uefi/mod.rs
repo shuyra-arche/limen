@@ -22,16 +22,18 @@ mod memory;
 mod ram;
 #[path = "../../../metal/sync/native.rs"]
 mod synchronization;
+#[path = "../material/window.rs"]
+mod window;
 
 static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
 static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
 static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static OBSERVED: AtomicUsize = AtomicUsize::new(usize::MAX);
 
-fn observe_minor(hart: usize) {
-    fixture::check_minor(&MINOR, hart);
+fn observe_minor(processor: usize) {
+    fixture::check_minor(&MINOR, processor);
     synchronization::check();
-    OBSERVED.store(hart, Ordering::Release);
+    OBSERVED.store(processor, Ordering::Release);
 }
 fn check_retention(boot: &boot::Boot<'_>) {
     let map = boot.firmware_map().unwrap();
@@ -71,8 +73,8 @@ fn check_retention(boot: &boot::Boot<'_>) {
     boot_diagnostic::write("PASS allocator retained without retirement or mapping\n");
 }
 
-fn minor(hart: usize, _: usize) -> ! {
-    observe_minor(hart);
+fn minor(processor: usize, _: usize) -> ! {
+    observe_minor(processor);
     loop {
         core::hint::spin_loop();
     }
@@ -131,6 +133,6 @@ pub fn check(boot: boot::Boot<'_>, complete: fn() -> !) -> ! {
     check_retention(&boot);
     let mut startup = fixture::inspect(&boot, &view);
     ram::check(&boot);
-    start_minor(boot.hart(), fixture::target(), &mut startup);
+    start_minor(boot.processor(), fixture::target(), &mut startup);
     complete()
 }

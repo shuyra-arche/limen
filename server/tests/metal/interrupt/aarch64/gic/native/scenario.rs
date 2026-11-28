@@ -3,7 +3,13 @@
 
 use kernel::metal::interrupt::treaty::{AbsoluteTimer, ClaimId, Completion, HardwareClaim};
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
-use kernel::metal::processor::treaty::{LocalStorage, Minor, Stack, Startup};
+use kernel::metal::processor::treaty::{
+    InstallError, Irq, LocalStorage, Minor, RuntimeTrap, Stack, Startup,
+};
+use kernel::{basis::room::IdleObservation, entry::hook::Binding};
+
+#[path = "spi.rs"]
+mod spi;
 
 #[path = "../../../claim.rs"]
 mod claim_consumer;
@@ -16,8 +22,9 @@ mod timer_consumer;
 
 use core::{
     arch::asm,
+    cell::UnsafeCell,
     fmt::Write,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,
 };
 use kernel::metal::{
@@ -25,9 +32,9 @@ use kernel::metal::{
     interrupt::aarch64::{
         gic::{
             GicV3,
-            cpu_interface::{CpuInterface, available},
+            cpu_interface::{CpuInterface, Wake, available},
             distributor::{Barrier, Distributor, Route, Slot, State as SpiState},
-            reception::State,
+            reception::{Failure as ReceptionFailure, State},
             redistributor::{
                 Frame, FrameHandoff, Redistributor, Slot as FrameSlot,
                 input::description::PrivateInterrupts,
@@ -41,7 +48,7 @@ use kernel::metal::{
         description::treaty::devicetree::DeviceTree, firmware::treaty::psci::PsciDescription,
     },
     processor::description::aarch64::cpu::Aarch64Cpus,
-    sync::treaty::{LeafLock, Supply},
+    sync::treaty::{LeafLock, Supply, TurnAcquireError, TurnLock},
 };
 use limen_treaty::model::{InternalAddress, PhysicalRange};
 
@@ -101,11 +108,101 @@ static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
 static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
 static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
 static MINOR_FRAME: LeafLock<Option<FrameHandoff<'static>>> = LeafLock::new(None);
-static MINOR_OBSERVED: AtomicBool = AtomicBool::new(false);
 static MINOR_SIGNAL: LeafLock<Option<Sgi<'static>>> = LeafLock::new(None);
-static SIGNAL_ISSUED: AtomicBool = AtomicBool::new(false);
-static SIGNAL_OBSERVED: AtomicBool = AtomicBool::new(false);
+static SIGNAL_READY: AtomicUsize = AtomicUsize::new(0);
+static FINAL_CHECK: AtomicUsize = AtomicUsize::new(0);
+static SIGNAL_WORK: AtomicUsize = AtomicUsize::new(0);
+static SIGNAL_ISSUED: AtomicUsize = AtomicUsize::new(0);
+static SIGNAL_OBSERVED: AtomicUsize = AtomicUsize::new(0);
 const SIGNAL_ID: u8 = 12;
+const OCCUPIED_ROUND: usize = 4;
+const ROOM_IDLE_ROUND: usize = 5;
+
+struct Reception {
+    processor: usize,
+    receiver: CpuInterface<'static>,
+    signal: Sgi<'static>,
+}
+
+struct LocalReception(UnsafeCell<Option<Reception>>);
+
+// Only the minor accesses the slot. Ordinary access is while IRQ is masked,
+// and the handler's borrow ends before the original continuation resumes.
+unsafe impl Sync for LocalReception {}
+
+static MINOR_IRQ: Binding<LocalReception> =
+    Binding::new(LocalReception(UnsafeCell::new(None)), handle_irq);
+static MINOR_VECTORS: RuntimeTrap = RuntimeTrap::new(MINOR_IRQ.entry());
+static RETURN_READY: AtomicBool = AtomicBool::new(false);
+static IRQ_TURN: TurnLock<()> = TurnLock::new(());
+
+fn handle_irq(owner: &LocalReception, irq: Irq<'_>) {
+    super::occupied::in_interrupt();
+    assert_eq!(IRQ_TURN.acquire(|_| ()), Err(TurnAcquireError::Context));
+    let original = unsafe { (&mut *owner.0.get()).as_mut().expect("prepared SGI") };
+    assert_eq!(irq.processor().get(), original.processor);
+    let mut claim = original
+        .receiver
+        .receive()
+        .unwrap()
+        .expect("actual SGI claim");
+    assert_eq!(claim.intid(), u32::from(original.signal.intid()));
+    claim.complete_sgi(&mut original.signal).unwrap();
+    assert!(claim.complete_sgi(&mut original.signal).is_err());
+    // The interrupted register values are live across this ordinary call ABI.
+    unsafe {
+        asm!("movi v0.16b, #0x11", "mov x8, #0x42", out("v0") _, out("x8") _, options(nostack, nomem));
+    }
+    RETURN_READY.store(true, Ordering::Release);
+}
+
+fn check_return() {
+    let state: usize;
+    let integers: usize;
+    let vectors: usize;
+    let stack: usize;
+    unsafe {
+        asm!(
+            "mov x8, #0xabcd",
+            "mov x9, sp",
+            // Make the interrupted SP unaligned without using it for memory.
+            "sub sp, sp, #8",
+            "movi v0.16b, #0x55",
+            "msr daifclr, #2",
+            "isb",
+            "2: ldarb w10, [{ready}]",
+            "cbz w10, 2b",
+            "mrs {state}, daif",
+            "msr daifset, #2",
+            "add sp, sp, #8",
+            "mov x10, sp",
+            "cmp x9, x10",
+            "cset {stack}, eq",
+            "mov x10, #0xabcd",
+            "cmp x8, x10",
+            "cset {integers}, eq",
+            "movi v1.16b, #0x55",
+            "cmeq v1.16b, v0.16b, v1.16b",
+            "uminv b1, v1.16b",
+            "umov w10, v1.b[0]",
+            "cmp w10, #0xff",
+            "cset {vectors}, eq",
+            ready = in(reg) RETURN_READY.as_ptr(),
+            state = lateout(reg) state,
+            integers = lateout(reg) integers,
+            vectors = lateout(reg) vectors,
+            stack = lateout(reg) stack,
+            out("x8") _,
+            out("x9") _,
+            out("x10") _,
+            out("v0") _,
+            out("v1") _,
+            options(nostack),
+        );
+    }
+    assert_eq!(state & 0x80, 0, "the interrupted IRQ mask was restored");
+    assert_eq!((integers, vectors, stack), (1, 1, 1));
+}
 
 fn wake(frame: &mut Frame<'_>) {
     for _ in 0..4096 {
@@ -117,7 +214,7 @@ fn wake(frame: &mut Frame<'_>) {
     assert!(frame.awake());
 }
 
-fn observe_minor(hart: usize, _: usize) -> ! {
+fn observe_minor(processor: usize, _: usize) -> ! {
     let handoff = MINOR_FRAME
         .acquire(Option::take)
         .unwrap()
@@ -128,7 +225,7 @@ fn observe_minor(hart: usize, _: usize) -> ! {
     let mut frame = handoff
         .attach(window(range))
         .unwrap_or_else(|(_, _, reason)| panic!("minor frame attachment: {reason:?}"));
-    assert_eq!(frame.affinity(), hart);
+    assert_eq!(frame.affinity(), processor);
     assert_eq!(frame.physical(), range);
     assert!(unsafe { available() });
     wake(&mut frame);
@@ -146,6 +243,66 @@ fn observe_minor(hart: usize, _: usize) -> ! {
             options(nostack)
         );
     }
+    assert_eq!(unsafe { MINOR_VECTORS.install() }, Ok(()));
+    assert_eq!(
+        unsafe { MINOR_VECTORS.install() },
+        Err(InstallError::Occupied)
+    );
+    for round in 1..=3 {
+        frame = run_sgi_round(frame, processor, round, |receiver| {
+            check_idle(receiver, round)
+        });
+    }
+    super::occupied::start(frame)
+}
+
+pub(super) fn resume_minor(frame: Frame<'static>) -> ! {
+    spi::on_minor(frame)
+}
+
+pub(super) fn interrupt_unit(frame: Frame<'static>, processor: usize) -> Frame<'static> {
+    run_sgi_round(frame, processor, OCCUPIED_ROUND, |_| {
+        await_round(&SIGNAL_ISSUED, OCCUPIED_ROUND)
+    })
+}
+
+pub(super) fn wake_room(
+    frame: Frame<'static>,
+    processor: usize,
+    idle: &IdleObservation,
+) -> Frame<'static> {
+    run_sgi_round(frame, processor, ROOM_IDLE_ROUND, |receiver| {
+        let limit = time_count() + 3 * time_frequency();
+        let mut announced = false;
+        loop {
+            let wake = unsafe {
+                receiver.wait_for_sgi(SIGNAL_ID, || {
+                    let ready = idle.changed();
+                    if !announced {
+                        assert!(!ready);
+                        FINAL_CHECK.store(ROOM_IDLE_ROUND, Ordering::Release);
+                        announced = true;
+                    }
+                    ready
+                })
+            }
+            .unwrap();
+            if wake != Wake::Recheck {
+                break;
+            }
+            assert!(time_count() < limit, "Room idle wake timeout");
+        }
+        await_round(&SIGNAL_ISSUED, ROOM_IDLE_ROUND);
+        assert!(idle.changed());
+    })
+}
+
+fn run_sgi_round(
+    frame: Frame<'static>,
+    processor: usize,
+    round: usize,
+    wait: impl FnOnce(&mut CpuInterface<'static>),
+) -> Frame<'static> {
     let mut receiver = unsafe { CpuInterface::admit(frame) }
         .unwrap_or_else(|(_, reason)| panic!("original SGI CPU Interface: {reason:?}"));
     let signal = unsafe { receiver.reserve_sgi(SIGNAL_ID, 0x10) }.expect("original minor SGI");
@@ -155,37 +312,110 @@ fn observe_minor(hart: usize, _: usize) -> ! {
             *slot = Some(signal);
         })
         .unwrap();
-    MINOR_OBSERVED.store(true, Ordering::Release);
-    while !SIGNAL_ISSUED.load(Ordering::Acquire) {
-        unsafe { asm!("wfe", options(nostack, nomem)) };
-    }
-    let mut signal = MINOR_SIGNAL
+    RETURN_READY.store(false, Ordering::Relaxed);
+    assert_eq!(
+        unsafe { receiver.wait_for_sgi(SIGNAL_ID + 1, || false) },
+        Err(ReceptionFailure::Scope)
+    );
+    assert_eq!(
+        IRQ_TURN.acquire(|_| unsafe { receiver.wait_for_sgi(SIGNAL_ID, || false) }),
+        Ok(Err(ReceptionFailure::Busy)),
+    );
+    unsafe { asm!("msr ICC_PMR_EL1, {}", "isb", in(reg) 0x10u64, options(nostack)) };
+    assert_eq!(
+        unsafe { receiver.wait_for_sgi(SIGNAL_ID, || false) },
+        Err(ReceptionFailure::Busy)
+    );
+    unsafe { asm!("msr ICC_PMR_EL1, {}", "isb", in(reg) 0x80u64, options(nostack)) };
+    SIGNAL_READY.store(round, Ordering::Release);
+    wait(&mut receiver);
+    assert!(!RETURN_READY.load(Ordering::Acquire));
+    let signal = MINOR_SIGNAL
         .acquire(Option::take)
         .unwrap()
         .expect("original sent SGI");
-    wait_for_claim(&mut receiver, usize::from(SIGNAL_ID));
-    let mut claim = receiver.claim().expect("original minor SGI");
-    assert_eq!(claim.intid(), u32::from(signal.intid()));
-    claim.complete_sgi(&mut signal).unwrap();
-    assert!(claim.complete_sgi(&mut signal).is_err());
+    unsafe {
+        MINOR_IRQ.owner().0.get().write(Some(Reception {
+            processor,
+            receiver,
+            signal,
+        }))
+    };
+    assert_eq!(IRQ_TURN.acquire(|_| ()), Ok(()));
+    check_return();
+    assert_eq!(IRQ_TURN.acquire(|_| ()), Ok(()));
+    let Reception {
+        mut receiver,
+        signal,
+        ..
+    } = unsafe {
+        (&mut *MINOR_IRQ.owner().0.get())
+            .take()
+            .expect("returned local SGI")
+    };
+    assert_eq!(receiver.state(), State::Empty);
+    assert!(receiver.receive().unwrap().is_none());
     let mut frame = receiver
         .release()
         .unwrap_or_else(|_| panic!("minor SGI remains live"));
     frame.retire_sgi(signal).unwrap();
-    SIGNAL_OBSERVED.store(true, Ordering::Release);
-    loop {
-        // Keep the original Frame reserved for this PE until guest shutdown.
-        core::hint::black_box(&mut frame);
-        unsafe { asm!("wfe", options(nostack, nomem)) };
-    }
+    SIGNAL_OBSERVED.store(round, Ordering::Release);
+    frame
 }
 
-fn start_minor(tree: &DeviceTree<'_>, hart: usize, frame: Frame<'static>) {
+fn check_idle(receiver: &mut CpuInterface<'_>, round: usize) {
+    if round == 1 {
+        await_round(&SIGNAL_ISSUED, round);
+        assert_eq!(
+            unsafe { receiver.wait_for_sgi(SIGNAL_ID, || signal_work(round)) },
+            Ok(Wake::Ready),
+        );
+        return;
+    }
+    if round == 2 {
+        let wake = unsafe {
+            receiver.wait_for_sgi(SIGNAL_ID, || {
+                assert!(!signal_work(round));
+                FINAL_CHECK.store(round, Ordering::Release);
+                // The real send wins after the work snapshot but before the
+                // receiver's last hardware pending check.
+                await_round(&SIGNAL_ISSUED, round);
+                false
+            })
+        };
+        assert_eq!(wake, Ok(Wake::Pending));
+        return;
+    }
+
+    let limit = time_count() + 3 * time_frequency();
+    let mut announced = false;
+    loop {
+        let wake = unsafe {
+            receiver.wait_for_sgi(SIGNAL_ID, || {
+                if !announced {
+                    assert!(!signal_work(round));
+                    FINAL_CHECK.store(round, Ordering::Release);
+                    announced = true;
+                    return false;
+                }
+                signal_work(round)
+            })
+        }
+        .unwrap();
+        if wake != Wake::Recheck {
+            break;
+        }
+        assert!(time_count() < limit, "SGI idle wake timeout");
+    }
+    await_round(&SIGNAL_ISSUED, round);
+}
+
+fn start_minor(tree: &DeviceTree<'_>, processor: usize, frame: Frame<'static>) {
     let psci = PsciDescription::read(tree)
         .unwrap()
         .expect("GIC fixture PSCI");
     let psci = unsafe { psci.verify() }.unwrap();
-    unsafe { psci.verify_affinity(hart, false) }.unwrap();
+    unsafe { psci.verify_affinity(processor, false) }.unwrap();
     MINOR_FRAME
         .acquire(|slot| {
             assert!(slot.is_none());
@@ -193,55 +423,75 @@ fn start_minor(tree: &DeviceTree<'_>, hart: usize, frame: Frame<'static>) {
         })
         .unwrap();
     let mut startup = Startup::Psci(psci);
-    unsafe { MINOR.start(hart, observe_minor, 0, &mut startup) }.unwrap();
-    let start: u64;
-    let frequency: u64;
-    unsafe {
-        asm!("mrs {}, CNTVCT_EL0", "mrs {}, CNTFRQ_EL0", out(reg) start, out(reg) frequency, options(nostack))
-    };
-    while !MINOR_OBSERVED.load(Ordering::Acquire) {
-        let now: u64;
-        unsafe { asm!("mrs {}, CNTVCT_EL0", out(reg) now, options(nostack)) };
-        assert!(
-            now.wrapping_sub(start) < frequency * 3,
-            "minor GICR observation timeout"
-        );
-    }
+    unsafe { MINOR.start(processor, observe_minor, 0, &mut startup) }.unwrap();
+    await_round(&SIGNAL_READY, 1);
     assert!(MINOR.ready());
-    unsafe { psci.verify_affinity(hart, true) }.unwrap();
+    unsafe { psci.verify_affinity(processor, true) }.unwrap();
+}
+
+fn time_count() -> u64 {
+    let count;
+    unsafe { asm!("mrs {}, CNTVCT_EL0", out(reg) count, options(nostack, nomem)) };
+    count
+}
+
+fn time_frequency() -> u64 {
+    let frequency;
+    unsafe { asm!("mrs {}, CNTFRQ_EL0", out(reg) frequency, options(nostack, nomem)) };
+    frequency
+}
+
+fn signal_work(round: usize) -> bool {
+    SIGNAL_WORK.load(Ordering::Acquire) == round
+}
+
+pub(super) fn await_round(state: &AtomicUsize, round: usize) {
+    let limit = time_count() + 3 * time_frequency();
+    while state.load(Ordering::Acquire) != round {
+        assert!(time_count() < limit, "peer SGI round timeout");
+        core::hint::spin_loop();
+    }
 }
 
 fn check_signal(frame: Frame<'static>) -> Frame<'static> {
     let mut sender = unsafe { CpuInterface::admit(frame) }
         .unwrap_or_else(|(_, reason)| panic!("original SGI sender: {reason:?}"));
-    let mut signal = MINOR_SIGNAL
-        .acquire(Option::take)
-        .unwrap()
-        .expect("admitted minor SGI");
-    sender.send_sgi(&mut signal).unwrap();
-    assert!(sender.send_sgi(&mut signal).is_err());
-    MINOR_SIGNAL
-        .acquire(|slot| {
-            assert!(slot.is_none());
-            *slot = Some(signal);
-        })
-        .unwrap();
-    SIGNAL_ISSUED.store(true, Ordering::Release);
-    unsafe { asm!("sev", options(nostack, nomem)) };
-    let start: u64;
-    let frequency: u64;
-    unsafe {
-        asm!("mrs {}, CNTVCT_EL0", "mrs {}, CNTFRQ_EL0", out(reg) start, out(reg) frequency, options(nostack))
-    };
-    while !SIGNAL_OBSERVED.load(Ordering::Acquire) {
-        let now: u64;
-        unsafe { asm!("mrs {}, CNTVCT_EL0", out(reg) now, options(nostack)) };
-        assert!(
-            now.wrapping_sub(start) < frequency * 3,
-            "minor SGI completion timeout"
-        );
+    for round in 1..=ROOM_IDLE_ROUND {
+        await_round(&SIGNAL_READY, round);
+        if matches!(round, 2 | 3 | ROOM_IDLE_ROUND) {
+            await_round(&FINAL_CHECK, round);
+        }
+        if matches!(round, 3 | ROOM_IDLE_ROUND) {
+            let send_after = time_count() + time_frequency() / 100;
+            while time_count() < send_after {
+                core::hint::spin_loop();
+            }
+        }
+        let mut signal = MINOR_SIGNAL
+            .acquire(Option::take)
+            .unwrap()
+            .expect("admitted minor SGI");
+        if round == ROOM_IDLE_ROUND {
+            super::occupied::publish_ready();
+        } else {
+            SIGNAL_WORK.store(round, Ordering::Release);
+        }
+        sender.send_sgi(&mut signal).unwrap();
+        assert!(sender.send_sgi(&mut signal).is_err());
+        MINOR_SIGNAL
+            .acquire(|slot| {
+                assert!(slot.is_none());
+                *slot = Some(signal);
+            })
+            .unwrap();
+        SIGNAL_ISSUED.store(round, Ordering::Release);
+        await_round(&SIGNAL_OBSERVED, round);
     }
-    boot_diagnostic::write("PASS arm-sgi target=1 claim=1 eoi=1 retired=1\n");
+    super::occupied::check_departure();
+    boot_diagnostic::write(
+        "PASS arm-sgi target=1 irq=5 claim=5 eoi=5 restored=5 retired=5 idle=3 occupied=1 leave=2\n",
+    );
+    boot_diagnostic::write("PASS arm-room-idle ready=1 sgi=1 dispatched=1 leave=1\n");
     sender
         .release()
         .unwrap_or_else(|_| panic!("major SGI interface busy"))
@@ -263,6 +513,7 @@ fn check_virtual_timer(
     let distinct_counter = unsafe { counter.bind(major) }.unwrap();
     let counter = unsafe { counter.bind(major) }.unwrap();
     let clock = counter.clock();
+    let mut captured = false;
     for delay in [Duration::from_secs(5), Duration::from_millis(10)] {
         receiver.prepare_ppi(&mut ppi).unwrap();
         let mut timer = unsafe { VirtualTimer::admit(timer, &counter, &mut ppi) }.unwrap();
@@ -279,6 +530,18 @@ fn check_virtual_timer(
             timer_consumer::advance(clock, &mut timer, Duration::from_millis(10));
         }
         assert!(timer.stopped_ppi().is_none());
+        if delay == Duration::from_millis(10) {
+            super::timer::install();
+            super::timer::receive(
+                &mut receiver,
+                &mut timer,
+                time_count() + clock.frequency().get() * 3,
+            );
+            assert!(timer.stopped_ppi().is_none());
+            assert_eq!(receiver.state(), State::Empty);
+            captured = true;
+            continue;
+        }
         wait_for_claim(&mut receiver, role.intid as usize);
         timer_consumer::confirm_due(&timer);
         assert_eq!(timer.pending(), Ok(true));
@@ -302,6 +565,7 @@ fn check_virtual_timer(
         assert!(timer.stopped_ppi().is_none());
         assert_eq!(receiver.state(), State::Empty);
     }
+    assert!(captured);
     let mut frame = receiver
         .release()
         .unwrap_or_else(|_| panic!("timer receiver remains live"));
@@ -309,7 +573,7 @@ fn check_virtual_timer(
         match unsafe { frame.retire_ppi(ppi) } {
             Ok(()) => {
                 boot_diagnostic::write(
-                    "PASS arm-virtual-timer programmed=1 ppi=1 eoi=1 retired=1 common=1\n",
+                    "PASS arm-virtual-timer programmed=2 ppi=2 eoi=2 runtime=1 restored=1 retired=1\n",
                 );
                 return frame;
             }
@@ -423,13 +687,17 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
             assert!(spi.reserve(second_route).is_err());
             route_consumer::publish(
                 &mut spi
-                    .configure(&mut primary_binding, major as u64, 0x10)
+                    .configure(&mut primary_binding, receiver.destination().unwrap(), 0x10)
                     .unwrap(),
             );
             assert_eq!(spi.state(second_id), Ok(SpiState::Masked));
             route_consumer::publish(
                 &mut spi
-                    .configure(&mut secondary_binding, major as u64, 0x20)
+                    .configure(
+                        &mut secondary_binding,
+                        receiver.destination().unwrap(),
+                        0x20,
+                    )
                     .unwrap(),
             );
             (primary_binding, secondary_binding)
@@ -473,7 +741,9 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
             unsafe { route_consumer::resume(&mut spi.control(binding).unwrap()) };
             assert_eq!(spi.state(input), Ok(SpiState::Enabled));
             route_consumer::mask(&mut spi.control(binding).unwrap());
-            unsafe { route_consumer::retire(&mut spi.control(binding).unwrap()) };
+            let request = unsafe { spi.begin_retirement(binding) }.unwrap();
+            let receipt = receiver.observe_retirement(request).unwrap();
+            unsafe { spi.finish_retirement(binding, receipt) }.unwrap();
             let mut replacement =
                 unsafe { spi.reserve(if input == id { route } else { second_route }) }.unwrap();
             assert!(spi.control(binding).is_err());
@@ -487,6 +757,17 @@ pub(super) fn check(tree: &DeviceTree<'_>, controller: GicV3<'_>, major: usize) 
     local_frame = check_virtual_timer(tree, controller, major, local_frame);
     local_frame = check_signal(local_frame);
     assert!(local_frame.awake());
+    let remote = unsafe { CpuInterface::admit(local_frame) }
+        .unwrap_or_else(|(_, reason)| panic!("major GIC interface: {reason:?}"));
+    spi::close_remote(
+        controller,
+        distributor.reborrow(),
+        second_route,
+        &mut secondary,
+        &remote,
+        minor,
+    );
+    assert!(remote.release().is_ok());
     boot_diagnostic::write("PASS gicr frames=2 independent=1\n");
     boot_diagnostic::write("PASS external-route published=2 repeated=0 independent=1\n");
     let bank = id / 32 * 4;

@@ -12,15 +12,17 @@ mod cooperative;
 pub use cooperative::Dispatchers;
 #[cfg(limen_cooperative)]
 pub(crate) use cooperative::{
-    Context, Dispatcher, LeaveReceipt, LocalExecution, attached, cooperative_ready, current,
-    reserve,
+    Context, Dispatcher, LeaveReceipt, LocalExecution, RuntimeError, cooperative_ready, current,
+    start_runtime,
 };
+#[cfg(all(limen_cooperative, target_arch = "riscv64"))]
+pub(crate) use cooperative::{budget_ready, current_in_interrupt};
 
-/// Physical Hart identity used to compare observations in their original scope.
+/// Hardware identity of a logical processor in its original scope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct HartId(usize);
+pub struct ProcessorId(usize);
 
-impl HartId {
+impl ProcessorId {
     pub const fn new(value: usize) -> Self {
         Self(value)
     }
@@ -30,10 +32,17 @@ impl HartId {
     }
 }
 
-/// Check the ordinary entry and return only its installed Hart identity.
+/// Check the ordinary entry and return only its installed processor identity.
 #[cfg(limen_target)]
-pub(crate) fn try_current_hart() -> Option<HartId> {
-    Some(HartId::new(local::ordinary_local()?.identity()))
+pub(crate) fn try_current_processor() -> Option<ProcessorId> {
+    Some(local::ordinary_local()?.identity())
+}
+
+/// The original local entry grants at most one supervisor line delivery.
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+pub(in crate::metal) fn claim_supervisor_reception(processor: ProcessorId) -> bool {
+    local::ordinary_local()
+        .is_some_and(|local| local.identity() == processor && local.claim_supervisor_reception())
 }
 
 /// Protect a window of execution on the current verified CPU.
@@ -54,6 +63,22 @@ pub(crate) fn can_switch() -> bool {
     protect().is_some_and(|protection| protection.is_outer())
 }
 
+#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "x86_64")))]
+pub use super::execution::runtime::Irq;
+#[cfg(limen_target)]
+pub(crate) use super::execution::runtime::{Capture, Handler};
+#[cfg(limen_target)]
+pub use super::execution::runtime::{Entry, InstallError, RuntimeTrap};
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+pub use super::execution::runtime::{SoftwareInterrupt, TimerInterrupt};
+
+#[cfg(all(limen_target, target_arch = "aarch64"))]
+pub(in crate::metal) use super::executor::aarch64::native::wait_for_interrupt;
+#[cfg(all(limen_target, target_arch = "riscv64", limen_firmware = "sbi"))]
+pub(in crate::metal) use super::executor::riscv64::native::wait_for_interrupt;
+#[cfg(all(limen_target, target_arch = "x86_64"))]
+pub(in crate::metal) use super::executor::x86_64::native::wait_for_interrupt;
+
 pub use super::execution::terminal::Console;
 #[cfg(limen_target)]
 pub use super::execution::terminal::Terminal;
@@ -62,3 +87,6 @@ pub use super::executor::launch::{Minor, StartError, Startup};
 
 #[cfg(limen_target)]
 pub use super::executor::local::{LocalStorage, stack::Stack};
+
+#[cfg(limen_firmware = "sbi")]
+pub use super::description::riscv64::cpu::RiscvCpus;

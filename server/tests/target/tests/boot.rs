@@ -11,7 +11,7 @@ use kernel::metal::sync::treaty::turn_capacity;
 guest::entry! {
     platform: platform::Platform::native(4),
     test: |mut boot| {
-        assert_ne!(boot.hart(), usize::MAX);
+        assert_ne!(boot.processor(), usize::MAX);
         assert!(!boot.stack_range().is_empty());
         let _major = boot.take_major().expect("original major ownership");
         assert!(boot.take_major().is_none());

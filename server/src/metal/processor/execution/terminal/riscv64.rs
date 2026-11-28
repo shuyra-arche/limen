@@ -5,14 +5,24 @@ use core::arch::{asm, naked_asm};
 #[rustc_align(4)]
 pub(in crate::metal) unsafe extern "C" fn trap() -> ! {
     naked_asm!(
-        "csrr t0, sscratch",
+        // The terminal vector must remain usable while sscratch is prepared
+        // for the replacement entry, including before gp is initialized.
+        ".option push",
+        ".option norelax",
+        "lla t0, {top}",
+        ".option pop",
         "amoswap.d.aq t0, zero, (t0)",
         "beqz t0, 2f",
         "mv a0, sp",
         "mv sp, t0",
+        ".option push",
+        ".option norelax",
+        "la gp, __global_pointer$",
+        ".option pop",
         "tail {capture}",
         "2: wfi",
         "j 2b",
+        top = sym diagnostic::TOP,
         capture = sym capture,
     );
 }

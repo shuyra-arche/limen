@@ -1,5 +1,6 @@
 pub mod chrono;
 pub(crate) mod identity;
+pub(crate) mod index;
 pub mod interrupt;
 pub mod memory;
 pub mod module;

@@ -67,7 +67,7 @@ fn check_failure(startup: &mut Startup, target: usize) {
     );
     assert_eq!(FAILURE_DELAY_CALLS.load(Ordering::Relaxed), 2);
     let expected = apic::launch::State::Unconfirmed(apic::launch::Effect {
-        hart: u8::try_from(target).unwrap(),
+        processor: u8::try_from(target).unwrap(),
         page,
         stage: apic::launch::Stage::Init,
     });

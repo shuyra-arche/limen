@@ -3,8 +3,9 @@
 use core::{arch::global_asm, mem::offset_of};
 
 use crate::metal::{
-    interrupt::riscv64::internal::supervisor, memory::mmu::riscv64::internal::context::Context,
-    processor::executor::riscv64::native,
+    interrupt::riscv64::internal::supervisor,
+    memory::mmu::riscv64::internal::context::Context,
+    processor::executor::{local, riscv64::native},
 };
 
 /// The native integer-only switch is valid in the verified Bare environment.
@@ -12,8 +13,13 @@ pub(in crate::metal::processor) fn ready() -> bool {
     let status = native::status();
     status.masked()
         && status.extensions_off()
-        && supervisor::all_masked()
         && Context::current() == Some(Context::BARE)
+        // The switch keeps SIE masked. An individually enabled source needs
+        // the verified, permanent runtime entry to receive it on either side.
+        && (supervisor::all_masked()
+            || local::ordinary_local()
+                .and_then(|local| local.runtime())
+                .is_some_and(|runtime| runtime.covers_enabled()))
 }
 
 #[repr(C)]
@@ -39,6 +45,20 @@ impl Saved {
             stack,
             ..Self::EMPTY
         }
+    }
+
+    /// Restore the suspended dispatcher across its native switch call.
+    pub(in crate::metal::processor) fn return_address(&self, registers: &mut [usize; 32]) -> usize {
+        let global = registers[3];
+        let local = registers[4];
+        *registers = [0; 32];
+        registers[1] = self.resume;
+        registers[2] = self.stack;
+        registers[3] = global;
+        registers[4] = local;
+        registers[8..10].copy_from_slice(&self.preserved[..2]);
+        registers[18..28].copy_from_slice(&self.preserved[2..]);
+        self.resume
     }
 }
 

@@ -93,7 +93,7 @@ because it supplies loader and board services shared by UEFI guests.
 
 The linked `.testenv` record describes the selected execution purpose
 independently of the machine configuration (firmware, interrupt controller,
-Hart count, serial topology, IOMMU and PCI devices). The Runner rejects a
+processor count, serial topology, IOMMU and PCI devices). The Runner rejects a
 missing, malformed or unsupported declaration, including a mismatch between
 the requested purpose and the compiled callback, before starting QEMU. The kernel still discovers real hardware
 through the original firmware inputs. Debug and Release use the same rules.
@@ -162,17 +162,43 @@ semihosting is enabled to report completion.
 | --- | --- |
 | Boot | `kernel-guest:boot-handoff`: original SBI/UEFI handoff, major/minor stacks, firmware reservation, memory admission and Foundation |
 | Execution | `kernel-guest:execution-lifecycle`: creation, admission, cancellation, exact departure, return, reap and stack reuse on all architectures |
-| Migration | `kernel-guest:execution-migration`: cross-Hart continuation, stack, ABI and stale receipts |
+| Migration | `kernel-guest:execution-migration`: cross-processor continuation, stack, ABI and stale receipts |
 | Sync | `kernel-guest:sync`: collected cases and native synchronization contracts, plus the riscv64 enabled-interrupt contract |
 | Participation | `riscv64-guest:execution-participation`: independent occupancies, exact switch-boundary integer registers, Turn/Snapshot, three admitted participants, fourth rejected |
 | Interrupt | `riscv64-guest:aplic,plic-sstc,ipi`, `aarch64-guest:gic`, `x86_64-guest:apic-failure,apic-timer,ioapic,ipi`: real sources, claims, timer effects and launch failures |
 | CPU translation | `aarch64-guest:paging`, `x86_64-guest:paging`, `module-guest:lifecycle` on riscv64: retained roots, exact context and actual translation |
 | IO translation | `riscv64-guest:iommu`, `aarch64-guest:smmu`, `x86_64-guest:amdvi,vtd`: actual EDU DMA, binding, withdrawal and completion |
-| Module | `module-guest:lifecycle`: UEFI strict-NX independent ELF, use draining and retention without withdrawal; riscv64 Sv39/Sv48/Sv57, two Harts, dependency-ordered retirement and reuse |
+| Module | `module-guest:lifecycle`: UEFI strict-NX independent ELF, use draining and retention without withdrawal; riscv64 Sv39/Sv48/Sv57, two processors, dependency-ordered retirement and reuse |
 
 Host models and compiler contracts do not establish native hardware authority.
-Hardware fixtures exercise actual observations and retained resources. They
-do not replace the future runtime Trap or driver Sign lifecycle.
+The riscv64 IPI guest uses the permanent supervisor software trap vector on
+the receiving processor. It checks real peer delivery, coalescing, same-layer
+return, and masked WFI with pre-wait and post-wait rechecks. The riscv64
+execution lifecycle guest receives an IRQ during an occupied Kernel Unit,
+resumes the same stack and only then obtains the original cooperative leave
+receipt. The Sstc and SBI TIME guests capture actual timer interrupts and
+settle the original comparison from the ordinary masked path.
+
+The AArch64 GIC guest installs the permanent EL1h IRQ vector on the receiving
+processor before enabling its original Group 1 SGI. It checks the exact
+claim and completion, refuses ordinary Turn with idle Sync, and observes
+the interrupted stack, IRQ mask, GPR and full-width SIMD continuation after
+hardware return. An explicitly paired Generic Timer PPI also uses the
+permanent vector, stops the original comparison and completes that GIC
+claim. Other GIC cases retain their polling reception checks.
+
+The x86_64 IPI guest installs the runtime table before launching the minor.
+Its physical ICR sends exercise the receiving vector's IST stack and exact
+xAPIC lease and EOI, including coalescing and a later accepted delivery.
+The guest observes restored RSP, RFLAGS, GPR and XMM state and verifies that
+Turn rejects the IRQ path while the local Sync supply is idle.
+The xAPIC one-shot timer uses that permanent entry and keeps its lease
+until the original pending and in-service receipts drain. The ordinary
+owner then rearms the same relative countdown.
+The x86_64 Host observer uses the same native guest for two separate terminal
+runs. It checks a remote xAPIC NMI with an unusable interrupted RSP, and a
+processor-generated #DF after the #GP delivery itself faults. Each run records
+its own native terminal evidence and process settlement.
 
 ## Host-assisted observations
 
@@ -257,17 +283,17 @@ No separate benchmark workspace or lockfile is required.
 The first target, `riscv64-guest:clock`, establishes a measurement transport
 over the admitted RISC-V timebase. The Sync owner uses two machine topologies:
 
-| Image | Active Harts | Measurement series |
+| Image | Active processors | Measurement series |
 | --- | --- | --- |
 | `sync-local` | 1 | `leaf-local`, `turn-local` |
 | `kernel-guest:sync` | 4 | `leaf-shared`, `turn-shared` |
 | `kernel-guest:sync` | 2 of 4 | `atomic-alternating`, `leaf-alternating`, `turn-alternating` |
 
-The local workload increments a protected word on a one-Hart machine.
-The shared workload starts three actual minor Harts, then measures batches
-of equal work on all four Harts. Every batch must retire all participating
+The local workload increments a protected word on a one-processor machine.
+The shared workload starts three actual minor processors, then measures batches
+of equal work on all four processors. Every batch must retire all participating
 operations and match the exact aggregate count. The alternating workload
-passes an explicit atomic baton between two Harts; the other two Harts
+passes an explicit atomic baton between two processors; the other two processors
 remain inactive in the fixture. These durations include the baton and
 synchronization costs, not an isolated measurement of MCS queue handoff.
 The atomic alternating series provides a comparison, not a value to
@@ -284,7 +310,7 @@ cargo -Z panic-abort-tests --config "$config" bench --locked \
 Use a fresh evidence root. Replace `--bench clock` with `--bench sync-local`
 or `--benches` to select dedicated measurement targets.
 
-The shared four-Hart Sync entry retains its ordinary Test contract. To
+The shared four-processor Sync entry retains its ordinary Test contract. To
 select its measurement callback on riscv64, use:
 
 ```sh
@@ -323,7 +349,7 @@ an additional source declaration.
 The clock and local Sync benchmarks use 1,024 warmup iterations and nine
 batches of 16,384 operations. Each shared Sync series uses 512 warmup
 iterations and nine batches of 4,096 operations per participant.
-The measurement record includes the observing Hart, admitted frequency,
+The measurement record includes the observing processor, admitted frequency,
 number of series, active participant count, aggregate warmup and measured
 operation counts, and raw batch durations in nanoseconds. All series must
 be present, distinct and complete. Reporting occurs after measurement.

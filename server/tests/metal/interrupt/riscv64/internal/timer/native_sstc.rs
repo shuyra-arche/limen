@@ -19,8 +19,11 @@ mod clock;
 #[path = "../../../timer.rs"]
 mod consumer;
 
+#[path = "reception.rs"]
+mod reception;
+
 pub(super) fn check(boot: &Boot<'_>, local: &mut Reception) {
-    let hart = boot.hart() as u64;
+    let hart = boot.processor() as u64;
     let cpus = boot.riscv_cpus();
     let cpu = cpus.cpu(hart).unwrap().unwrap();
     let isa = RiscvIsa::describe(&cpu).unwrap().unwrap();
@@ -42,31 +45,26 @@ pub(super) fn check(boot: &Boot<'_>, local: &mut Reception) {
         }
         break;
     }
+    reception::install();
     assert_eq!(timer.arm_at(counter.deadline(0)), Err(Failure::Range));
-    for round in 0..2 {
+    for _ in 0..2 {
         let now = counter.read().unwrap();
         let limit = now + u64::from(counter.hertz()) * 2;
-        if round == 0 {
-            consumer::arm(counter.clock(), &mut timer, Duration::from_secs(2));
-        } else {
-            unsafe { timer.rearm(counter.deadline(limit)) }.unwrap();
-        }
+        consumer::arm(counter.clock(), &mut timer, Duration::from_secs(2));
         assert_eq!(timer.due(), Ok(false));
         consumer::advance(counter.clock(), &mut timer, Duration::from_millis(50));
-        assert_eq!(
-            unsafe { super::reception::receive(limit) },
-            (1usize << 63) | 5
-        );
-        consumer::confirm_due(&timer);
-    }
-    let limit = counter.read().unwrap() + u64::from(counter.hertz());
-    loop {
-        match unsafe { consumer::stop(&mut timer) } {
-            Err(Failure::Busy) if counter.read().unwrap() < limit => continue,
-            result => result.unwrap(),
+        reception::receive(&mut timer, limit);
+        assert_eq!(timer.pending_effect(), Ok(Some(TimerEffect::Clearing)));
+        assert_eq!(timer.arm_at(counter.deadline(limit)), Err(Failure::Busy));
+        loop {
+            match unsafe { consumer::stop(&mut timer) } {
+                Err(Failure::Busy) if counter.read().unwrap() < limit => continue,
+                result => result.unwrap(),
+            }
+            break;
         }
-        break;
+        assert_eq!(timer.state(), State::Idle);
+        assert_eq!(timer.pending(), Ok(false));
     }
-    assert_eq!(timer.state(), State::Idle);
-    boot_diagnostic::write("PASS sstc expired=2 replaced=1 shut=1 common=1\n");
+    boot_diagnostic::write("PASS sstc armed=2 irq=2 deferred=2 shut=2\n");
 }

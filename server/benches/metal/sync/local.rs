@@ -25,11 +25,11 @@ fn measure(clock: &Clock, mut increment: impl FnMut()) -> [u64; SAMPLES] {
 }
 
 pub fn check(boot: Boot<'_>) {
-    let hart = boot.hart();
-    assert_eq!(hart, 0);
+    let processor = boot.processor();
+    assert_eq!(processor, 0);
     assert!(boot.riscv_cpus().cpu(1).unwrap().is_none());
     let timebase = RiscvTimebase::describe(boot.riscv_cpus()).unwrap().unwrap();
-    let counter = unsafe { Counter::admit(timebase, hart as u64) }.unwrap();
+    let counter = unsafe { Counter::admit(timebase, processor as u64) }.unwrap();
     let clock = counter.clock();
 
     let leaf = LeafLock::new(0_usize);

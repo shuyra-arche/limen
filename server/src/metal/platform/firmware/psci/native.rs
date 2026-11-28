@@ -12,11 +12,14 @@ pub(in crate::metal::platform::firmware) const FEATURES: usize = 0x8400_000a;
 impl Psci {
     pub(in crate::metal) unsafe fn cpu_on(
         self,
-        hart: usize,
+        processor: usize,
         entry: *const (),
         context: usize,
     ) -> Result<(), isize> {
-        match unsafe { self.conduit.invoke(CPU_ON, hart, entry.addr(), context) as i32 } {
+        match unsafe {
+            self.conduit
+                .invoke(CPU_ON, processor, entry.addr(), context) as i32
+        } {
             0 => Ok(()),
             code => Err(code as isize),
         }

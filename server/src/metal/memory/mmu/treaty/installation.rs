@@ -45,7 +45,7 @@ mod bound {
     /// Installation requires the original authority, table trees and continuity.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct Context {
-        hart: usize,
+        processor: usize,
         profile: Profile,
         controls: Controls,
         root: Option<PhysicalAddress>,
@@ -55,20 +55,31 @@ mod bound {
         pub fn root(self) -> Option<PhysicalAddress> {
             self.root
         }
+
+        /// Verify the actual local controls, not merely the last recorded write.
+        #[cfg(limen_cooperative)]
+        pub(crate) fn is_current(self) -> bool {
+            Native::check(self.processor).is_ok() && unsafe { Native::observe() } == self.controls
+        }
+
+        #[cfg(limen_cooperative)]
+        pub(crate) fn processor(self) -> usize {
+            self.processor
+        }
     }
 
     /// Hardware readback of this local installation and its original context.
     /// Storage, mapping and residency retirement require separate evidence.
     #[derive(Debug, Eq, PartialEq)]
     pub struct LocalInstall {
-        hart: usize,
+        processor: usize,
         previous: Context,
         installed: Context,
     }
 
     impl LocalInstall {
-        pub fn hart(&self) -> usize {
-            self.hart
+        pub fn processor(&self) -> usize {
+            self.processor
         }
 
         pub fn previous(&self) -> Context {
@@ -80,7 +91,7 @@ mod bound {
         }
     }
 
-    /// Bound access to the original Hart's supported translation controls.
+    /// Bound access to the original processor's supported translation controls.
     /// Only its native admission may establish this local installation scope.
     #[must_use]
     pub struct LocalContext<'scope> {
@@ -91,20 +102,20 @@ mod bound {
 
     impl<'scope> LocalContext<'scope> {
         pub(in crate::metal::memory::mmu) fn bind(
-            hart: usize,
+            processor: usize,
             native: Native<'scope>,
             initial: Controls,
         ) -> Self {
             Self {
                 native,
-                installation: Installation::new(hart, initial),
+                installation: Installation::new(processor, initial),
                 local: PhantomData,
             }
         }
 
         fn describe(&self, controls: Controls) -> Context {
             Context {
-                hart: self.installation.hart(),
+                processor: self.installation.processor(),
                 profile: self.native.profile(),
                 controls,
                 root: self.native.physical_root(controls),
@@ -139,7 +150,7 @@ mod bound {
             expected: Context,
             requested: Context,
         ) -> Result<LocalInstall, SwitchError> {
-            Native::check(self.installation.hart())?;
+            Native::check(self.installation.processor())?;
             let previous = self
                 .installation
                 .current()
@@ -161,19 +172,19 @@ mod bound {
         /// Confirm the installed controls of the original pending operation.
         /// Observation does not issue another native write or prove retirement.
         pub fn confirm(&mut self) -> Result<LocalInstall, SwitchError> {
-            Native::check(self.installation.hart())?;
+            Native::check(self.installation.processor())?;
             self.installation.pending().ok_or(SwitchError::Current)?;
             self.settle(unsafe { Native::observe() })
         }
 
-        /// Retry only the exact retained installation on its original Hart.
+        /// Retry only the exact retained installation on its original processor.
         /// If its target is already observed, settle the original operation.
         ///
         /// # Safety
         /// Keep the original switch's ownership, mappings and ordering live.
         /// No unrelated operation may have used its controls.
         pub unsafe fn retry(&mut self) -> Result<LocalInstall, SwitchError> {
-            Native::check(self.installation.hart())?;
+            Native::check(self.installation.processor())?;
             let observed = unsafe { Native::observe() };
             if let Some(next) = self.installation.retry(observed)? {
                 unsafe { self.apply(next) }
@@ -187,10 +198,52 @@ mod bound {
             self.settle(unsafe { Native::observe() })
         }
 
+        /// Synchronize one actual leaf under the same confirmed local scope.
+        /// A context change is not a substitute for this completion.
+        #[cfg(limen_cooperative)]
+        pub(in crate::metal::memory::mmu) unsafe fn synchronize_leaf(
+            &self,
+            expected: Context,
+            address: limen_treaty::model::InternalAddress,
+        ) -> Result<(), SwitchError> {
+            Native::check(self.installation.processor())?;
+            if self.current() != Some(expected) || !expected.is_current() {
+                return Err(SwitchError::Current);
+            }
+            unsafe { Native::synchronize_leaf(address) };
+            if !expected.is_current() {
+                return Err(SwitchError::Unconfirmed);
+            }
+            Ok(())
+        }
+
+        /// Order the initialized private child before its non-leaf Make.
+        #[cfg(limen_cooperative)]
+        pub(in crate::metal::memory::mmu) unsafe fn order_table(&self) {
+            unsafe { Native::order_table() };
+        }
+
+        /// Complete non-leaf publication over the original local tree.
+        #[cfg(limen_cooperative)]
+        pub(in crate::metal::memory::mmu) unsafe fn synchronize_tree(
+            &self,
+            expected: Context,
+        ) -> Result<(), SwitchError> {
+            Native::check(self.installation.processor())?;
+            if self.current() != Some(expected) || !expected.is_current() {
+                return Err(SwitchError::Current);
+            }
+            unsafe { Native::synchronize_tree() };
+            if !expected.is_current() {
+                return Err(SwitchError::Unconfirmed);
+            }
+            Ok(())
+        }
+
         fn settle(&mut self, observed: Controls) -> Result<LocalInstall, SwitchError> {
             let (previous, installed) = self.installation.complete(observed)?;
             Ok(LocalInstall {
-                hart: self.installation.hart(),
+                processor: self.installation.processor(),
                 previous: self.describe(previous),
                 installed: self.describe(installed),
             })
@@ -217,8 +270,98 @@ mod bound {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    impl LocalContext<'_> {
+        /// Qualify the owned upper tree against the original inactive walk.
+        pub(in crate::metal::memory::mmu) unsafe fn prepare_table(
+            &self,
+            table: crate::metal::memory::mmu::table::TableFormat,
+            root: PhysicalAddress,
+        ) -> Result<Context, SwitchError> {
+            use crate::metal::memory::mmu::{aarch64::internal::format::Root, table::TableFormat};
+            let previous = self.current().ok_or(SwitchError::Unconfirmed)?;
+            let format = self.native.profile();
+            if previous.root().is_some()
+                || format.root() != Root::Upper
+                || table != TableFormat::Aarch64(format)
+            {
+                return Err(SwitchError::Scope);
+            }
+            unsafe { self.prepare_root(root) }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl LocalContext<'_> {
+        /// Qualify an owned successor in the exact original IA-32e format.
+        pub(in crate::metal::memory::mmu) unsafe fn prepare_table(
+            &self,
+            table: crate::metal::memory::mmu::table::TableFormat,
+            root: PhysicalAddress,
+        ) -> Result<Context, SwitchError> {
+            use crate::metal::memory::mmu::table::TableFormat;
+            let previous = self.current().ok_or(SwitchError::Unconfirmed)?;
+            if table != TableFormat::X86_64(self.native.profile()) || previous.root() == Some(root)
+            {
+                return Err(SwitchError::Scope);
+            }
+            unsafe { self.prepare_root(root) }
+        }
+
+        /// Observe one original PML4 entry through its retained identity view.
+        /// The caller holds the real original subtree and its stable structure.
+        pub(in crate::metal::memory::mmu) unsafe fn original_branch(
+            &self,
+            original: core::ptr::NonNull<u64>,
+            index: usize,
+        ) -> Result<u64, SwitchError> {
+            Native::check(self.installation.processor())?;
+            let previous = self
+                .installation
+                .current()
+                .ok_or(SwitchError::Unconfirmed)?;
+            let observed = unsafe { Native::observe() };
+            if previous != observed {
+                return Err(SwitchError::Current);
+            }
+            if index >= 512 || original.as_ptr().addr() != previous.cr3 || previous.cr3 == 0 {
+                return Err(SwitchError::Scope);
+            }
+            // A volatile scalar observation, not an exclusive byte reference:
+            // hardware may update Accessed on the retained original root.
+            let entry = unsafe { original.as_ptr().add(index).read_volatile() };
+            const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
+            if entry & ADDRESS == previous.cr3 as u64 {
+                // Recursive roots are not independent retained subtrees.
+                return Err(SwitchError::Scope);
+            }
+            self.native
+                .profile()
+                .inherited_branch(entry)
+                .ok_or(SwitchError::Scope)
+        }
+    }
+
     #[cfg(target_arch = "riscv64")]
     impl LocalContext<'_> {
+        /// Qualify the owned successor of the original bare supervisor context.
+        pub(in crate::metal::memory::mmu) unsafe fn prepare_table(
+            &self,
+            table: crate::metal::memory::mmu::table::TableFormat,
+            root: PhysicalAddress,
+        ) -> Result<Context, SwitchError> {
+            use crate::metal::memory::mmu::table::TableFormat;
+            let previous = self.current().ok_or(SwitchError::Unconfirmed)?;
+            let TableFormat::Riscv64(format) = table else {
+                return Err(SwitchError::Scope);
+            };
+            if previous.controls != Controls::BARE {
+                return Err(SwitchError::Scope);
+            }
+            let next = Controls::paged(format, root).ok_or(SwitchError::Scope)?;
+            unsafe { self.prepare_context(next) }
+        }
+
         /// Qualify the exact retained Bare or ASID-zero paged context.
         ///
         /// # Safety
@@ -245,20 +388,20 @@ enum State<C> {
 /// Tracks a local installation and the observations needed to confirm it.
 /// Constructing the record grants no access to native controls.
 pub struct Installation<C> {
-    hart: usize,
+    processor: usize,
     state: State<C>,
 }
 
 impl<C: Copy + Eq> Installation<C> {
-    pub fn new(hart: usize, current: C) -> Self {
+    pub fn new(processor: usize, current: C) -> Self {
         Self {
-            hart,
+            processor,
             state: State::Current(current),
         }
     }
 
-    pub fn hart(&self) -> usize {
-        self.hart
+    pub fn processor(&self) -> usize {
+        self.processor
     }
 
     pub fn current(&self) -> Option<C> {

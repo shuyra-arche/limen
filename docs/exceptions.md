@@ -20,13 +20,29 @@ never returns the pointer. [Stack and reporting policy](../server/src/metal/proc
 
 | Backend | Before switching stacks | On the emergency stack |
 | --- | --- | --- |
-| RV64 | `sscratch` points to the atomic slot. Take the top and preserve the interrupted SP. | Read `scause`, `sepc`, `stval` and `sstatus`. |
+| RV64 | Take the terminal stack from its resident atomic slot and preserve the interrupted SP. | Read `scause`, `sepc`, `stval` and `sstatus`. |
 | AArch64 | Preserve the vector slot and the entry value of `SP_EL1`. | Read `ELR_EL1`, select the interrupted SP from the slot and interpret ESR and FAR when applicable. |
 | x86_64 | Normalize the hardware error-code slot and preserve the frame address. | Decode the vector, error code, RIP and interrupted RSP. Read CR2 for a page fault. |
 
-On x86 the CPU must be able to push its interrupt frame before the vector can
-take the emergency stack. All three backends deliver the same five fields to
-the reporter: cause, PC, value, interrupted SP and native status.
+Before a runtime IDT is installed on x86, the CPU pushes the early interrupt
+frame on the interrupted stack. All three backends deliver cause, PC, value,
+interrupted SP and native status to the reporter.
+
+## x86_64 runtime entry
+
+A trusted CPL0 Executor can install permanent descriptor tables with
+independent IST stacks for the selected IRQ, NMI, double fault and terminal
+fallback. The admitted source GDT stays resident for later SIPI startup.
+The runtime GDT preserves its selectors while the old IDT is still active.
+The new IDT is installed after the new TSS and its selectors are read back.
+
+The selected external interrupt uses a non-nested base x87/SSE profile.
+The entry owns the machine frame through `IRETQ`. The Local APIC separately
+checks the captured processor, vector and original in-service receipt before
+acknowledging the interrupt. The IRQ stack excludes ordinary synchronization.
+Terminal entries use their own hardware stacks and require no ordinary local
+lookup.
+[Runtime and stack ownership](../server/src/metal/processor/execution/runtime/x86_64/mod.rs)
 
 ## Failure shutdown
 

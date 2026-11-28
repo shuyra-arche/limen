@@ -140,6 +140,15 @@ impl<'storage, Scope: Copy + Eq, T> GenerationTable<'storage, Scope, T> {
         Ok(self.reserve_front(slot))
     }
 
+    /// Observe the exact next identity while the original protection stays
+    /// held. No reservation is consumed until the caller commits.
+    #[cfg(limen_cooperative)]
+    pub(crate) fn next_key(&self) -> Result<Key<Scope>, ReserveError> {
+        let slot = self.free.ok_or_else(|| self.unavailable())?;
+        let (_, generation) = self.free_entry(slot);
+        Ok(Key::new(self.scope, slot, generation))
+    }
+
     /// Observe available slots under the current protection without claiming any.
     pub(crate) fn check_reserve(&self, count: usize) -> Result<(), ReserveError> {
         if count > self.entries.len() {

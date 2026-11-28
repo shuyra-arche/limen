@@ -1,10 +1,14 @@
-#[cfg(target_arch = "riscv64")]
+#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
 use kernel::metal::platform::boot::treaty::write;
 #[cfg(target_arch = "riscv64")]
 mod admission;
 #[cfg(target_arch = "riscv64")]
 mod buddy;
 #[cfg(target_arch = "riscv64")]
+mod interrupt;
+#[cfg(target_arch = "x86_64")]
+#[path = "x86_interrupt.rs"]
+mod interrupt;
 #[path = "../../../entry/boot/material/memory.rs"]
 mod memory;
 #[cfg(target_arch = "riscv64")]
@@ -12,28 +16,34 @@ mod pool;
 #[cfg(target_arch = "riscv64")]
 #[path = "../../../entry/boot/material/pool.rs"]
 mod pool_material;
+mod retirement;
+#[cfg(target_os = "uefi")]
+#[path = "../../../entry/boot/material/window.rs"]
+mod window;
 
 use core::{
     hint::black_box,
     mem::{MaybeUninit, size_of},
+    ops::Range,
     sync::atomic::{AtomicUsize, Ordering::Relaxed},
 };
 
 use kernel::{
     basis::{
-        execution::{Current, Error, Execution, KernelBinding},
-        room::{Harts, Occupancy},
+        execution::{Current, Error, Execution, KernelBinding, RuntimeEntry},
+        room::{AdmissionId, Occupancy, Participants},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
     entry::boot::Boot,
 };
 
 static mut STACKS: Stacks = Stacks::new();
-static mut HARTS: Harts<1> = Harts::new();
+static mut PARTICIPANTS: Participants<1> = Participants::new();
 static mut DISPATCHERS: kernel::metal::processor::treaty::Dispatchers<Occupancy, 1> =
     kernel::metal::processor::treaty::Dispatchers::new();
 static mut RECORDS: [UnitRecord<KernelBinding>; 4] = [const { UnitRecord::EMPTY }; 4];
 static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
+static mut RUNTIME: MaybeUninit<RuntimeEntry<Initial>> = MaybeUninit::uninit();
 static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 static FIRST_STACK: AtomicUsize = AtomicUsize::new(0);
 static SECOND_STACK: AtomicUsize = AtomicUsize::new(0);
@@ -62,6 +72,12 @@ fn first(current: &mut Current) -> u64 {
     assert_eq!(execution().pending_leave(), Ok(None));
     assert_eq!(execution().enter(), Err(Error::Busy));
     assert_eq!(execution().finish_end(current.id()), Err(Error::Busy));
+    #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+    {
+        interrupt::receive(current.processor());
+        assert_eq!(stack_address(&local), FIRST_STACK.load(Relaxed));
+        assert_eq!(black_box(local), 0x1234_5678);
+    }
     current.yield_now().expect("cooperative leave and reentry");
     assert_eq!(SEQUENCE.fetch_add(1, Relaxed), 2);
     assert_eq!(stack_address(&local), FIRST_STACK.load(Relaxed));
@@ -114,25 +130,30 @@ fn finish(unit: UnitId, occupancy: Occupancy, value: u64) {
     assert_eq!(execution.finish_end(unit), Ok(()));
 }
 
+#[cfg(target_os = "uefi")]
+pub(crate) use retirement::prepare_uefi;
+
 pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     #[cfg(target_arch = "riscv64")]
     pool::prepare(&boot);
+    let scratch = retirement::prepare(&boot);
     let major_stack = boot.stack_range();
     // Each executable owns its resident supplies for exactly one admission.
     let stacks = unsafe { &mut *(&raw mut STACKS) };
     let records = unsafe { &mut *(&raw mut RECORDS) };
-    let harts = unsafe { &mut *(&raw mut HARTS) };
+    let participants = unsafe { &mut *(&raw mut PARTICIPANTS) };
     let dispatchers = unsafe { &mut *(&raw mut DISPATCHERS) };
     #[cfg(target_arch = "riscv64")]
     let runtime = {
-        assert!(boot.hart() < 4, "unexpected QEMU boot Hart");
-        let failure = admission::reject_constructor(&mut boot, stacks, records, harts, dispatchers);
+        assert!(boot.processor() < 4, "unexpected QEMU boot processor");
+        let failure =
+            admission::reject_constructor(&mut boot, stacks, records, participants, dispatchers);
         Execution::new(
             failure.major,
             failure.terminal,
             failure.stacks,
             failure.records,
-            failure.harts,
+            failure.participants,
             failure.dispatchers,
         )
     };
@@ -140,111 +161,161 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     let runtime = {
         let major = boot.take_major().expect("original native major relation");
         assert!(boot.take_major().is_none());
-        Execution::new(major, boot.terminal(), stacks, records, harts, dispatchers)
+        Execution::new(
+            major,
+            boot.terminal(),
+            stacks,
+            records,
+            participants,
+            dispatchers,
+        )
     };
     let runtime = runtime
         .map_err(|failure| failure.reason)
         .expect("original handoff and independent supplies");
     unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
     let execution = execution();
+    assert_eq!(execution.attach(), Err(Error::Unsupported));
     assert_eq!(execution.enter(), Err(Error::Unsupported));
-    #[cfg(target_arch = "riscv64")]
-    admission::reject_attach(execution);
+    let a = unsafe { execution.create(first) }.expect("first unit");
+    let dormant = unsafe { execution.create(abandoned) }.expect("dormant unit");
+    assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
     assert_eq!(execution.enter(), Err(Error::Unsupported));
-    execution.attach().expect("attach actual boot Hart");
-    assert_eq!(execution.attach(), Err(Error::Busy));
-    assert_eq!(execution.enter(), Err(Error::Protection));
-    let mut schedule = || {
-        let mark = core::hint::black_box(0u8);
-        let address = core::hint::black_box(&mark) as *const u8 as usize;
-        assert!(!major_stack.contains(&address));
-        let a = unsafe { execution.create(first) }.expect("first unit");
-        let dormant = unsafe { execution.create(abandoned) }.expect("dormant unit");
-        assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
-        assert_eq!(execution.enter(), Ok(None));
 
-        execution
-            .stop_dormant(dormant)
-            .expect("stop before admission");
-        assert_eq!(execution.lifecycle(dormant), Ok(Lifecycle::Ending));
-        assert_eq!(execution.stop_dormant(dormant), Ok(()));
-        assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
-        assert_eq!(execution.reap(dormant), Err(Error::UnitNotEnded));
-        assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
-        assert_eq!(execution.enter(), Ok(None));
-        execution
-            .finish_end(dormant)
-            .expect("finish without admission");
-        assert_eq!(
-            execution.lifecycle(dormant),
-            Ok(Lifecycle::Ended(End::Cancelled))
-        );
-        // The original result remains live, but its stack is already reusable.
-        let b = unsafe { execution.create(second) }.expect("reuse stack before Reap");
-        assert_eq!(
-            execution.lifecycle(dormant),
-            Ok(Lifecycle::Ended(End::Cancelled))
-        );
-        assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
-        assert_ne!(dormant, b);
-        assert_eq!(execution.stop_dormant(dormant), Err(Error::Gone));
-        assert_eq!(execution.submit(dormant), Err(Error::Gone));
-        let a_admission = execution.submit(a).expect("submit first");
-        let b_admission = execution.submit(b).expect("submit second");
-        assert_ne!(a_admission, b_admission);
-        assert_eq!(execution.submit(a), Err(Error::Busy));
-        assert_eq!(execution.stop_dormant(a), Err(Error::Busy));
+    execution
+        .stop_dormant(dormant)
+        .expect("stop before admission");
+    assert_eq!(execution.lifecycle(dormant), Ok(Lifecycle::Ending));
+    assert_eq!(execution.stop_dormant(dormant), Ok(()));
+    assert_eq!(execution.submit(dormant), Err(Error::UnitNotLive));
+    assert_eq!(execution.reap(dormant), Err(Error::UnitNotEnded));
+    assert_eq!(unsafe { execution.create(second) }, Err(Error::Capacity));
+    assert_eq!(execution.enter(), Err(Error::Unsupported));
+    execution
+        .finish_end(dormant)
+        .expect("finish without admission");
+    assert_eq!(
+        execution.lifecycle(dormant),
+        Ok(Lifecycle::Ended(End::Cancelled))
+    );
+    // The original result remains live, but its stack is already reusable.
+    let b = unsafe { execution.create(second) }.expect("reuse stack before Reap");
+    assert_eq!(
+        execution.lifecycle(dormant),
+        Ok(Lifecycle::Ended(End::Cancelled))
+    );
+    assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
+    assert_ne!(dormant, b);
+    assert_eq!(execution.stop_dormant(dormant), Err(Error::Gone));
+    assert_eq!(execution.submit(dormant), Err(Error::Gone));
+    let a_admission = execution.submit(a).expect("submit first");
+    let b_admission = execution.submit(b).expect("submit second");
+    assert_ne!(a_admission, b_admission);
+    assert_eq!(execution.submit(a), Err(Error::Busy));
+    assert_eq!(execution.stop_dormant(a), Err(Error::Busy));
 
-        #[cfg(target_arch = "riscv64")]
-        admission::reject_dispatch(execution);
+    #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+    interrupt::install(&boot);
 
-        let initial = dispatch(a);
-        assert_eq!(initial.admission(), a_admission);
-        assert_eq!(execution.lifecycle(a), Ok(Lifecycle::Live));
-        execution.vacate(initial).expect("return to ready");
-
-        let leaving = dispatch(b);
-        assert_eq!(leaving.admission(), b_admission);
-        assert_eq!(execution.vacate(initial), Err(Error::Gone));
-        assert_eq!(execution.pending_leave(), Ok(Some(leaving)));
-        finish(b, leaving, 41);
-
-        let resumed = dispatch(a);
-        assert_ne!(resumed, initial);
-        assert_eq!(resumed.admission(), a_admission);
-        assert_eq!(execution.vacate(initial), Err(Error::Gone));
-        finish(a, resumed, 0x1234_5678);
-        assert_eq!(execution.reap(b), Ok(End::Returned { value: 41 }));
-        assert_eq!(execution.reap(b), Err(Error::Gone));
-        assert_eq!(execution.submit(b), Err(Error::Gone));
-
-        // Only b's Unit slot is vacant. a's End remains observable while its
-        // returned stack is selected for the replacement.
-        let replacement =
-            unsafe { execution.create(run_replacement) }.expect("reuse returned stack");
-        assert_ne!(replacement, b);
-        let replacement_admission = execution.submit(replacement).expect("submit replacement");
-        assert_ne!(replacement_admission, a_admission);
-        assert_ne!(replacement_admission, b_admission);
-        let replaced = dispatch(replacement);
-        assert_eq!(replaced.admission(), replacement_admission);
-        assert_eq!(execution.vacate(leaving), Err(Error::Gone));
-        assert_eq!(
-            execution.lifecycle(a),
-            Ok(Lifecycle::Ended(End::Returned { value: 0x1234_5678 }))
-        );
-        finish(replacement, replaced, 43);
-        assert_eq!(execution.reap(a), Ok(End::Returned { value: 0x1234_5678 }));
-        assert_eq!(execution.reap(replacement), Ok(End::Returned { value: 43 }));
-        assert_eq!(execution.enter(), Ok(None));
-        assert_eq!(SEQUENCE.load(Relaxed), 4);
-
-        #[cfg(target_arch = "riscv64")]
-        write(concat!(
-            "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1",
-            " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1 binding_returned=1 admission=1\n",
-        ));
-        complete()
+    let initial = Initial {
+        scratch,
+        major_stack,
+        a,
+        a_admission,
+        b,
+        b_admission,
+        complete,
     };
-    unsafe { execution.run(&mut schedule) }.expect("resident dispatcher")
+    let entry = unsafe { (&mut *(&raw mut RUNTIME)).write(RuntimeEntry::new(schedule, initial)) };
+    #[cfg(target_arch = "riscv64")]
+    admission::reject_runtime(execution, entry);
+    unsafe { execution.run(entry) }.expect("resident dispatcher")
+}
+
+struct Initial {
+    scratch: &'static retirement::Scratch,
+    major_stack: Range<usize>,
+    a: UnitId,
+    a_admission: AdmissionId,
+    b: UnitId,
+    b_admission: AdmissionId,
+    complete: fn() -> !,
+}
+
+fn schedule(initial: &'static Initial) -> ! {
+    let execution = execution();
+    let mark = black_box(0u8);
+    let address = core::ptr::from_ref(black_box(&mark)).addr();
+    assert!(!initial.major_stack.contains(&address));
+    initial.scratch.settle();
+    assert_eq!(execution.pending_leave(), Ok(None));
+    assert_eq!(execution.enter(), Err(Error::Unsupported));
+
+    let entry = unsafe { (&*(&raw const RUNTIME)).assume_init_ref() };
+    assert_eq!(unsafe { execution.run(entry) }, Err(Error::Busy));
+    execution.attach().expect("attach from the runtime stack");
+    assert_eq!(execution.attach(), Err(Error::Busy));
+
+    let Initial {
+        a,
+        a_admission,
+        b,
+        b_admission,
+        complete,
+        ..
+    } = *initial;
+    #[cfg(target_arch = "riscv64")]
+    admission::reject_dispatch(execution);
+
+    let initial = dispatch(a);
+    assert_eq!(initial.admission(), a_admission);
+    assert_eq!(execution.lifecycle(a), Ok(Lifecycle::Live));
+    execution.vacate(initial).expect("return to ready");
+
+    let leaving = dispatch(b);
+    assert_eq!(leaving.admission(), b_admission);
+    assert_eq!(execution.vacate(initial), Err(Error::Gone));
+    assert_eq!(execution.pending_leave(), Ok(Some(leaving)));
+    finish(b, leaving, 41);
+
+    let resumed = dispatch(a);
+    assert_ne!(resumed, initial);
+    assert_eq!(resumed.admission(), a_admission);
+    assert_eq!(execution.vacate(initial), Err(Error::Gone));
+    finish(a, resumed, 0x1234_5678);
+    assert_eq!(execution.reap(b), Ok(End::Returned { value: 41 }));
+    assert_eq!(execution.reap(b), Err(Error::Gone));
+    assert_eq!(execution.submit(b), Err(Error::Gone));
+
+    // Only b's Unit slot is vacant. a's End remains observable while its
+    // returned stack is selected for the replacement.
+    let replacement = unsafe { execution.create(run_replacement) }.expect("reuse returned stack");
+    assert_ne!(replacement, b);
+    let replacement_admission = execution.submit(replacement).expect("submit replacement");
+    assert_ne!(replacement_admission, a_admission);
+    assert_ne!(replacement_admission, b_admission);
+    let replaced = dispatch(replacement);
+    assert_eq!(replaced.admission(), replacement_admission);
+    assert_eq!(execution.vacate(leaving), Err(Error::Gone));
+    assert_eq!(
+        execution.lifecycle(a),
+        Ok(Lifecycle::Ended(End::Returned { value: 0x1234_5678 }))
+    );
+    finish(replacement, replaced, 43);
+    assert_eq!(execution.reap(a), Ok(End::Returned { value: 0x1234_5678 }));
+    assert_eq!(execution.reap(replacement), Ok(End::Returned { value: 43 }));
+    assert_eq!(execution.enter(), Ok(None));
+    assert_eq!(SEQUENCE.load(Relaxed), 4);
+
+    #[cfg(target_arch = "riscv64")]
+    write(concat!(
+        "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1",
+        " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1 binding_returned=1 admission=1 occupied_irq=1\n",
+    ));
+    #[cfg(target_arch = "x86_64")]
+    write(concat!(
+        "PASS x86 kernel-execution occupied_irq=1 eoi=1 context_restored=1",
+        " room_leave=4 reap=4 stale=1\n",
+    ));
+    complete()
 }

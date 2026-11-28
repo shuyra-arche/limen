@@ -6,7 +6,7 @@ use limen_treaty::model::PhysicalAddress;
 fn uncertain_readback_retains_the_original_operation() {
     let mut installation = Installation::new(3, 10);
 
-    assert_eq!(installation.hart(), 3);
+    assert_eq!(installation.processor(), 3);
     assert_eq!(installation.retry(10), Err(SwitchError::Current));
     assert_eq!(installation.issue(9, 10, 20), Err(SwitchError::Current));
     assert_eq!(installation.issue(10, 9, 20), Err(SwitchError::Current));
@@ -37,6 +37,7 @@ fn same_root_readback_does_not_excuse_a_changed_execution_profile() {
         cr3: 0x2000,
         cr4: 1 << 5,
         efer: (1 << 10) | (1 << 11),
+        pat: Some(6),
     };
     let next = x86_64::internal::context::Controls {
         cr3: 0x3000,
@@ -50,6 +51,12 @@ fn same_root_readback_does_not_excuse_a_changed_execution_profile() {
     install.issue(first, first, next).unwrap();
     assert_eq!(install.complete(wrong), Err(SwitchError::Unconfirmed));
     assert_eq!(install.retry(wrong), Err(SwitchError::Unconfirmed));
+    let wrong_pat = x86_64::internal::context::Controls {
+        pat: Some(0),
+        ..next
+    };
+    assert_eq!(install.complete(wrong_pat), Err(SwitchError::Unconfirmed));
+    assert_eq!(install.retry(wrong_pat), Err(SwitchError::Unconfirmed));
     assert_eq!(install.retry(first), Ok(Some(next)));
     assert_eq!(install.complete(next), Ok((first, next)));
 }

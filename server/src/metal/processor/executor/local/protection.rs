@@ -25,13 +25,18 @@ impl LocalProtection {
             active: Cell::new(None),
         }
     }
+
+    #[cfg(all(limen_cooperative, target_arch = "riscv64"))]
+    pub(super) fn inactive(&self) -> bool {
+        self.active.get().is_none()
+    }
 }
 
 /// A protected window belonging to the current verified CPU.
 #[must_use]
 pub(in crate::metal) struct Protection {
     local: &'static Executor,
-    same_hart: PhantomData<*mut ()>,
+    same_processor: PhantomData<*mut ()>,
 }
 
 impl Protection {
@@ -66,7 +71,7 @@ impl Executor {
         self.protection.active.set(Some(active));
         Protection {
             local: self,
-            same_hart: PhantomData,
+            same_processor: PhantomData,
         }
     }
 }

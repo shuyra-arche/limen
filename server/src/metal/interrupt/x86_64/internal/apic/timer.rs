@@ -4,17 +4,16 @@ use core::num::NonZeroU32;
 
 use super::{Failure, LocalApic, VectorLease};
 
-const LVT: usize = 0x320;
+pub(super) const LVT: usize = 0x320;
 const INITIAL: usize = 0x380;
-const CURRENT: usize = 0x390;
+pub(super) const CURRENT: usize = 0x390;
 const DIVIDE: usize = 0x3e0;
 const MASKED: u32 = 1 << 16;
 const DELIVERY_PENDING: u32 = 1 << 12;
 const TIMER_MODE: u32 = 3 << 17;
 const PERIODIC: u32 = 1 << 17;
-const LVT_FIELDS: u32 = MASKED | TIMER_MODE | 0xff;
+pub(super) const LVT_FIELDS: u32 = MASKED | TIMER_MODE | 0xff;
 const DIVIDE_FIELDS: u32 = (1 << 3) | 3;
-const REQUESTS: usize = 0x200;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Divider {
@@ -65,7 +64,7 @@ pub enum TimerState {
 
 impl TimerState {
     fn begin_arm(self, countdown: Countdown) -> Result<Self, Failure> {
-        if self != Self::Reserved {
+        if !matches!(self, Self::Reserved | Self::Stopped) {
             return Err(Failure::Busy);
         }
         Ok(Self::Arming(countdown))
@@ -80,7 +79,7 @@ impl TimerState {
 }
 
 pub(super) struct Timer {
-    vector: VectorLease,
+    pub(super) vector: VectorLease,
     state: TimerState,
 }
 
@@ -113,10 +112,12 @@ pub(super) enum Slot {
     Retiring(Inherited),
     Vacant,
     Bound(Timer),
+    #[cfg(all(limen_target, target_arch = "x86_64"))]
+    Deadline(super::deadline::Record),
 }
 
 impl Slot {
-    fn bound(&self) -> Result<&Timer, Failure> {
+    pub(super) fn bound(&self) -> Result<&Timer, Failure> {
         match self {
             Self::Bound(timer) => Ok(timer),
             _ => Err(Failure::Scope),
@@ -150,6 +151,8 @@ impl LocalApic<'_> {
             Slot::Retiring(original) => original,
             Slot::Vacant => return Ok(()),
             Slot::Bound(_) => return Err(Failure::Busy),
+            #[cfg(all(limen_target, target_arch = "x86_64"))]
+            Slot::Deadline(_) => return Err(Failure::Busy),
         };
         self.timer = Slot::Retiring(original);
         let masked = original.masked();
@@ -159,7 +162,7 @@ impl LocalApic<'_> {
             return Err(Failure::Unconfirmed);
         }
         let vector = original.vector();
-        if vector >= 32 && (self.vector_pending(vector) || self.reception_involves(vector)) {
+        if vector >= 32 && self.vector_busy(vector) {
             return Err(Failure::Busy);
         }
         self.timer = Slot::Vacant;
@@ -169,12 +172,14 @@ impl LocalApic<'_> {
     /// Transfer an original, already reserved vector to this idle timer.
     /// Failure returns the lease before effects can escape.
     pub fn reserve_timer(&mut self, vector: VectorLease) -> Result<(), (VectorLease, Failure)> {
-        if self.reception_context().is_err() || !vector.matches(self.hart as u8, vector.vector()) {
+        if self.reception_context().is_err()
+            || !vector.matches(self.processor as u8, vector.vector())
+        {
             return Err((vector, Failure::Scope));
         }
         if !matches!(self.timer, Slot::Vacant)
             || !self.timer_quiet()
-            || self.vector_pending(vector.vector())
+            || self.vector_busy(vector.vector())
         {
             return Err((vector, Failure::Busy));
         }
@@ -185,7 +190,8 @@ impl LocalApic<'_> {
         Ok(())
     }
 
-    /// Start a one-shot countdown on the owning Hart.
+    /// Start a one-shot countdown on the owning processor. A stopped timer
+    /// can reuse its original lease once the previous expiration has drained.
     ///
     /// # Safety
     /// The caller owns the original vector's handling path. Interrupts
@@ -193,22 +199,49 @@ impl LocalApic<'_> {
     /// any delivery that has not completed until the vector is released.
     pub unsafe fn arm_timer(&mut self, countdown: Countdown) -> Result<(), Failure> {
         self.reception_context()?;
-        let timer = self.timer.bound_mut()?;
-        timer.state = timer.state.begin_arm(countdown)?;
-        let configuration = u32::from(timer.vector.vector());
-        self.timer_write(DIVIDE, countdown.divider.bits());
-        self.timer_write(LVT, configuration);
-        self.timer_write(INITIAL, countdown.ticks.get());
-        if !self.timer_matches(LVT, LVT_FIELDS, configuration)
-            || !self.timer_matches(DIVIDE, DIVIDE_FIELDS, countdown.divider.bits())
-            || self.timer_read(INITIAL) != countdown.ticks.get()
-        {
-            return Err(Failure::Unconfirmed);
+        let timer = self.timer.bound()?;
+        let state = timer.state.begin_arm(countdown)?;
+        let vector = timer.vector.vector();
+        if !self.timer_quiet() || self.vector_busy(vector) {
+            return Err(Failure::Busy);
         }
         self.timer
             .bound_mut()
             .expect("timer remains reserved")
-            .state = TimerState::Armed(countdown);
+            .state = state;
+        let configuration = u32::from(vector);
+        self.timer_write(DIVIDE, countdown.divider.bits());
+        self.timer_write(LVT, configuration);
+        self.timer_write(INITIAL, countdown.ticks.get());
+        self.confirm_timer()
+    }
+
+    /// Observe the original issued write or stop without issuing it again.
+    pub(super) fn confirm_timer(&mut self) -> Result<(), Failure> {
+        self.reception_context()?;
+        let timer = self.timer.bound()?;
+        let vector = timer.vector.vector();
+        let next = match timer.state {
+            TimerState::Arming(countdown) => {
+                if !self.timer_matches(LVT, LVT_FIELDS, u32::from(vector))
+                    || !self.timer_matches(DIVIDE, DIVIDE_FIELDS, countdown.divider.bits())
+                    || self.timer_read(INITIAL) != countdown.ticks.get()
+                {
+                    return Err(Failure::Unconfirmed);
+                }
+                TimerState::Armed(countdown)
+            }
+            TimerState::Stopping(_) => {
+                if !self.timer_matches(LVT, LVT_FIELDS, u32::from(vector) | MASKED)
+                    || !self.timer_quiet()
+                {
+                    return Err(Failure::Unconfirmed);
+                }
+                TimerState::Stopped
+            }
+            _ => return Err(Failure::Busy),
+        };
+        self.timer.bound_mut()?.state = next;
         Ok(())
     }
 
@@ -241,8 +274,7 @@ impl LocalApic<'_> {
         let vector = timer.vector.vector();
         if !matches!(state, TimerState::Reserved | TimerState::Stopped)
             || !self.timer_quiet()
-            || self.vector_pending(vector)
-            || self.reception_involves(vector)
+            || self.vector_busy(vector)
         {
             return Err(Failure::Busy);
         }
@@ -252,27 +284,21 @@ impl LocalApic<'_> {
         Ok(timer.vector)
     }
 
-    fn timer_quiet(&mut self) -> bool {
+    pub(super) fn timer_quiet(&mut self) -> bool {
         self.timer_matches(LVT, MASKED | DELIVERY_PENDING, MASKED)
             && self.timer_read(INITIAL) == 0
             && self.timer_read(CURRENT) == 0
     }
 
-    fn vector_pending(&mut self, vector: u8) -> bool {
-        let bank = usize::from(vector / 32) * 16;
-        let bit = 1 << (vector % 32);
-        self.timer_read(REQUESTS + bank) & bit != 0 || self.in_service(vector)
-    }
-
-    fn timer_matches(&mut self, register: usize, mask: u32, expected: u32) -> bool {
+    pub(super) fn timer_matches(&mut self, register: usize, mask: u32, expected: u32) -> bool {
         self.timer_read(register) & mask == expected
     }
 
-    fn timer_read(&mut self, register: usize) -> u32 {
+    pub(super) fn timer_read(&mut self, register: usize) -> u32 {
         unsafe { self.window.read_u32(register) }.expect("xAPIC timer register geometry")
     }
 
-    fn timer_write(&mut self, register: usize, value: u32) {
+    pub(super) fn timer_write(&mut self, register: usize, value: u32) {
         unsafe { self.window.write_u32(register, value) }.expect("xAPIC timer register geometry");
     }
 }

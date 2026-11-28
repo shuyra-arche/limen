@@ -79,7 +79,7 @@ pub fn major<const N: usize, const EXCESS: usize>() {
         assert_eq!(*held.access(&COUNT).unwrap(), 2 * ROUNDS);
         assert_eq!(*held.access(&PAIR).unwrap(), [2 * ROUNDS, !(2 * ROUNDS)]);
     })
-    .expect("both Harts returned their nodes");
+    .expect("both processors returned their nodes");
 }
 
 fn check_capacity<const N: usize, const EXCESS: usize>() {

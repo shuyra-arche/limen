@@ -1,5 +1,5 @@
 //! Preflight and initialize the source’s permanent root and initial material.
-pub(crate) mod bump;
+pub(super) mod bump;
 
 use core::{
     alloc::Layout,
@@ -101,18 +101,6 @@ pub struct RootStorage<'a> {
 }
 
 impl<'a> RootStorage<'a> {
-    pub(crate) fn new(
-        mapping: MappedRange<'a>,
-        reserved: PhysicalRange,
-        origin: RegionOrigin,
-    ) -> Self {
-        Self {
-            mapping,
-            reserved,
-            origin,
-        }
-    }
-
     pub fn physical(&self) -> PhysicalRange {
         self.mapping.physical()
     }
@@ -131,6 +119,115 @@ impl<'a> RootStorage<'a> {
 
     pub fn bytes(&mut self) -> &mut [MaybeUninit<u8>] {
         self.mapping.bytes()
+    }
+}
+
+/// A planned reservation backed by a unique, unchanged mapped extent. The
+/// original mapping remains with its owner until the reservation is consumed.
+pub(crate) struct RootReservation<'r, 'm> {
+    mapping: &'r mut Option<MappedRange<'m>>,
+    layout: Layout,
+    granule: Alignment,
+    physical: PhysicalRange,
+    reserved: PhysicalRange,
+    origin: RegionOrigin,
+}
+
+impl<'r, 'm> RootReservation<'r, 'm> {
+    pub(crate) fn prepare(
+        mapping: &'r mut Option<MappedRange<'m>>,
+        layout: Layout,
+        granule: Alignment,
+        region: RegionDescription,
+    ) -> Result<Option<Self>, Error> {
+        let Some(mapped) = mapping.as_ref() else {
+            return Ok(None);
+        };
+        if !region.physical.covers(mapped.physical()) {
+            return Ok(None);
+        }
+        let address = mapped.address();
+        let limit = address.checked_add(mapped.length()).ok_or(Error::Range)?;
+        if layout.size() == 0
+            || mapped.physical().start().get() % layout.align() as u64
+                != (address % layout.align()) as u64
+        {
+            return Err(Error::Layout);
+        }
+        let bytes = Bump::new(address..limit)
+            .and_then(|mut bump| bump.reserve(layout))
+            .ok_or(Error::Layout)?;
+        let offset = u64::try_from(bytes.start - address).map_err(|_| Error::Range)?;
+        let length = u64::try_from(bytes.len()).map_err(|_| Error::Range)?;
+        let physical = mapped
+            .physical()
+            .start()
+            .advance(ByteLength::new(offset))
+            .and_then(|start| start.range(ByteLength::new(length)))
+            .ok_or(Error::Range)?;
+        let reserved = PhysicalRange::new(
+            physical.start().align_down(granule),
+            physical.end().align_up(granule).ok_or(Error::Range)?,
+        )
+        .filter(|range| region.physical.covers(*range))
+        .ok_or(Error::Range)?;
+        Ok(Some(Self {
+            mapping,
+            layout,
+            granule,
+            physical,
+            reserved,
+            origin: region.origin,
+        }))
+    }
+
+    pub(crate) fn reserved(&self) -> PhysicalRange {
+        self.reserved
+    }
+
+    pub(crate) fn reserve(self) -> RootStorage<'m> {
+        let mut storage = self.mapping.take().expect("retained mapped range");
+        let start = storage.physical().start();
+        if self.physical.start() != start {
+            let offset = self
+                .physical
+                .start()
+                .distance(start)
+                .expect("checked start");
+            let (_, suffix) = storage.split(offset).ok().expect("checked root start");
+            storage = suffix;
+        }
+        if self.physical.end() != storage.physical().end() {
+            let (prefix, _) = storage
+                .split(self.physical.length())
+                .ok()
+                .expect("checked root end");
+            storage = prefix;
+        }
+        RootStorage {
+            mapping: storage,
+            reserved: self.reserved,
+            origin: self.origin,
+        }
+    }
+}
+
+/// Exact geometry of one initial source after carving its fixed root.
+/// Both slices remain borrowed through installation.
+pub(crate) struct InitialRegions<'a> {
+    pub(crate) before: &'a [Option<RegionDescription>],
+    pub(crate) remainder: [Option<RegionDescription>; 2],
+    pub(crate) after: &'a [Option<RegionDescription>],
+}
+
+impl InitialRegions<'_> {
+    fn entries(&self) -> impl Iterator<Item = RegionDescription> + '_ {
+        self.before
+            .iter()
+            .chain(self.remainder.iter())
+            .chain(self.after.iter())
+            .flatten()
+            .copied()
     }
 }
 
@@ -153,30 +250,33 @@ impl<'a> Initial<'a> {
 
 /// Exact root input and initial receiving positions checked before Entry
 /// consumes the permanent mapped storage.
-pub(crate) struct RootInitialization<'r, 'a, Descriptions> {
+pub(crate) struct RootInitialization<'r, 'a> {
     config: Config,
-    descriptions: Descriptions,
+    root: RootReservation<'r, 'static>,
+    regions: InitialRegions<'r>,
     capacity: u64,
     committed: u64,
     allowance_receiver: &'r mut Option<Allowance>,
     initial: &'r mut [Initial<'a>],
 }
 
-impl<'r, 'a, Descriptions: Iterator<Item = RegionDescription> + Clone>
-    RootInitialization<'r, 'a, Descriptions>
-{
+impl<'r, 'a> RootInitialization<'r, 'a> {
     pub(crate) fn prepare(
         config: Config,
-        descriptions: Descriptions,
+        root: RootReservation<'r, 'static>,
+        regions: InitialRegions<'r>,
         capacity: u64,
         allowance_receiver: &'r mut Option<Allowance>,
         initial: &'r mut [Initial<'a>],
     ) -> Result<Self, Error> {
-        config.check()?;
+        let layout = config.layout()?;
         if allowance_receiver.is_some() {
             return Err(Error::Receiver);
         }
         let alignment = config.granule_alignment();
+        if root.layout != layout || root.granule != alignment {
+            return Err(Error::Layout);
+        }
         if initial.len() > config.regions.saturating_mul(config.allocations)
             || !alignment.is_aligned(ByteLength::new(capacity))
         {
@@ -185,7 +285,10 @@ impl<'r, 'a, Descriptions: Iterator<Item = RegionDescription> + Clone>
         let mut committed = 0u64;
         let mut total = ByteLength::new(0);
         let mut previous: Option<PhysicalRange> = None;
-        for (index, description) in descriptions.clone().enumerate() {
+        for (index, description) in regions.entries().enumerate() {
+            if description.physical.overlaps(root.reserved) {
+                return Err(Error::Overlap);
+            }
             if index >= config.regions {
                 return Err(Error::Capacity);
             }
@@ -227,8 +330,8 @@ impl<'r, 'a, Descriptions: Iterator<Item = RegionDescription> + Clone>
             return Err(Error::Balance);
         }
         if initial.iter().any(|item| {
-            !descriptions
-                .clone()
+            !regions
+                .entries()
                 .any(|region| region.physical.covers(item.physical))
         }) {
             return Err(Error::Range);
@@ -236,7 +339,8 @@ impl<'r, 'a, Descriptions: Iterator<Item = RegionDescription> + Clone>
 
         Ok(Self {
             config,
-            descriptions,
+            root,
+            regions,
             capacity,
             committed,
             allowance_receiver,
@@ -246,17 +350,16 @@ impl<'r, 'a, Descriptions: Iterator<Item = RegionDescription> + Clone>
 
     /// # Safety
     ///
-    /// Entry must supply the exact root from its preflight, with this
-    /// configuration's layout and exclusive permanent storage. It must
-    /// have removed the entire reservation from the prepared regions.
-    /// The retained description iterator and every preflight clone must
-    /// enumerate the same immutable regions in the same order. Clone alone
-    /// does not guarantee this; entry retains the borrowed list and root plan.
-    pub(crate) unsafe fn install(self, storage: RootStorage<'static>) -> &'static Allocator {
+    /// The caller is the exclusive authority to hand off all regions to
+    /// this source once, and keeps them isolated from other physical use
+    /// through admission. The retained mapping must be canonical permanent
+    /// storage. Receiver slots belong to the actual initial consumers and
+    /// remain recoverable after installation.
+    pub(crate) unsafe fn install(self) -> &'static Allocator {
         initialize(
-            storage,
+            self.root.reserve(),
             self.config,
-            self.descriptions,
+            self.regions.entries(),
             self.capacity,
             self.committed,
             self.allowance_receiver,
@@ -385,7 +488,7 @@ fn initialize(
     });
     for item in initial {
         let id = item.staged.take().expect("preflighted initial position");
-        *item.receiver = Some(Allocation::issued(source, id, item.physical));
+        *item.receiver = Some(Allocation::issued(source, id, item.physical, None));
     }
     *allowance_receiver = Some(Allowance::initial(source, allowance));
     source.published.store(published, Release);

@@ -38,7 +38,7 @@ pub(in crate::metal) unsafe fn initialize() {
     unsafe { asm!("mov {:x}, cs", out(reg) selector, options(nomem, nostack, preserves_flags)) };
     let slots = (&raw mut IDT).cast::<Gate>();
     for index in 0..256 {
-        let addr = vectors as *const () as usize + index * VECTOR_BYTES;
+        let addr = vector_address(index as u8);
         let gate = Gate {
             low: addr as u16,
             selector,
@@ -56,6 +56,11 @@ pub(in crate::metal) unsafe fn initialize() {
 // A 64-bit interrupt gate saves RIP, CS, RFLAGS, RSP and SS. Normalize the
 // hardware error-code slot before entering the common register-only stub.
 const VECTOR_BYTES: usize = 16;
+
+pub(in crate::metal::processor) fn vector_address(vector: u8) -> usize {
+    vectors as *const () as usize + usize::from(vector) * VECTOR_BYTES
+}
+
 #[unsafe(naked)]
 unsafe extern "sysv64" fn vectors() -> ! {
     naked_asm!(

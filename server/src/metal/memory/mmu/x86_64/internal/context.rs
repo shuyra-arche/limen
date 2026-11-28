@@ -10,6 +10,7 @@ pub struct Controls {
     pub cr3: usize,
     pub cr4: usize,
     pub efer: u64,
+    pub pat: Option<u64>,
 }
 
 impl Controls {
@@ -39,6 +40,7 @@ impl Controls {
             .then_some(Format {
                 physical_bits,
                 gigabyte,
+                pat: self.pat?,
             })
     }
 }

@@ -1,4 +1,4 @@
-//! Host inputs for production Hart-local synchronization.
+//! Host inputs for production processor-local synchronization.
 
 use super::{Executor, LocalStorage};
 use crate::metal::sync::treaty::Supply;
@@ -15,12 +15,12 @@ std::thread_local! {
 
 pub(super) fn local_address() -> usize {
     LOCAL.with(|local| {
-        let hart = local.get_or_init(|| unsafe {
+        let processor = local.get_or_init(|| unsafe {
             Box::leak(Box::new(LocalStorage::<5>::new(Supply::new())))
                 .material()
                 .bind()
         });
-        ptr::from_ref(*hart).expose_provenance()
+        ptr::from_ref(*processor).expose_provenance()
     })
 }
 
@@ -74,18 +74,18 @@ fn machine_protection_holds_the_original_mask_without_lock_participation() {
 }
 
 #[test]
-fn acquisition_uses_the_nodes_supplied_to_this_hart() {
+fn acquisition_uses_the_nodes_supplied_to_this_processor() {
     use crate::metal::sync::treaty::{
         TurnAcquireError, TurnLock, TurnMode, TurnWorkspace, turn_capacity,
     };
 
     std::thread::spawn(|| {
-        let hart = unsafe {
+        let processor = unsafe {
             Box::leak(Box::new(LocalStorage::<1>::new(Supply::new())))
                 .material()
                 .bind()
         };
-        LOCAL.with(|local| assert!(local.set(hart).is_ok()));
+        LOCAL.with(|local| assert!(local.set(processor).is_ok()));
         assert_eq!(turn_capacity(), Some(1));
         let first = TurnLock::new(0);
         let second = TurnLock::new(0);
