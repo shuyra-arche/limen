@@ -36,7 +36,10 @@ fn prepared_access_is_not_an_accepted_access() {
     assert_eq!(record.accepted(&access), Err(Error::Access));
     assert_eq!(record.accept(&access, range, rights, owner), Ok(()));
     assert_eq!(record.accepted(&access), Ok(()));
-    assert_eq!(record.accept(&access, range, rights, owner), Err(Error::Access));
+    assert_eq!(
+        record.accept(&access, range, rights, owner),
+        Err(Error::Access)
+    );
 }
 
 #[test]

@@ -728,7 +728,6 @@ impl CellConstruction {
         })?
     }
 
-
     /// Register one physical byte access in the original supplied receiver.
     /// No hardware or ordinary byte access is authorized by preparation.
     pub fn prepare(
@@ -748,7 +747,11 @@ impl CellConstruction {
         slot.plan(&mut plan);
         plan.insert(&receiver.0).expect("original access receiver");
         plan.acquire(mode, |held| {
-            if held.access(&receiver.0).expect("original access receiver").is_some() {
+            if held
+                .access(&receiver.0)
+                .expect("original access receiver")
+                .is_some()
+            {
                 return Err(Error::Occupied);
             }
             let (construction, mut locked) = slot.together(held, &self.0);
@@ -766,12 +769,10 @@ impl CellConstruction {
             if record.role != Role::Ordinary || !matches!(record.storage, Storage::Retained(_)) {
                 return Err(Error::Access);
             }
-            let access = state.accesses.ordinary()?.prepare(
-                id,
-                range,
-                rights,
-                receiver.owner(),
-            )?;
+            let access = state
+                .accesses
+                .ordinary()?
+                .prepare(id, range, rights, receiver.owner())?;
             let id = access.id;
             *held.access(&receiver.0).expect("original access receiver") =
                 Some(Preparation { slot, access });
@@ -862,7 +863,9 @@ impl AccessPreparation {
     }
 
     pub fn observe(&self) -> Result<Option<AccessId>, Error> {
-        Ok(self.0.acquire(|state| state.as_ref().map(|p| p.access.id))?)
+        Ok(self
+            .0
+            .acquire(|state| state.as_ref().map(|p| p.access.id))?)
     }
 
     /// Cancel only the exact unaccepted preparation. Revocation and release
@@ -894,7 +897,10 @@ impl AccessPreparation {
             {
                 return Err(Error::Scope);
             }
-            state.accesses.ordinary()?.cancel(&original.access, self.owner())?;
+            state
+                .accesses
+                .ordinary()?
+                .cancel(&original.access, self.owner())?;
             *preparation = None;
             Ok(())
         })?

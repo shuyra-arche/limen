@@ -1,8 +1,14 @@
 //! A retained local Internal Nest and the recoverable execution references.
 //! The trusted Kernel owner holds the actual installed root. No ordinary
-//! DELETE authority, Span, Mapping or remote residency is inferred here.
+//! DELETE authority, general Mapping or remote residency is inferred here.
 
 use core::ptr;
+
+use limen_treaty::model::InternalRange;
+
+mod span;
+pub use span::{SpanId, SpanObservation, SpanPhase, SpanStorage};
+use span::SpanIndex;
 
 use crate::metal::{
     identity::treaty::Generation,
@@ -41,6 +47,8 @@ pub enum Error {
     Acquire(TurnAcquireError),
     Table(TableError),
     Busy,
+    Capacity,
+    Conflict,
     Gone,
     Shut,
     Scope,
@@ -63,6 +71,7 @@ pub struct Nest {
 pub(super) struct State {
     generation: Option<Generation>,
     record: Option<Record>,
+    spans: SpanIndex,
 }
 
 struct Record {
@@ -158,13 +167,16 @@ impl Binding {
 }
 
 impl Nest {
-    pub const fn new() -> Self {
-        Self {
+    pub fn new<const CAPACITY: usize>(
+        storage: &'static mut SpanStorage<CAPACITY>,
+    ) -> Result<Self, Error> {
+        Ok(Self {
             state: TurnLock::new(State {
                 generation: None,
                 record: None,
+                spans: SpanIndex::new(storage)?,
             }),
-        }
+        })
     }
 
     /// Accept an already installed original owned root. No copied physical
@@ -179,7 +191,7 @@ impl Nest {
         let published = self
             .state
             .acquire(|state| {
-                if state.record.is_some() {
+                if state.record.is_some() || !state.spans.is_empty() {
                     return Err(Error::Busy);
                 }
                 let generation = Generation::next(state.generation).ok_or(Error::Exhausted)?;
@@ -221,12 +233,6 @@ impl Nest {
     }
 }
 
-impl Default for Nest {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// The trusted Kernel Nest's actual local owner. It retains the unique
 /// root installation, including any original inherited branch. Losing the
 /// handle does not reopen its table pages or erase the stable record.
@@ -244,6 +250,48 @@ impl LocalNest<'_, '_> {
 
     pub(super) fn binding(&self) -> Binding {
         self.binding
+    }
+
+    /// Reserve a page-aligned ordinary interval in the exact owned local
+    /// root's original unoccupied layout. This trusted owner does not imply
+    /// a public NestPermit or a Recoverable Span.
+    pub fn reserve_span(&mut self, range: InternalRange) -> Result<SpanId, Error> {
+        if !range.start().get().is_multiple_of(4096)
+            || !range.end().get().is_multiple_of(4096)
+        {
+            return Err(Error::Scope);
+        }
+        self.binding.state().acquire(|state| {
+            let record = state.record(self.id())?;
+            if record.phase != Phase::Open {
+                return Err(Error::Shut);
+            }
+            if !self.root.admits_span(range) {
+                return Err(Error::Scope);
+            }
+            state.spans.reserve(self.id(), range)
+        })?
+    }
+
+    pub fn observe_span(&self, id: SpanId) -> Result<SpanObservation, Error> {
+        self.binding.state().acquire(|state| {
+            state.record(self.id())?;
+            state.spans.observe(id)
+        })?
+    }
+
+    pub fn begin_release_span(&mut self, id: SpanId) -> Result<(), Error> {
+        self.binding.state().acquire(|state| {
+            state.record(self.id())?;
+            state.spans.close(id)
+        })?
+    }
+
+    pub fn finish_release_span(&mut self, id: SpanId) -> Result<(), Error> {
+        self.binding.state().acquire(|state| {
+            state.record(self.id())?;
+            state.spans.settle(id)
+        })?
     }
 
     /// Trusted platform closure; ordinary Nest DELETE capability is a
@@ -291,13 +339,16 @@ impl LocalNest<'_, '_> {
         if self.retired {
             return Ok(Progress::Retired);
         }
-        self.binding.state().acquire(|state| {
+        let pending_span = self.binding.state().acquire(|state| {
             let record = state.record(self.id())?;
             if record.phase != Phase::Draining || record.recoverable_refs != 0 {
                 return Err(Error::Busy);
             }
-            Ok(())
+            Ok(state.spans.advance())
         })??;
+        if pending_span {
+            return Ok(Progress::Pending);
+        }
         // Draining closes new admission. Never retain the Nest Turn across
         // native root installation or an independently protected refund.
         if unsafe { self.root.advance_retirement(TurnMode::Slow) }.map_err(Error::Table)?
@@ -309,6 +360,7 @@ impl LocalNest<'_, '_> {
             let record = state.record(self.id())?;
             assert_eq!(record.phase, Phase::Draining);
             assert_eq!(record.recoverable_refs, 0);
+            assert!(state.spans.is_empty());
             state.record = None;
             Ok::<(), Error>(())
         })??;

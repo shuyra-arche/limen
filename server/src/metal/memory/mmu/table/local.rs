@@ -8,6 +8,8 @@ use crate::metal::{
     sync::treaty::TurnMode,
 };
 use limen_treaty::model::PhysicalAddress;
+#[cfg(limen_cooperative)]
+use limen_treaty::model::{InternalAddress, InternalRange};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Stage {
@@ -42,6 +44,8 @@ pub struct LocalRoot<'control, 'scope> {
     previous: Context,
     next: Context,
     stage: Stage,
+    #[cfg(limen_cooperative)]
+    available: [u64; 8],
     #[cfg(limen_cooperative)]
     retirement: Retirement,
 }
@@ -108,10 +112,27 @@ impl TableStore {
         if self.level + 1 != self.format.levels() {
             return Err(TableError::Layout);
         }
+        #[cfg(limen_cooperative)]
+        let mut available = [0u64; 8];
         let next = self.with_node(id, mode, |node, held| {
             let page = node.private()?;
             let next = unsafe { control.prepare_table(self.format, page.cell.physical().start()) }
                 .map_err(|_| TableError::Scope)?;
+            #[cfg(limen_cooperative)]
+            {
+                let bytes = page.cell.bytes(held, &page.access)?;
+                let (entries, []) = bytes.as_chunks_mut::<8>() else {
+                    unreachable!("native table geometry");
+                };
+                assert_eq!(entries.len(), super::ENTRIES);
+                for (index, entry) in entries.iter().enumerate() {
+                    if borrowed.is_none_or(|branch| branch.index != index)
+                        && TablePage::read(entry) == 0
+                    {
+                        available[index / 64] |= 1 << (index % 64);
+                    }
+                }
+            }
             if let Some(branch) = borrowed {
                 if previous.root() != Some(branch.original) {
                     return Err(TableError::Scope);
@@ -143,6 +164,8 @@ impl TableStore {
             next,
             stage: Stage::Prepared,
             #[cfg(limen_cooperative)]
+            available,
+            #[cfg(limen_cooperative)]
             retirement: Retirement::new(self, id),
         })
     }
@@ -156,6 +179,39 @@ impl LocalRoot<'_, '_> {
             && self.control.current() == Some(self.next)
             && self.next.is_current())
         .then_some((self.id, self.next))
+    }
+
+    /// Whether a range belongs to the original owned root's empty branches.
+    /// This is a fixed layout boundary, not a claim that no current mapping
+    /// occupies the range. The Nest is responsible for subsequent reservations.
+    #[cfg(limen_cooperative)]
+    pub(crate) fn admits_span(&self, range: InternalRange) -> bool {
+        use super::TableFormat;
+
+        if self.installed().is_none() {
+            return false;
+        }
+        let first = range.start();
+        let last = InternalAddress::new(range.end().get() - 1);
+        let level = self.table.level;
+        let indices = match self.table.format {
+            TableFormat::Riscv64(format) if format.is_canonical_range(range) => {
+                (format.index(first, level), format.index(last, level))
+            }
+            TableFormat::Aarch64(format) if format.is_canonical_range(range) => {
+                (format.index(first, level), format.index(last, level))
+            }
+            TableFormat::X86_64(format) if format.is_canonical_range(range) => {
+                (format.index(first, level), format.index(last, level))
+            }
+            _ => return false,
+        };
+        let (Some(first), Some(last)) = indices else {
+            return false;
+        };
+        first <= last
+            && last < super::ENTRIES
+            && (first..=last).all(|index| self.available[index / 64] & (1 << (index % 64)) != 0)
     }
 
     /// Advance the actual native withdrawal and whole-tree settlement.

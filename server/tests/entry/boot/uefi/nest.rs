@@ -10,7 +10,7 @@ use core::{
 use kernel::{
     basis::{
         execution::{Current, Error, Execution, KernelBinding, RuntimeEntry},
-        nest::{self, LocalNest, Nest, NestId, Phase, Progress},
+        nest::{self, LocalNest, Nest, NestId, Phase, Progress, SpanPhase, SpanStorage},
         room::{Occupancy, Participants},
         unit::{End, Lifecycle, Stacks, UnitId, UnitRecord},
     },
@@ -24,7 +24,7 @@ use kernel::{
         sync::treaty::TurnMode::Fast,
     },
 };
-use limen_treaty::model::PhysicalAddress;
+use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
 use uefi::Status;
 
 #[path = "../material/memory.rs"]
@@ -37,7 +37,8 @@ mod window;
 use tree::Tree;
 
 static WINDOW: window::Window<{ tree::PAGES }> = window::Window::new();
-static NEST: Nest = Nest::new();
+static mut NEST: MaybeUninit<Nest> = MaybeUninit::uninit();
+static mut SPANS: SpanStorage<2> = SpanStorage::new();
 static ALIAS: AtomicUsize = AtomicUsize::new(0);
 static mut CONTROL: MaybeUninit<LocalContext<'static>> = MaybeUninit::uninit();
 static mut STACKS: Stacks = Stacks::new();
@@ -61,6 +62,7 @@ struct Initial {
     tree: RefCell<Option<Tree>>,
     original: Controls,
     id: NestId,
+    span: nest::SpanId,
     unit: UnitId,
     complete: fn() -> !,
 }
@@ -69,8 +71,16 @@ fn execution() -> &'static Execution {
     unsafe { (&*(&raw const EXECUTION)).assume_init_ref() }
 }
 
+fn nest() -> &'static Nest {
+    unsafe { (&*(&raw const NEST)).assume_init_ref() }
+}
+
+fn range(start: u64, end: u64) -> InternalRange {
+    InternalRange::new(InternalAddress::new(start), InternalAddress::new(end)).unwrap()
+}
+
 fn check_refs(id: NestId, phase: Phase, references: usize) {
-    let observation = NEST.observe(id).unwrap();
+    let observation = nest().observe(id).unwrap();
     assert_eq!(observation.phase, phase);
     assert_eq!(observation.recoverable_refs, references);
 }
@@ -132,14 +142,61 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     tree.link([0, 0, slot]);
     ALIAS.store(slot << 39, Ordering::Relaxed);
     let prepared = unsafe { root.store.prepare_shared(root.id, control, old, 0, Fast) }.unwrap();
+    unsafe {
+        (&mut *(&raw mut NEST)).write(Nest::new(&mut *(&raw mut SPANS)).unwrap());
+    }
     // A prepared root is not a real installed Nest.
-    let (mut prepared, failure) = NEST.publish(prepared).err().unwrap();
+    let (mut prepared, failure) = nest().publish(prepared).err().unwrap();
     assert_eq!(failure, nest::Error::State);
     unsafe { prepared.install() }.unwrap();
-    let mut owner = NEST.publish(prepared).ok().unwrap();
+    let mut owner = nest().publish(prepared).ok().unwrap();
     let id = owner.id();
-    assert_eq!(NEST.observe(id).unwrap().root, root.id);
+    assert_eq!(nest().observe(id).unwrap().root, root.id);
     check_refs(id, Phase::Open, 0);
+    let vacant = (1..256).find(|&index| index != slot).unwrap() as u64;
+    let base = vacant << 39;
+    assert_eq!(
+        owner.reserve_span(range(0x1000, 0x2000)),
+        Err(nest::Error::Scope)
+    );
+    let alias = (slot as u64) << 39;
+    assert_eq!(
+        owner.reserve_span(range(alias, alias + 4096)),
+        Err(nest::Error::Scope)
+    );
+    assert_eq!(
+        owner.reserve_span(range(base + 1, base + 4096)),
+        Err(nest::Error::Scope)
+    );
+    let first = owner.reserve_span(range(base, base + 4096)).unwrap();
+    assert_eq!(
+        owner.reserve_span(range(base, base + 8192)),
+        Err(nest::Error::Conflict)
+    );
+    let second = owner
+        .reserve_span(range(base + 4096, base + 8192))
+        .unwrap();
+    assert_eq!(
+        owner.reserve_span(range(base + 8192, base + 12288)),
+        Err(nest::Error::Capacity)
+    );
+    owner.begin_release_span(first).unwrap();
+    assert_eq!(owner.observe_span(first).unwrap().phase, SpanPhase::Shutting);
+    assert_eq!(
+        owner.reserve_span(range(base, base + 4096)),
+        Err(nest::Error::Conflict)
+    );
+    owner.finish_release_span(first).unwrap();
+    let replacement = owner.reserve_span(range(base, base + 4096)).unwrap();
+    assert_ne!(replacement, first);
+    assert_eq!(owner.finish_release_span(first), Err(nest::Error::Gone));
+    owner.begin_release_span(replacement).unwrap();
+    owner.finish_release_span(replacement).unwrap();
+    owner.begin_release_span(second).unwrap();
+    owner.finish_release_span(second).unwrap();
+    // The original Nest retirement must close and settle this reservation
+    // before it can withdraw its native root.
+    let remaining = owner.reserve_span(range(base, base + 4096)).unwrap();
 
     let mut execution = Execution::new(
         boot.take_major().unwrap(),
@@ -166,6 +223,10 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     check_refs(id, Phase::Open, 2);
 
     owner.begin_delete().unwrap();
+    assert_eq!(
+        owner.reserve_span(range(base + 4096, base + 8192)),
+        Err(nest::Error::Shut)
+    );
     check_refs(id, Phase::Shutting, 2);
     assert_eq!(owner.begin_drain(), Err(nest::Error::Busy));
     assert_eq!(
@@ -192,6 +253,7 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         tree: RefCell::new(Some(tree)),
         original,
         id,
+        span: remaining,
         unit,
         complete,
     };
@@ -236,6 +298,15 @@ fn schedule(initial: &'static Initial) -> ! {
     let tree = initial.tree.borrow_mut().take().unwrap();
     let root = tree.nodes[3];
     let mut retired = None;
+    assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Pending));
+    assert_ne!(unsafe { Controls::current() }, initial.original);
+    assert_eq!(
+        owner.observe_span(initial.span).unwrap().phase,
+        SpanPhase::Shutting
+    );
+    assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Pending));
+    assert_eq!(owner.observe_span(initial.span), Err(nest::Error::Gone));
+    assert_ne!(unsafe { Controls::current() }, initial.original);
     assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Pending));
     assert_eq!(unsafe { Controls::current() }, initial.original);
     // The native predecessor is back, but the entire old tree still
@@ -285,7 +356,7 @@ fn schedule(initial: &'static Initial) -> ! {
     }
     assert!(complete);
     assert_eq!(refunded, 4);
-    assert_eq!(NEST.observe(initial.id), Err(nest::Error::Gone));
+    assert_eq!(nest().observe(initial.id), Err(nest::Error::Gone));
     assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Retired));
     assert_eq!(owner.begin_delete(), Err(nest::Error::Gone));
     assert_eq!(
@@ -294,7 +365,7 @@ fn schedule(initial: &'static Initial) -> ! {
     );
     tree.settle();
     kernel::metal::platform::boot::treaty::write(
-        "PASS local-nest installed=1 rollback=1 shut=1 dormant=1 yield=1 ending=1 leave=1 refs=0 withdrawn=1 refund=4 retired=1 stale=1\n",
+        "PASS local-nest installed=1 rollback=1 shut=1 dormant=1 yield=1 ending=1 leave=1 refs=0 withdrawn=1 refund=4 retired=1 stale=1 span=1\n",
     );
     (initial.complete)()
 }
