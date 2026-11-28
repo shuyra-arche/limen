@@ -106,8 +106,8 @@ fn dispatch(
     let sign: &'static Sign<'static, 2> =
         unsafe { (&mut *(&raw mut SIGN)).write(Sign::new(clock)) };
     let records = unsafe { &mut *(&raw mut PERIODS) };
-    let owner = unsafe { Fund::new(timer, timing, configuration, sign, records) }
-        .expect("original Fund");
+    let owner =
+        unsafe { Fund::new(timer, timing, configuration, sign, records) }.expect("original Fund");
     let owner = unsafe { (&mut *(&raw mut FUND)).write(owner) };
     unsafe { VECTORS.install() }.expect("permanent native timer entry");
     let execution = setup::execution();
@@ -232,7 +232,9 @@ fn dispatch(
         Err(FundError::Execution(Error::Gone)),
     );
 
-    write("PASS rv64-fund budget-stop=1 shared-stop=1 sign-resume=1 idle-sign=1 cross-period=1 late-settlement=1 denied-start=1 exhausted=1\n");
+    write(
+        "PASS rv64-fund budget-stop=1 shared-stop=1 sign-resume=1 idle-sign=1 cross-period=1 late-settlement=1 denied-start=1 exhausted=1\n",
+    );
     complete()
 }
 

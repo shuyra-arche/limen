@@ -15,9 +15,9 @@ use crate::metal::processor::treaty::{LeaveReceipt, ProcessorId};
 #[cfg(target_arch = "riscv64")]
 mod fund;
 #[cfg(target_arch = "riscv64")]
-pub use fund::{ChargeSettlement, PeriodKey, PeriodRecord, PeriodSettlement};
-#[cfg(target_arch = "riscv64")]
 use fund::Periods;
+#[cfg(target_arch = "riscv64")]
+pub use fund::{ChargeSettlement, PeriodKey, PeriodRecord, PeriodSettlement};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Queue {

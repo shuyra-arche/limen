@@ -342,7 +342,10 @@ impl Execution {
         }
         self.room
             .acquire(|room| {
-                let records = fund.periods.take().ok_or(crate::basis::room::Error::State)?;
+                let records = fund
+                    .periods
+                    .take()
+                    .ok_or(crate::basis::room::Error::State)?;
                 if let Err((error, records)) =
                     room.attach_fund(processor, fund.id(), fund.config.quota, records)
                 {
@@ -406,7 +409,10 @@ impl Execution {
                 if room.funded_period(processor, fund.id())? != expected {
                     return Err(crate::basis::room::Error::Gone);
                 }
-                let sample = fund.timing.sample().ok_or(crate::basis::room::Error::Timing)?;
+                let sample = fund
+                    .timing
+                    .sample()
+                    .ok_or(crate::basis::room::Error::Timing)?;
                 if !fund.timing.reached(sample, shuts) {
                     return Err(crate::basis::room::Error::Timing);
                 }
@@ -529,13 +535,10 @@ impl Execution {
                 let entry = binding.entry;
                 let (begin, end) = binding.span.ok_or(Error::State)?;
                 let opening = fund.timing.sample().ok_or(Error::Timing)?;
-                if !fund.timing.can_start(
-                    opening,
-                    opens,
-                    planned,
-                    confirmed,
-                    config.stop.start,
-                ) {
+                if !fund
+                    .timing
+                    .can_start(opening, opens, planned, confirmed, config.stop.start)
+                {
                     return Err(Error::Timing);
                 }
                 let occupancy =
