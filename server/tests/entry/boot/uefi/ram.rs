@@ -7,15 +7,11 @@ use uefi::{Status, boot::PAGE_SIZE};
 
 use super::{foundation, window::Window};
 
-#[cfg(target_arch = "aarch64")]
-#[path = "../../../metal/memory/mmu/aarch64/owned.rs"]
-mod upper;
+#[cfg_attr(target_arch = "aarch64", path = "../../../metal/memory/mmu/aarch64/owned.rs")]
+#[cfg_attr(target_arch = "x86_64", path = "../../../metal/memory/mmu/x86_64/owned.rs")]
+mod owned;
 
-#[cfg(target_arch = "aarch64")]
-const UPPER_PAGES: usize = upper::PAGES;
-#[cfg(target_arch = "x86_64")]
-const UPPER_PAGES: usize = 0;
-const PAGES: usize = foundation::PAGES + UPPER_PAGES;
+const PAGES: usize = foundation::PAGES + owned::PAGES;
 static WINDOW: Window<PAGES> = Window::new();
 
 pub(super) fn prepare() -> Result<(), Status> {
@@ -65,17 +61,14 @@ pub(super) fn check(boot: &Boot<'_>) {
 
     unsafe { foundation::check(boot, scope.start().get(), &evidence) };
 
-    #[cfg(target_arch = "aarch64")]
-    {
-        let range = limen_treaty::model::PhysicalRange::new(scope.end(), window.end()).unwrap();
-        let mut evidence = Retirement::new(range);
-        // The original allocator never admitted these independently
-        // inspected pages of the same private conventional RAM extent.
-        unsafe {
-            evidence.record(Condition::NoEarlyBorrow);
-            evidence.record(Condition::TranslationRetired);
-            evidence.record(Condition::DevicesIsolated);
-            upper::check(boot, range, &evidence);
-        }
+    let range = limen_treaty::model::PhysicalRange::new(scope.end(), window.end()).unwrap();
+    let mut evidence = Retirement::new(range);
+    // The original allocator never admitted these independently
+    // inspected pages of the same private conventional RAM extent.
+    unsafe {
+        evidence.record(Condition::NoEarlyBorrow);
+        evidence.record(Condition::TranslationRetired);
+        evidence.record(Condition::DevicesIsolated);
+        owned::check(boot, range, &evidence);
     }
 }

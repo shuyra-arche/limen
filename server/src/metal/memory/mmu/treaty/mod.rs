@@ -1,6 +1,6 @@
 //! Shared CPU translation and I/O binding contracts.
 
-#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
+#[cfg(limen_target)]
 pub use super::table::LocalRoot;
 pub use super::table::{TableBranch, TableError, TableFormat, TableId, TableStore};
 

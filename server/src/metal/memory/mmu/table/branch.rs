@@ -153,7 +153,7 @@ impl TableStore {
                 return Err(TableError::State);
             };
             if page.exposure != (Exposure::Child { parent: id, index })
-                || self.format.branch(page.cell.physical().start()) != Some(encoded)
+                || !self.format.matches_branch(page.cell.physical().start(), encoded)
             {
                 return Err(TableError::State);
             }

@@ -32,10 +32,8 @@ fn roundtrip(processor: usize, apic: PhysicalRange, version: u32) {
     let top = unsafe { &raw mut TOP.0 };
     let root = physical(&raw const TOP);
     let alternate = physical(&raw const ALTERNATE_TOP);
-    let (low, high): (u32, u32);
+    assert!(original.pat.is_some());
     unsafe {
-        asm!("rdmsr", in("ecx") 0x277u32, out("eax") low, out("edx") high, options(nomem, nostack));
-        let pat = u64::from(high) << 32 | u64::from(low);
         for i in 0..512 {
             (*top)[i] = old.add(i).read_volatile();
             ALTERNATE_TOP.0[i] = (*top)[i];
@@ -59,7 +57,6 @@ fn roundtrip(processor: usize, apic: PhysicalRange, version: u32) {
                 Privilege::Kernel,
                 LeafAccess::ReadOnly,
                 Memory::Normal,
-                pat,
             )
             .unwrap();
         LAST.0[1] = format
@@ -69,7 +66,6 @@ fn roundtrip(processor: usize, apic: PhysicalRange, version: u32) {
                 Privilege::Kernel,
                 LeafAccess::ReadOnly,
                 Memory::Device,
-                pat,
             )
             .unwrap();
         ALTERNATE_TOP.0[slot] = format
@@ -88,7 +84,6 @@ fn roundtrip(processor: usize, apic: PhysicalRange, version: u32) {
                 Privilege::Kernel,
                 LeafAccess::ReadOnly,
                 Memory::Normal,
-                pat,
             )
             .unwrap();
         let first = control.prepare_root(root).unwrap();

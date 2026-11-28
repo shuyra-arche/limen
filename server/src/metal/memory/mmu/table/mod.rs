@@ -30,9 +30,9 @@ const ENTRIES: usize = 512;
 mod branch;
 pub use branch::TableBranch;
 
-#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
+#[cfg(limen_target)]
 mod local;
-#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
+#[cfg(limen_target)]
 pub use local::LocalRoot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +58,13 @@ impl TableFormat {
         }
     }
 
+    fn matches_branch(self, address: PhysicalAddress, observed: u64) -> bool {
+        match self {
+            Self::X86_64(format) => format.matches_branch(address, observed),
+            _ => self.branch(address) == Some(observed),
+        }
+    }
+
     fn leaf(
         self,
         address: PhysicalAddress,
@@ -70,7 +77,7 @@ impl TableFormat {
                 format.leaf(address, level, access)
             }
             Self::Aarch64(format) => format.leaf(address, level, Privilege::Kernel, access, memory),
-            // IA-32e requires an admitted PAT and memory attribute relation.
+            Self::X86_64(format) => format.leaf(address, level, Privilege::Kernel, access, memory),
             _ => None,
         }
     }
@@ -168,8 +175,10 @@ enum Exposure {
         parent: TableId,
         index: usize,
     },
-    #[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
-    Local,
+    #[cfg(limen_target)]
+    Local {
+        borrowed: Option<local::BorrowedBranch>,
+    },
 }
 
 enum Node {

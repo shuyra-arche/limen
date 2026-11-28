@@ -238,6 +238,52 @@ mod bound {
         }
     }
 
+    #[cfg(target_arch = "x86_64")]
+    impl LocalContext<'_> {
+        /// Qualify an owned successor in the exact original IA-32e format.
+        pub(in crate::metal::memory::mmu) unsafe fn prepare_table(
+            &self,
+            table: crate::metal::memory::mmu::table::TableFormat,
+            root: PhysicalAddress,
+        ) -> Result<Context, SwitchError> {
+            use crate::metal::memory::mmu::table::TableFormat;
+            let previous = self.current().ok_or(SwitchError::Unconfirmed)?;
+            if table != TableFormat::X86_64(self.native.profile())
+                || previous.root() == Some(root)
+            {
+                return Err(SwitchError::Scope);
+            }
+            unsafe { self.prepare_root(root) }
+        }
+
+        /// Observe one original PML4 entry through its retained identity view.
+        /// The caller holds the real original subtree and its stable structure.
+        pub(in crate::metal::memory::mmu) unsafe fn original_branch(
+            &self,
+            original: core::ptr::NonNull<u64>,
+            index: usize,
+        ) -> Result<u64, SwitchError> {
+            Native::check(self.installation.processor())?;
+            let previous = self.installation.current().ok_or(SwitchError::Unconfirmed)?;
+            let observed = unsafe { Native::observe() };
+            if previous != observed {
+                return Err(SwitchError::Current);
+            }
+            if index >= 512 || original.as_ptr().addr() != previous.cr3 || previous.cr3 == 0 {
+                return Err(SwitchError::Scope);
+            }
+            // A volatile scalar observation, not an exclusive byte reference:
+            // hardware may update Accessed on the retained original root.
+            let entry = unsafe { original.as_ptr().add(index).read_volatile() };
+            const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
+            if entry & ADDRESS == previous.cr3 as u64 {
+                // Recursive roots are not independent retained subtrees.
+                return Err(SwitchError::Scope);
+            }
+            self.native.profile().inherited_branch(entry).ok_or(SwitchError::Scope)
+        }
+    }
+
     #[cfg(target_arch = "riscv64")]
     impl LocalContext<'_> {
         /// Qualify the owned successor of the original bare supervisor context.

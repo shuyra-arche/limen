@@ -1,6 +1,7 @@
 //! Retain an owned tree through its original local native root installation.
 
-use super::{Exposure, Node, TableError, TableId, TableStore};
+use super::{Exposure, Node, TableError, TableId, TablePage, TableStore};
+use limen_treaty::model::PhysicalAddress;
 use crate::metal::{
     memory::mmu::treaty::{Context, LocalContext, SwitchError},
     sync::treaty::TurnMode,
@@ -16,7 +17,16 @@ enum Stage {
     Finished,
 }
 
-/// The original owned root and its exclusive PE control scope.
+/// An actual original firmware subtree retained through a local successor.
+/// Its storage is never a second owned TablePage.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) struct BorrowedBranch {
+    original: PhysicalAddress,
+    index: usize,
+    descriptor: u64,
+}
+
+/// The original owned root and its exclusive Processor control scope.
 /// Dropping the handle leaves the table retained.
 #[must_use]
 pub struct LocalRoot<'control, 'scope> {
@@ -44,6 +54,48 @@ impl TableStore {
         control: &'control mut LocalContext<'scope>,
         mode: TurnMode,
     ) -> Result<LocalRoot<'control, 'scope>, TableError> {
+        unsafe { self.retain_local(id, control, mode, None) }
+    }
+
+    /// Retain one actual supervisor subtree of the original IA-32e root
+    /// together with this private successor. The original entry is not edited.
+    ///
+    /// # Safety
+    /// In addition to prepare_local, original is the live retained identity
+    /// mapping of the confirmed CR3 page. The selected subtree covers every
+    /// inherited live access and its actual owner keeps all descendant
+    /// storage, permissions, attributes and mappings stable and resident
+    /// until the successor has been withdrawn and the borrow detached.
+    /// No software edits those descriptors; native A/D updates are allowed.
+    /// Other original roots and CPUs retain their own independent obligations.
+    #[cfg(target_arch = "x86_64")]
+    pub unsafe fn prepare_shared<'control, 'scope>(
+        &'static self,
+        id: TableId,
+        control: &'control mut LocalContext<'scope>,
+        original: core::ptr::NonNull<u64>,
+        index: usize,
+        mode: TurnMode,
+    ) -> Result<LocalRoot<'control, 'scope>, TableError> {
+        let previous = control.current().ok_or(TableError::State)?;
+        let root = previous.root().ok_or(TableError::Scope)?;
+        let descriptor = unsafe { control.original_branch(original, index) }
+            .map_err(|_| TableError::Scope)?;
+        let borrowed = BorrowedBranch {
+            original: root,
+            index,
+            descriptor,
+        };
+        unsafe { self.retain_local(id, control, mode, Some(borrowed)) }
+    }
+
+    unsafe fn retain_local<'control, 'scope>(
+        &'static self,
+        id: TableId,
+        control: &'control mut LocalContext<'scope>,
+        mode: TurnMode,
+        borrowed: Option<BorrowedBranch>,
+    ) -> Result<LocalRoot<'control, 'scope>, TableError> {
         let previous = control.current().ok_or(TableError::State)?;
         if self.level + 1 != self.format.levels() {
             return Err(TableError::Layout);
@@ -52,8 +104,26 @@ impl TableStore {
             let page = node.private()?;
             let next = unsafe { control.prepare_table(self.format, page.cell.physical().start()) }
                 .map_err(|_| TableError::Scope)?;
-            page.cell.freeze(held, &page.access)?;
-            page.exposure = Exposure::Local;
+            if let Some(branch) = borrowed {
+                if previous.root() != Some(branch.original) {
+                    return Err(TableError::Scope);
+                }
+                let entry = page.entry(held, branch.index)?;
+                if TablePage::read(entry) != 0 {
+                    return Err(TableError::Occupied);
+                }
+                TablePage::write(entry, branch.descriptor);
+            }
+            if let Err(error) = page.cell.freeze(held, &page.access) {
+                if let Some(branch) = borrowed {
+                    TablePage::write(
+                        page.entry(held, branch.index).expect("unchanged private root"),
+                        0,
+                    );
+                }
+                return Err(error.into());
+            }
+            page.exposure = Exposure::Local { borrowed };
             Ok(next)
         })?;
         Ok(LocalRoot {
@@ -123,12 +193,22 @@ impl LocalRoot<'_, '_> {
             let Node::Admitted(page) = node else {
                 return Err(TableError::State);
             };
-            if page.exposure != Exposure::Local {
+            let Exposure::Local { borrowed } = page.exposure else {
                 return Err(TableError::State);
+            };
+            if borrowed.is_some_and(|branch| self.previous.root() != Some(branch.original)) {
+                return Err(TableError::Scope);
             }
             // Either the native write never started, or the original control
-            // has completed maintenance and confirmed withdrawal.
+            // has completed maintenance and confirmed withdrawal. Detach the
+            // inherited descriptor before reopening ordinary root operations.
             unsafe { page.cell.thaw(held, &page.access) }?;
+            if let Some(branch) = borrowed {
+                TablePage::write(
+                    page.entry(held, branch.index).expect("original retained branch"),
+                    0,
+                );
+            }
             page.exposure = Exposure::Private;
             Ok(())
         })?;

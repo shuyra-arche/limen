@@ -8,7 +8,7 @@ use limen_treaty::model::PhysicalAddress;
 
 impl Controls {
     /// # Safety
-    /// Execute with privileged CR and EFER access on the intended processor.
+    /// Execute with privileged CR and MSR access on the intended processor.
     pub unsafe fn current() -> Self {
         let (cr0, cr3, cr4): (usize, usize, usize);
         let (low, high): (u32, u32);
@@ -16,18 +16,30 @@ impl Controls {
             asm!("mov {}, cr0", "mov {}, cr3", "mov {}, cr4", out(reg) cr0, out(reg) cr3, out(reg) cr4, options(nostack, nomem));
             asm!("rdmsr", in("ecx") 0xc000_0080u32, out("eax") low, out("edx") high, options(nostack, nomem));
         }
+        let efer = u64::from(high) << 32 | u64::from(low);
+        let pat = if core::arch::x86_64::__cpuid(1).edx & (1 << 16) != 0 {
+            let (low, high): (u32, u32);
+            unsafe {
+                asm!("rdmsr", in("ecx") 0x277u32, out("eax") low, out("edx") high,
+                    options(nostack, nomem));
+            }
+            Some(u64::from(high) << 32 | u64::from(low))
+        } else {
+            None
+        };
         Self {
             cr0,
             cr3,
             cr4,
-            efer: u64::from(high) << 32 | u64::from(low),
+            efer,
+            pat,
         }
     }
 
     /// Check the executing CPU's physical address width and optional 1 GiB pages.
     fn local_format(self) -> Option<Format> {
         use core::arch::x86_64::__cpuid;
-        if __cpuid(1).edx & (1 << 16) == 0 || __cpuid(0x8000_0000).eax < 0x8000_0008 {
+        if self.pat.is_none() || __cpuid(0x8000_0000).eax < 0x8000_0008 {
             return None;
         }
         self.format(
@@ -40,9 +52,9 @@ impl Controls {
 /// Bind this processor's four-level, untagged CR3 installation authority.
 ///
 /// # Safety
-/// The caller owns the local root registers exclusively, with physical
-/// address modifiers excluded. Keep that ownership and all affected
-/// table storage live through actual retirement.
+/// The caller owns the local root registers and PAT exclusively, with
+/// physical address modifiers excluded. Keep that ownership, effective
+/// memory types and all affected table storage live through retirement.
 pub unsafe fn admit_root(processor: usize) -> Result<(LocalContext<'static>, Format), SwitchError> {
     NativeRoot::check(processor)?;
     let initial = unsafe { Controls::current() };
