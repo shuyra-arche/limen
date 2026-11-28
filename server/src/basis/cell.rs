@@ -1,11 +1,12 @@
-//! Physical ownership and a registered first access for an Internal table page.
+//! Physical ownership and exact access registration.
+//! The first implemented access policy is a dedicated Internal table page.
 
 use core::mem::MaybeUninit;
 
-use limen_treaty::model::PhysicalRange;
+use limen_treaty::model::{ByteOffset, ByteRange, PhysicalRange};
 
 use crate::metal::{
-    identity::treaty::Generation,
+    identity::treaty::{Generation, Key, Slot},
     memory::{
         access::treaty::ram::{MappedRange, RetainedRange},
         allocator::treaty::{Allocation, AllocationId, MappedStorage, Retired},
@@ -27,20 +28,95 @@ struct State {
 
 struct Record {
     allocation: Allocation,
-    mapping: Mapping,
-    owner: TableId,
-    access: Option<Access>,
+    storage: Storage,
+    table: TableId,
+    access: Option<AccessRecord>,
 }
 
-enum Mapping {
+enum Storage {
     Exclusive(MappedRange<'static>),
     Retained(RetainedRange<'static>),
 }
 
+/// Identifies one registered use in an exact Cell instance, not a permit
+/// or the identity of the owner that consumes the use.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AccessId(Key<CellId>);
+
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum Access {
+enum AccessPhase {
     Prepared,
     Accepted,
+}
+
+struct AccessRecord {
+    id: AccessId,
+    range: ByteRange,
+    phase: AccessPhase,
+}
+
+impl AccessRecord {
+    /// A dedicated table Cell admits exactly one full-range read/write use.
+    /// Its slot is never recycled within the life of that Cell.
+    fn prepare(cell: CellId, range: ByteRange) -> (Self, CellAccess) {
+        let id = AccessId(Key::new(
+            cell,
+            Slot::new(0).expect("dedicated access slot"),
+            Generation::FIRST,
+        ));
+        (
+            Self {
+                id,
+                range,
+                phase: AccessPhase::Prepared,
+            },
+            CellAccess { id },
+        )
+    }
+
+    fn check(&self, access: &CellAccess) -> Result<(), Error> {
+        if access.id != self.id {
+            return Err(Error::Scope);
+        }
+        Ok(())
+    }
+
+    fn accept(&mut self, access: &CellAccess, range: ByteRange) -> Result<(), Error> {
+        self.check(access)?;
+        if self.range != range {
+            return Err(Error::Scope);
+        }
+        if self.phase != AccessPhase::Prepared {
+            return Err(Error::Access);
+        }
+        self.phase = AccessPhase::Accepted;
+        Ok(())
+    }
+
+    fn accepted(&self, access: &CellAccess) -> Result<(), Error> {
+        self.check(access)?;
+        if self.phase != AccessPhase::Accepted {
+            return Err(Error::Access);
+        }
+        Ok(())
+    }
+}
+
+impl Record {
+    fn access(&self, access: &CellAccess) -> Result<&AccessRecord, Error> {
+        let original = self.access.as_ref().ok_or(Error::Access)?;
+        original.check(access)?;
+        Ok(original)
+    }
+
+    fn accepted(&self, access: &CellAccess) -> Result<(), Error> {
+        self.access(access)?.accepted(access)
+    }
+}
+
+fn full_range(physical: PhysicalRange) -> ByteRange {
+    ByteRange::new(ByteOffset::new(0), ByteOffset::new(physical.length().get()))
+        .expect("nonempty physical range")
 }
 
 /// One stable Cell position, with prepaid space for its single table access.
@@ -92,8 +168,8 @@ impl CellSlot {
         let (issued, mapping) = material.into_parts();
         state.cell = Some(Record {
             allocation: issued,
-            mapping: Mapping::Exclusive(mapping),
-            owner,
+            storage: Storage::Exclusive(mapping),
+            table: owner,
             access: None,
         });
         state.generation = Some(generation);
@@ -108,7 +184,11 @@ impl CellSlot {
                 allocation,
                 physical,
             },
-            CellPermit { cell: id, owner },
+            CellPermit {
+                cell: id,
+                table: owner,
+                range: full_range(physical),
+            },
         ))
     }
 }
@@ -140,12 +220,15 @@ pub(crate) struct Cell {
 #[derive(Clone, Copy)]
 pub(crate) struct CellPermit {
     cell: CellId,
-    owner: TableId,
+    table: TableId,
+    range: ByteRange,
 }
 
-/// The one access record for this Cell generation and its original table node.
+/// Linear evidence of the registered use, independent of its issuing permit.
 #[must_use]
-pub(crate) struct CellAccess(CellPermit);
+pub(crate) struct CellAccess {
+    id: AccessId,
+}
 
 impl Cell {
     pub(crate) fn slot(&self) -> &'static CellSlot {
@@ -181,7 +264,10 @@ impl Cell {
         permit: CellPermit,
     ) -> Result<&'held mut Record, Error> {
         let record = self.state(held)?.cell.as_mut().expect("live Cell");
-        if permit.cell != self.id || permit.owner != record.owner {
+        if permit.cell != self.id
+            || permit.table != record.table
+            || permit.range != full_range(self.physical)
+        {
             return Err(Error::Scope);
         }
         Ok(record)
@@ -196,8 +282,9 @@ impl Cell {
         if record.access.is_some() {
             return Err(Error::Access);
         }
-        record.access = Some(Access::Prepared);
-        Ok(CellAccess(permit))
+        let (entry, access) = AccessRecord::prepare(self.id, permit.range);
+        record.access = Some(entry);
+        Ok(access)
     }
 
     pub(crate) fn accept(
@@ -206,15 +293,12 @@ impl Cell {
         permit: CellPermit,
         access: &CellAccess,
     ) -> Result<(), Error> {
-        if access.0.cell != permit.cell || access.0.owner != permit.owner {
-            return Err(Error::Scope);
-        }
         let record = self.record(held, permit)?;
-        if record.access != Some(Access::Prepared) {
-            return Err(Error::Access);
-        }
-        record.access = Some(Access::Accepted);
-        Ok(())
+        record
+            .access
+            .as_mut()
+            .ok_or(Error::Access)?
+            .accept(access, permit.range)
     }
 
     pub(crate) fn bytes<'held>(
@@ -222,30 +306,30 @@ impl Cell {
         held: &'held mut CellTurn<'_>,
         access: &CellAccess,
     ) -> Result<&'held mut [MaybeUninit<u8>], Error> {
-        let record = self.record(held, access.0)?;
-        let Mapping::Exclusive(mapping) = &mut record.mapping else {
+        let record = self.state(held)?.cell.as_mut().expect("live Cell");
+        record.accepted(access)?;
+        let range = record.access(access)?.range;
+        let Storage::Exclusive(mapping) = &mut record.storage else {
             return Err(Error::Access);
         };
-        if record.access != Some(Access::Accepted) {
-            return Err(Error::Access);
-        }
-        Ok(mapping.bytes())
+        let start = usize::try_from(range.start().get()).map_err(|_| Error::Scope)?;
+        let end = usize::try_from(range.end().get()).map_err(|_| Error::Scope)?;
+        mapping.bytes().get_mut(start..end).ok_or(Error::Scope)
     }
 
     /// Retain the exact storage while ending its exclusive byte reference.
     pub(crate) fn freeze(&self, held: &mut CellTurn<'_>, access: &CellAccess) -> Result<(), Error> {
-        let record = self.record(held, access.0)?;
-        if record.access != Some(Access::Accepted)
-            || !matches!(record.mapping, Mapping::Exclusive(_))
-        {
+        let record = self.state(held)?.cell.as_mut().expect("live Cell");
+        record.accepted(access)?;
+        if !matches!(record.storage, Storage::Exclusive(_)) {
             return Err(Error::Access);
         }
         let record = held.state.cell.take().expect("checked Cell access");
-        let Mapping::Exclusive(mapping) = record.mapping else {
+        let Storage::Exclusive(mapping) = record.storage else {
             unreachable!("checked exclusive mapping");
         };
         held.state.cell = Some(Record {
-            mapping: Mapping::Retained(mapping.into_retained()),
+            storage: Storage::Retained(mapping.into_retained()),
             ..record
         });
         Ok(())
@@ -259,18 +343,17 @@ impl Cell {
         held: &mut CellTurn<'_>,
         access: &CellAccess,
     ) -> Result<(), Error> {
-        let record = self.record(held, access.0)?;
-        if record.access != Some(Access::Accepted)
-            || !matches!(record.mapping, Mapping::Retained(_))
-        {
+        let record = self.state(held)?.cell.as_mut().expect("live Cell");
+        record.accepted(access)?;
+        if !matches!(record.storage, Storage::Retained(_)) {
             return Err(Error::Access);
         }
         let record = held.state.cell.take().expect("checked Cell access");
-        let Mapping::Retained(mapping) = record.mapping else {
+        let Storage::Retained(mapping) = record.storage else {
             unreachable!("checked retained mapping");
         };
         held.state.cell = Some(Record {
-            mapping: Mapping::Exclusive(unsafe { mapping.into_exclusive() }),
+            storage: Storage::Exclusive(unsafe { mapping.into_exclusive() }),
             ..record
         });
         Ok(())
@@ -288,24 +371,28 @@ impl Cell {
     ) -> Result<Retired, Error> {
         let state = self.state(held)?;
         let record = state.cell.as_ref().expect("live Cell");
-        if owner != record.owner || record.access.is_some() != access.is_some() {
+        if owner != record.table || record.access.is_some() != access.is_some() {
             return Err(Error::Scope);
         }
-        if access.is_some_and(|access| access.0.cell != self.id || access.0.owner != owner) {
-            return Err(Error::Scope);
+        if let Some(access) = access {
+            record.access(access)?;
         }
-        if !matches!(record.mapping, Mapping::Exclusive(_)) {
+        if !matches!(record.storage, Storage::Exclusive(_)) {
             return Err(Error::Access);
         }
         let Record {
             allocation,
-            mapping,
+            storage,
             ..
         } = state.cell.take().expect("validated Cell");
-        let Mapping::Exclusive(_ended) = mapping else {
+        let Storage::Exclusive(_ended) = storage else {
             unreachable!("checked exclusive mapping");
         };
         // Hardware reachability has ended and the former mapping is no longer used.
         Ok(unsafe { allocation.retire() })
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/basis/cell.rs"]
+mod tests;

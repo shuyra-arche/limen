@@ -715,7 +715,10 @@ fn ordinary_cell_spending_cannot_publish_a_table_page() {
         .publish_cell(cell, spending, storage, Fast)
         .err()
         .unwrap();
-    assert_eq!(error, TableError::Pend(PendError::Source(Error::PermitLimit)));
+    assert_eq!(
+        error,
+        TableError::Pend(PendError::Source(Error::PermitLimit))
+    );
     assert_eq!(storage.id(), id);
     assert_eq!(tables.locate(id), Ok(None));
 
