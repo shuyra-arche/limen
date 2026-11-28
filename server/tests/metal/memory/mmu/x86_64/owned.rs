@@ -63,7 +63,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     assert!(boot.image().end().get() <= COVERAGE);
     assert!(range.end().get() <= COVERAGE && (original.cr3 as u64) < COVERAGE);
 
-    let tree = unsafe { Tree::prepare(boot, range, evidence, TableFormat::X86_64(format)) };
+    let tree = unsafe { Tree::prepare(boot, range, evidence, TableFormat::X86_64(format), 0) };
     let [leaf, _, _, root] = tree.nodes;
     let witness = ptr::from_ref(&WITNESS).addr() as u64;
     assert!(boot.image().covers(extent(witness, witness + PAGE)));

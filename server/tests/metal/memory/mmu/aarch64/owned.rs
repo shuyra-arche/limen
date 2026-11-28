@@ -69,7 +69,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     verify_lower_writable(range);
     let original = unsafe { Controls::current() };
     let (mut control, profile) = unsafe { admit_inactive_upper(boot.processor()) }.unwrap();
-    let tree = unsafe { Tree::prepare(boot, range, evidence, TableFormat::Aarch64(profile)) };
+    let tree = unsafe { Tree::prepare(boot, range, evidence, TableFormat::Aarch64(profile), 0) };
     let [leaf, _, _, root] = tree.nodes;
 
     let lower = ptr::from_ref(&WITNESS).addr() as u64;

@@ -36,6 +36,13 @@ struct Record {
     allocation: Allocation,
     storage: Storage,
     role: Role,
+    admission: Admission,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Admission {
+    Open,
+    Shut,
 }
 
 /// The dedicated first-use policy is not a different physical source.
@@ -78,6 +85,8 @@ impl Rights {
 enum AccessOwner {
     Table(TableId),
     Preparation(usize),
+    #[cfg(limen_cooperative)]
+    Mapping(super::nest::MappingId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,6 +101,7 @@ struct AccessRecord {
     range: ByteRange,
     rights: Rights,
     owner: AccessOwner,
+    authority: Option<usize>,
     phase: AccessPhase,
 }
 
@@ -108,6 +118,7 @@ impl AccessRecord {
                 range,
                 rights,
                 owner,
+                authority: None,
                 phase: AccessPhase::Prepared,
             },
             CellAccess { id },
@@ -210,6 +221,7 @@ impl OrdinaryAccesses {
         range: ByteRange,
         rights: Rights,
         owner: AccessOwner,
+        authority: usize,
     ) -> Result<CellAccess, Error> {
         let reservation = self.entries.reserve().map_err(|error| match error {
             ReserveError::IdentityExhausted => Error::Exhausted,
@@ -217,7 +229,8 @@ impl OrdinaryAccesses {
         })?;
         let key = reservation.key();
         let id = AccessId(Key::new(cell, key.slot(), key.generation()));
-        let (record, access) = AccessRecord::prepare(id, range, rights, owner);
+        let (mut record, access) = AccessRecord::prepare(id, range, rights, owner);
+        record.authority = Some(authority);
         self.entries
             .publish(reservation, record)
             .expect("original reserved access position");
@@ -228,17 +241,31 @@ impl OrdinaryAccesses {
     fn cancel(&mut self, access: &CellAccess, owner: AccessOwner) -> Result<(), Error> {
         let id = access.id.0;
         let key = Key::new(self.scope, id.slot(), id.generation());
+        let record = self.entries.get(key).ok_or(Error::Scope)?;
+        if record.authority.is_none() {
+            return Err(Error::Scope);
+        }
+        record.prepared(access, owner)?;
+        self.remove(key);
+        Ok(())
+    }
+
+    #[cfg(limen_cooperative)]
+    fn original(&mut self, id: AccessId) -> Result<&mut AccessRecord, Error> {
+        let key = Key::new(self.scope, id.0.slot(), id.0.generation());
         self.entries
-            .get(key)
-            .ok_or(Error::Scope)?
-            .prepared(access, owner)?;
+            .get_mut(key)
+            .filter(|record| record.id == id)
+            .ok_or(Error::Scope)
+    }
+
+    fn remove(&mut self, key: Key<usize>) {
         self.entries.detach(key).expect("validated access");
         let (reclamation, _) = self.entries.reclaim(key).expect("detached access");
         self.entries
             .release(reclamation)
             .expect("settled access position");
         self.active -= 1;
-        Ok(())
     }
 }
 
@@ -365,6 +392,7 @@ impl CellSlot {
                 Role::Table(_) => Storage::Exclusive(mapping),
             },
             role,
+            admission: Admission::Open,
         });
         state.generation = Some(generation);
         let id = CellId {
@@ -401,6 +429,7 @@ pub enum Error {
     Exhausted,
     Scope,
     Access,
+    Shut,
     Pend(pend::Error),
     Acquire(TurnAcquireError),
 }
@@ -477,6 +506,9 @@ impl Cell {
     ) -> Result<(&'held mut Option<AccessRecord>, TableId), Error> {
         let state = self.state(held)?;
         let record = state.cell.as_ref().expect("live Cell");
+        if record.admission != Admission::Open {
+            return Err(Error::Shut);
+        }
         let Role::Table(table) = record.role else {
             return Err(Error::Scope);
         };
@@ -554,8 +586,7 @@ impl Cell {
     ) -> Result<core::ptr::NonNull<u64>, Error> {
         let state = self.state(held)?;
         let registered = state.accesses.table_accepted(access)?;
-        if registered.range != full_range(self.physical)
-            || registered.rights != Rights::READ_WRITE
+        if registered.range != full_range(self.physical) || registered.rights != Rights::READ_WRITE
         {
             return Err(Error::Scope);
         }
@@ -755,7 +786,7 @@ impl CellConstruction {
     /// Register one physical byte access in the original supplied receiver.
     /// No hardware or ordinary byte access is authorized by preparation.
     pub fn prepare(
-        &self,
+        &'static self,
         id: CellId,
         range: ByteRange,
         rights: Rights,
@@ -790,22 +821,55 @@ impl CellConstruction {
             }
             let state = original.cell.state(&mut locked)?;
             let record = state.cell.as_ref().expect("live Cell");
+            if record.admission != Admission::Open {
+                return Err(Error::Shut);
+            }
             if record.role != Role::Ordinary || !matches!(record.storage, Storage::Retained(_)) {
                 return Err(Error::Access);
             }
             let access = state
                 .accesses
                 .ordinary()?
-                .prepare(id, range, rights, receiver.owner())?;
+                .prepare(
+                    id,
+                    range,
+                    rights,
+                    receiver.owner(),
+                    core::ptr::from_ref(self).addr(),
+                )?;
             let id = access.id;
             *held.access(&receiver.0).expect("original access receiver") =
-                Some(Preparation { slot, access });
+                Some(Preparation {
+                    slot,
+                    #[cfg(limen_cooperative)]
+                    source: self,
+                    access,
+                });
             Ok(id)
         })?
     }
 
-    /// Return a construction whose ordinary access has never been accepted.
-    /// A prepared access still occupies its original record until cancellation.
+    /// Permanently close physical admission independently of the first
+    /// authorization branch. Existing preparations and accepted uses retain
+    /// their original settlement paths.
+    pub fn shut(&self, id: CellId, mode: TurnMode) -> Result<(), Error> {
+        let slot = self
+            .0
+            .acquire(|state| Ok::<_, Error>(Self::original(state, id)?.cell.slot()))??;
+        let mut workspace = TurnWorkspace::<2>::new();
+        let mut plan = workspace.plan();
+        plan.insert(&self.0).expect("original construction");
+        slot.plan(&mut plan);
+        plan.acquire(mode, |held| {
+            let (construction, mut locked) = slot.together(held, &self.0);
+            let original = Self::original(construction, id)?;
+            let record = original.cell.state(&mut locked)?.cell.as_mut().expect("live Cell");
+            record.admission = Admission::Shut;
+            Ok(())
+        })?
+    }
+
+    /// Return the original Cell only after all access registrations settle.
     /// The real receiver takes the exact original Allocation retirement;
     /// refund remains an independent Allocator operation.
     ///
@@ -869,6 +933,10 @@ impl Default for CellConstruction {
 
 struct Preparation {
     slot: &'static CellSlot,
+    // The direct root belongs to this exact construction and Cell generation.
+    // No additional authority or independent holding is created by preparation.
+    #[cfg(limen_cooperative)]
+    source: &'static CellConstruction,
     access: CellAccess,
 }
 
@@ -937,6 +1005,11 @@ impl Default for AccessPreparation {
     }
 }
 
+#[cfg(limen_cooperative)]
+mod mapping;
+#[cfg(limen_cooperative)]
+pub(super) use mapping::{AcceptedAccess, MappingInput};
+
 #[cfg(test)]
-#[path = "../../tests/basis/cell.rs"]
+#[path = "../../../tests/basis/cell.rs"]
 mod tests;

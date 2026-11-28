@@ -52,6 +52,8 @@ pub struct LocalTranslation {
     leaf: Position,
     index: usize,
     address: InternalAddress,
+    physical: PhysicalAddress,
+    access: LeafAccess,
     descriptor: u64,
     phase: TranslationPhase,
 }
@@ -59,6 +61,14 @@ pub struct LocalTranslation {
 impl LocalTranslation {
     pub fn phase(&self) -> TranslationPhase {
         self.phase
+    }
+
+    pub(crate) fn physical(&self) -> PhysicalAddress {
+        self.physical
+    }
+
+    pub(crate) fn access(&self) -> LeafAccess {
+        self.access
     }
 }
 
@@ -111,8 +121,7 @@ impl LocalRoot<'_, '_> {
         };
         for _ in 0..self.table.format.levels() {
             let table = position.store;
-            let index =
-                coordinate(table.format, address, table.level).ok_or(TableError::Layout)?;
+            let index = coordinate(table.format, address, table.level).ok_or(TableError::Layout)?;
             if table.level == 0 {
                 return Ok(position);
             }
@@ -195,7 +204,10 @@ impl LocalRoot<'_, '_> {
             .format
             .leaf(physical, 0, access, Memory::Normal)
             .ok_or(TableError::Layout)?;
-        let count = self.translations.checked_add(1).ok_or(TableError::Exhausted)?;
+        let count = self
+            .translations
+            .checked_add(1)
+            .ok_or(TableError::Exhausted)?;
         leaf.store.with_node(leaf.id, mode, |node, held| {
             let page = leaf.page(node)?;
             let word = page.cell.retained_word(held, &page.access, index)?;
@@ -211,6 +223,8 @@ impl LocalRoot<'_, '_> {
             leaf,
             index,
             address,
+            physical,
+            access,
             descriptor,
             phase: TranslationPhase::Prepared,
         })
@@ -242,8 +256,9 @@ impl LocalRoot<'_, '_> {
                 let leaf = translation.leaf;
                 leaf.store.with_node(leaf.id, mode, |node, held| {
                     let page = leaf.page(node)?;
-                    let word =
-                        page.cell.retained_word(held, &page.access, translation.index)?;
+                    let word = page
+                        .cell
+                        .retained_word(held, &page.access, translation.index)?;
                     if !claim(page, translation.index)
                         || unsafe { word.as_ptr().read_volatile() } != 0
                     {
@@ -258,8 +273,11 @@ impl LocalRoot<'_, '_> {
             TranslationPhase::Active => return Ok(()),
             _ => return Err(TableError::State),
         }
-        unsafe { self.control.synchronize_leaf(self.next, translation.address) }
-            .map_err(TableError::Switch)?;
+        unsafe {
+            self.control
+                .synchronize_leaf(self.next, translation.address)
+        }
+        .map_err(TableError::Switch)?;
         translation.phase = TranslationPhase::Active;
         Ok(())
     }
@@ -307,8 +325,11 @@ impl LocalRoot<'_, '_> {
             })?;
         }
         if translation.phase == TranslationPhase::Removing {
-            unsafe { self.control.synchronize_leaf(self.next, translation.address) }
-                .map_err(TableError::Switch)?;
+            unsafe {
+                self.control
+                    .synchronize_leaf(self.next, translation.address)
+            }
+            .map_err(TableError::Switch)?;
         } else if translation.phase != TranslationPhase::Prepared {
             return Err(TableError::State);
         }

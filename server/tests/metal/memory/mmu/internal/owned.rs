@@ -110,7 +110,10 @@ impl Tree {
         range: PhysicalRange,
         evidence: &Retirement,
         format: TableFormat,
+        ordinary_pages: usize,
     ) -> Self {
+        let pages = LEVELS.checked_add(ordinary_pages).expect("fixture capacity");
+        assert!(pages <= PAGES - 2);
         let start = range.start().get();
         let mut scratch = [None; 1];
         let mut regions = boot
@@ -123,8 +126,8 @@ impl Tree {
             regions: 1,
             grains: PAGES,
             roots: 4,
-            allocations: LEVELS,
-            returns: LEVELS,
+            allocations: pages,
+            returns: pages,
             allowances: 1,
             edits: 64,
         };
@@ -134,7 +137,7 @@ impl Tree {
             regions.allocator(
                 &mut Some(mapped(backing)),
                 config,
-                4 * PAGE,
+                pages as u64 * PAGE,
                 allowance,
                 &mut [],
             )

@@ -137,6 +137,17 @@ impl SpanIndex {
         })
     }
 
+    pub(super) fn check_map(&mut self, id: SpanId, range: InternalRange) -> Result<(), Error> {
+        let span = self.original(id)?;
+        if span.phase != SpanPhase::Open || span.root.resolve().ok() != Some(id) {
+            return Err(Error::Shut);
+        }
+        if !span.range.covers(range) {
+            return Err(Error::Scope);
+        }
+        Ok(())
+    }
+
     pub(super) fn close(&mut self, id: SpanId) -> Result<(), Error> {
         let span = self.original(id)?;
         if span.phase == SpanPhase::Open {

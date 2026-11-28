@@ -868,6 +868,12 @@ fn ordinary_cell_publication_owns_cleared_material_and_an_independent_holding() 
     assert_ne!(c, a);
     assert_eq!(first.cancel(a, Fast), Err(CellError::Scope));
     assert_eq!(first.observe(), Ok(Some(c)));
+    construction.shut(published, Fast).unwrap();
+    assert_eq!(
+        construction.prepare(published, range, Rights::READ, third, Fast),
+        Err(CellError::Shut)
+    );
+    assert_eq!(construction.initial_range(published), Ok(range));
     construction.revoke(published).unwrap();
     assert_eq!(
         construction.initial_range(published),

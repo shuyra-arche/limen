@@ -6,7 +6,10 @@ use core::ptr;
 
 use limen_treaty::model::InternalRange;
 
+mod mapping;
 mod span;
+use mapping::{MappingIndex, Work};
+pub use mapping::{MappingId, MappingObservation, MappingPhase, MappingProgress, MappingStorage};
 use span::SpanIndex;
 pub use span::{SpanId, SpanObservation, SpanPhase, SpanStorage};
 
@@ -46,6 +49,7 @@ pub struct Observation {
 pub enum Error {
     Acquire(TurnAcquireError),
     Table(TableError),
+    Cell(super::cell::Error),
     Busy,
     Capacity,
     Conflict,
@@ -72,6 +76,7 @@ pub(super) struct State {
     generation: Option<Generation>,
     record: Option<Record>,
     spans: SpanIndex,
+    mappings: MappingIndex,
 }
 
 struct Record {
@@ -167,14 +172,16 @@ impl Binding {
 }
 
 impl Nest {
-    pub fn new<const CAPACITY: usize>(
-        storage: &'static mut SpanStorage<CAPACITY>,
+    pub fn new<const SPANS: usize, const MAPPINGS: usize>(
+        spans: &'static mut SpanStorage<SPANS>,
+        mappings: &'static mut MappingStorage<MAPPINGS>,
     ) -> Result<Self, Error> {
         Ok(Self {
             state: TurnLock::new(State {
                 generation: None,
                 record: None,
-                spans: SpanIndex::new(storage)?,
+                spans: SpanIndex::new(spans)?,
+                mappings: MappingIndex::new(mappings)?,
             }),
         })
     }
@@ -194,7 +201,7 @@ impl Nest {
         let published = self
             .state
             .acquire(|state| {
-                if state.record.is_some() || !state.spans.is_empty() {
+                if state.record.is_some() || !state.spans.is_empty() || !state.mappings.is_empty() {
                     return Err(Error::Busy);
                 }
                 let generation = Generation::next(state.generation).ok_or(Error::Exhausted)?;
@@ -218,6 +225,7 @@ impl Nest {
             Ok(id) => Ok(LocalNest {
                 binding: Binding { nest: self, id },
                 root,
+                work: Work::new(),
                 retired: false,
             }),
             Err(error) => Err((root, error)),
@@ -243,6 +251,7 @@ impl Nest {
 pub struct LocalNest<'control, 'scope> {
     binding: Binding,
     root: LocalRoot<'control, 'scope>,
+    work: Work,
     retired: bool,
 }
 
@@ -271,7 +280,11 @@ impl LocalNest<'_, '_> {
         })??;
         // The exclusive LocalRoot keeps this layout check valid across the
         // Nest Turn acquisition. Never acquire table Turns under the Nest.
-        if !self.root.admits_span(range, TurnMode::Slow).map_err(Error::Table)? {
+        if !self
+            .root
+            .admits_span(range, TurnMode::Slow)
+            .map_err(Error::Table)?
+        {
             return Err(Error::Scope);
         }
         self.binding.state().acquire(|state| {
@@ -300,6 +313,10 @@ impl LocalNest<'_, '_> {
     pub fn finish_release_span(&mut self, id: SpanId) -> Result<(), Error> {
         self.binding.state().acquire(|state| {
             state.record(self.id())?;
+            let range = state.spans.observe(id)?.range;
+            if state.mappings.overlaps(range) || self.work.prepared.is_some() {
+                return Err(Error::Busy);
+            }
             state.spans.settle(id)
         })?
     }
@@ -349,6 +366,26 @@ impl LocalNest<'_, '_> {
         if self.retired {
             return Ok(Progress::Retired);
         }
+        self.binding.state().acquire(|state| {
+            let record = state.record(self.id())?;
+            if record.phase != Phase::Draining || record.recoverable_refs != 0 {
+                return Err(Error::Busy);
+            }
+            Ok(())
+        })??;
+        if self.work.prepared.is_some() {
+            self.cancel_preparation(TurnMode::Slow)?;
+            return Ok(Progress::Pending);
+        }
+        let mapping = self.binding.state().acquire(|state| {
+            state.record(self.id())?;
+            Ok::<_, Error>(state.mappings.first())
+        })??;
+        if let Some(mapping) = self.work.active.as_ref().map(|work| work.id).or(mapping) {
+            self.begin_unmap(mapping)?;
+            unsafe { self.advance_mapping(mapping, TurnMode::Slow) }?;
+            return Ok(Progress::Pending);
+        }
         let pending_span = self.binding.state().acquire(|state| {
             let record = state.record(self.id())?;
             if record.phase != Phase::Draining || record.recoverable_refs != 0 {
@@ -371,6 +408,7 @@ impl LocalNest<'_, '_> {
             assert_eq!(record.phase, Phase::Draining);
             assert_eq!(record.recoverable_refs, 0);
             assert!(state.spans.is_empty());
+            assert!(state.mappings.is_empty());
             state.record = None;
             Ok::<(), Error>(())
         })??;
