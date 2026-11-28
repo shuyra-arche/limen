@@ -24,7 +24,8 @@ use kernel::{
                     installation::admit_context,
                 },
                 treaty::{
-                    LeafAccess, Memory, TableBranch, TableError, TableFormat, TableId, TableStore,
+                    LeafAccess, LocalRoot, Memory, TableBranch, TableError, TableFormat, TableId,
+                    TableStore,
                 },
             },
         },
@@ -240,7 +241,81 @@ impl Tree<'_> {
     }
 }
 
+#[inline(never)]
+fn check_leaf(active: &mut LocalRoot<'_, '_>, witness: u64, read_only: u64, writable: u64) {
+    // Retain the actual live leaf slot, not a second private byte borrow.
+    use kernel::metal::memory::mmu::treaty::{SwitchError, TranslationPhase};
+    let address = InternalAddress::new(ALIAS + PAGE);
+    let target = PhysicalAddress::new(witness);
+    let mut edit = active
+        .prepare_translation(
+            address,
+            target,
+            ByteLength::new(PAGE),
+            LeafAccess::ReadOnly,
+            Fast,
+        )
+        .unwrap();
+    assert_eq!(edit.phase(), TranslationPhase::Prepared);
+    assert!(matches!(
+        active.prepare_translation(
+            address,
+            target,
+            ByteLength::new(PAGE),
+            LeafAccess::ReadOnly,
+            Fast
+        ),
+        Err(kernel::metal::memory::mmu::treaty::TableError::Occupied)
+    ));
+    assert_eq!(unsafe { active.restore() }, Err(SwitchError::Current));
+    unsafe { active.install_translation(&mut edit, Fast) }.unwrap();
+    assert_eq!(edit.phase(), TranslationPhase::Active);
+    let value: u64;
+    unsafe {
+        asm!("ld {}, 0({})", out(reg) value, in(reg) address.get(), options(nostack, readonly))
+    };
+    assert_eq!(value, WITNESS.0[0]);
+    unsafe { active.remove_translation(&mut edit, Fast) }.unwrap();
+    assert_eq!(edit.phase(), TranslationPhase::Removed);
+    let replacement_physical = ptr::from_ref(&REPLACEMENT).addr() as u64;
+    assert!(
+        extent(read_only, writable)
+            .covers(extent(replacement_physical, replacement_physical + PAGE))
+    );
+    assert_ne!(replacement_physical, witness);
+    let mut replacement = active
+        .prepare_translation(
+            address,
+            PhysicalAddress::new(replacement_physical),
+            ByteLength::new(PAGE),
+            LeafAccess::ReadOnly,
+            Fast,
+        )
+        .unwrap();
+    // Repeated retirement of the original cannot cancel the replacement.
+    unsafe { active.remove_translation(&mut edit, Fast) }.unwrap();
+    unsafe { active.install_translation(&mut replacement, Fast) }.unwrap();
+    let value: u64;
+    unsafe {
+        asm!("ld {}, 0({})", out(reg) value, in(reg) address.get(), options(nostack, readonly))
+    };
+    assert_eq!(value, REPLACEMENT.0[0]);
+    unsafe { active.remove_translation(&mut replacement, Fast) }.unwrap();
+    let mut cancelled = active
+        .prepare_translation(
+            address,
+            target,
+            ByteLength::new(PAGE),
+            LeafAccess::ReadOnly,
+            Fast,
+        )
+        .unwrap();
+    unsafe { active.remove_translation(&mut cancelled, Fast) }.unwrap();
+    assert_eq!(cancelled.phase(), TranslationPhase::Removed);
+}
+
 pub fn check(boot: &Boot<'_>) {
+    kernel::metal::platform::boot::treaty::write("BEGIN owned root construction\n");
     assert_eq!(Context::current(), Some(Context::BARE));
     let cpu = boot
         .riscv_cpus()
@@ -351,81 +426,15 @@ pub fn check(boot: &Boot<'_>) {
         Err(TableError::State)
     );
     assert!(retired.is_none());
+    kernel::metal::platform::boot::treaty::write("BEGIN native root installation\n");
     unsafe { active.install() }.unwrap();
     assert_eq!(Context::current(), Context::paged(FORMAT, physical));
     let value: u64;
     unsafe { asm!("ld {}, 0({})", out(reg) value, in(reg) ALIAS, options(nostack, readonly)) };
     assert_eq!(value, WITNESS.0[0]);
 
-    // Retain the actual live leaf slot, not a second private byte borrow.
-    use kernel::metal::memory::mmu::treaty::{SwitchError, TranslationPhase};
-    let address = InternalAddress::new(ALIAS + PAGE);
-    let target = PhysicalAddress::new(witness);
-    let mut edit = active
-        .prepare_translation(
-            address,
-            target,
-            ByteLength::new(PAGE),
-            LeafAccess::ReadOnly,
-            Fast,
-        )
-        .unwrap();
-    assert_eq!(edit.phase(), TranslationPhase::Prepared);
-    assert!(matches!(
-        active.prepare_translation(
-            address,
-            target,
-            ByteLength::new(PAGE),
-            LeafAccess::ReadOnly,
-            Fast
-        ),
-        Err(kernel::metal::memory::mmu::treaty::TableError::Occupied)
-    ));
-    assert_eq!(unsafe { active.restore() }, Err(SwitchError::Current));
-    unsafe { active.install_translation(&mut edit, Fast) }.unwrap();
-    assert_eq!(edit.phase(), TranslationPhase::Active);
-    let value: u64;
-    unsafe {
-        asm!("ld {}, 0({})", out(reg) value, in(reg) address.get(), options(nostack, readonly))
-    };
-    assert_eq!(value, WITNESS.0[0]);
-    unsafe { active.remove_translation(&mut edit, Fast) }.unwrap();
-    assert_eq!(edit.phase(), TranslationPhase::Removed);
-    let replacement_physical = ptr::from_ref(&REPLACEMENT).addr() as u64;
-    assert!(
-        extent(read_only, writable)
-            .covers(extent(replacement_physical, replacement_physical + PAGE))
-    );
-    assert_ne!(replacement_physical, witness);
-    let mut replacement = active
-        .prepare_translation(
-            address,
-            PhysicalAddress::new(replacement_physical),
-            ByteLength::new(PAGE),
-            LeafAccess::ReadOnly,
-            Fast,
-        )
-        .unwrap();
-    // Repeated retirement of the original cannot cancel the replacement.
-    unsafe { active.remove_translation(&mut edit, Fast) }.unwrap();
-    unsafe { active.install_translation(&mut replacement, Fast) }.unwrap();
-    let value: u64;
-    unsafe {
-        asm!("ld {}, 0({})", out(reg) value, in(reg) address.get(), options(nostack, readonly))
-    };
-    assert_eq!(value, REPLACEMENT.0[0]);
-    unsafe { active.remove_translation(&mut replacement, Fast) }.unwrap();
-    let mut cancelled = active
-        .prepare_translation(
-            address,
-            target,
-            ByteLength::new(PAGE),
-            LeafAccess::ReadOnly,
-            Fast,
-        )
-        .unwrap();
-    unsafe { active.remove_translation(&mut cancelled, Fast) }.unwrap();
-    assert_eq!(cancelled.phase(), TranslationPhase::Removed);
+    check_leaf(&mut active, witness, read_only, writable);
+    kernel::metal::platform::boot::treaty::write("PASS native leaf editing\n");
 
     unsafe {
         (&raw mut WRITABLE).write_volatile(0x5678);
@@ -456,6 +465,7 @@ pub fn check(boot: &Boot<'_>) {
         expanded.occupied().get(),
         charged.occupied().get() + 2 * PAGE
     );
+    kernel::metal::platform::boot::treaty::write("BEGIN ordinary mapping\n");
     unsafe {
         mapping::check(
             &mut owner,
@@ -475,6 +485,7 @@ pub fn check(boot: &Boot<'_>) {
         )
     };
     assert_eq!(allowance.balance(), Ok(expanded));
+    kernel::metal::platform::boot::treaty::write("BEGIN owned root retirement\n");
     owner.begin_delete().unwrap();
     owner.begin_drain().unwrap();
     assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Pending));

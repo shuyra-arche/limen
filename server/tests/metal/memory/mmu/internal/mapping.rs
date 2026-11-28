@@ -38,6 +38,7 @@ fn range(start: u64, end: u64) -> InternalRange {
 
 /// The fixture retains the original RAM, compatible Normal identity
 /// mapping and exclusive local native scope until all accesses settle.
+#[inline(never)]
 pub(super) unsafe fn check(
     owner: &mut LocalNest<'_, '_>,
     allowance: &Allowance,
@@ -128,48 +129,79 @@ pub(super) unsafe fn check(
         Err(nest::Error::Table(TableError::Scope))
     );
     assert_eq!(FIRST_ACCESS.observe(), Ok(Some(first)));
+    let (head, head_id) = supplied[0];
     let (last, last_id) = supplied[supplied.len() - 1];
     if supplied.len() > 1 {
+        // A missing lower level is not an accepted partial publication.
         assert_eq!(
-            unsafe { owner.supply_table(span, virtual_address, last, last_id, Fast) },
+            unsafe { owner.supply_path(span, virtual_address, last, last_id, Fast) },
             Err(nest::Error::Table(TableError::Layout))
         );
+        assert_eq!(
+            unsafe { owner.supply_path(span, virtual_address, head, head_id, Fast) },
+            Err(nest::Error::Table(TableError::Layout))
+        );
+        assert_eq!(head.descriptor(head_id, 0, Fast), Ok(0));
         assert_eq!(last.descriptor(last_id, 0, Fast), Ok(0));
+
+        // Compose the actual private chain bottom-up. A wrong root entry
+        // must leave that entire chain private and the live path absent.
+        for offset in (0..supplied.len() - 1).rev() {
+            let (parent, parent_id) = supplied[offset];
+            let (child, child_id) = supplied[offset + 1];
+            let level = supplied.len() - offset - 1;
+            let index = ((address >> (12 + 9 * level)) & 511) as usize;
+            let entry = if offset == 0 { index ^ 1 } else { index };
+            parent
+                .link_child(parent_id, entry, child, child_id, Fast)
+                .unwrap();
+        }
+        assert_eq!(
+            unsafe { owner.supply_path(span, virtual_address, head, head_id, Fast) },
+            Err(nest::Error::Table(TableError::Layout))
+        );
+        let level = supplied.len() - 1;
+        let index = ((address >> (12 + 9 * level)) & 511) as usize;
+        let (child, child_id) = supplied[1];
+        assert_eq!(head.unlink_child(head_id, index ^ 1, Fast), Ok(child_id));
+        head.link_child(head_id, index, child, child_id, Fast)
+            .unwrap();
     }
-    for (offset, &(store, id)) in supplied.iter().enumerate() {
-        assert_eq!(
-            owner.missing_table(span, virtual_address, Fast),
-            Ok(Some(supplied.len() - offset - 1))
-        );
-        assert_eq!(
-            unsafe {
-                owner.supply_table(
-                    span,
-                    InternalAddress::new(address + 2 * LENGTH),
-                    store,
-                    id,
-                    Fast,
-                )
-            },
-            Err(nest::Error::Scope)
-        );
-        assert_eq!(store.descriptor(id, 0, Fast), Ok(0));
-        unsafe { owner.supply_table(span, virtual_address, store, id, Fast) }.unwrap();
-        assert_eq!(
-            owner.missing_table(span, virtual_address, Fast),
-            Err(nest::Error::Table(TableError::State))
-        );
-        assert_eq!(
-            unsafe { owner.map(span, virtual_address, &FIRST_ACCESS, first, Fast) },
-            Err(nest::Error::Table(TableError::State))
-        );
-        assert_eq!(FIRST_ACCESS.observe(), Ok(Some(first)));
+    assert_eq!(
+        owner.missing_table(span, virtual_address, Fast),
+        Ok(Some(supplied.len() - 1))
+    );
+    assert_eq!(
+        unsafe {
+            owner.supply_path(
+                span,
+                InternalAddress::new(address + 2 * LENGTH),
+                head,
+                head_id,
+                Fast,
+            )
+        },
+        Err(nest::Error::Scope)
+    );
+    assert!(head.descriptor(head_id, 0, Fast).is_ok());
+    assert_eq!(FIRST_ACCESS.observe(), Ok(Some(first)));
+    unsafe { owner.supply_path(span, virtual_address, head, head_id, Fast) }.unwrap();
+    assert_eq!(
+        owner.missing_table(span, virtual_address, Fast),
+        Err(nest::Error::Table(TableError::State))
+    );
+    assert_eq!(
+        unsafe { owner.map(span, virtual_address, &FIRST_ACCESS, first, Fast) },
+        Err(nest::Error::Table(TableError::State))
+    );
+    assert_eq!(FIRST_ACCESS.observe(), Ok(Some(first)));
+    for &(store, id) in supplied {
         assert_eq!(store.descriptor(id, 0, Fast), Err(TableError::State));
-        unsafe { owner.advance_supply(Fast) }.unwrap();
     }
+    unsafe { owner.advance_supply(Fast) }.unwrap();
     assert_eq!(owner.missing_table(span, virtual_address, Fast), Ok(None));
     assert_eq!(
-        unsafe { owner.supply_table(span, virtual_address, last, last_id, Fast) },
+        unsafe { owner.supply_path(span, virtual_address, head, head_id, Fast) },
         Err(nest::Error::Table(TableError::Occupied))
     );
     let mapping = unsafe { owner.map(span, virtual_address, &FIRST_ACCESS, first, Fast) }.unwrap();
@@ -336,6 +368,6 @@ pub(super) unsafe fn check(
     receipt.acknowledge().unwrap();
     assert_eq!(allowance.balance(), Ok(balance));
     kernel::metal::platform::boot::treaty::write(
-        "PASS ordinary-mapping allocation=1 zero=1 joint=1 conflict=1 capacity=1 rw=1 remap=1 close=1 revoke=1 finish=1 refund=1 supply=1 leaves=2 partial=1\n",
+        "PASS ordinary-mapping allocation=1 zero=1 joint=1 conflict=1 capacity=1 rw=1 remap=1 close=1 revoke=1 finish=1 refund=1 supply=1 leaves=2 partial=1 chain=1\n",
     );
 }

@@ -42,8 +42,7 @@ static MAJOR: boot_diagnostic::MajorMaterial =
 /// only from a quiescent test checkpoint, never as a stack safety proof.
 pub fn check_major_guard() {
     assert_eq!(
-        core::ptr::from_ref(&MAJOR_STACK.guard).addr()
-            + core::mem::size_of_val(&MAJOR_STACK.guard),
+        core::ptr::from_ref(&MAJOR_STACK.guard).addr() + core::mem::size_of_val(&MAJOR_STACK.guard),
         MAJOR_STACK.stack.range().start,
     );
     assert!(
@@ -84,7 +83,9 @@ pub fn check_minor(minor: &Minor, processor: usize) {
         core::arch::asm!("mov {},rsp",out(reg) sp, options(nostack,nomem));
     }
     assert!(
-        minor.ready() && minor.stack_range().contains(&sp) && !MAJOR_STACK.stack.range().contains(&sp)
+        minor.ready()
+            && minor.stack_range().contains(&sp)
+            && !MAJOR_STACK.stack.range().contains(&sp)
     );
 }
 

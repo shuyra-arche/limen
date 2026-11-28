@@ -324,13 +324,15 @@ impl LocalNest<'_, '_> {
         self.root.missing_table(address, mode).map_err(Error::Table)
     }
 
-    /// Supply an initialized private empty page to the actual owned path.
-    /// Ok transfers custody to the original parent before native Make.
+    /// Supply a complete already linked private empty-leaf chain.
+    /// Ok transfers the whole original subtree before native Make.
     ///
     /// # Safety
-    /// Preserve the original child's coherent table RAM and working mapping
+    /// The caller exclusively owns the prepared chain. Exclude independent
+    /// private editors and retirement through validation and acceptance.
+    /// Preserve all original coherent table RAM and working mappings
     /// through the root's retirement, under the admitted local control.
-    pub unsafe fn supply_table(
+    pub unsafe fn supply_path(
         &mut self,
         span: SpanId,
         address: InternalAddress,
@@ -341,7 +343,7 @@ impl LocalNest<'_, '_> {
         self.check_supply(span, address)?;
         // The trusted LocalNest is the exclusive Span/translation editor.
         // No Nest Turn is held across the actual table/Cell commit.
-        unsafe { self.root.supply_table(address, child, id, mode) }.map_err(Error::Table)
+        unsafe { self.root.supply_path(address, child, id, mode) }.map_err(Error::Table)
     }
 
     /// Complete an already accepted table supply even if its Span closed.
