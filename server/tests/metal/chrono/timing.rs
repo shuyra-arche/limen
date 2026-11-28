@@ -77,6 +77,16 @@ fn earlier_confirmed_comparison_must_cover_the_stop_and_leave_the_full_start_tai
 }
 
 #[test]
+fn period_close_requires_the_lower_bound_in_the_original_valid_interval() {
+    let timing = timing();
+    assert!(!timing.reached(1_000, 1_000));
+    assert!(!timing.reached(1_001, 1_000));
+    assert!(timing.reached(1_002, 1_000));
+    assert!(!timing.reached(9_999, 1_000));
+    assert!(!timing.reached(1_002, 20_000));
+}
+
+#[test]
 fn measured_charge_rounds_outward_and_rejects_expired_or_reversed_reads() {
     let timing = timing();
     assert_eq!(

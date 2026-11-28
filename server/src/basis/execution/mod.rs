@@ -9,7 +9,10 @@ use core::{marker::PhantomData, num::NonZeroUsize};
 #[cfg(target_arch = "riscv64")]
 mod fund;
 #[cfg(target_arch = "riscv64")]
-pub use fund::{ChargeSettlement, Fund, FundConfig, FundError, FundEstablishFailure};
+pub use fund::{
+    ChargeSettlement, Fund, FundConfig, FundError, FundEstablishFailure, PeriodKey, PeriodRecord,
+    PeriodSettlement,
+};
 
 use crate::{
     basis::{

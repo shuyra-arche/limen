@@ -72,6 +72,14 @@ impl TimingBounds {
                 .is_some_and(|count| *count.start() >= opens && *count.end() < shuts)
     }
 
+    #[cfg(any(limen_target, test))]
+    fn reached(&self, count: u64, deadline: u64) -> bool {
+        self.valid.contains(&deadline)
+            && self
+                .observed(count)
+                .is_some_and(|observed| *observed.start() >= deadline)
+    }
+
     fn trigger(&self, start: u64, shuts: u64, ceiling: Duration, stop: StopBounds) -> Option<u64> {
         let start = self.observed(start)?;
         if !self.valid.contains(&shuts)
@@ -208,6 +216,18 @@ impl<'clock> LocalTiming<'clock> {
             return false;
         };
         self.bounds.in_window(count, opens, shuts)
+    }
+
+    /// A closing boundary is reached only when the trustworthy lower bound
+    /// reaches the original same-domain deadline.
+    pub fn reached(&self, observed: Sample<'_>, deadline: Deadline<'_>) -> bool {
+        let Some(count) = observed.count_for(self.clock) else {
+            return false;
+        };
+        let Some(deadline) = self.clock.count_for(deadline) else {
+            return false;
+        };
+        self.bounds.reached(count, deadline)
     }
 
     /// Choose an early comparison for the original elapsed and charge limits.

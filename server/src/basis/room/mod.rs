@@ -15,9 +15,9 @@ use crate::metal::processor::treaty::{LeaveReceipt, ProcessorId};
 #[cfg(target_arch = "riscv64")]
 mod fund;
 #[cfg(target_arch = "riscv64")]
-pub use fund::ChargeSettlement;
+pub use fund::{ChargeSettlement, PeriodKey, PeriodRecord, PeriodSettlement};
 #[cfg(target_arch = "riscv64")]
-pub(super) use fund::Period;
+use fund::Periods;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Queue {
@@ -115,7 +115,7 @@ struct Participant {
     occupied: Option<usize>,
     queue: Queue,
     #[cfg(target_arch = "riscv64")]
-    period: Option<Period>,
+    periods: Option<Periods>,
 }
 
 impl Participant {
@@ -125,7 +125,7 @@ impl Participant {
             occupied: None,
             queue: Queue::Ordinary,
             #[cfg(target_arch = "riscv64")]
-            period: None,
+            periods: None,
         }
     }
 }

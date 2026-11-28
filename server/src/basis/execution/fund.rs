@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     basis::{
-        room::{LeaveDestination, Occupancy, Period, Queue},
+        room::{LeaveDestination, Occupancy, Queue},
         sign::Sign,
         unit::{End, UnitId},
     },
@@ -27,9 +27,11 @@ use crate::{
     },
 };
 
-pub use crate::basis::room::ChargeSettlement;
+pub use crate::basis::room::{ChargeSettlement, PeriodKey, PeriodRecord, PeriodSettlement};
 
 pub struct FundConfig<'clock> {
+    /// First certified ordinary window. The supplied record count fixes the
+    /// number of contiguous equal-width windows at this original quota.
     pub opens: Deadline<'clock>,
     pub shuts: Deadline<'clock>,
     pub quota: Duration,
@@ -46,6 +48,7 @@ pub enum FundError {
 /// Rejection leaves the original comparator and its effects with the caller.
 pub struct FundEstablishFailure<'clock> {
     pub timer: Timer<'clock>,
+    pub periods: &'static mut [PeriodRecord],
     pub reason: FundError,
 }
 
@@ -98,11 +101,14 @@ enum State<'clock> {
     Closed(Closed),
 }
 
-/// One original Timer and one ordinary window on an isolated processor.
-/// Sign owns the absolute waits; Room owns the Period and Charge.
+/// One original Timer and a finite ordinary schedule on an isolated processor.
+/// Sign owns the absolute waits; Room owns the Periods and Charges.
 pub struct Fund<'clock> {
     timing: LocalTiming<'clock>,
     config: FundConfig<'clock>,
+    windows: NonZeroUsize,
+    // Until Attach succeeds, this is the original unconsumed Room supply.
+    periods: Cell<Option<&'static mut [PeriodRecord]>>,
     timer: UnsafeCell<Timer<'clock>>,
     // The typed Sign is supplied explicitly by the resident dispatcher.
     // Its storage is borrowed for the original clock lifetime at admission.
@@ -120,9 +126,11 @@ impl<'clock> Fund<'clock> {
     ///
     /// # Safety
     /// The trusted platform must reserve this processor's funded execution
-    /// supply and comparator for this window and connect the original Timer
+    /// supply and comparator for every supplied window and connect the original Timer
     /// Hook to this resident Fund. Only this local dispatcher may service the
     /// bound Sign or program its comparator; the Sign must remain resident.
+    /// The caller certifies the whole finite schedule, including its quota
+    /// per window and the resources to service Sign across boundaries.
     /// Supply timing bounds for this exact machine, IRQ configuration,
     /// permitted native spans and Rust entry and exit tails.
     /// Account for programming, delivery and masking,
@@ -133,12 +141,17 @@ impl<'clock> Fund<'clock> {
         timing: LocalTiming<'clock>,
         config: FundConfig<'clock>,
         sign: &'clock Sign<'clock, N>,
+        periods: &'static mut [PeriodRecord],
     ) -> Result<Self, FundEstablishFailure<'clock>> {
+        let windows = NonZeroUsize::new(periods.len());
+        let last = windows.and_then(|windows| Self::window_for(&timing, &config, windows));
         let result = if !ptr::eq(timer.clock(), timing.clock())
             || !ptr::eq(sign.clock, timing.clock())
             || config.quota < config.ceiling
             || config.ceiling.is_zero()
+            || !PeriodRecord::accepts(periods)
             || !timing.window_valid(config.opens, config.shuts)
+            || !last.is_some_and(|(_, shuts)| timing.window_valid(config.opens, shuts))
         {
             Err(Error::Timing.into())
         } else {
@@ -149,16 +162,49 @@ impl<'clock> Fund<'clock> {
             }
         };
         if let Err(reason) = result {
-            return Err(FundEstablishFailure { timer, reason });
+            return Err(FundEstablishFailure {
+                timer,
+                periods,
+                reason,
+            });
         }
         Ok(Self {
             timing,
             config,
+            windows: windows.expect("checked window count"),
+            periods: Cell::new(Some(periods)),
             timer: UnsafeCell::new(timer),
             sign: ptr::from_ref(sign).addr(),
             execution: Cell::new(None),
             state: Cell::new(State::Idle),
         })
+    }
+
+    fn window_for(
+        timing: &LocalTiming<'clock>,
+        config: &FundConfig<'clock>,
+        window: NonZeroUsize,
+    ) -> Option<(Deadline<'clock>, Deadline<'clock>)> {
+        let clock = timing.clock();
+        let first = clock.count_for(config.opens)?;
+        let width = clock.count_for(config.shuts)?.checked_sub(first)?;
+        if width == 0 {
+            return None;
+        }
+        let ordinal = u64::try_from(window.get()).ok()?;
+        let shuts = first.checked_add(width.checked_mul(ordinal)?)?;
+        if shuts == u64::MAX {
+            return None;
+        }
+        let opens = shuts.checked_sub(width)?;
+        Some((clock.deadline(opens), clock.deadline(shuts)))
+    }
+
+    fn window(&self, key: PeriodKey) -> Result<(Deadline<'clock>, Deadline<'clock>), Error> {
+        if !key.belongs_to(self.id()) || key.window() > self.windows {
+            return Err(Error::Gone);
+        }
+        Self::window_for(&self.timing, &self.config, key.window()).ok_or(Error::Timing)
     }
 
     fn id(&self) -> usize {
@@ -206,10 +252,9 @@ impl<'clock> Fund<'clock> {
             return Err(Error::Gone);
         }
         let count = sign.clock.count_for(deadline).ok_or(Error::Timing)?;
-        let shuts = sign
-            .clock
-            .count_for(self.config.shuts)
-            .ok_or(Error::Timing)?;
+        let (_, last) =
+            Self::window_for(&self.timing, &self.config, self.windows).ok_or(Error::Timing)?;
+        let shuts = sign.clock.count_for(last).ok_or(Error::Timing)?;
         if count >= shuts {
             return Err(Error::Timing);
         }
@@ -297,13 +342,78 @@ impl Execution {
         }
         self.room
             .acquire(|room| {
-                room.attach_fund(processor, fund.id(), Period::new(fund.config.quota))?;
+                let records = fund.periods.take().ok_or(crate::basis::room::Error::State)?;
+                if let Err((error, records)) =
+                    room.attach_fund(processor, fund.id(), fund.config.quota, records)
+                {
+                    fund.periods.set(Some(records));
+                    return Err(error);
+                }
                 fund.execution.set(Some(ptr::from_ref(self).addr()));
                 Ok::<_, crate::basis::room::Error>(())
             })
             .map_err(Error::from)?
             .map_err(Error::from)?;
         Ok(())
+    }
+
+    pub fn funded_period(&self, fund: &Fund<'_>) -> Result<PeriodKey, FundError> {
+        let (processor, _) = self.dispatcher()?;
+        fund.check_local()?;
+        fund.check_execution(self)?;
+        Ok(self
+            .room
+            .acquire(|room| room.funded_period(processor, fund.id()))
+            .map_err(Error::from)?
+            .map_err(Error::from)?)
+    }
+
+    /// Observe a previously closed, immutable original Period.
+    pub fn closed_funded_period(
+        &self,
+        fund: &Fund<'_>,
+        key: PeriodKey,
+    ) -> Result<PeriodSettlement, FundError> {
+        let (processor, _) = self.dispatcher()?;
+        fund.check_local()?;
+        fund.check_execution(self)?;
+        Ok(self
+            .room
+            .acquire(|room| room.closed_period(processor, fund.id(), key))
+            .map_err(Error::from)?
+            .map_err(Error::from)?)
+    }
+
+    /// Close the exact old window after its boundary is reached and its
+    /// execution and charge are settled. Open the next pre-admitted window,
+    /// if any; the final close exhausts the finite schedule.
+    /// Neither the original Sign registrations nor the Timer are changed.
+    pub fn advance_funded_period(
+        &self,
+        fund: &Fund<'_>,
+        expected: PeriodKey,
+    ) -> Result<PeriodSettlement, FundError> {
+        let (processor, _) = self.dispatcher()?;
+        fund.check_local()?;
+        fund.check_execution(self)?;
+        if !matches!(fund.state.get(), State::Idle) {
+            return Err(Error::Busy.into());
+        }
+        let (_, shuts) = fund.window(expected)?;
+        Ok(self
+            .room
+            .acquire(|room| {
+                if room.funded_period(processor, fund.id())? != expected {
+                    return Err(crate::basis::room::Error::Gone);
+                }
+                let sample = fund.timing.sample().ok_or(crate::basis::room::Error::Timing)?;
+                if !fund.timing.reached(sample, shuts) {
+                    return Err(crate::basis::room::Error::Timing);
+                }
+                room.advance_period(processor, fund.id(), expected)
+            })
+            .map_err(Error::from)?
+            .map_err(Error::from)?)
     }
 
     /// A funded Unit uses the exact Timer profile for every admission.
@@ -383,7 +493,7 @@ impl Execution {
             }
         }
         let config = &fund.config;
-        let Some(unit) = self
+        let Some((unit, period)) = self
             .room
             .acquire(|room| room.funded_candidate(processor, fund.id(), config.ceiling))
             .map_err(Error::from)?
@@ -391,13 +501,14 @@ impl Execution {
         else {
             return Ok(None);
         };
+        let (opens, shuts) = fund.window(period)?;
         let estimate = fund.timing.sample().ok_or(Error::Timing)?;
-        if !fund.timing.in_window(estimate, config.opens, config.shuts) {
+        if !fund.timing.in_window(estimate, opens, shuts) {
             return Err(Error::Timing.into());
         }
         let planned = fund
             .timing
-            .stop(estimate, config.shuts, config.ceiling, config.stop)
+            .stop(estimate, shuts, config.ceiling, config.stop)
             .ok_or(Error::Timing)?;
         let prepared = (|| {
             let timer = unsafe { &mut *fund.timer.get() };
@@ -420,14 +531,15 @@ impl Execution {
                 let opening = fund.timing.sample().ok_or(Error::Timing)?;
                 if !fund.timing.can_start(
                     opening,
-                    config.opens,
+                    opens,
                     planned,
                     confirmed,
                     config.stop.start,
                 ) {
                     return Err(Error::Timing);
                 }
-                let occupancy = room.occupy_funded(processor, fund.id(), unit, config.ceiling)?;
+                let occupancy =
+                    room.occupy_funded(processor, fund.id(), unit, period, config.ceiling)?;
                 // The prepaid Charge and preallocated local Meter become
                 // Armed together. Dispatch can still be safely cancelled.
                 fund.state.set(State::Armed(occupancy));
@@ -456,7 +568,7 @@ impl Execution {
             fund.timing.sample().filter(|sample| {
                 confirmed.is_some_and(|target| {
                     fund.timing
-                        .can_start(*sample, config.opens, planned, target, config.stop.start)
+                        .can_start(*sample, opens, planned, target, config.stop.start)
                 })
             })
         };

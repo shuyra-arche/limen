@@ -13,7 +13,7 @@ use kernel::{
     basis::{
         execution::{
             ChargeSettlement, Current, DeadlineProgress, Error, Execution, Fund, FundConfig,
-            FundError,
+            FundError, PeriodKey, PeriodRecord,
         },
         room::Occupancy,
         sign::Sign,
@@ -41,6 +41,7 @@ const STOP: StopBounds = StopBounds {
 const RETURNED: u64 = 33;
 
 static mut FUND: MaybeUninit<Fund<'static>> = MaybeUninit::uninit();
+static mut PERIODS: [PeriodRecord; 2] = [const { PeriodRecord::EMPTY }; 2];
 static mut SIGN: MaybeUninit<Sign<'static, 2>> = MaybeUninit::uninit();
 static WAIT_AT: AtomicU64 = AtomicU64::new(0);
 static WAIT_SPANS: AtomicUsize = AtomicUsize::new(0);
@@ -104,11 +105,19 @@ fn dispatch(
     // the bounded native code span on this isolated Hart under this profile.
     let sign: &'static Sign<'static, 2> =
         unsafe { (&mut *(&raw mut SIGN)).write(Sign::new(clock)) };
-    let owner = unsafe { Fund::new(timer, timing, configuration, sign) }.expect("original Fund");
+    let records = unsafe { &mut *(&raw mut PERIODS) };
+    let owner = unsafe { Fund::new(timer, timing, configuration, sign, records) }
+        .expect("original Fund");
     let owner = unsafe { (&mut *(&raw mut FUND)).write(owner) };
     unsafe { VECTORS.install() }.expect("permanent native timer entry");
     let execution = setup::execution();
     execution.attach_fund(owner).expect("attach original Fund");
+    let first_period = execution.funded_period(owner).unwrap();
+    assert_eq!(first_period.window().get(), 1);
+    assert_eq!(
+        execution.advance_funded_period(owner, first_period),
+        Err(FundError::Execution(Error::Timing)),
+    );
     let span =
         (&raw const limen_test_budget_begin).addr()..(&raw const limen_test_budget_end).addr();
     let unit =
@@ -135,7 +144,12 @@ fn dispatch(
     assert!(origin < target && target <= source.read().unwrap());
     assert!(target - origin < CEILING.as_millis() as u64 * hertz.get() / 1000);
 
+    assert_eq!(
+        execution.advance_funded_period(owner, first_period),
+        Err(FundError::Execution(Error::Busy)),
+    );
     let first_charge = settle(execution, owner, first);
+    assert_eq!(first_charge.period, first_period);
     assert_eq!(first_charge.occupancy, first);
     assert_eq!(first_charge.spent, first_charge.evidence.maximum);
     check_charge(&first_charge);
@@ -165,6 +179,7 @@ fn dispatch(
     ));
     assert_eq!(execution.pending_leave(), Ok(Some(second)));
     let second_charge = settle(execution, owner, second);
+    assert_eq!(second_charge.period, first_period);
     assert_eq!(second_charge.occupancy, second);
     assert_eq!(
         second_charge.spent,
@@ -182,10 +197,11 @@ fn dispatch(
     assert_eq!(execution.reap(unit), Ok(End::Returned { value: RETURNED }));
 
     shared_deadline(execution, owner, sign, span.clone(), second_charge);
+    cross_period(execution, owner, sign, span.clone(), first_period, shuts);
 
     let blocked = unsafe { execution.create_funded(owner, work, span) }.unwrap();
     execution.submit(blocked).unwrap();
-    let near_shut = shuts - hertz.get() / 10;
+    let near_shut = shuts + 2 * hertz.get() - hertz.get() / 10;
     while source.read().unwrap() < near_shut {
         spin_loop();
     }
@@ -199,9 +215,108 @@ fn dispatch(
     assert_eq!(execution.lifecycle(blocked), Ok(Lifecycle::Live));
     assert_eq!(ENTRIES.load(Ordering::Relaxed), 1);
     assert_eq!(comparison(), u64::MAX);
+    let last = execution.funded_period(owner).unwrap();
+    while source.read().unwrap() < shuts + 2 * hertz.get() + hertz.get() / 100 {
+        spin_loop();
+    }
+    let closed = execution.advance_funded_period(owner, last).unwrap();
+    assert_eq!(closed.period, last);
+    assert_eq!(closed.spent + closed.free, closed.quota);
+    assert_eq!(execution.closed_funded_period(owner, last), Ok(closed));
+    assert_eq!(
+        execution.funded_period(owner),
+        Err(FundError::Execution(Error::Gone)),
+    );
+    assert_eq!(
+        execution.enter_funded(owner, sign),
+        Err(FundError::Execution(Error::Gone)),
+    );
 
-    write("PASS rv64-fund budget-stop=1 shared-stop=1 sign-resume=1 idle-sign=1 denied-start=1\n");
+    write("PASS rv64-fund budget-stop=1 shared-stop=1 sign-resume=1 idle-sign=1 cross-period=1 late-settlement=1 denied-start=1 exhausted=1\n");
     complete()
+}
+
+fn cross_period(
+    execution: &'static Execution,
+    owner: &'static Fund<'static>,
+    sign: &'static Sign<'static, 2>,
+    span: core::ops::Range<usize>,
+    first: PeriodKey,
+    shuts: u64,
+) {
+    let source = setup::counter();
+    let hertz = source.clock().frequency().get();
+    let deadline = shuts + hertz / 2;
+    WAIT_AT.store(deadline, Ordering::Relaxed);
+    let waiter = unsafe { execution.create_funded(owner, wait_for_sign, span) }.unwrap();
+    let admission = execution.submit(waiter).unwrap();
+    let parked = execution.enter_funded(owner, sign).unwrap().unwrap();
+    assert_eq!(parked.unit(), waiter);
+    assert_eq!(parked.admission(), admission);
+    assert_eq!(execution.pending_leave(), Ok(Some(parked)));
+    assert!(source.read().unwrap() < shuts);
+
+    // Actual departure and Meter close have occurred, but the original
+    // Room charge/leave deliberately remain unsettled across the boundary.
+    while source.read().unwrap() < shuts + hertz / 100 {
+        spin_loop();
+    }
+    assert_eq!(
+        execution.advance_funded_period(owner, first),
+        Err(FundError::Execution(Error::Busy)),
+    );
+    let old_charge = settle(execution, owner, parked);
+    check_charge(&old_charge);
+    assert_eq!(old_charge.period, first);
+    let old = execution.advance_funded_period(owner, first).unwrap();
+    assert_eq!(old.period, first);
+    assert_eq!(old.quota, QUOTA);
+    assert_eq!(old.spent, old_charge.spent);
+    assert_eq!(old.free, old_charge.free);
+    assert_eq!(old.excess, Duration::ZERO);
+    let next = execution.funded_period(owner).unwrap();
+    assert_eq!(next.window().get(), 2);
+    assert_ne!(next, first);
+    assert_eq!(
+        execution.advance_funded_period(owner, first),
+        Err(FundError::Execution(Error::Gone)),
+    );
+    assert_eq!(execution.closed_funded_period(owner, first), Ok(old));
+
+    // The original old budget comparison may still need actual reception.
+    // Advance itself cannot erase the original timer or Sign obligation.
+    let progress = service(execution, owner, sign);
+    if progress == DeadlineProgress::AwaitInterrupt {
+        receive_idle(deadline);
+        assert_eq!(service(execution, owner, sign), DeadlineProgress::Armed);
+    } else {
+        assert_eq!(progress, DeadlineProgress::Armed);
+    }
+    assert_eq!(comparison(), deadline);
+    assert!(source.read().unwrap() < deadline);
+    assert!(execution.enter_funded(owner, sign).unwrap().is_none());
+
+    receive_idle(deadline + hertz);
+    assert_eq!(service(execution, owner, sign), DeadlineProgress::Idle);
+    let resumed = execution.enter_funded(owner, sign).unwrap().unwrap();
+    assert_eq!(resumed.unit(), waiter);
+    assert_eq!(resumed.admission(), admission);
+    assert_ne!(resumed, parked);
+    assert_eq!(
+        execution.vacate_funded(owner, parked),
+        Err(FundError::Execution(Error::Gone)),
+    );
+    let new_charge = settle(execution, owner, resumed);
+    check_charge(&new_charge);
+    assert_eq!(new_charge.period, next);
+    assert_eq!(new_charge.spent, new_charge.evidence.maximum);
+    assert_eq!(execution.closed_funded_period(owner, first), Ok(old));
+    execution.finish_end(waiter).unwrap();
+    assert_eq!(
+        execution.reap(waiter),
+        Ok(End::Returned { value: RETURNED })
+    );
+    assert_eq!(service(execution, owner, sign), DeadlineProgress::Idle);
 }
 
 fn service(execution: &Execution, owner: &Fund<'_>, sign: &Sign<'_, 2>) -> DeadlineProgress {
