@@ -736,7 +736,10 @@ fn ordinary_cell_spending_cannot_publish_a_table_page() {
 #[test]
 fn ordinary_cell_publication_owns_cleared_material_and_an_independent_holding() {
     use crate::{
-        basis::cell::{CellConstruction, CellSlot, Error as CellError},
+        basis::cell::{
+            AccessPreparation, AccessStorage, CellConstruction, CellSlot, Error as CellError,
+            Rights,
+        },
         metal::memory::allocator::treaty::{AllocationConstruction, MappedStorage, RamPurpose},
     };
     use limen_treaty::model::{ByteOffset, ByteRange};
@@ -789,12 +792,15 @@ fn ordinary_cell_publication_owns_cleared_material_and_an_independent_holding() 
     unsafe { position.take(&mut material) }.unwrap();
     let material = material.unwrap();
     let physical = material.physical();
-    let bytes = Box::leak(Box::new(Mapped([MaybeUninit::new(0xa5); 2 * PAGE as usize])));
+    let bytes = Box::leak(Box::new(Mapped(
+        [MaybeUninit::new(0xa5); 2 * PAGE as usize],
+    )));
     let map = unsafe { MappedRange::new(physical, &mut bytes.0[..PAGE as usize]) }.unwrap();
     let material = unsafe { MappedStorage::prepare(material, map) }
         .ok()
         .unwrap();
-    let cell = Box::leak(Box::new(CellSlot::new()));
+    let accesses = Box::leak(Box::new(AccessStorage::<2>::new()));
+    let cell = Box::leak(Box::new(CellSlot::for_cells(accesses).unwrap()));
     let construction = Box::leak(Box::new(CellConstruction::new()));
 
     let (material, error) = construction
@@ -816,13 +822,52 @@ fn ordinary_cell_publication_owns_cleared_material_and_an_independent_holding() 
     let material = unsafe { MappedStorage::prepare(material, map) }
         .ok()
         .unwrap();
-    let published = construction.publish(cell, spending, material, Fast).ok().unwrap();
+    let published = construction
+        .publish(cell, spending, material, Fast)
+        .ok()
+        .unwrap();
     let range = ByteRange::new(ByteOffset::new(0), ByteOffset::new(PAGE)).unwrap();
     assert_eq!(construction.locate(id), Ok(Some(published)));
     assert_eq!(construction.initial_range(published), Ok(range));
     closing.revoke().unwrap();
     spending.release().unwrap();
     assert_eq!(construction.initial_range(published), Ok(range));
+    let first = Box::leak(Box::new(AccessPreparation::new()));
+    let second = Box::leak(Box::new(AccessPreparation::new()));
+    let third = Box::leak(Box::new(AccessPreparation::new()));
+    let half = ByteRange::new(ByteOffset::new(0), ByteOffset::new(PAGE / 2)).unwrap();
+    let outside = ByteRange::new(ByteOffset::new(0), ByteOffset::new(PAGE + 1)).unwrap();
+    assert_eq!(
+        construction.prepare(published, outside, Rights::READ, first, Fast),
+        Err(CellError::Scope)
+    );
+    assert_eq!(
+        construction.prepare(published, half, Rights::EXECUTE, first, Fast),
+        Err(CellError::Scope)
+    );
+    let a = construction
+        .prepare(published, half, Rights::READ, first, Fast)
+        .unwrap();
+    let b = construction
+        .prepare(published, range, Rights::READ_WRITE, second, Fast)
+        .unwrap();
+    assert_ne!(a, b);
+    assert_eq!(first.observe(), Ok(Some(a)));
+    assert_eq!(second.observe(), Ok(Some(b)));
+    assert_eq!(
+        construction.prepare(published, range, Rights::READ, third, Fast),
+        Err(CellError::Capacity)
+    );
+    assert_eq!(third.observe(), Ok(None));
+    assert_eq!(second.cancel(a, Fast), Err(CellError::Scope));
+    first.cancel(a, Fast).unwrap();
+    assert_eq!(first.observe(), Ok(None));
+    let c = construction
+        .prepare(published, half, Rights::READ, first, Fast)
+        .unwrap();
+    assert_ne!(c, a);
+    assert_eq!(first.cancel(a, Fast), Err(CellError::Scope));
+    assert_eq!(first.observe(), Ok(Some(c)));
     construction.revoke(published).unwrap();
     assert_eq!(
         construction.initial_range(published),
@@ -834,8 +879,22 @@ fn ordinary_cell_publication_owns_cleared_material_and_an_independent_holding() 
         Err(CellError::Pend(PendError::Exhausted))
     );
     assert_eq!(construction.locate(id), Ok(Some(published)));
-    assert_eq!(allowance.balance().unwrap().occupied().get(), before.occupied().get() + PAGE);
+    assert_eq!(
+        allowance.balance().unwrap().occupied().get(),
+        before.occupied().get() + PAGE
+    );
+    assert_eq!(
+        construction.prepare(published, range, Rights::READ, third, Fast),
+        Err(CellError::Pend(PendError::Exhausted))
+    );
     let mut retired = None;
+    assert_eq!(
+        unsafe { construction.retire(published, &mut retired, Fast) },
+        Err(CellError::Access)
+    );
+    assert!(retired.is_none());
+    first.cancel(c, Fast).unwrap();
+    second.cancel(b, Fast).unwrap();
     unsafe { construction.retire(published, &mut retired, Fast) }.unwrap();
     assert_eq!(construction.locate(id), Ok(None));
     assert_eq!(construction.initial_range(published), Err(CellError::Scope));
