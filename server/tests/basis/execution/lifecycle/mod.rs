@@ -1,10 +1,13 @@
-#[cfg(target_arch = "riscv64")]
+#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
 use kernel::metal::platform::boot::treaty::write;
 #[cfg(target_arch = "riscv64")]
 mod admission;
 #[cfg(target_arch = "riscv64")]
 mod buddy;
 #[cfg(target_arch = "riscv64")]
+mod interrupt;
+#[cfg(target_arch = "x86_64")]
+#[path = "x86_interrupt.rs"]
 mod interrupt;
 #[path = "../../../entry/boot/material/memory.rs"]
 mod memory;
@@ -69,8 +72,12 @@ fn first(current: &mut Current) -> u64 {
     assert_eq!(execution().pending_leave(), Ok(None));
     assert_eq!(execution().enter(), Err(Error::Busy));
     assert_eq!(execution().finish_end(current.id()), Err(Error::Busy));
-    #[cfg(target_arch = "riscv64")]
-    interrupt::receive(current.processor());
+    #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+    {
+        interrupt::receive(current.processor());
+        assert_eq!(stack_address(&local), FIRST_STACK.load(Relaxed));
+        assert_eq!(black_box(local), 0x1234_5678);
+    }
     current.yield_now().expect("cooperative leave and reentry");
     assert_eq!(SEQUENCE.fetch_add(1, Relaxed), 2);
     assert_eq!(stack_address(&local), FIRST_STACK.load(Relaxed));
@@ -207,7 +214,7 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     assert_eq!(execution.submit(a), Err(Error::Busy));
     assert_eq!(execution.stop_dormant(a), Err(Error::Busy));
 
-    #[cfg(target_arch = "riscv64")]
+    #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
     interrupt::install(&boot);
 
     let initial = Initial {
@@ -304,6 +311,11 @@ fn schedule(initial: &'static Initial) -> ! {
     write(concat!(
         "PASS kernel-execution stacks=2 resume=1 leave=4 ended=4 reuse=1 stale=1 busy=1",
         " rejected_before_occupy=1 dormant_reaped=1 buddy_edits=1 binding_returned=1 admission=1 occupied_irq=1\n",
+    ));
+    #[cfg(target_arch = "x86_64")]
+    write(concat!(
+        "PASS x86 kernel-execution occupied_irq=1 eoi=1 context_restored=1",
+        " room_leave=4 reap=4 stale=1\n",
     ));
     complete()
 }
