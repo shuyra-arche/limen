@@ -26,6 +26,19 @@ fn incomplete_native_effects_keep_their_original_reservation() {
 }
 
 #[test]
+fn unrecognized_destructive_result_preserves_the_whole_original_context() {
+    assert_eq!(State::observe_receive(5, 0, 8), State::Open);
+    assert_eq!(State::observe_receive(5, 8, 8), State::Received(5, 8));
+    let state = State::observe_receive(5, 9, 8);
+    assert_eq!(state, State::Uncertain(5, 9));
+    assert_eq!(state.reborrowable_claim(), Err(Failure::Unconfirmed));
+    for source in 1..=8 {
+        assert!(state.retains_claim(source));
+        assert!(!state.excludes_source(source));
+    }
+}
+
+#[test]
 fn physical_domain_state_can_move_without_a_hart_local_mapping() {
     fn transferable<T: Send>() {}
     transferable::<Controller<'static, 'static>>();

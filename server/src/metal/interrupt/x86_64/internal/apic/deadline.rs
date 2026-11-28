@@ -203,7 +203,7 @@ mod native {
             } else if !matches!(owner.timer, Slot::Vacant)
                 || owner.reception() != Reception::Idle
                 || !owner.timer_quiet()
-                || owner.vector_pending(vector.vector())
+                || owner.vector_busy(vector.vector())
                 || read() != 0
             {
                 Some(Failure::Busy)
@@ -266,7 +266,7 @@ mod native {
             self.mode()?;
             let msr = read();
             let now = self.now()?;
-            let pending = self.owner.vector_pending(self.vector());
+            let pending = self.owner.vector_busy(self.vector());
             let state = self.record().state.observe(now, msr, pending)?;
             self.record_mut().state = state;
             Ok(())
@@ -339,7 +339,7 @@ mod native {
             self.context()?;
             self.reception_idle()?;
             if self.record().state != State::Idle
-                || self.owner.vector_pending(self.vector())
+                || self.owner.vector_busy(self.vector())
                 || read() != 0
             {
                 return Err(Failure::Busy);
@@ -370,7 +370,7 @@ mod native {
             let target = self.clock.count_for(deadline).ok_or(Failure::Scope)?;
             let state = self.record().state;
             let previous = state.confirmed()?.ok_or(Failure::Busy)?;
-            if self.owner.vector_pending(self.vector()) || read() != previous {
+            if self.owner.vector_busy(self.vector()) || read() != previous {
                 return Err(Failure::Busy);
             }
             let next = state.advance(self.now()?, target)?;

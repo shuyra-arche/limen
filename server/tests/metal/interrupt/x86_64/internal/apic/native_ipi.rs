@@ -202,6 +202,12 @@ fn interrupt(owner: &LocalReceiver, mut irq: Irq<'_>) {
     assert!(!MINOR.stack_range().contains(&stack));
     assert!((1..=16 * 1024).contains(&receiver.stack_top.checked_sub(stack).unwrap()));
 
+    if CAPTURED.load(Relaxed) == 0 {
+        // Keep the first actual ISR bit outstanding after the native capture.
+        // The ordinary receiver below will check the lease before claiming it.
+        CAPTURED.fetch_add(1, Release);
+        return;
+    }
     let mut claim = unsafe { receiver.controller.receive_irq(&mut irq) }.unwrap();
     assert_eq!(claim.vector(), receiver.original.vector());
     assert_eq!(claim.identity().round(), CAPTURED.load(Relaxed) as u64 + 1);
@@ -273,6 +279,18 @@ fn await_vector(expected: usize) {
     assert_eq!(TURN.acquire(|_| ()), Ok(()));
 }
 
+fn retained_vector() {
+    let mut receiver = unsafe {
+        (&mut *RECEPTION.owner().0.get())
+            .take()
+            .expect("original receiver")
+    };
+    let (original, reason) = receiver.controller.release_vector(receiver.original).unwrap_err();
+    assert_eq!(reason, Failure::Busy);
+    receiver.original = original;
+    unsafe { RECEPTION.owner().0.get().write(Some(receiver)) };
+}
+
 fn minor(processor: usize, argument: usize) -> ! {
     fixture::check_minor(&MINOR, processor);
     // The nonreturning major retains the immutable, ACPI-backed launch
@@ -316,8 +334,26 @@ fn minor(processor: usize, argument: usize) -> ! {
     };
     assert_eq!(TURN.acquire(|_| ()), Ok(()));
     ICR_PROBE.store(1, Release);
+    await_phase(&ICR_PROBE, 2);
+    assert_eq!(CAPTURED.load(Acquire), 0);
+    // The sender has confirmed its ICR write; IF has not opened.
+    retained_vector();
     await_vector(1);
-    ICR_PROBE.store(2, Release);
+    // The first typed handler has returned without EOI. Its real ISR bit
+    // must still prevent retirement before the ordinary claim is recorded.
+    retained_vector();
+    {
+        let receiver = unsafe {
+            (&mut *RECEPTION.owner().0.get())
+                .as_mut()
+                .expect("original receiver")
+        };
+        assert_eq!(receiver.controller.reception(), Reception::Idle);
+        let mut claim = unsafe { receiver.controller.receive(VECTOR) }.unwrap();
+        assert_eq!(claim.identity().round(), 1);
+        unsafe { claim.complete() }.unwrap();
+    }
+    ICR_PROBE.store(3, Release);
 
     for round in 1..=2 {
         READY.store(round, Release);
@@ -439,7 +475,8 @@ pub fn check(boot: boot::Boot<'_>) {
             assert_eq!(route.pending(), Ok(Some(issue)));
             assert_eq!(route.confirm(issue), Ok(Issuance::Confirmed(issue)));
         }
-        await_phase(&ICR_PROBE, 2);
+        ICR_PROBE.store(2, Release);
+        await_phase(&ICR_PROBE, 3);
 
         assert!(matches!(
             unsafe { controller.bind_ipi(original) },
@@ -459,6 +496,6 @@ pub fn check(boot: boot::Boot<'_>) {
         deliver_nmi(&boot, destination);
     }
     boot_diagnostic::write(
-        "PASS local-apic-ipi capture=3 rechecked=2 eoi=3 restored=3 ist=1 turn-denied=3 stale=0 scope-rejected=1 icr-blocked=1\n",
+        "PASS local-apic-ipi capture=3 rechecked=2 eoi=3 restored=3 ist=1 turn-denied=3 stale=0 scope-rejected=1 icr-blocked=1 irr-retained=1 isr-retained=1\n",
     );
 }

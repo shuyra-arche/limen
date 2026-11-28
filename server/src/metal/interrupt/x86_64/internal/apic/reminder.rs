@@ -138,7 +138,7 @@ mod native {
                 })();
                 // No original effect may be forgotten even if measuring fails.
                 owner.stop_timer()?;
-                if owner.vector_pending(vector) || owner.reception() != Reception::Idle {
+                if owner.vector_busy(vector) || owner.reception() != Reception::Idle {
                     return Err(Failure::Busy);
                 }
                 rate
@@ -231,7 +231,7 @@ mod native {
             ) {
                 self.owner.confirm_timer()?;
             }
-            if self.owner.vector_pending(self.vector()) {
+            if self.owner.vector_busy(self.vector()) {
                 return Ok(Progress::AwaitInterrupt);
             }
             match self.owner.timer_state() {
@@ -255,7 +255,7 @@ mod native {
 
         fn stop(&mut self) -> Result<Progress, Failure> {
             self.owner.stop_timer()?;
-            if self.owner.vector_pending(self.vector()) || self.owner.reception() != Reception::Idle
+            if self.owner.vector_busy(self.vector()) || self.owner.reception() != Reception::Idle
             {
                 // Keep the old identity through a raced expiration. Its
                 // late vector must be received before the next arm.
@@ -319,7 +319,7 @@ mod native {
                 )
             {
                 self.request = None;
-                if self.owner.vector_pending(self.vector()) {
+                if self.owner.vector_busy(self.vector()) {
                     return Ok(Progress::AwaitInterrupt);
                 }
             }
