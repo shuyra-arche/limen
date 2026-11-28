@@ -113,7 +113,13 @@ impl MappingIndex {
 
     pub(super) fn first(&self) -> Option<MappingId> {
         let slot = self.tree.first()?;
-        Some(self.entries.published_at(slot.index()).expect("indexed Mapping").1.id)
+        Some(
+            self.entries
+                .published_at(slot.index())
+                .expect("indexed Mapping")
+                .1
+                .id,
+        )
     }
 
     fn position(&self, range: InternalRange) -> Result<Insertion, Error> {
@@ -132,17 +138,16 @@ impl MappingIndex {
         self.position(range).is_err()
     }
 
-    fn prepare(
-        &self,
-        nest: NestId,
-        range: InternalRange,
-    ) -> Result<(Insertion, MappingId), Error> {
+    fn prepare(&self, nest: NestId, range: InternalRange) -> Result<(Insertion, MappingId), Error> {
         let position = self.position(range)?;
         let key = self.entries.next_key().map_err(|error| match error {
             ReserveError::IdentityExhausted => Error::Exhausted,
             _ => Error::Capacity,
         })?;
-        Ok((position, MappingId(Key::new(nest, key.slot(), key.generation()))))
+        Ok((
+            position,
+            MappingId(Key::new(nest, key.slot(), key.generation())),
+        ))
     }
 
     fn publish(&mut self, position: Insertion, mapping: Mapping) {
@@ -161,7 +166,10 @@ impl MappingIndex {
 
     fn original(&mut self, id: MappingId) -> Result<&mut Mapping, Error> {
         let key = self.key(id);
-        self.entries.get_mut(key).filter(|mapping| mapping.id == id).ok_or(Error::Gone)
+        self.entries
+            .get_mut(key)
+            .filter(|mapping| mapping.id == id)
+            .ok_or(Error::Gone)
     }
 
     fn settle(&mut self, id: MappingId) {
@@ -238,30 +246,41 @@ impl LocalNest<'_, '_> {
         let mut plan = workspace.plan();
         plan.insert(binding.state()).expect("original Nest");
         input.plan(&mut plan);
-        let committed = plan.acquire(mode, |held| {
-            let state = held.access(binding.state()).expect("original Nest");
-            if state.record(binding.id())?.phase == Phase::Draining {
-                return Err(Error::Shut);
-            }
-            state.spans.check_map(span, range)?;
-            let (position, id) = state.mappings.prepare(binding.id(), range)?;
-            let accepted = input.accept(
-                held,
-                id,
-                self.work.prepared.as_ref().expect("original leaf preparation"),
-            ).map_err(Error::Cell)?;
-            let state = held.access(binding.state()).expect("original Nest");
-            state.mappings.publish(position, Mapping {
-                id,
-                span,
-                range,
-                rights: input.rights(),
-                access: accepted,
-                phase: MappingPhase::Installing,
-                translation: self.work.prepared.take(),
-            });
-            Ok(id)
-        }).map_err(Error::from).and_then(core::convert::identity);
+        let committed = plan
+            .acquire(mode, |held| {
+                let state = held.access(binding.state()).expect("original Nest");
+                if state.record(binding.id())?.phase == Phase::Draining {
+                    return Err(Error::Shut);
+                }
+                state.spans.check_map(span, range)?;
+                let (position, id) = state.mappings.prepare(binding.id(), range)?;
+                let accepted = input
+                    .accept(
+                        held,
+                        id,
+                        self.work
+                            .prepared
+                            .as_ref()
+                            .expect("original leaf preparation"),
+                    )
+                    .map_err(Error::Cell)?;
+                let state = held.access(binding.state()).expect("original Nest");
+                state.mappings.publish(
+                    position,
+                    Mapping {
+                        id,
+                        span,
+                        range,
+                        rights: input.rights(),
+                        access: accepted,
+                        phase: MappingPhase::Installing,
+                        translation: self.work.prepared.take(),
+                    },
+                );
+                Ok(id)
+            })
+            .map_err(Error::from)
+            .and_then(core::convert::identity);
 
         if committed.is_err() {
             // A failed cancellation retains the original claim in the local
@@ -324,14 +343,21 @@ impl LocalNest<'_, '_> {
             let nest_phase = state.record(binding.id())?.phase;
             let original = state.mappings.original(id)?;
             let (span, range, phase) = (original.span, original.range, original.phase);
-            let closing = nest_phase == Phase::Draining || state.spans.check_map(span, range).is_err();
+            let closing =
+                nest_phase == Phase::Draining || state.spans.check_map(span, range).is_err();
             let original = state.mappings.original(id)?;
-            if closing || self.work.active.as_ref().is_some_and(|work| work.failed_install) {
+            if closing
+                || self
+                    .work
+                    .active
+                    .as_ref()
+                    .is_some_and(|work| work.failed_install)
+            {
                 original.phase = MappingPhase::Removing;
             }
             if original.phase == MappingPhase::Active {
                 assert_eq!(phase, MappingPhase::Active);
-                return Ok(MappingPhase::Active);
+                return Ok::<_, Error>(MappingPhase::Active);
             }
             if self.work.active.is_none() {
                 self.work.active = Some(ActiveWork {
@@ -347,7 +373,9 @@ impl LocalNest<'_, '_> {
         }
         let work = self.work.active.as_mut().expect("original native work");
         if phase == MappingPhase::Installing {
-            if let Err(error) = unsafe { self.root.install_translation(&mut work.translation, mode) } {
+            if let Err(error) =
+                unsafe { self.root.install_translation(&mut work.translation, mode) }
+            {
                 work.failed_install = true;
                 return Err(Error::Table(error));
             }
@@ -364,10 +392,11 @@ impl LocalNest<'_, '_> {
             })?;
         }
 
-        unsafe { self.root.remove_translation(&mut work.translation, mode) }.map_err(Error::Table)?;
-        let slot = binding.state().acquire(|state| {
-            Ok::<_, Error>(state.mappings.original(id)?.access.slot())
-        })??;
+        unsafe { self.root.remove_translation(&mut work.translation, mode) }
+            .map_err(Error::Table)?;
+        let slot = binding
+            .state()
+            .acquire(|state| Ok::<_, Error>(state.mappings.original(id)?.access.slot()))??;
         let mut workspace = TurnWorkspace::<2>::new();
         let mut plan = workspace.plan();
         plan.insert(binding.state()).expect("original Nest");
@@ -383,7 +412,9 @@ impl LocalNest<'_, '_> {
             let (state, mut cell_locked) = slot.together(held, binding.state());
             let original = state.mappings.original(id)?;
             let work = self.work.active.as_ref().expect("removed original work");
-            original.access.finish_locked(&mut cell_locked, id, &work.translation)
+            original
+                .access
+                .finish_locked(&mut cell_locked, id, &work.translation)
                 .map_err(Error::Cell)?;
             state.mappings.settle(id);
             self.work.active = None;

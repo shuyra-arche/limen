@@ -8,8 +8,8 @@ use limen_treaty::model::InternalRange;
 
 mod mapping;
 mod span;
-use mapping::{MappingIndex, Work};
 pub use mapping::{MappingId, MappingObservation, MappingPhase, MappingProgress, MappingStorage};
+use mapping::{MappingIndex, Work};
 use span::SpanIndex;
 pub use span::{SpanId, SpanObservation, SpanPhase, SpanStorage};
 

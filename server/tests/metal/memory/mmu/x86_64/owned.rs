@@ -144,12 +144,17 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     unsafe { active.install_translation(&mut edit, Fast) }.unwrap();
     assert_eq!(edit.phase(), TranslationPhase::Active);
     let value: u64;
-    unsafe { asm!("mov {}, [{}]", out(reg) value, in(reg) address.get(), options(nostack, readonly)) };
+    unsafe {
+        asm!("mov {}, [{}]", out(reg) value, in(reg) address.get(), options(nostack, readonly))
+    };
     assert_eq!(value, WITNESS.0[0]);
     unsafe { active.remove_translation(&mut edit, Fast) }.unwrap();
     assert_eq!(edit.phase(), TranslationPhase::Removed);
     let replacement_physical = ptr::from_ref(&REPLACEMENT).addr() as u64;
-    assert!(boot.image().covers(extent(replacement_physical, replacement_physical + PAGE)));
+    assert!(
+        boot.image()
+            .covers(extent(replacement_physical, replacement_physical + PAGE))
+    );
     assert_ne!(replacement_physical, witness);
     let mut replacement = active
         .prepare_translation(
@@ -163,7 +168,9 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     unsafe { active.remove_translation(&mut edit, Fast) }.unwrap();
     unsafe { active.install_translation(&mut replacement, Fast) }.unwrap();
     let value: u64;
-    unsafe { asm!("mov {}, [{}]", out(reg) value, in(reg) address.get(), options(nostack, readonly)) };
+    unsafe {
+        asm!("mov {}, [{}]", out(reg) value, in(reg) address.get(), options(nostack, readonly))
+    };
     assert_eq!(value, REPLACEMENT.0[0]);
     unsafe { active.remove_translation(&mut replacement, Fast) }.unwrap();
     let mut cancelled = active

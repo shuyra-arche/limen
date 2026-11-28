@@ -11,7 +11,7 @@ use crate::{
 
 use super::{
     AccessId, AccessOwner, AccessPreparation, Admission, CellAccess, CellConstruction, CellSlot,
-    Error, Role, Rights, TurnAccess, TurnPlan,
+    Error, Rights, Role, TurnAccess, TurnPlan,
 };
 
 fn leaf(rights: Rights) -> Result<LeafAccess, Error> {
@@ -22,10 +22,7 @@ fn leaf(rights: Rights) -> Result<LeafAccess, Error> {
     }
 }
 
-fn physical(
-    base: PhysicalAddress,
-    range: ByteRange,
-) -> Result<PhysicalAddress, Error> {
+fn physical(base: PhysicalAddress, range: ByteRange) -> Result<PhysicalAddress, Error> {
     if range.length() != ByteLength::new(4096) {
         return Err(Error::Access);
     }
@@ -51,10 +48,7 @@ pub(in crate::basis) struct MappingInput {
 }
 
 impl AccessPreparation {
-    pub(in crate::basis) fn mapping(
-        &'static self,
-        id: AccessId,
-    ) -> Result<MappingInput, Error> {
+    pub(in crate::basis) fn mapping(&'static self, id: AccessId) -> Result<MappingInput, Error> {
         let (slot, source) = self.0.acquire(|state| {
             state
                 .as_ref()
@@ -105,7 +99,8 @@ impl MappingInput {
     pub(in crate::basis) fn plan<'a>(&'a self, plan: &mut TurnPlan<'a, '_>) {
         plan.insert(&self.source.0).expect("original Cell holding");
         self.slot.plan(plan);
-        plan.insert(&self.receiver.0).expect("original access receiver");
+        plan.insert(&self.receiver.0)
+            .expect("original access receiver");
     }
 
     /// Final checks precede the single write to AccessRecord and transfer of
@@ -161,7 +156,12 @@ impl MappingInput {
         if record.authority != Some(ptr::from_ref(self.source).addr()) {
             return Err(Error::Scope);
         }
-        record.accept(&original.access, self.range, self.rights, self.receiver.owner())?;
+        record.accept(
+            &original.access,
+            self.range,
+            self.rights,
+            self.receiver.owner(),
+        )?;
         record.owner = AccessOwner::Mapping(owner);
         let original = receiver.take().expect("validated prepared access");
         Ok(AcceptedAccess {

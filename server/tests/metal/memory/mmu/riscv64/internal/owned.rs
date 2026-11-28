@@ -6,6 +6,7 @@ use core::{arch::asm, mem::MaybeUninit, ptr};
 use kernel::{
     basis::{
         cell::CellSlot,
+        nest::{MappingStorage, Nest, Progress, SpanStorage},
         pend::{Handle, Initial, PendSpace},
     },
     entry::boot::Boot,
@@ -24,7 +25,7 @@ use kernel::{
                 },
                 treaty::{
                     LeafAccess, Memory, TableBranch, TableError, TableFormat, TableId,
-                    TableProgress, TableStore,
+                    TableStore,
                 },
             },
         },
@@ -36,6 +37,9 @@ use limen_treaty::model::{Alignment, ByteLength, InternalAddress, PhysicalAddres
 #[path = "../../../../../entry/boot/material/memory.rs"]
 mod memory;
 use memory::{extent, mapped, retirement};
+
+#[path = "../../internal/mapping.rs"]
+mod mapping;
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x8460_0000;
@@ -57,6 +61,9 @@ struct Witness([u64; 512]);
 static WITNESS: Witness = Witness([0x51ab_0dcd_1234_abcd; 512]);
 static REPLACEMENT: Witness = Witness([0x8c11_772e_3210_6543; 512]);
 static mut WRITABLE: u64 = 0x1234;
+static mut NEST: MaybeUninit<Nest> = MaybeUninit::uninit();
+static mut SPANS: SpanStorage<1> = SpanStorage::new();
+static mut MAPPINGS: MappingStorage<1> = MappingStorage::new();
 static SPENDING: PendSpace = PendSpace::for_page_tables();
 static CONSTRUCTION: [AllocationConstruction; CAPACITY] =
     [const { AllocationConstruction::new() }; CAPACITY];
@@ -263,12 +270,12 @@ pub fn check(boot: &Boot<'_>) {
                 regions: 1,
                 grains: PAGES,
                 roots: 8,
-                allocations: CAPACITY,
-                returns: CAPACITY,
+                allocations: CAPACITY + 1,
+                returns: CAPACITY + 1,
                 allowances: 1,
                 edits: 128,
             },
-            CAPACITY as u64 * PAGE,
+            (CAPACITY as u64 + 1) * PAGE,
             &mut allowance,
             &mut [],
         )
@@ -367,13 +374,17 @@ pub fn check(boot: &Boot<'_>) {
     unsafe { active.install_translation(&mut edit, Fast) }.unwrap();
     assert_eq!(edit.phase(), TranslationPhase::Active);
     let value: u64;
-    unsafe { asm!("ld {}, 0({})", out(reg) value, in(reg) address.get(), options(nostack, readonly)) };
+    unsafe {
+        asm!("ld {}, 0({})", out(reg) value, in(reg) address.get(), options(nostack, readonly))
+    };
     assert_eq!(value, WITNESS.0[0]);
     unsafe { active.remove_translation(&mut edit, Fast) }.unwrap();
     assert_eq!(edit.phase(), TranslationPhase::Removed);
     let replacement_physical = ptr::from_ref(&REPLACEMENT).addr() as u64;
-    assert!(extent(read_only, writable)
-        .covers(extent(replacement_physical, replacement_physical + PAGE)));
+    assert!(
+        extent(read_only, writable)
+            .covers(extent(replacement_physical, replacement_physical + PAGE))
+    );
     assert_ne!(replacement_physical, witness);
     let mut replacement = active
         .prepare_translation(
@@ -387,7 +398,9 @@ pub fn check(boot: &Boot<'_>) {
     unsafe { active.remove_translation(&mut edit, Fast) }.unwrap();
     unsafe { active.install_translation(&mut replacement, Fast) }.unwrap();
     let value: u64;
-    unsafe { asm!("ld {}, 0({})", out(reg) value, in(reg) address.get(), options(nostack, readonly)) };
+    unsafe {
+        asm!("ld {}, 0({})", out(reg) value, in(reg) address.get(), options(nostack, readonly))
+    };
     assert_eq!(value, REPLACEMENT.0[0]);
     unsafe { active.remove_translation(&mut replacement, Fast) }.unwrap();
     let mut cancelled = active
@@ -408,20 +421,47 @@ pub fn check(boot: &Boot<'_>) {
     assert_eq!(active.finish(Fast), Err(TableError::State));
     assert_eq!(allowance.balance(), Ok(charged));
 
-    unsafe { active.restore() }.unwrap();
+    let nest = unsafe {
+        (&mut *(&raw mut NEST))
+            .write(Nest::new(&mut *(&raw mut SPANS), &mut *(&raw mut MAPPINGS)).unwrap())
+    };
+    let mut owner = nest.publish(active).ok().unwrap();
+    let data_start = BASE + (PAGES as u64 - 1) * PAGE;
+    assert!(data_start >= BASE + (BACKING + CAPACITY) as u64 * PAGE);
+    unsafe {
+        mapping::check(
+            &mut owner,
+            allowance,
+            extent(data_start, data_start + PAGE),
+            ALIAS + PAGE,
+            mapped,
+            |address| {
+                let value: u64;
+                asm!("ld {}, 0({})", out(reg) value, in(reg) address, options(nostack, readonly));
+                value
+            },
+            |address, value| {
+                asm!("sd {}, 0({})", in(reg) value, in(reg) address, options(nostack));
+            },
+        )
+    };
+    assert_eq!(allowance.balance(), Ok(charged));
+    owner.begin_delete().unwrap();
+    owner.begin_drain().unwrap();
+    assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Pending));
     assert_eq!(Context::current(), Some(Context::BARE));
     // More than one real subtree is owned by this root. Each refund
     // must settle before its detached original branch can disappear.
     for _ in 0..(CAPACITY * 6 + 2) {
-        if unsafe { active.advance_retirement(Fast) }.unwrap() == TableProgress::Complete {
+        if unsafe { owner.advance_retirement() }.unwrap() == Progress::Retired {
             break;
         }
     }
     assert_eq!(
-        unsafe { active.advance_retirement(Fast) },
-        Ok(TableProgress::Complete)
+        unsafe { owner.advance_retirement() },
+        Ok(Progress::Retired)
     );
-    drop(active);
+    drop(owner);
     assert_eq!(control.current().unwrap().root(), None);
     assert_eq!(unsafe { (&raw const WRITABLE).read_volatile() }, 0x5678);
     for node in tree.nodes.iter().flatten() {

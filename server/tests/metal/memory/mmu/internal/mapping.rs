@@ -1,0 +1,215 @@
+//! Common ordinary RAM Mapping lifecycle through a real installed local Nest.
+
+use core::mem::MaybeUninit;
+
+use kernel::{
+    basis::{
+        cell::{self, AccessPreparation, AccessStorage, CellConstruction, CellSlot, Rights},
+        nest::{self, LocalNest, MappingPhase, MappingProgress},
+        pend::{self, Initial as InitialPend, PendSpace},
+    },
+    metal::{
+        memory::{
+            access::treaty::ram::MappedRange,
+            allocator::treaty::{
+                AllocationConstruction, Allowance, LookupObservation, MappedStorage, RamPurpose,
+                Request, Search,
+            },
+        },
+        sync::treaty::TurnMode::Fast,
+    },
+};
+use limen_treaty::model::{
+    Alignment, ByteLength, ByteOffset, ByteRange, InternalAddress, InternalRange, PhysicalRange,
+};
+
+static DATA_SPENDING: PendSpace = PendSpace::for_cells();
+static DATA_ALLOCATION: AllocationConstruction = AllocationConstruction::new();
+static DATA_CONSTRUCTION: CellConstruction = CellConstruction::new();
+static mut DATA_ACCESSES: AccessStorage<2> = AccessStorage::new();
+static mut DATA_CELL: MaybeUninit<CellSlot> = MaybeUninit::uninit();
+static FIRST_ACCESS: AccessPreparation = AccessPreparation::new();
+static SECOND_ACCESS: AccessPreparation = AccessPreparation::new();
+
+fn range(start: u64, end: u64) -> InternalRange {
+    InternalRange::new(InternalAddress::new(start), InternalAddress::new(end)).unwrap()
+}
+
+/// The fixture retains the original RAM, compatible Normal identity
+/// mapping and exclusive local native scope until all accesses settle.
+pub(super) unsafe fn check(
+    owner: &mut LocalNest<'_, '_>,
+    allowance: &Allowance,
+    physical: PhysicalRange,
+    address: u64,
+    mapped: unsafe fn(PhysicalRange) -> MappedRange<'static>,
+    load: impl Fn(u64) -> u64,
+    store: impl Fn(u64, u64),
+) {
+    const PAGE: u64 = 4096;
+    let balance = allowance.balance().unwrap();
+    let mut spending = None;
+    let mut closing = None;
+    unsafe {
+        DATA_SPENDING.publish_initial(
+            allowance,
+            ByteLength::new(PAGE),
+            Alignment::new(PAGE).unwrap(),
+            InitialPend {
+                spending: &mut spending,
+                closing: &mut closing,
+            },
+            Fast,
+        )
+    }
+    .unwrap();
+    let spending = spending.unwrap();
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(PAGE).unwrap(),
+        physical,
+        None,
+        RamPurpose::Cell,
+    )
+    .unwrap();
+    let mut observations = [LookupObservation::EMPTY; 1];
+    let mut lookup = allowance
+        .source()
+        .lookup(request, None, &mut observations)
+        .unwrap();
+    let candidate = loop {
+        match lookup.step().unwrap() {
+            Search::Candidate(candidate) => break candidate,
+            Search::Pending => {}
+            Search::NoRange => panic!("original ordinary page is available"),
+        }
+    };
+    assert_eq!(candidate.physical(), physical);
+    let allocation = spending.reserve(candidate, &DATA_ALLOCATION, Fast).unwrap();
+    assert_eq!(spending.issue(&DATA_ALLOCATION, Fast), Ok(allocation));
+    let mut material = None;
+    unsafe { DATA_ALLOCATION.take(&mut material) }.unwrap();
+    let material =
+        unsafe { MappedStorage::prepare(material.take().unwrap(), mapped(physical)) }
+            .ok()
+            .unwrap();
+    let slot = unsafe {
+        (&mut *(&raw mut DATA_CELL))
+            .write(CellSlot::for_cells(&mut *(&raw mut DATA_ACCESSES)).unwrap())
+    };
+    let cell = DATA_CONSTRUCTION
+        .publish(slot, spending, material, Fast)
+        .ok()
+        .unwrap();
+    closing.unwrap().revoke().unwrap();
+    spending.release().unwrap();
+    let bytes = ByteRange::new(ByteOffset::new(0), ByteOffset::new(PAGE)).unwrap();
+    let virtual_range = range(address, address + 2 * PAGE);
+    let span = owner.reserve_span(virtual_range).unwrap();
+    let first = DATA_CONSTRUCTION
+        .prepare(cell, bytes, Rights::READ_WRITE, &FIRST_ACCESS, Fast)
+        .unwrap();
+    let second = DATA_CONSTRUCTION
+        .prepare(cell, bytes, Rights::READ, &SECOND_ACCESS, Fast)
+        .unwrap();
+    let virtual_address = InternalAddress::new(address);
+    let other_address = InternalAddress::new(address + PAGE);
+    let mapping = unsafe { owner.map(span, virtual_address, &FIRST_ACCESS, first, Fast) }.unwrap();
+    assert_eq!(FIRST_ACCESS.observe(), Ok(None));
+    let accepted = owner.observe_mapping(mapping).unwrap();
+    assert_eq!(accepted.phase, MappingPhase::Installing);
+    assert_eq!(accepted.access, first);
+    assert_eq!(accepted.rights, Rights::READ_WRITE);
+    assert_eq!(
+        unsafe { owner.map(span, virtual_address, &SECOND_ACCESS, second, Fast) },
+        Err(nest::Error::Conflict)
+    );
+    assert_eq!(
+        unsafe { owner.map(span, other_address, &SECOND_ACCESS, second, Fast) },
+        Err(nest::Error::Capacity)
+    );
+    assert_eq!(SECOND_ACCESS.observe(), Ok(Some(second)));
+    assert_eq!(
+        unsafe { owner.advance_mapping(mapping, Fast) },
+        Ok(MappingProgress::Active)
+    );
+    assert_eq!(load(address), 0);
+    let written = 0x1742_ace0_dad0_3210u64;
+    store(address, written);
+    owner.begin_unmap(mapping).unwrap();
+    assert_eq!(
+        owner.observe_mapping(mapping).unwrap().phase,
+        MappingPhase::Removing
+    );
+    let mut retired = None;
+    assert_eq!(
+        unsafe { DATA_CONSTRUCTION.retire(cell, &mut retired, Fast) },
+        Err(cell::Error::Access)
+    );
+    assert!(retired.is_none());
+    assert_eq!(
+        unsafe { owner.advance_mapping(mapping, Fast) },
+        Ok(MappingProgress::Removed)
+    );
+    assert_eq!(owner.observe_mapping(mapping), Err(nest::Error::Gone));
+
+    let replacement =
+        unsafe { owner.map(span, virtual_address, &SECOND_ACCESS, second, Fast) }.unwrap();
+    assert_ne!(mapping, replacement);
+    assert_eq!(owner.begin_unmap(mapping), Err(nest::Error::Gone));
+    assert_eq!(
+        unsafe { owner.advance_mapping(replacement, Fast) },
+        Ok(MappingProgress::Active)
+    );
+    assert_eq!(load(address), written);
+    let late = DATA_CONSTRUCTION
+        .prepare(cell, bytes, Rights::READ, &FIRST_ACCESS, Fast)
+        .unwrap();
+    DATA_CONSTRUCTION.revoke(cell).unwrap();
+    // The direct grant governs admission, not ongoing one-time accepted use.
+    assert_eq!(
+        owner.observe_mapping(replacement).unwrap().phase,
+        MappingPhase::Active
+    );
+    owner.begin_release_span(span).unwrap();
+    assert_eq!(owner.finish_release_span(span), Err(nest::Error::Busy));
+    assert_eq!(
+        unsafe { owner.map(span, other_address, &FIRST_ACCESS, late, Fast) },
+        Err(nest::Error::Shut)
+    );
+    assert_eq!(FIRST_ACCESS.observe(), Ok(Some(late)));
+    assert_eq!(
+        unsafe { owner.advance_mapping(replacement, Fast) },
+        Ok(MappingProgress::Removed)
+    );
+    owner.finish_release_span(span).unwrap();
+    let next_span = owner.reserve_span(virtual_range).unwrap();
+    assert_ne!(next_span, span);
+    assert_eq!(
+        unsafe { owner.map(next_span, virtual_address, &FIRST_ACCESS, late, Fast) },
+        Err(nest::Error::Cell(cell::Error::Pend(pend::Error::Revoked)))
+    );
+    assert_eq!(FIRST_ACCESS.observe(), Ok(Some(late)));
+    // The rejected accept must also have released the actual leaf claim.
+    owner.cancel_preparation(Fast).unwrap();
+    FIRST_ACCESS.cancel(late, Fast).unwrap();
+    DATA_CONSTRUCTION.shut(cell, Fast).unwrap();
+    DATA_CONSTRUCTION.release(cell).unwrap();
+    owner.begin_release_span(next_span).unwrap();
+    owner.finish_release_span(next_span).unwrap();
+    unsafe { DATA_CONSTRUCTION.retire(cell, &mut retired, Fast) }.unwrap();
+    assert_eq!(DATA_CONSTRUCTION.locate(allocation), Ok(None));
+    let mut receipt = None;
+    unsafe { retired.take().unwrap().begin_return(&mut receipt) }
+        .ok()
+        .unwrap();
+    let receipt = receipt.take().unwrap();
+    let returned = receipt.finish(Fast).unwrap();
+    assert_eq!(returned.allocation, allocation);
+    assert_eq!(returned.physical, physical);
+    receipt.acknowledge().unwrap();
+    assert_eq!(allowance.balance(), Ok(balance));
+    kernel::metal::platform::boot::treaty::write(
+        "PASS ordinary-mapping allocation=1 zero=1 joint=1 conflict=1 capacity=1 rw=1 remap=1 close=1 revoke=1 finish=1 refund=1\n",
+    );
+}

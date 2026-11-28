@@ -112,7 +112,9 @@ impl Tree {
         format: TableFormat,
         ordinary_pages: usize,
     ) -> Self {
-        let pages = LEVELS.checked_add(ordinary_pages).expect("fixture capacity");
+        let pages = LEVELS
+            .checked_add(ordinary_pages)
+            .expect("fixture capacity");
         assert!(pages <= PAGES - 2);
         let start = range.start().get();
         let mut scratch = [None; 1];

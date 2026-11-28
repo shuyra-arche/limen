@@ -827,24 +827,20 @@ impl CellConstruction {
             if record.role != Role::Ordinary || !matches!(record.storage, Storage::Retained(_)) {
                 return Err(Error::Access);
             }
-            let access = state
-                .accesses
-                .ordinary()?
-                .prepare(
-                    id,
-                    range,
-                    rights,
-                    receiver.owner(),
-                    core::ptr::from_ref(self).addr(),
-                )?;
+            let access = state.accesses.ordinary()?.prepare(
+                id,
+                range,
+                rights,
+                receiver.owner(),
+                core::ptr::from_ref(self).addr(),
+            )?;
             let id = access.id;
-            *held.access(&receiver.0).expect("original access receiver") =
-                Some(Preparation {
-                    slot,
-                    #[cfg(limen_cooperative)]
-                    source: self,
-                    access,
-                });
+            *held.access(&receiver.0).expect("original access receiver") = Some(Preparation {
+                slot,
+                #[cfg(limen_cooperative)]
+                source: self,
+                access,
+            });
             Ok(id)
         })?
     }
@@ -863,7 +859,12 @@ impl CellConstruction {
         plan.acquire(mode, |held| {
             let (construction, mut locked) = slot.together(held, &self.0);
             let original = Self::original(construction, id)?;
-            let record = original.cell.state(&mut locked)?.cell.as_mut().expect("live Cell");
+            let record = original
+                .cell
+                .state(&mut locked)?
+                .cell
+                .as_mut()
+                .expect("live Cell");
             record.admission = Admission::Shut;
             Ok(())
         })?
