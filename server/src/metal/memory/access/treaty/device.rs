@@ -205,6 +205,16 @@ impl<'mapping> DeviceWindow<'mapping> {
         Ok(())
     }
 
+    /// Observe a non-destructive 32-bit register without a mutable borrow.
+    /// # Safety
+    /// The original mapping and register must permit shared, non-destructive
+    /// reads, including any interruptible reader. The caller owns the read
+    /// protocol and excludes conflicting writes for the required lifetime.
+    pub unsafe fn observe_u32(&self, offset: usize) -> Result<u32, Error> {
+        let address = self.address(offset, 4)?;
+        Ok(unsafe { ptr::without_provenance::<u32>(address).read_volatile() })
+    }
+
     /// Geometry only. Does not grant access to the register.
     pub fn supports_u64(&self, offset: usize) -> bool {
         self.address(offset, 8).is_ok()

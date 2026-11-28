@@ -401,3 +401,65 @@ fn dmar_preserves_segment_scope_and_register_aperture() {
         assert!(fixture.discover().unwrap().dmar().is_err());
     }
 }
+
+fn hpet_body() -> [u8; 20] {
+    let mut body = [0; 20];
+    body[..4].copy_from_slice(&0x8086_a201u32.to_le_bytes());
+    body[8..16].copy_from_slice(&0xfed0_0000u64.to_le_bytes());
+    body
+}
+
+#[test]
+fn hpet_requires_one_original_revision_one_memory_block() {
+    let body = hpet_body();
+    let firmware = Firmware::new(vec![(FIRST, table(*b"HPET", 1, &body))]);
+    let acpi = firmware.discover().unwrap();
+    let description = acpi.hpet().unwrap().unwrap();
+    assert_eq!(description.table().physical(), range(FIRST, FIRST + 56));
+    assert_eq!(description.registers(), range(0xfed0_0000, 0xfed0_0400));
+    assert_eq!(description.block_id(), 0x8086_a201);
+    assert_eq!(description.number(), 0);
+
+    let firmware = Firmware::new(vec![
+        (FIRST, table(*b"HPET", 1, &body)),
+        (SECOND, table(*b"HPET", 1, &body)),
+    ]);
+    assert_eq!(
+        firmware.discover().unwrap().hpet().unwrap_err(),
+        Error::DuplicateTable
+    );
+    let firmware = Firmware::new(vec![(FIRST, table(*b"HPET", 2, &body))]);
+    assert_eq!(
+        firmware.discover().unwrap().hpet().unwrap_err(),
+        Error::UnsupportedRevision
+    );
+    let firmware = Firmware::new(vec![(FIRST, table(*b"HPET", 1, &body[..19]))]);
+    assert_eq!(
+        firmware.discover().unwrap().hpet().unwrap_err(),
+        Error::InvalidLength
+    );
+    let firmware = Firmware::new(Vec::new());
+    assert!(firmware.discover().unwrap().hpet().unwrap().is_none());
+}
+
+#[test]
+fn hpet_rejects_invalid_identity_gas_and_extent_before_mapping() {
+    for (offset, value) in [(0, 0), (4, 1), (5, 8), (6, 1), (7, 1), (19, 3)] {
+        let mut body = hpet_body();
+        body[offset] = value;
+        let firmware = Firmware::new(vec![(FIRST, table(*b"HPET", 1, &body))]);
+        assert_eq!(
+            firmware.discover().unwrap().hpet().unwrap_err(),
+            Error::InvalidRecord
+        );
+    }
+    for address in [0, 0xfed0_0001, u64::MAX - 1023] {
+        let mut body = hpet_body();
+        body[8..16].copy_from_slice(&address.to_le_bytes());
+        let firmware = Firmware::new(vec![(FIRST, table(*b"HPET", 1, &body))]);
+        assert_eq!(
+            firmware.discover().unwrap().hpet().unwrap_err(),
+            Error::InvalidAddress
+        );
+    }
+}

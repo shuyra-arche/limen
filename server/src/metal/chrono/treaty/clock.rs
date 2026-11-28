@@ -44,6 +44,21 @@ impl Clock {
         })
     }
 
+    #[cfg(target_arch = "x86_64")]
+    pub(in crate::metal::chrono) fn bind_mapped(
+        processor: ProcessorId,
+        frequency: core::num::NonZeroU64,
+        window: crate::metal::memory::access::treaty::device::DeviceWindow<'static>,
+        observe: fn(&crate::metal::memory::access::treaty::device::DeviceWindow<'_>) -> Option<u64>,
+    ) -> Result<Self, crate::metal::memory::access::treaty::device::DeviceWindow<'static>> {
+        if try_current_processor() != Some(processor) {
+            return Err(window);
+        }
+        Ok(Self {
+            counter: Counter::mapped(processor, frequency, window, observe),
+        })
+    }
+
     /// Read a local count with the original counter and its admitted rate.
     pub fn sample(&self) -> Option<Sample<'_>> {
         Sample::reported(&self.counter, try_current_processor()?)
