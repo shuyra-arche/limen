@@ -75,7 +75,8 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     verify_lower_writable(range);
     let original = unsafe { Controls::current() };
     let (mut control, profile) = unsafe { admit_inactive_upper(boot.processor()) }.unwrap();
-    let tree = unsafe { Tree::prepare(boot, range, evidence, TableFormat::Aarch64(profile), 1) };
+    let mut tree =
+        unsafe { Tree::prepare(boot, range, evidence, TableFormat::Aarch64(profile), 2) };
     let [leaf, _, _, root] = tree.nodes;
 
     let lower = ptr::from_ref(&WITNESS).addr() as u64;
@@ -193,12 +194,22 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     let mut owner = nest.publish(active).ok().unwrap();
     let data_start = range.start().get() + 6 * PAGE;
     let data = extent(data_start, data_start + PAGE);
+    let spare = unsafe {
+        tree.prepare_leaf(
+            TableFormat::Aarch64(profile),
+            extent(data_start + PAGE, data_start + 2 * PAGE),
+        )
+    };
+    let expanded = tree.allowance.balance().unwrap();
+    assert_eq!(expanded.occupied().get(), charged.occupied().get() + PAGE);
+    let dynamic_address = UPPER + (1 << 21);
     unsafe {
         mapping::check(
             &mut owner,
             tree.allowance,
             data,
-            UPPER + PAGE,
+            dynamic_address,
+            &[(spare.store, spare.id)],
             memory::mapped,
             |address| {
                 let observed = translation(address);
@@ -217,26 +228,23 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
             },
         )
     };
-    assert_ne!(translation(UPPER + PAGE) & 1, 0);
-    assert_eq!(tree.allowance.balance(), Ok(charged));
+    assert_ne!(translation(dynamic_address) & 1, 0);
+    assert_eq!(tree.allowance.balance(), Ok(expanded));
     owner.begin_delete().unwrap();
     owner.begin_drain().unwrap();
     assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Pending));
     assert_eq!(unsafe { Controls::current() }, original);
     assert_ne!(translation(UPPER) & 1, 0);
-    for _ in 0..32 {
+    for _ in 0..40 {
         if unsafe { owner.advance_retirement() }.unwrap() == Progress::Retired {
             break;
         }
     }
-    assert_eq!(
-        unsafe { owner.advance_retirement() },
-        Ok(Progress::Retired)
-    );
+    assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Retired));
     drop(owner);
     assert_eq!(control.current().unwrap().root(), None);
     tree.settle();
     kernel::metal::platform::boot::treaty::write(
-        "PASS owned upper tables=4 active=1 access=1 original=1 retire=1 refund=4\n",
+        "PASS owned upper tables=5 active=1 access=1 original=1 retire=1 refund=5\n",
     );
 }

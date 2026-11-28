@@ -77,6 +77,18 @@ impl NativeRoot<'_> {
     }
 
     #[cfg(limen_cooperative)]
+    pub(in crate::metal::memory::mmu) unsafe fn order_table() {
+        unsafe { asm!("fence rw, w", options(nostack)) };
+    }
+
+    #[cfg(limen_cooperative)]
+    pub(in crate::metal::memory::mmu) unsafe fn synchronize_tree() {
+        unsafe {
+            asm!("fence rw, rw", "sfence.vma x0, x0", "fence rw, rw", options(nostack));
+        }
+    }
+
+    #[cfg(limen_cooperative)]
     pub(in crate::metal::memory::mmu) unsafe fn synchronize_leaf(
         address: limen_treaty::model::InternalAddress,
     ) {

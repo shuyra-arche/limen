@@ -28,10 +28,12 @@ const PAGE: u64 = 4096;
 const LEVELS: usize = 4;
 
 static SPENDING: PendSpace = PendSpace::for_page_tables();
-static CONSTRUCTION: [AllocationConstruction; LEVELS] =
-    [const { AllocationConstruction::new() }; LEVELS];
-static CELLS: [CellSlot; LEVELS] = [const { CellSlot::new() }; LEVELS];
-static mut BRANCHES: [[TableBranch; 1]; LEVELS] = [const { [TableBranch::EMPTY] }; LEVELS];
+static CONSTRUCTION: [AllocationConstruction; LEVELS + 1] =
+    [const { AllocationConstruction::new() }; LEVELS + 1];
+static CELLS: [CellSlot; LEVELS + 1] = [const { CellSlot::new() }; LEVELS + 1];
+static mut BRANCHES: [[TableBranch; 2]; LEVELS] = [const { [TableBranch::EMPTY; 2] }; LEVELS];
+static mut SPARE_TABLE: MaybeUninit<TableStore> = MaybeUninit::uninit();
+static mut SPARE_BRANCHES: [TableBranch; 0] = [];
 static mut TABLES: [MaybeUninit<TableStore>; LEVELS] = [const { MaybeUninit::uninit() }; LEVELS];
 static mut ALLOWANCE: Option<Allowance> = None;
 static mut HANDLE: Option<pend::Handle> = None;
@@ -42,7 +44,7 @@ unsafe fn make_table(
     store: &'static TableStore,
     allowance: &Allowance,
     handle: pend::Handle,
-    level: usize,
+    slot: usize,
     range: PhysicalRange,
 ) -> (TableId, AllocationId) {
     let request = Request::new(
@@ -66,7 +68,7 @@ unsafe fn make_table(
         }
     };
     assert_eq!(candidate.physical(), range);
-    let construction = &CONSTRUCTION[level];
+    let construction = &CONSTRUCTION[slot];
     let allocation_id = handle.reserve(candidate, construction, Fast).unwrap();
     assert_eq!(handle.issue(construction, Fast), Ok(allocation_id));
     let original = unsafe { &mut *(&raw mut ALLOCATION) };
@@ -76,7 +78,7 @@ unsafe fn make_table(
         .ok()
         .unwrap();
     let id = store
-        .publish_cell(&CELLS[level], handle, material, Fast)
+        .publish_cell(&CELLS[slot], handle, material, Fast)
         .ok()
         .unwrap();
     store.prepare(id, Fast).unwrap();
@@ -95,6 +97,7 @@ pub(super) struct Node {
 
 pub(super) struct Tree {
     pub(super) nodes: [Node; LEVELS],
+    pub(super) spare: Option<Node>,
     pub(super) allowance: &'static Allowance,
     handle: pend::Handle,
     closing: &'static Revoker,
@@ -110,10 +113,10 @@ impl Tree {
         range: PhysicalRange,
         evidence: &Retirement,
         format: TableFormat,
-        ordinary_pages: usize,
+        additional_pages: usize,
     ) -> Self {
         let pages = LEVELS
-            .checked_add(ordinary_pages)
+            .checked_add(additional_pages)
             .expect("fixture capacity");
         assert!(pages <= PAGES - 2);
         let start = range.start().get();
@@ -170,7 +173,7 @@ impl Tree {
         let nodes: [(&'static TableStore, TableId, AllocationId); LEVELS] =
             core::array::from_fn(|_| {
                 let (level, (table, links)) = material.next().expect("one real table page");
-                let links = &mut links[..usize::from(level != 0)];
+                let links = &mut links[..2 * usize::from(level != 0)];
                 let store: &'static TableStore =
                     table.write(TableStore::for_level(format, level, links).unwrap());
                 let physical = start + (level as u64 + 2) * PAGE;
@@ -192,11 +195,36 @@ impl Tree {
                 id,
                 allocation,
             }),
+            spare: None,
             allowance,
             handle,
             closing: closing.as_ref().unwrap(),
             balance,
         }
+    }
+
+    /// Obtain an actual additional private leaf page from the same
+    /// source, before handing it to the installed root owner.
+    ///
+    /// # Safety
+    /// The exact supplied RAM is private, identity mapped and retained
+    /// through all native traversal and retirement.
+    pub(super) unsafe fn prepare_leaf(
+        &mut self,
+        format: TableFormat,
+        range: PhysicalRange,
+    ) -> Node {
+        assert!(self.spare.is_none());
+        let store: &'static TableStore = unsafe {
+            (&mut *(&raw mut SPARE_TABLE)).write(
+                TableStore::for_level(format, 0, &mut *(&raw mut SPARE_BRANCHES)).unwrap(),
+            )
+        };
+        let (id, allocation) =
+            unsafe { make_table(store, self.allowance, self.handle, LEVELS, range) };
+        let node = Node { store, id, allocation };
+        self.spare = Some(node);
+        node
     }
 
     /// Indexes from the bottom branch to the root branch.
@@ -217,7 +245,7 @@ impl Tree {
 
     /// The actual root owner has settled every original node and refund.
     pub(super) fn settle(self) {
-        for node in self.nodes {
+        for node in self.nodes.into_iter().chain(self.spare) {
             assert_eq!(node.store.locate(node.allocation), Ok(None));
         }
         assert_eq!(self.allowance.balance(), Ok(self.balance));

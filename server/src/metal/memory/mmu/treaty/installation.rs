@@ -217,6 +217,29 @@ mod bound {
             Ok(())
         }
 
+        /// Order the initialized private child before its non-leaf Make.
+        #[cfg(limen_cooperative)]
+        pub(in crate::metal::memory::mmu) unsafe fn order_table(&self) {
+            unsafe { Native::order_table() };
+        }
+
+        /// Complete non-leaf publication over the original local tree.
+        #[cfg(limen_cooperative)]
+        pub(in crate::metal::memory::mmu) unsafe fn synchronize_tree(
+            &self,
+            expected: Context,
+        ) -> Result<(), SwitchError> {
+            Native::check(self.installation.processor())?;
+            if self.current() != Some(expected) || !expected.is_current() {
+                return Err(SwitchError::Current);
+            }
+            unsafe { Native::synchronize_tree() };
+            if !expected.is_current() {
+                return Err(SwitchError::Unconfirmed);
+            }
+            Ok(())
+        }
+
         fn settle(&mut self, observed: Controls) -> Result<LocalInstall, SwitchError> {
             let (previous, installed) = self.installation.complete(observed)?;
             Ok(LocalInstall {

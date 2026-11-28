@@ -4,7 +4,7 @@
 
 use core::ptr;
 
-use limen_treaty::model::InternalRange;
+use limen_treaty::model::{ByteLength, InternalAddress, InternalRange};
 
 mod mapping;
 mod span;
@@ -15,7 +15,7 @@ pub use span::{SpanId, SpanObservation, SpanPhase, SpanStorage};
 
 use crate::metal::{
     identity::treaty::Generation,
-    memory::mmu::treaty::{Context, LocalRoot, TableError, TableId, TableProgress},
+    memory::mmu::treaty::{Context, LocalRoot, TableError, TableId, TableProgress, TableStore},
     sync::treaty::{TurnAcquireError, TurnLock, TurnMode},
 };
 
@@ -192,7 +192,7 @@ impl Nest {
         &'static self,
         root: LocalRoot<'control, 'scope>,
     ) -> Result<LocalNest<'control, 'scope>, (LocalRoot<'control, 'scope>, Error)> {
-        if root.has_translations() {
+        if root.has_translations() || root.has_pending_supply() {
             return Err((root, Error::Busy));
         }
         let Some((table, context)) = root.installed() else {
@@ -296,6 +296,62 @@ impl LocalNest<'_, '_> {
         })?
     }
 
+    fn check_supply(&self, span: SpanId, address: InternalAddress) -> Result<(), Error> {
+        if self.work.prepared.is_some() || self.work.active.is_some() {
+            return Err(Error::Busy);
+        }
+        let end = address.advance(ByteLength::new(4096)).ok_or(Error::Scope)?;
+        let range = InternalRange::new(address, end).ok_or(Error::Scope)?;
+        if !address.get().is_multiple_of(4096) {
+            return Err(Error::Scope);
+        }
+        self.binding.state().acquire(|state| {
+            if state.record(self.id())?.phase == Phase::Draining {
+                return Err(Error::Shut);
+            }
+            state.spans.check_map(span, range)
+        })?
+    }
+
+    /// Locate the next real missing table for this open Span.
+    pub fn missing_table(
+        &self,
+        span: SpanId,
+        address: InternalAddress,
+        mode: TurnMode,
+    ) -> Result<Option<usize>, Error> {
+        self.check_supply(span, address)?;
+        self.root.missing_table(address, mode).map_err(Error::Table)
+    }
+
+    /// Supply an initialized private empty page to the actual owned path.
+    /// Ok transfers custody to the original parent before native Make.
+    ///
+    /// # Safety
+    /// Preserve the original child's coherent table RAM and working mapping
+    /// through the root's retirement, under the admitted local control.
+    pub unsafe fn supply_table(
+        &mut self,
+        span: SpanId,
+        address: InternalAddress,
+        child: &'static TableStore,
+        id: TableId,
+        mode: TurnMode,
+    ) -> Result<(), Error> {
+        self.check_supply(span, address)?;
+        // The trusted LocalNest is the exclusive Span/translation editor.
+        // No Nest Turn is held across the actual table/Cell commit.
+        unsafe { self.root.supply_table(address, child, id, mode) }.map_err(Error::Table)
+    }
+
+    /// Complete an already accepted table supply even if its Span closed.
+    ///
+    /// # Safety
+    /// Retain the original local context and all table material.
+    pub unsafe fn advance_supply(&mut self, mode: TurnMode) -> Result<(), Error> {
+        unsafe { self.root.advance_supply(mode) }.map_err(Error::Table)
+    }
+
     pub fn observe_span(&self, id: SpanId) -> Result<SpanObservation, Error> {
         self.binding.state().acquire(|state| {
             state.record(self.id())?;
@@ -314,7 +370,10 @@ impl LocalNest<'_, '_> {
         self.binding.state().acquire(|state| {
             state.record(self.id())?;
             let range = state.spans.observe(id)?.range;
-            if state.mappings.overlaps(range) || self.work.prepared.is_some() {
+            if state.mappings.overlaps(range)
+                || self.work.prepared.is_some()
+                || self.root.has_pending_supply()
+            {
                 return Err(Error::Busy);
             }
             state.spans.settle(id)
@@ -373,6 +432,10 @@ impl LocalNest<'_, '_> {
             }
             Ok(())
         })??;
+        if self.root.has_pending_supply() {
+            unsafe { self.advance_supply(TurnMode::Slow) }?;
+            return Ok(Progress::Pending);
+        }
         if self.work.prepared.is_some() {
             self.cancel_preparation(TurnMode::Slow)?;
             return Ok(Progress::Pending);

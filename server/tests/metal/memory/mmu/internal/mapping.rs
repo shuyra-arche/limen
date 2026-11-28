@@ -15,6 +15,7 @@ use kernel::{
                 AllocationConstruction, Allowance, LookupObservation, MappedStorage, RamPurpose,
                 Request, Search,
             },
+            mmu::treaty::{TableError, TableId, TableStore},
         },
         sync::treaty::TurnMode::Fast,
     },
@@ -42,6 +43,7 @@ pub(super) unsafe fn check(
     allowance: &Allowance,
     physical: PhysicalRange,
     address: u64,
+    supplied: &[(&'static TableStore, TableId)],
     mapped: unsafe fn(PhysicalRange) -> MappedRange<'static>,
     load: impl Fn(u64) -> u64,
     store: impl Fn(u64, u64),
@@ -89,10 +91,9 @@ pub(super) unsafe fn check(
     assert_eq!(spending.issue(&DATA_ALLOCATION, Fast), Ok(allocation));
     let mut material = None;
     unsafe { DATA_ALLOCATION.take(&mut material) }.unwrap();
-    let material =
-        unsafe { MappedStorage::prepare(material.take().unwrap(), mapped(physical)) }
-            .ok()
-            .unwrap();
+    let material = unsafe { MappedStorage::prepare(material.take().unwrap(), mapped(physical)) }
+        .ok()
+        .unwrap();
     let slot = unsafe {
         (&mut *(&raw mut DATA_CELL))
             .write(CellSlot::for_cells(&mut *(&raw mut DATA_ACCESSES)).unwrap())
@@ -114,6 +115,60 @@ pub(super) unsafe fn check(
         .unwrap();
     let virtual_address = InternalAddress::new(address);
     let other_address = InternalAddress::new(address + PAGE);
+    assert!(!supplied.is_empty());
+    assert_eq!(
+        owner.missing_table(span, virtual_address, Fast),
+        Ok(Some(supplied.len() - 1))
+    );
+    assert_eq!(
+        unsafe { owner.map(span, virtual_address, &FIRST_ACCESS, first, Fast) },
+        Err(nest::Error::Table(TableError::Scope))
+    );
+    assert_eq!(FIRST_ACCESS.observe(), Ok(Some(first)));
+    let (last, last_id) = supplied[supplied.len() - 1];
+    if supplied.len() > 1 {
+        assert_eq!(
+            unsafe { owner.supply_table(span, virtual_address, last, last_id, Fast) },
+            Err(nest::Error::Table(TableError::Layout))
+        );
+        assert_eq!(last.descriptor(last_id, 0, Fast), Ok(0));
+    }
+    for (offset, &(store, id)) in supplied.iter().enumerate() {
+        assert_eq!(
+            owner.missing_table(span, virtual_address, Fast),
+            Ok(Some(supplied.len() - offset - 1))
+        );
+        assert_eq!(
+            unsafe {
+                owner.supply_table(
+                    span,
+                    InternalAddress::new(address + 2 * PAGE),
+                    store,
+                    id,
+                    Fast,
+                )
+            },
+            Err(nest::Error::Scope)
+        );
+        assert_eq!(store.descriptor(id, 0, Fast), Ok(0));
+        unsafe { owner.supply_table(span, virtual_address, store, id, Fast) }.unwrap();
+        assert_eq!(
+            owner.missing_table(span, virtual_address, Fast),
+            Err(nest::Error::Table(TableError::State))
+        );
+        assert_eq!(
+            unsafe { owner.map(span, virtual_address, &FIRST_ACCESS, first, Fast) },
+            Err(nest::Error::Table(TableError::State))
+        );
+        assert_eq!(FIRST_ACCESS.observe(), Ok(Some(first)));
+        assert_eq!(store.descriptor(id, 0, Fast), Err(TableError::State));
+        unsafe { owner.advance_supply(Fast) }.unwrap();
+    }
+    assert_eq!(owner.missing_table(span, virtual_address, Fast), Ok(None));
+    assert_eq!(
+        unsafe { owner.supply_table(span, virtual_address, last, last_id, Fast) },
+        Err(nest::Error::Table(TableError::Occupied))
+    );
     let mapping = unsafe { owner.map(span, virtual_address, &FIRST_ACCESS, first, Fast) }.unwrap();
     assert_eq!(FIRST_ACCESS.observe(), Ok(None));
     let accepted = owner.observe_mapping(mapping).unwrap();
@@ -210,6 +265,6 @@ pub(super) unsafe fn check(
     receipt.acknowledge().unwrap();
     assert_eq!(allowance.balance(), Ok(balance));
     kernel::metal::platform::boot::treaty::write(
-        "PASS ordinary-mapping allocation=1 zero=1 joint=1 conflict=1 capacity=1 rw=1 remap=1 close=1 revoke=1 finish=1 refund=1\n",
+        "PASS ordinary-mapping allocation=1 zero=1 joint=1 conflict=1 capacity=1 rw=1 remap=1 close=1 revoke=1 finish=1 refund=1 supply=1\n",
     );
 }

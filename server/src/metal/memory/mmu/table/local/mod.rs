@@ -12,6 +12,10 @@ use limen_treaty::model::PhysicalAddress;
 use limen_treaty::model::{InternalAddress, InternalRange};
 
 #[cfg(limen_cooperative)]
+mod path;
+#[cfg(limen_cooperative)]
+mod supply;
+#[cfg(limen_cooperative)]
 mod translation;
 #[cfg(limen_cooperative)]
 pub use translation::{LocalTranslation, TranslationPhase};
@@ -53,6 +57,8 @@ pub struct LocalRoot<'control, 'scope> {
     available: [u64; 8],
     #[cfg(limen_cooperative)]
     translations: usize,
+    #[cfg(limen_cooperative)]
+    supply: Option<supply::Pending>,
     #[cfg(limen_cooperative)]
     retirement: Retirement,
 }
@@ -175,6 +181,8 @@ impl TableStore {
             #[cfg(limen_cooperative)]
             translations: 0,
             #[cfg(limen_cooperative)]
+            supply: None,
+            #[cfg(limen_cooperative)]
             retirement: Retirement::new(self, id),
         })
     }
@@ -207,7 +215,7 @@ impl LocalRoot<'_, '_> {
     ) -> Result<bool, TableError> {
         use super::TableFormat;
 
-        if self.installed().is_none() {
+        if self.installed().is_none() || self.has_pending_supply() {
             return Ok(false);
         }
         let first = range.start();
@@ -234,7 +242,7 @@ impl LocalRoot<'_, '_> {
         {
             return Ok(true);
         }
-        self.vacant_leaf_range(first, last, mode)
+        self.vacant_range(first, last, mode)
     }
 
     /// Advance the actual native withdrawal and whole-tree settlement.
@@ -250,6 +258,10 @@ impl LocalRoot<'_, '_> {
         &mut self,
         mode: TurnMode,
     ) -> Result<TableProgress, TableError> {
+        if self.has_pending_supply() {
+            unsafe { self.advance_supply(mode) }?;
+            return Ok(TableProgress::Pending);
+        }
         match self.stage {
             Stage::Installed | Stage::Restoring => {
                 unsafe { self.restore() }.map_err(TableError::Switch)?;
@@ -294,7 +306,7 @@ impl LocalRoot<'_, '_> {
     /// Continue both trees and their mappings through actual settlement.
     pub unsafe fn restore(&mut self) -> Result<(), SwitchError> {
         #[cfg(limen_cooperative)]
-        if self.translations != 0 {
+        if self.translations != 0 || self.has_pending_supply() {
             return Err(SwitchError::Current);
         }
         match self.stage {

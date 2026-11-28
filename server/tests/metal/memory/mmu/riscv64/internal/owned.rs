@@ -24,8 +24,7 @@ use kernel::{
                     installation::admit_context,
                 },
                 treaty::{
-                    LeafAccess, Memory, TableBranch, TableError, TableFormat, TableId,
-                    TableStore,
+                    LeafAccess, Memory, TableBranch, TableError, TableFormat, TableId, TableStore,
                 },
             },
         },
@@ -428,12 +427,20 @@ pub fn check(boot: &Boot<'_>) {
     let mut owner = nest.publish(active).ok().unwrap();
     let data_start = BASE + (PAGES as u64 - 1) * PAGE;
     assert!(data_start >= BASE + (BACKING + CAPACITY) as u64 * PAGE);
+    // Grow a previously absent top-level Sv39 branch using the two
+    // real supplied levels, without touching the original ALIAS branch.
+    let dynamic_address = ALIAS + (1 << 30);
+    let middle = tree.node(1, dynamic_address);
+    let leaf = tree.node(0, dynamic_address);
+    let expanded = allowance.balance().unwrap();
+    assert_eq!(expanded.occupied().get(), charged.occupied().get() + 2 * PAGE);
     unsafe {
         mapping::check(
             &mut owner,
             allowance,
             extent(data_start, data_start + PAGE),
-            ALIAS + PAGE,
+            dynamic_address,
+            &[(middle.store, middle.id), (leaf.store, leaf.id)],
             mapped,
             |address| {
                 let value: u64;
@@ -445,7 +452,7 @@ pub fn check(boot: &Boot<'_>) {
             },
         )
     };
-    assert_eq!(allowance.balance(), Ok(charged));
+    assert_eq!(allowance.balance(), Ok(expanded));
     owner.begin_delete().unwrap();
     owner.begin_drain().unwrap();
     assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Pending));
@@ -457,10 +464,7 @@ pub fn check(boot: &Boot<'_>) {
             break;
         }
     }
-    assert_eq!(
-        unsafe { owner.advance_retirement() },
-        Ok(Progress::Retired)
-    );
+    assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Retired));
     drop(owner);
     assert_eq!(control.current().unwrap().root(), None);
     assert_eq!(unsafe { (&raw const WRITABLE).read_volatile() }, 0x5678);

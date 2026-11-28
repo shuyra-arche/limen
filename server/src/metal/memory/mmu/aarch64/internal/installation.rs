@@ -196,6 +196,21 @@ impl NativeRoot {
     }
 
     #[cfg(limen_cooperative)]
+    pub(in crate::metal::memory::mmu) unsafe fn order_table() {
+        unsafe { asm!("dsb ishst", options(nostack, preserves_flags)) };
+    }
+
+    #[cfg(limen_cooperative)]
+    pub(in crate::metal::memory::mmu) unsafe fn synchronize_tree() {
+        unsafe {
+            asm!(
+                "dsb ishst", "tlbi vmalle1is", "dsb ish", "isb",
+                options(nostack, preserves_flags)
+            );
+        }
+    }
+
+    #[cfg(limen_cooperative)]
     pub(in crate::metal::memory::mmu) unsafe fn synchronize_leaf(
         address: limen_treaty::model::InternalAddress,
     ) {

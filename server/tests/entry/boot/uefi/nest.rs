@@ -29,10 +29,10 @@ use kernel::{
 use limen_treaty::model::{InternalAddress, InternalRange, PhysicalAddress};
 use uefi::Status;
 
-#[path = "../material/memory.rs"]
-mod memory;
 #[path = "../../../metal/memory/mmu/internal/mapping.rs"]
 mod mapping;
+#[path = "../material/memory.rs"]
+mod memory;
 #[path = "../../../metal/memory/mmu/internal/owned.rs"]
 mod tree;
 #[path = "../material/window.rs"]
@@ -129,7 +129,8 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     let slot = (1..256)
         .find(|&index| unsafe { old.as_ptr().add(index).read_volatile() } == 0)
         .expect("unused original PML4 slot");
-    let tree = unsafe { Tree::prepare(&boot, physical, &evidence, TableFormat::X86_64(format), 1) };
+    let mut tree =
+        unsafe { Tree::prepare(&boot, physical, &evidence, TableFormat::X86_64(format), 2) };
     let [leaf, _, _, root] = tree.nodes;
     let witness = ptr::from_ref(&WITNESS).addr() as u64;
     assert!(boot.image().covers(memory::extent(witness, witness + 4096)));
@@ -201,15 +202,22 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     owner.finish_release_span(replacement).unwrap();
     owner.begin_release_span(second).unwrap();
     owner.finish_release_span(second).unwrap();
-    // An already populated owned branch may still contain exact vacant
-    // leaves. Reserving such a leaf must not admit its occupied neighbor.
+    // Supply a new leaf table at the missing next 2 MiB path. Its actual
+    // table page is separate from the ordinary data allocation.
     let data_start = physical.start().get() + 6 * 4096;
+    let spare = unsafe {
+        tree.prepare_leaf(
+            TableFormat::X86_64(format),
+            memory::extent(data_start + 4096, data_start + 8192),
+        )
+    };
     unsafe {
         mapping::check(
             &mut owner,
             tree.allowance,
             memory::extent(data_start, data_start + 4096),
-            alias + 4096,
+            alias + (1 << 21),
+            &[(spare.store, spare.id)],
             memory::mapped,
             |address| {
                 let value: u64;
@@ -352,13 +360,20 @@ fn schedule(initial: &'static Initial) -> ! {
     let mut previous = tree.allowance.balance().unwrap().occupied().get();
     let mut refunded = 0;
     let mut complete = false;
-    for _ in 0..32 {
+    let retirement_order = [
+        tree.nodes[0],
+        tree.spare.expect("supplied leaf"),
+        tree.nodes[1],
+        tree.nodes[2],
+        tree.nodes[3],
+    ];
+    for _ in 0..40 {
         let progress = unsafe { owner.advance_retirement() }.unwrap();
         let occupied = tree.allowance.balance().unwrap().occupied().get();
         assert!(occupied <= previous);
         if occupied < previous {
             assert_eq!(previous - occupied, 4096);
-            let node = tree.nodes[refunded];
+            let node = retirement_order[refunded];
             assert_eq!(node.store.locate(node.allocation), Ok(Some(node.id)));
             assert_eq!(
                 unsafe { node.store.retire_private(node.id, &mut retired, Fast) },
@@ -382,7 +397,7 @@ fn schedule(initial: &'static Initial) -> ! {
         );
     }
     assert!(complete);
-    assert_eq!(refunded, 4);
+    assert_eq!(refunded, retirement_order.len());
     assert_eq!(nest().observe(initial.id), Err(nest::Error::Gone));
     assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Retired));
     assert_eq!(owner.begin_delete(), Err(nest::Error::Gone));
@@ -392,7 +407,7 @@ fn schedule(initial: &'static Initial) -> ! {
     );
     tree.settle();
     kernel::metal::platform::boot::treaty::write(
-        "PASS local-nest installed=1 rollback=1 shut=1 dormant=1 yield=1 ending=1 leave=1 refs=0 withdrawn=1 refund=4 retired=1 stale=1 span=1\n",
+        "PASS local-nest installed=1 rollback=1 shut=1 dormant=1 yield=1 ending=1 leave=1 refs=0 withdrawn=1 refund=5 retired=1 stale=1 span=1\n",
     );
     (initial.complete)()
 }

@@ -44,7 +44,7 @@ impl State {
             })
     }
 
-    fn free_branch(&self) -> Option<usize> {
+    pub(super) fn free_branch(&self) -> Option<usize> {
         self.branches
             .as_deref()?
             .iter()
