@@ -33,7 +33,8 @@ pub(crate) unsafe fn admit<'a>(
             "FAIL Limen boot: major CPU identity mismatch\n"
         ));
     }
-    // The trusted loader keeps this value and its buffers resident.
+    // Read the loader once. Acpi::new consumes the read function and
+    // retains only the original validated byte slices.
     unsafe { describe(input.cast::<Loader<'a>>().as_ref()?, descriptions) }
 }
 

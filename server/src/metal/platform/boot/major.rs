@@ -62,11 +62,13 @@ pub(super) unsafe extern "C" fn start(
         ));
     }
 
-    // Retained descriptions live on the original stack for this nonreturning
-    // handoff. They remain borrowed until Entry obtains independent custody.
-    let mut descriptions = Descriptions::new();
-    let Some(facts) = (unsafe { boot::admit(processor, input, &mut descriptions) }) else {
-        terminal.reject(format_args!("FAIL Limen boot: invalid firmware input\n"));
+    let Some((facts, descriptions)) = material
+        .descriptions
+        .retain(|descriptions| unsafe { boot::admit(processor, input, descriptions) })
+    else {
+        terminal.reject(format_args!(
+            "FAIL Limen boot: invalid or repeated firmware input\n"
+        ));
     };
     let physical_stacks = [stack.clone(), trap::stack_range()].map(|range| {
         unsafe { identity_extent(range) }
@@ -77,6 +79,16 @@ pub(super) unsafe extern "C" fn start(
                 ))
             })
     });
+    if !unsafe { identity_extent(material.descriptions.range()) }.is_some_and(|physical| {
+        facts.image.covers(physical)
+            && physical_stacks
+                .iter()
+                .all(|stack| !stack.overlaps(physical))
+    }) {
+        terminal.reject(format_args!(
+            "FAIL Limen boot: descriptions outside resident storage\n"
+        ));
+    }
     let Some(entry) = entry::admit(stack.clone()) else {
         terminal.reject(format_args!(
             "FAIL Limen boot: entry changed before processor admission\n"
@@ -98,7 +110,7 @@ pub(super) unsafe extern "C" fn start(
         terminal,
         stack,
         facts,
-        descriptions: &descriptions,
+        descriptions,
         physical_stacks,
         #[cfg(limen_cooperative)]
         major: unsafe { local.major() },

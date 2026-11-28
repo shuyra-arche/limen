@@ -93,7 +93,7 @@ impl<'a> Boot<'a> {
 
     /// CPU scope already checked at the SBI handoff.
     #[cfg(limen_firmware = "sbi")]
-    pub fn riscv_cpus(&self) -> &crate::metal::processor::treaty::RiscvCpus<'a> {
+    pub fn riscv_cpus(&self) -> &'a crate::metal::processor::treaty::RiscvCpus<'a> {
         self.descriptions
             .cpus
             .as_ref()
@@ -111,7 +111,7 @@ impl<'a> Boot<'a> {
         self.reception.take()
     }
 
-    pub fn acpi(&self) -> Option<&Acpi<'a>> {
+    pub fn acpi(&self) -> Option<&'a Acpi<'a>> {
         self.descriptions.acpi.as_ref()
     }
 
@@ -120,7 +120,7 @@ impl<'a> Boot<'a> {
     }
 
     /// RAM and reservations from a DTB supplied as a memory description.
-    pub fn dtb_memory(&self) -> Option<&DtbMemory> {
+    pub fn dtb_memory(&self) -> Option<&'a DtbMemory> {
         self.descriptions
             .memory
             .as_ref()
