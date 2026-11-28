@@ -104,6 +104,11 @@ pub use reception::{Claim, Reception, VectorLease};
 mod timer;
 pub use timer::{Countdown, Divider, TimerState};
 
+#[cfg(any(test, all(limen_target, target_arch = "x86_64")))]
+mod deadline;
+#[cfg(all(limen_target, target_arch = "x86_64"))]
+pub use deadline::DeadlineTimer;
+
 mod ipi;
 pub use ipi::{IpiIssue, IpiRoute, IpiTarget};
 

@@ -85,6 +85,10 @@ pub(super) fn check(boot: &boot::Boot<'_>) {
     let mut window = q35::local_window(boot);
     unsafe { hardware::prepare(&mut window) };
     let mut local = q35::local_controller(boot, window);
+    // The original q35 profile does not expose TSC-deadline. This check
+    // must neither touch the deadline MSR nor consume the timer slot.
+    assert_eq!(local.deadline_supported(), Ok(false));
+    assert_eq!(local.timer_state(), None);
 
     let vector = local.reserve_vector(VECTOR).unwrap();
     let (vector, reason) = local.reserve_timer(vector).unwrap_err();

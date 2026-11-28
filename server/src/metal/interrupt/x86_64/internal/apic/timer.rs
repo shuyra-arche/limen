@@ -4,7 +4,7 @@ use core::num::NonZeroU32;
 
 use super::{Failure, LocalApic, VectorLease};
 
-const LVT: usize = 0x320;
+pub(super) const LVT: usize = 0x320;
 const INITIAL: usize = 0x380;
 const CURRENT: usize = 0x390;
 const DIVIDE: usize = 0x3e0;
@@ -12,7 +12,7 @@ const MASKED: u32 = 1 << 16;
 const DELIVERY_PENDING: u32 = 1 << 12;
 const TIMER_MODE: u32 = 3 << 17;
 const PERIODIC: u32 = 1 << 17;
-const LVT_FIELDS: u32 = MASKED | TIMER_MODE | 0xff;
+pub(super) const LVT_FIELDS: u32 = MASKED | TIMER_MODE | 0xff;
 const DIVIDE_FIELDS: u32 = (1 << 3) | 3;
 const REQUESTS: usize = 0x200;
 
@@ -113,6 +113,8 @@ pub(super) enum Slot {
     Retiring(Inherited),
     Vacant,
     Bound(Timer),
+    #[cfg(all(limen_target, target_arch = "x86_64"))]
+    Deadline(super::deadline::Record),
 }
 
 impl Slot {
@@ -150,6 +152,8 @@ impl LocalApic<'_> {
             Slot::Retiring(original) => original,
             Slot::Vacant => return Ok(()),
             Slot::Bound(_) => return Err(Failure::Busy),
+            #[cfg(all(limen_target, target_arch = "x86_64"))]
+            Slot::Deadline(_) => return Err(Failure::Busy),
         };
         self.timer = Slot::Retiring(original);
         let masked = original.masked();
@@ -263,19 +267,19 @@ impl LocalApic<'_> {
         Ok(timer.vector)
     }
 
-    fn timer_quiet(&mut self) -> bool {
+    pub(super) fn timer_quiet(&mut self) -> bool {
         self.timer_matches(LVT, MASKED | DELIVERY_PENDING, MASKED)
             && self.timer_read(INITIAL) == 0
             && self.timer_read(CURRENT) == 0
     }
 
-    fn vector_pending(&mut self, vector: u8) -> bool {
+    pub(super) fn vector_pending(&mut self, vector: u8) -> bool {
         let bank = usize::from(vector / 32) * 16;
         let bit = 1 << (vector % 32);
         self.timer_read(REQUESTS + bank) & bit != 0 || self.in_service(vector)
     }
 
-    fn timer_matches(&mut self, register: usize, mask: u32, expected: u32) -> bool {
+    pub(super) fn timer_matches(&mut self, register: usize, mask: u32, expected: u32) -> bool {
         self.timer_read(register) & mask == expected
     }
 
@@ -283,7 +287,7 @@ impl LocalApic<'_> {
         unsafe { self.window.read_u32(register) }.expect("xAPIC timer register geometry")
     }
 
-    fn timer_write(&mut self, register: usize, value: u32) {
+    pub(super) fn timer_write(&mut self, register: usize, value: u32) {
         unsafe { self.window.write_u32(register, value) }.expect("xAPIC timer register geometry");
     }
 }
