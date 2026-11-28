@@ -734,6 +734,120 @@ fn ordinary_cell_spending_cannot_publish_a_table_page() {
 }
 
 #[test]
+fn ordinary_cell_publication_owns_cleared_material_and_an_independent_holding() {
+    use crate::{
+        basis::cell::{CellConstruction, CellSlot, Error as CellError},
+        metal::memory::allocator::treaty::{AllocationConstruction, MappedStorage, RamPurpose},
+    };
+    use limen_treaty::model::{ByteOffset, ByteRange};
+
+    let mut original = None;
+    let (source, allowance) = source(&mut original, 8 * PAGE);
+    let publish = || {
+        let space = Box::leak(Box::new(PendSpace::for_cells()));
+        let mut spending = None;
+        let mut closing = None;
+        unsafe {
+            space.publish_initial(
+                &allowance,
+                ByteLength::new(PAGE),
+                Alignment::new(PAGE).unwrap(),
+                InitialPend {
+                    spending: &mut spending,
+                    closing: &mut closing,
+                },
+                Fast,
+            )
+        }
+        .unwrap();
+        (spending.unwrap(), closing.unwrap())
+    };
+    let (spending, closing) = publish();
+    let (other, other_closing) = publish();
+    let request = Request::new(
+        ByteLength::new(PAGE),
+        Alignment::new(PAGE).unwrap(),
+        pages(6, 13),
+        Some(ATTRIBUTES),
+        RamPurpose::Cell,
+    )
+    .unwrap();
+    let mut observations = [LookupObservation::EMPTY; 3];
+    let mut lookup = source.lookup(request, None, &mut observations).unwrap();
+    let candidate = loop {
+        match lookup.step().unwrap() {
+            Search::Pending => {}
+            Search::Candidate(candidate) => break candidate,
+            Search::NoRange => panic!("page available"),
+        }
+    };
+    let before = allowance.balance().unwrap();
+    let position = Box::leak(Box::new(AllocationConstruction::new()));
+    let id = spending.reserve(candidate, position, Fast).unwrap();
+    assert_eq!(spending.issue(position, Fast), Ok(id));
+    let mut material = None;
+    unsafe { position.take(&mut material) }.unwrap();
+    let material = material.unwrap();
+    let physical = material.physical();
+    let bytes = Box::leak(Box::new(Mapped([MaybeUninit::new(0xa5); 2 * PAGE as usize])));
+    let map = unsafe { MappedRange::new(physical, &mut bytes.0[..PAGE as usize]) }.unwrap();
+    let material = unsafe { MappedStorage::prepare(material, map) }
+        .ok()
+        .unwrap();
+    let cell = Box::leak(Box::new(CellSlot::new()));
+    let construction = Box::leak(Box::new(CellConstruction::new()));
+
+    let (material, error) = construction
+        .publish(cell, other, material, Fast)
+        .err()
+        .unwrap();
+    assert_eq!(
+        error,
+        CellError::Pend(PendError::Source(Error::PermitOrigin))
+    );
+    assert_eq!(material.id(), id);
+    assert_eq!(construction.locate(id), Ok(None));
+    let (material, mut map) = material.into_parts();
+    assert!(
+        map.bytes()
+            .iter()
+            .all(|byte| unsafe { byte.assume_init() } == 0)
+    );
+    let material = unsafe { MappedStorage::prepare(material, map) }
+        .ok()
+        .unwrap();
+    let published = construction.publish(cell, spending, material, Fast).ok().unwrap();
+    let range = ByteRange::new(ByteOffset::new(0), ByteOffset::new(PAGE)).unwrap();
+    assert_eq!(construction.locate(id), Ok(Some(published)));
+    assert_eq!(construction.initial_range(published), Ok(range));
+    closing.revoke().unwrap();
+    spending.release().unwrap();
+    assert_eq!(construction.initial_range(published), Ok(range));
+    construction.revoke(published).unwrap();
+    assert_eq!(
+        construction.initial_range(published),
+        Err(CellError::Pend(PendError::Revoked))
+    );
+    construction.release(published).unwrap();
+    assert_eq!(
+        construction.initial_range(published),
+        Err(CellError::Pend(PendError::Exhausted))
+    );
+    assert_eq!(construction.locate(id), Ok(Some(published)));
+    assert_eq!(allowance.balance().unwrap().occupied().get(), before.occupied().get() + PAGE);
+    let mut retired = None;
+    unsafe { construction.retire(published, &mut retired, Fast) }.unwrap();
+    assert_eq!(construction.locate(id), Ok(None));
+    assert_eq!(construction.initial_range(published), Err(CellError::Scope));
+    let receipt = begin_return(retired.take().unwrap());
+    assert_eq!(receipt.finish(Fast).unwrap().allocation, id);
+    receipt.acknowledge().unwrap();
+    assert_eq!(allowance.balance(), Ok(before));
+    other_closing.revoke().unwrap();
+    other.release().unwrap();
+}
+
+#[test]
 fn closing_the_allowance_rejects_first_cell_publication_and_retains_the_allocation() {
     use crate::{
         basis::cell::CellSlot,

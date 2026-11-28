@@ -1,5 +1,6 @@
 //! Physical ownership and exact access registration.
-//! The first implemented access policy is a dedicated Internal table page.
+//! Ordinary RAM construction and dedicated Internal table pages share the
+//! same physical instance identity and source ownership.
 
 use core::mem::MaybeUninit;
 
@@ -9,11 +10,15 @@ use crate::metal::{
     identity::treaty::{Generation, Key, Slot},
     memory::{
         access::treaty::ram::{MappedRange, RetainedRange},
-        allocator::treaty::{Allocation, AllocationId, MappedStorage, Retired},
+        allocator::treaty::{
+            Allocation, AllocationId, InitialAccess, MappedStorage, RamPurpose, Retired,
+        },
         mmu::treaty::TableId,
     },
-    sync::treaty::{TurnAccess, TurnLock, TurnPlan},
+    sync::treaty::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
 };
+
+use super::pend::{self, Handle, Pend};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CellId {
@@ -29,8 +34,15 @@ struct State {
 struct Record {
     allocation: Allocation,
     storage: Storage,
-    table: TableId,
+    role: Role,
     access: Option<AccessRecord>,
+}
+
+/// The dedicated first-use policy is not a different physical source.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Role {
+    Ordinary,
+    Table(TableId),
 }
 
 enum Storage {
@@ -119,7 +131,8 @@ fn full_range(physical: PhysicalRange) -> ByteRange {
         .expect("nonempty physical range")
 }
 
-/// One stable Cell position, with prepaid space for its single table access.
+/// One stable physical instance position. Dedicated table access has one
+/// inline record; ordinary multi-access admission is not yet enabled.
 pub struct CellSlot(TurnLock<State>);
 
 pub(crate) struct CellTurn<'held> {
@@ -156,6 +169,15 @@ impl CellSlot {
         owner: TableId,
         material: &mut Option<MappedStorage<'static>>,
     ) -> Result<(Cell, CellPermit), Error> {
+        self.publish_for(held, Role::Table(owner), material)
+    }
+
+    fn publish_for(
+        &'static self,
+        held: &mut TurnAccess<'_>,
+        role: Role,
+        material: &mut Option<MappedStorage<'static>>,
+    ) -> Result<(Cell, CellPermit), Error> {
         let scope = core::ptr::from_ref(self).addr();
         let state = held.access(&self.0).expect("Cell storage");
         if state.cell.is_some() {
@@ -168,8 +190,11 @@ impl CellSlot {
         let (issued, mapping) = material.into_parts();
         state.cell = Some(Record {
             allocation: issued,
-            storage: Storage::Exclusive(mapping),
-            table: owner,
+            storage: match role {
+                Role::Ordinary => Storage::Retained(mapping.into_retained()),
+                Role::Table(_) => Storage::Exclusive(mapping),
+            },
+            role,
             access: None,
         });
         state.generation = Some(generation);
@@ -186,7 +211,7 @@ impl CellSlot {
             },
             CellPermit {
                 cell: id,
-                table: owner,
+                role,
                 range: full_range(physical),
             },
         ))
@@ -205,6 +230,20 @@ pub enum Error {
     Exhausted,
     Scope,
     Access,
+    Pend(pend::Error),
+    Acquire(TurnAcquireError),
+}
+
+impl From<pend::Error> for Error {
+    fn from(error: pend::Error) -> Self {
+        Self::Pend(error)
+    }
+}
+
+impl From<TurnAcquireError> for Error {
+    fn from(error: TurnAcquireError) -> Self {
+        Self::Acquire(error)
+    }
 }
 
 /// The sole disposition right for the original physical instance.
@@ -216,11 +255,12 @@ pub(crate) struct Cell {
     physical: PhysicalRange,
 }
 
-/// The first access is read/write across the exact Cell for this one table node.
+/// The first Read/Write ceiling covers this exact instance and range.
+/// Its role restricts dedicated table access to the original table node.
 #[derive(Clone, Copy)]
 pub(crate) struct CellPermit {
     cell: CellId,
-    table: TableId,
+    role: Role,
     range: ByteRange,
 }
 
@@ -265,7 +305,8 @@ impl Cell {
     ) -> Result<&'held mut Record, Error> {
         let record = self.state(held)?.cell.as_mut().expect("live Cell");
         if permit.cell != self.id
-            || permit.table != record.table
+            || permit.role != record.role
+            || !matches!(record.role, Role::Table(_))
             || permit.range != full_range(self.physical)
         {
             return Err(Error::Scope);
@@ -371,7 +412,7 @@ impl Cell {
     ) -> Result<Retired, Error> {
         let state = self.state(held)?;
         let record = state.cell.as_ref().expect("live Cell");
-        if owner != record.table || record.access.is_some() != access.is_some() {
+        if record.role != Role::Table(owner) || record.access.is_some() != access.is_some() {
             return Err(Error::Scope);
         }
         if let Some(access) = access {
@@ -390,6 +431,173 @@ impl Cell {
         };
         // Hardware reachability has ended and the former mapping is no longer used.
         Ok(unsafe { allocation.retire() })
+    }
+}
+
+struct Construction {
+    cell: Cell,
+    holding: Pend<CellPermit>,
+}
+
+/// Permanent receiving position for an ordinary RAM construction. The
+/// trusted Kernel receiver retains the disposition right and the actual
+/// first direct Pend holding; it is not a user PendSpace or a new Cell type.
+pub struct CellConstruction(TurnLock<Option<Construction>>);
+
+impl CellConstruction {
+    pub const fn new() -> Self {
+        Self(TurnLock::new(None))
+    }
+
+    /// Publish the original cleared RAM and an independent first Read/Write
+    /// holding. The caller owns the original unpublished material until this
+    /// commit. Failure returns that material, possibly already cleared.
+    pub fn publish(
+        &'static self,
+        slot: &'static CellSlot,
+        issuer: Handle,
+        mut material: MappedStorage<'static>,
+        mode: TurnMode,
+    ) -> Result<CellId, (MappedStorage<'static>, Error)> {
+        // Clearing private bytes may be expensive. Never hold a Turn while
+        // doing it, and do not retain an exclusive byte borrow after publication.
+        material.clear();
+        let mut original = Some(material);
+        let mut workspace = TurnWorkspace::<4>::new();
+        let mut plan = workspace.plan();
+        if let Err(error) = issuer.plan_initial_access(&mut plan) {
+            return Err((original.expect("original material"), error.into()));
+        }
+        slot.plan(&mut plan);
+        plan.insert(&self.0).expect("original construction");
+        let committed = plan.acquire(mode, |held| {
+            let InitialAccess::ReadWrite = issuer.initial_access(
+                held,
+                original.as_ref().expect("unpublished material"),
+                RamPurpose::Cell,
+            )?;
+            if held.access(&self.0).expect("original construction").is_some() {
+                return Err(Error::Occupied);
+            }
+            let (cell, permit) = slot.publish_for(held, Role::Ordinary, &mut original)?;
+            let id = cell.id();
+            *held.access(&self.0).expect("original construction") = Some(Construction {
+                cell,
+                holding: Pend::held(permit),
+            });
+            Ok(id)
+        });
+        committed
+            .map_err(Error::from)
+            .and_then(core::convert::identity)
+            .map_err(|error| (original.expect("unpublished material"), error))
+    }
+
+    /// Recover the original publication by its exact Allocation identity.
+    pub fn locate(&self, allocation: AllocationId) -> Result<Option<CellId>, Error> {
+        Ok(self.0.acquire(|state| {
+            state.as_ref().and_then(|record| {
+                (record.cell.allocation() == allocation).then_some(record.cell.id())
+            })
+        })?)
+    }
+
+    fn original(
+        state: &mut Option<Construction>,
+        id: CellId,
+    ) -> Result<&mut Construction, Error> {
+        state
+            .as_mut()
+            .filter(|record| record.cell.id() == id)
+            .ok_or(Error::Scope)
+    }
+
+    /// Observe the direct holding's current ceiling, not access authority
+    /// that can be reused after dropping this protection.
+    pub fn initial_range(&self, id: CellId) -> Result<ByteRange, Error> {
+        self.0.acquire(|state| {
+            let record = Self::original(state, id)?;
+            let permit = record.holding.resolve()?;
+            Ok(permit.range)
+        })?
+    }
+
+    /// The trusted construction receiver closes its own first branch,
+    /// independently of the original Allocation spending branch.
+    pub fn revoke(&self, id: CellId) -> Result<(), Error> {
+        self.0.acquire(|state| {
+            Self::original(state, id)?.holding.shut();
+            Ok(())
+        })?
+    }
+
+    /// Settle the direct operation holding without releasing disposition.
+    pub fn release(&self, id: CellId) -> Result<(), Error> {
+        self.0.acquire(|state| {
+            Self::original(state, id)?.holding.consume()?;
+            Ok(())
+        })?
+    }
+
+    /// Return a construction whose ordinary access has never been admitted.
+    /// The real receiver takes the exact original Allocation retirement;
+    /// refund remains an independent Allocator operation.
+    ///
+    /// # Safety
+    /// The receiver belongs to the actual durable return owner. Preserve
+    /// the backing storage and original mapping until this transfer.
+    pub unsafe fn retire(
+        &self,
+        id: CellId,
+        receiver: &mut Option<Retired>,
+        mode: TurnMode,
+    ) -> Result<(), Error> {
+        if receiver.is_some() {
+            return Err(Error::Occupied);
+        }
+        let slot = self
+            .0
+            .acquire(|state| Ok::<_, Error>(Self::original(state, id)?.cell.slot()))??;
+        let mut workspace = TurnWorkspace::<2>::new();
+        let mut plan = workspace.plan();
+        plan.insert(&self.0).expect("original construction");
+        slot.plan(&mut plan);
+        plan.acquire(mode, |held| {
+            let (construction, mut cell_locked) = slot.together(held, &self.0);
+            let original = Self::original(construction, id)?;
+            let cell = original.cell.state(&mut cell_locked)?;
+            let record = cell.cell.as_ref().expect("live Cell");
+            if record.role != Role::Ordinary
+                || record.access.is_some()
+                || !matches!(record.storage, Storage::Retained(_))
+            {
+                return Err(Error::Access);
+            }
+            let Record {
+                allocation,
+                storage,
+                ..
+            } = cell.cell.take().expect("validated Cell");
+            let Storage::Retained(_ended) = storage else {
+                unreachable!("validated retained storage");
+            };
+            // No ordinary access path is enabled yet. This exact original
+            // construction owns the only disposition and the direct holding.
+            original.holding.shut();
+            match original.holding.consume() {
+                Ok(_) | Err(pend::Error::Exhausted) => {}
+                Err(_) => unreachable!("direct holding consumption"),
+            }
+            *receiver = Some(unsafe { allocation.retire() });
+            *construction = None;
+            Ok(())
+        })?
+    }
+}
+
+impl Default for CellConstruction {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
