@@ -66,6 +66,10 @@ pub struct Timer<'a> {
 }
 
 impl<'a> Timer<'a> {
+    pub(crate) fn clock(&self) -> &crate::metal::chrono::treaty::Clock {
+        self.counter.clock()
+    }
+
     /// # Safety
     /// The actual Hart grants stimecmp and time access to this supervisor
     /// and delegates STIP. The original comparison and wake obligations

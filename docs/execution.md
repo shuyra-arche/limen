@@ -110,9 +110,44 @@ publishes a machine leave receipt after it resumes on its own stack.
 
 Room settles the original admission and the Unit's cancellation in one
 Turn after receiving that receipt. The Unit's stack becomes reusable
-through the ordinary end and reap path. Fund authorization also requires
-calibrated timing, a verified bound on the stop tail and settlement of
-the original Charge and Meter.
+through the ordinary end and reap path.
+
+## RV64 funded execution
+
+A trusted platform can attach a resident Fund to an isolated dispatcher.
+The Fund owns the original dedicated timer. Room owns one ordinary
+Period with a fixed quota and an exclusive Charge slot. A funded Unit is
+pinned to that participant and enters only with a new Charge. The
+trusted profile supplies validity, frequency and read-error bounds for
+the original clock, the worst entry delay, and separate elapsed and
+charged stop tails. Measure these obligations from the verified platform
+profile. The board's nominal frequency and an emulator run cannot supply
+physical worst-case bounds.
+
+The dispatcher programs and confirms an early absolute comparison before
+committing the Charge and Meter. The comparison must cover both the
+charge ceiling and the window's closing edge. A fresh sample under the
+joint Unit and Room Turn must still leave the certified entry margin.
+An unsuccessful preparation leaves the Unit Ready and no budget
+reserved. The timer owner settles any original programming effect.
+
+The verified Timer capture saves the complete integer frame at the
+admitted native span and returns through the original dispatcher stack.
+The Unit remains Live. The dispatcher closes the Meter using the
+original Clock. Vacate settles the matching Leave and Meter for that
+exact Charge before publishing Ready. A subsequent occupation with its
+own confirmed comparison and Charge restores the original frame through
+the native return instruction. A normal entry return also settles the
+actual elapsed interval before releasing its admission.
+
+The approved span must preserve local machine controls and allow
+suspension at any reachable interrupt point. Start and terminal paths
+remain masked and fit the admitted bounds. Funded Units in this profile
+use native budget suspension or return; cooperative Yield and Sign
+waiting remain available to the ordinary execution profile. This Fund
+uses its dedicated comparator and one fixed Period. Period rollover,
+Promises, cross-processor charging and a shared Sign/Fund comparator
+require their own ownership and admission.
 
 ## Same-level IRQ entry
 

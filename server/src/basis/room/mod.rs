@@ -12,6 +12,20 @@ use core::{
 use super::{sign::TockId, unit::UnitId};
 use crate::metal::processor::treaty::{LeaveReceipt, ProcessorId};
 
+#[cfg(target_arch = "riscv64")]
+mod fund;
+#[cfg(target_arch = "riscv64")]
+pub use fund::ChargeSettlement;
+#[cfg(target_arch = "riscv64")]
+pub(super) use fund::Period;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Queue {
+    Ordinary,
+    #[cfg(target_arch = "riscv64")]
+    Funded(usize),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Error {
     Busy,
@@ -19,6 +33,10 @@ pub(crate) enum Error {
     Gone,
     State,
     Unsupported,
+    #[cfg(target_arch = "riscv64")]
+    Budget,
+    #[cfg(target_arch = "riscv64")]
+    Timing,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,12 +106,16 @@ struct UnitEntry {
     unit: UnitId,
     admission: AdmissionId,
     affinity: Option<ProcessorId>,
+    queue: Queue,
     placement: Placement,
 }
 
 struct Participant {
     processor: ProcessorId,
     occupied: Option<usize>,
+    queue: Queue,
+    #[cfg(target_arch = "riscv64")]
+    period: Option<Period>,
 }
 
 impl Participant {
@@ -101,6 +123,9 @@ impl Participant {
         Self {
             processor,
             occupied: None,
+            queue: Queue::Ordinary,
+            #[cfg(target_arch = "riscv64")]
+            period: None,
         }
     }
 }
@@ -190,10 +215,11 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         Ok(())
     }
 
-    pub(crate) fn submit(
+    pub(super) fn submit(
         &mut self,
         unit: UnitId,
         affinity: Option<ProcessorId>,
+        queue: Queue,
     ) -> Result<AdmissionId, Error> {
         if self.admitted(unit) {
             return Err(Error::Busy);
@@ -210,6 +236,7 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
             unit,
             admission,
             affinity,
+            queue,
             placement: Placement::Ready(OccupancyId(NonZeroU64::MIN)),
         });
         self.enqueue(slot);
@@ -241,7 +268,7 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
             .map(ParticipationId)
     }
 
-    fn available(&self, processor: ProcessorId) -> Result<ParticipationId, Error> {
+    fn available(&self, processor: ProcessorId, queue: Queue) -> Result<ParticipationId, Error> {
         let participation = self.participation(processor).ok_or(Error::Unsupported)?;
         let participant = self.participants[participation.0]
             .as_ref()
@@ -249,24 +276,31 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         if participant.occupied.is_some() {
             return Err(Error::Busy);
         }
+        if participant.queue != queue {
+            return Err(Error::Unsupported);
+        }
         Ok(participation)
     }
 
-    fn first_ready(&self, processor: ProcessorId) -> Option<(usize, usize)> {
+    fn first_ready(&self, processor: ProcessorId, queue: Queue) -> Option<(usize, usize)> {
         self.ready[..self.ready_len]
             .iter()
             .copied()
             .enumerate()
             .find(|&(_, slot)| {
                 let entry = self.units[slot].as_ref().expect("ready Unit");
-                entry.affinity.is_none_or(|target| target == processor)
+                entry.queue == queue && entry.affinity.is_none_or(|target| target == processor)
             })
     }
 
     pub(crate) fn candidate(&self, processor: ProcessorId) -> Result<Option<UnitId>, Error> {
-        self.available(processor)?;
+        self.candidate_for(processor, Queue::Ordinary)
+    }
+
+    fn candidate_for(&self, processor: ProcessorId, queue: Queue) -> Result<Option<UnitId>, Error> {
+        self.available(processor, queue)?;
         Ok(self
-            .first_ready(processor)
+            .first_ready(processor, queue)
             .map(|(_, slot)| self.units[slot].as_ref().expect("ready Unit").unit))
     }
 
@@ -289,8 +323,17 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         processor: ProcessorId,
         unit: UnitId,
     ) -> Result<Occupancy, Error> {
-        let participation = self.available(processor)?;
-        let (index, slot) = self.first_ready(processor).ok_or(Error::State)?;
+        self.occupy_for(processor, unit, Queue::Ordinary)
+    }
+
+    fn occupy_for(
+        &mut self,
+        processor: ProcessorId,
+        unit: UnitId,
+        queue: Queue,
+    ) -> Result<Occupancy, Error> {
+        let participation = self.available(processor, queue)?;
+        let (index, slot) = self.first_ready(processor, queue).ok_or(Error::State)?;
         let entry = self.units[slot].as_mut().expect("ready Unit");
         if entry.unit != unit {
             return Err(Error::State);
@@ -298,6 +341,10 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         let Placement::Ready(id) = entry.placement else {
             unreachable!("Ready index points to a ready Unit");
         };
+        #[cfg(target_arch = "riscv64")]
+        if matches!(queue, Queue::Funded(_)) && id.0.checked_add(1).is_none() {
+            return Err(Error::Capacity);
+        }
         let occupancy = Occupancy {
             id,
             unit,

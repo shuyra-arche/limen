@@ -20,7 +20,7 @@ use kernel::{
     },
 };
 
-use super::{EXECUTION, check_comparison, clear_inherited, counter, reception};
+use super::{check_comparison, clear_inherited, counter, execution, reception};
 
 const OUTSIDE: u8 = 1;
 const STALE: u8 = 2;
@@ -94,7 +94,7 @@ pub(super) fn check(execution: &'static Execution, timer: &mut Timer<'_>) {
 }
 
 fn after_receipt(interrupt: TimerInterrupt<'_>) {
-    let execution = unsafe { (&*(&raw const EXECUTION)).assume_init_ref() };
+    let execution = execution();
     let occupancy = unsafe { (&raw const EXPECTED).read() }.unwrap();
     assert_eq!(
         execution.request_stop(interrupt, occupancy),

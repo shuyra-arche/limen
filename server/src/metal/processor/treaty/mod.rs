@@ -10,13 +10,13 @@ pub(in crate::metal) use super::executor::local::Protection;
 mod cooperative;
 #[cfg(limen_cooperative)]
 pub use cooperative::Dispatchers;
-#[cfg(all(limen_cooperative, target_arch = "riscv64"))]
-pub(crate) use cooperative::current_in_interrupt;
 #[cfg(limen_cooperative)]
 pub(crate) use cooperative::{
     Context, Dispatcher, LeaveReceipt, LocalExecution, RuntimeError, cooperative_ready, current,
     start_runtime,
 };
+#[cfg(all(limen_cooperative, target_arch = "riscv64"))]
+pub(crate) use cooperative::{budget_ready, current_in_interrupt};
 
 /// Hardware identity of a logical processor in its original scope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

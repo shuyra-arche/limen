@@ -17,10 +17,18 @@ pub(crate) use crate::metal::processor::execution::cooperative::{
 use super::TimerInterrupt;
 use super::{ProcessorId, can_switch};
 #[cfg(target_arch = "riscv64")]
-use crate::metal::processor::execution::cooperative::Stop;
+use crate::metal::processor::execution::cooperative::{Departure, Stop};
 
 pub(crate) fn cooperative_ready() -> bool {
     native::ready()
+}
+
+#[cfg(target_arch = "riscv64")]
+pub(crate) fn budget_ready() -> bool {
+    native::ready()
+        && local::ordinary_local()
+            .and_then(|executor| executor.runtime())
+            .is_some_and(|runtime| runtime.covers_budget())
 }
 
 /// Discover the current Executor's bound machine record. The local
@@ -98,12 +106,16 @@ impl Context {
     /// Requires exclusive use of an inactive context and a live stack extent.
     pub(crate) unsafe fn prepare(&self, stack: usize, entry: extern "C" fn(*const ()) -> !) {
         assert!(stack.is_multiple_of(16));
-        unsafe { self.0.get().write(native::Saved::initial(stack, entry)) };
+        unsafe { self.saved.get().write(native::Saved::initial(stack, entry)) };
     }
 
     /// Requires an inactive context with no permitted future entry.
     pub(crate) unsafe fn retire(&self) {
-        unsafe { self.0.get().write(native::Saved::EMPTY) };
+        unsafe { self.saved.get().write(native::Saved::EMPTY) };
+        #[cfg(target_arch = "riscv64")]
+        unsafe {
+            *self.suspension.get() = None;
+        }
     }
 }
 
@@ -114,7 +126,17 @@ impl<Occupancy> LeaveReceipt<Occupancy> {
 
     #[cfg(target_arch = "riscv64")]
     pub(crate) fn discarded(self) -> bool {
-        self.discarded
+        self.departure == Departure::Discarded
+    }
+
+    #[cfg(target_arch = "riscv64")]
+    pub(crate) fn suspended(self) -> bool {
+        self.departure == Departure::Suspended
+    }
+
+    #[cfg(target_arch = "riscv64")]
+    pub(crate) fn unused(self) -> bool {
+        self.departure == Departure::Unused
     }
 }
 
@@ -139,16 +161,29 @@ impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
         context: &Context,
         argument: *const (),
     ) {
+        // A suspended IRQ frame requires a newly covered entry. A normal
+        // cooperative dispatch may only consume its own ABI continuation.
+        #[cfg(target_arch = "riscv64")]
+        assert!(unsafe { (*context.suspension.get()).is_none() });
+        self.transfer(occupancy, |dispatcher| unsafe {
+            dispatcher.switch(context, argument)
+        });
+    }
+
+    fn transfer(&self, occupancy: Occupancy, enter: impl FnOnce(&Context)) {
         assert!(matches!(self.record.state.get(), State::Idle));
         assert!(can_switch());
         self.record.state.set(State::Running(occupancy));
-        unsafe { self.record.dispatcher.switch(context, argument) };
+        enter(&self.record.dispatcher);
         // The dispatcher is executing on its original stack again. Only now
         // does it publish a Leave receipt for the original occupancy.
         self.record.state.set(State::Stopped(LeaveReceipt {
             occupancy,
             #[cfg(target_arch = "riscv64")]
-            discarded: matches!(self.record.stop.replace(Stop::Closed), Stop::Returning),
+            departure: match self.record.stop.replace(Stop::Closed) {
+                Stop::Returning(departure) => departure,
+                _ => Departure::Cooperative,
+            },
         }));
     }
 
@@ -170,8 +205,68 @@ impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
         let stopped = self.stopped().expect("pending Leave receipt");
         assert!(stopped.occupancy() == receipt.occupancy());
         #[cfg(target_arch = "riscv64")]
-        assert_eq!(stopped.discarded(), receipt.discarded());
+        assert_eq!(stopped.departure, receipt.departure);
         self.record.state.set(State::Idle);
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+impl<Occupancy: Copy + Eq> LocalExecution<'_, Occupancy> {
+    /// Close the one unused native start opportunity from the dispatcher.
+    ///
+    /// # Safety
+    /// The ordinary caller owns the exact original Room reservation and has
+    /// excluded every future start under it. It has never transferred to
+    /// the Unit or started charging this occupancy.
+    pub(crate) unsafe fn cancel_unstarted(&self, occupancy: Occupancy) {
+        assert!(self.on_dispatcher_stack() && cooperative_ready() && can_switch());
+        assert!(matches!(self.record.state.get(), State::Idle));
+        assert!(matches!(self.record.stop.get(), Stop::Closed));
+        self.record.state.set(State::Stopped(LeaveReceipt {
+            occupancy,
+            departure: Departure::Unused,
+        }));
+    }
+
+    /// Enter this fixed-processor Unit with an admitted recoverable IRQ span.
+    ///
+    /// The caller owns the exact occupancy and Unit continuation and has
+    /// confirmed stop coverage on the current processor before calling.
+    /// All saved resources stay valid while the continuation is suspended.
+    /// Every dynamic use of the span must be valid to suspend. The span
+    /// and its stack remain resident until final departure is settled.
+    pub(crate) unsafe fn enter_recoverable(
+        &self,
+        occupancy: Occupancy,
+        context: &'static Context,
+        argument: *const (),
+        span: Range<usize>,
+    ) {
+        assert!(cooperative_ready() && can_switch());
+        assert!(matches!(self.record.state.get(), State::Idle));
+        assert!(matches!(self.record.stop.get(), Stop::Closed));
+        assert!(!span.is_empty());
+        let processor = local::ordinary_local()
+            .expect("trusted local entry")
+            .identity();
+        let stored = unsafe { &mut *context.suspension.get() };
+        assert!(
+            stored
+                .as_ref()
+                .is_none_or(|saved| saved.valid_for(processor, &span))
+        );
+        let suspended = stored.take();
+        self.record.stop.set(Stop::Allowed {
+            start: span.start,
+            end: span.end,
+            retain: Some(context),
+        });
+        self.transfer(occupancy, |dispatcher| unsafe {
+            match suspended {
+                Some(saved) => saved.resume(dispatcher),
+                None => dispatcher.switch(context, argument),
+            }
+        });
     }
 }
 
@@ -184,20 +279,26 @@ impl<Occupancy: Copy + Eq> LocalExecution<'static, Occupancy> {
         self.record.stop.set(Stop::Allowed {
             start: span.start,
             end: span.end,
+            retain: None,
         });
         true
     }
 
     pub(crate) fn request_stop(&self, occupancy: Occupancy, interrupt: TimerInterrupt<'_>) -> bool {
-        let Stop::Allowed { start, end } = self.record.stop.get() else {
+        let Stop::Allowed { start, end, retain } = self.record.stop.get() else {
             return false;
         };
         if self.running() != Some(occupancy)
-            || !interrupt.request_return(&(start..end), &self.record.dispatcher)
+            || !interrupt.request_return(&(start..end), &self.record.dispatcher, retain)
         {
             return false;
         }
-        self.record.stop.set(Stop::Returning);
+        let departure = if retain.is_some() {
+            Departure::Suspended
+        } else {
+            Departure::Discarded
+        };
+        self.record.stop.set(Stop::Returning(departure));
         true
     }
 }

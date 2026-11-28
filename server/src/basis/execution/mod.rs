@@ -6,10 +6,16 @@ use crate::metal::processor::treaty::TimerInterrupt;
 use core::ops::Range;
 use core::{marker::PhantomData, num::NonZeroUsize};
 
+#[cfg(target_arch = "riscv64")]
+mod fund;
+#[cfg(target_arch = "riscv64")]
+pub use fund::{ChargeSettlement, Fund, FundConfig, FundError, FundEstablishFailure};
+
 use crate::{
     basis::{
         room::{
-            self, AdmissionId, IdleObservation, LeaveDestination, Occupancy, Participants, Room,
+            self, AdmissionId, IdleObservation, LeaveDestination, Occupancy, Participants, Queue,
+            Room,
         },
         sign::{Deadlines, Sign},
         unit::{self, End, Lifecycle, STACK_CAPACITY, Stacks, UnitId, UnitRecord, Units},
@@ -40,6 +46,8 @@ pub enum Error {
     Timing,
     State,
     Unsupported,
+    #[cfg(target_arch = "riscv64")]
+    Budget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,6 +86,10 @@ impl From<room::Error> for Error {
             room::Error::Gone => Self::Gone,
             room::Error::State => Self::State,
             room::Error::Unsupported => Self::Unsupported,
+            #[cfg(target_arch = "riscv64")]
+            room::Error::Budget => Self::Budget,
+            #[cfg(target_arch = "riscv64")]
+            room::Error::Timing => Self::Timing,
         }
     }
 }
@@ -123,6 +135,9 @@ pub struct EstablishFailure<const PARTICIPANTS: usize> {
 pub struct KernelBinding {
     entry: Entry,
     affinity: Option<ProcessorId>,
+    queue: Queue,
+    #[cfg(target_arch = "riscv64")]
+    span: Option<(usize, usize)>,
 }
 
 /// The trusted runtime entry and its input in permanent storage.
@@ -259,17 +274,28 @@ impl Execution {
     }
 
     fn create_unit(&self, entry: Entry, affinity: Option<ProcessorId>) -> Result<UnitId, Error> {
+        self.publish_unit(KernelBinding {
+            entry,
+            affinity,
+            queue: Queue::Ordinary,
+            #[cfg(target_arch = "riscv64")]
+            span: None,
+        })
+    }
+
+    fn publish_unit(&self, binding: KernelBinding) -> Result<UnitId, Error> {
         self.units.acquire(|units| {
             let unit = units.vacant()?;
-            units.publish(unit, KernelBinding { entry, affinity }, start)?;
+            units.publish(unit, binding, start)?;
             Ok(unit)
         })?
     }
 
     pub fn submit(&self, unit: UnitId) -> Result<AdmissionId, Error> {
         self.with_unit_room(|units, room| {
-            let affinity = units.live(unit)?.0.affinity;
-            room.submit(unit, affinity).map_err(Error::from)
+            let binding = units.live(unit)?.0;
+            room.submit(unit, binding.affinity, binding.queue)
+                .map_err(Error::from)
         })
     }
 
@@ -532,6 +558,8 @@ impl Execution {
         let start = Start {
             execution: self,
             entry,
+            #[cfg(target_arch = "riscv64")]
+            fund: None,
         };
         // Room retains this exact occupancy until this processor completes the
         // leave. The initial continuation copies Start before it can suspend.
@@ -573,7 +601,7 @@ impl Execution {
             .filter(|receipt| receipt.occupancy() == occupancy && receipt.discarded())
         {
             return self.with_unit_room(|units, room| {
-                room.check_occupied(occupancy)?;
+                room.check_unfunded(occupancy)?;
                 units.live(occupancy.unit())?;
                 // The terminal machine return has already left the discarded
                 // stack. In the same Turn, close the Unit and its original
@@ -588,6 +616,9 @@ impl Execution {
             });
         }
         self.room.acquire(|room| {
+            #[cfg(target_arch = "riscv64")]
+            room.check_unfunded(occupancy)?;
+            #[cfg(not(target_arch = "riscv64"))]
             room.check_occupied(occupancy)?;
             let receipt = local
                 .stopped()
@@ -670,6 +701,8 @@ pub struct Current {
     execution: &'static Execution,
     unit: UnitId,
     local: PhantomData<*mut ()>,
+    #[cfg(target_arch = "riscv64")]
+    funded: bool,
 }
 
 impl Current {
@@ -698,6 +731,9 @@ impl Current {
     /// A switch or terminal return closes this permission.
     #[cfg(target_arch = "riscv64")]
     pub unsafe fn allow_stop_in(&mut self, span: Range<usize>) -> Result<Occupancy, Error> {
+        if self.funded {
+            return Err(Error::Unsupported);
+        }
         if !treaty::cooperative_ready() || !treaty::can_switch() {
             return Err(Error::Protection);
         }
@@ -715,6 +751,10 @@ impl Current {
     /// Yield the processor. Success is returned after a new dispatch resumes this
     /// continuation.
     pub fn yield_now(&mut self) -> Result<(), Error> {
+        #[cfg(target_arch = "riscv64")]
+        if self.funded {
+            return Err(Error::Unsupported);
+        }
         self.execution.leave(self.unit, None)
     }
 
@@ -730,6 +770,10 @@ impl Current {
         sign: &Sign<'_, N>,
         deadline: Deadline<'_>,
     ) -> Result<(), Error> {
+        #[cfg(target_arch = "riscv64")]
+        if self.funded {
+            return Err(Error::Unsupported);
+        }
         self.execution.wait_until(self.unit, sign, deadline)
     }
 }
@@ -737,18 +781,30 @@ impl Current {
 struct Start {
     execution: &'static Execution,
     entry: Entry,
+    #[cfg(target_arch = "riscv64")]
+    fund: Option<&'static Fund<'static>>,
 }
 
 extern "C" fn start(argument: *const ()) -> ! {
     // On first entry this points to the suspended dispatcher's live Start.
-    let Start { execution, entry } = unsafe { argument.cast::<Start>().read() };
+    let start = unsafe { argument.cast::<Start>().read() };
+    let Start {
+        execution, entry, ..
+    } = start;
     let (_, local) = execution.local().expect("attached processor");
     let unit = local.running().expect("authorized Kernel Unit").unit();
-    let value = entry(&mut Current {
+    let mut current = Current {
         execution,
         unit,
         local: PhantomData,
-    });
+        #[cfg(target_arch = "riscv64")]
+        funded: start.fund.is_some(),
+    };
+    let value = entry(&mut current);
+    #[cfg(target_arch = "riscv64")]
+    if let Some(fund) = start.fund {
+        fund.end(&current, value);
+    }
     let Err(error) = execution.end(unit, value);
     execution.terminal.reject(format_args!(
         "FAIL Limen execution: terminal leave {error:?}\n"

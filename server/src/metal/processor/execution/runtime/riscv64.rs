@@ -20,7 +20,10 @@ use crate::metal::{
 };
 
 use super::{
-    super::terminal::{Terminal, riscv64::trap as terminal},
+    super::{
+        cooperative::riscv64::{Saved, switch},
+        terminal::{Terminal, riscv64::trap as terminal},
+    },
     Capture, Entry, InstallError,
 };
 
@@ -115,6 +118,10 @@ impl RuntimeTrap {
         supervisor::enabled_covered(self.entry.software, self.entry.timer)
     }
 
+    pub(in crate::metal::processor) fn covers_budget(&self) -> bool {
+        self.entry.timer && supervisor::enabled_covered(false, true)
+    }
+
     pub(in crate::metal::processor) fn interrupt_context(&self, observed: native::Entry) -> bool {
         observed.vector == self.ordinary_entry().vector && observed.scratch == 0
     }
@@ -129,20 +136,25 @@ pub struct TimerInterrupt<'frame> {
     processor: ProcessorId,
     instruction: usize,
     received: Cell<bool>,
-    dispatcher: &'frame mut Option<&'static Context>,
+    returning: &'frame mut Option<Return>,
+}
+
+struct Return {
+    dispatcher: &'static Context,
+    retain: Option<&'static Context>,
 }
 
 impl<'frame> TimerInterrupt<'frame> {
     fn new(
         processor: ProcessorId,
         instruction: usize,
-        dispatcher: &'frame mut Option<&'static Context>,
+        returning: &'frame mut Option<Return>,
     ) -> Self {
         Self {
             processor,
             instruction,
             received: Cell::new(false),
-            dispatcher,
+            returning,
         }
     }
 
@@ -158,11 +170,12 @@ impl<'frame> TimerInterrupt<'frame> {
         self,
         span: &Range<usize>,
         dispatcher: &'static Context,
+        retain: Option<&'static Context>,
     ) -> bool {
         if !self.received.get() || !span.contains(&self.instruction) {
             return false;
         }
-        *self.dispatcher = Some(dispatcher);
+        *self.returning = Some(Return { dispatcher, retain });
         true
     }
 }
@@ -188,6 +201,7 @@ impl<'frame> SoftwareInterrupt<'frame> {
 
 // Indexed by RISC-V register number. x0 has no saved value.
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct Frame {
     registers: [usize; 32],
     status: usize,
@@ -196,29 +210,75 @@ struct Frame {
 
 const _: () = assert!(size_of::<Frame>().is_multiple_of(16));
 
+/// A full original native frame restricted to the processor which saved it.
+pub(in crate::metal::processor) struct Suspension {
+    processor: ProcessorId,
+    frame: Frame,
+}
+
+impl Suspension {
+    pub(in crate::metal::processor) fn valid_for(
+        &self,
+        processor: ProcessorId,
+        span: &Range<usize>,
+    ) -> bool {
+        self.processor == processor
+            && span.contains(&self.frame.pc)
+            && self.frame.status & SUPERVISOR_PREVIOUS != 0
+            && self.frame.status & SIE == 0
+            && Status::from_bits(self.frame.status).extensions_off()
+    }
+
+    /// On the original processor with interrupts masked, the native switch
+    /// first saves the new dispatcher. SRET then makes the complete old
+    /// instruction context and its interrupt mask effective together.
+    pub(in crate::metal::processor) unsafe fn resume(&self, dispatcher: &Context) {
+        let incoming = Saved::initial(self.frame.registers[2], enter_frame);
+        unsafe {
+            switch(
+                dispatcher.saved.get(),
+                &incoming,
+                core::ptr::from_ref(&self.frame).cast(),
+            )
+        };
+    }
+}
+
 extern "C" fn dispatch(frame: &mut Frame, cause: usize) -> bool {
-    if frame.status & SUPERVISOR_PREVIOUS == 0 || !Status::from_bits(frame.status).extensions_off()
+    if frame.status & SUPERVISOR_PREVIOUS == 0
+        || frame.status & SIE != 0
+        || !Status::from_bits(frame.status).extensions_off()
     {
         return false;
     }
     let Some((processor, runtime)) = local::interrupt_local() else {
         return false;
     };
-    let mut dispatcher = None;
+    let mut returning = None;
     let capture = match cause {
         SOFTWARE_CAUSE if runtime.entry.software => {
             Capture::Software(SoftwareInterrupt::new(frame, processor))
         }
         TIMER_CAUSE if runtime.entry.timer => {
-            Capture::Timer(TimerInterrupt::new(processor, frame.pc, &mut dispatcher))
+            Capture::Timer(TimerInterrupt::new(processor, frame.pc, &mut returning))
         }
         _ => return false,
     };
     runtime.entry.handle(capture);
-    if let Some(dispatcher) = dispatcher {
+    if let Some(Return { dispatcher, retain }) = returning {
         // The linear request established an actual suspended local dispatcher.
         // The regular epilogue restores the trap stack before returning there.
-        let continuation = unsafe { &*dispatcher.0.get() };
+        if let Some(context) = retain {
+            // The current occupancy owns this Unit continuation. Its prior
+            // frame was consumed before entering this same processor.
+            let suspended = unsafe { &mut *context.suspension.get() };
+            assert!(suspended.is_none());
+            *suspended = Some(Suspension {
+                processor,
+                frame: *frame,
+            });
+        }
+        let continuation = unsafe { &*dispatcher.saved.get() };
         frame.pc = continuation.return_address(&mut frame.registers);
         frame.status &= !(SIE | INTERRUPTS_PREVIOUS);
     }
@@ -280,6 +340,30 @@ unsafe extern "C" fn vector() -> ! {
         "mv a0, sp",
         "call {dispatch}",
         "beqz a0, 3f",
+        "addi t0, sp, {size}",
+        "csrw sscratch, t0",
+        "mv a0, sp",
+        "tail {enter_frame}",
+        "3: ld sp, 2*8(sp)",
+        "tail {terminal}",
+        "4: csrrw sp, sscratch, zero",
+        "tail {terminal}",
+        size = const size_of::<Frame>(),
+        status = const offset_of!(Frame, status),
+        pc = const offset_of!(Frame, pc),
+        supervisor = const SUPERVISOR_PREVIOUS,
+        dispatch = sym dispatch,
+        enter_frame = sym enter_frame,
+        terminal = sym terminal,
+    );
+}
+
+/// Enter either an ordinary IRQ return or an exclusively owned saved frame.
+/// The caller has already restored the original IRQ stack relation.
+#[unsafe(naked)]
+extern "C" fn enter_frame(_frame: *const ()) -> ! {
+    naked_asm!(
+        "mv sp, a0",
         "ld t0, {pc}(sp)",
         "csrw sepc, t0",
         "ld t0, {status}(sp)",
@@ -313,20 +397,10 @@ unsafe extern "C" fn vector() -> ! {
         "ld x29, 29*8(sp)",
         "ld x30, 30*8(sp)",
         "ld x31, 31*8(sp)",
-        "addi t0, sp, {size}",
-        "csrw sscratch, t0",
         "ld x5, 5*8(sp)",
         "ld sp, 2*8(sp)",
         "sret",
-        "3: ld sp, 2*8(sp)",
-        "tail {terminal}",
-        "4: csrrw sp, sscratch, zero",
-        "tail {terminal}",
-        size = const size_of::<Frame>(),
         status = const offset_of!(Frame, status),
         pc = const offset_of!(Frame, pc),
-        supervisor = const SUPERVISOR_PREVIOUS,
-        dispatch = sym dispatch,
-        terminal = sym terminal,
     );
 }

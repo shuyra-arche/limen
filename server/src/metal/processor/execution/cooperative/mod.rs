@@ -8,6 +8,9 @@ use core::{
 
 use crate::metal::processor::executor::local::stack::Stack;
 
+#[cfg(target_arch = "riscv64")]
+use super::runtime::Suspension;
+
 #[cfg(target_arch = "aarch64")]
 pub(in crate::metal::processor) mod aarch64;
 #[cfg(target_arch = "riscv64")]
@@ -24,15 +27,23 @@ pub(in crate::metal::processor) use x86_64 as native;
 
 /// One continuation in the actual linked machine's native save shape.
 /// Its consumer owns every access and keeps its stack alive until departure.
-pub(crate) struct Context(pub(in crate::metal::processor) UnsafeCell<native::Saved>);
+pub(crate) struct Context {
+    pub(in crate::metal::processor) saved: UnsafeCell<native::Saved>,
+    #[cfg(target_arch = "riscv64")]
+    pub(in crate::metal::processor) suspension: UnsafeCell<Option<Suspension>>,
+}
 
 impl Context {
     pub(crate) const fn new() -> Self {
-        Self(UnsafeCell::new(native::Saved::EMPTY))
+        Self {
+            saved: UnsafeCell::new(native::Saved::EMPTY),
+            #[cfg(target_arch = "riscv64")]
+            suspension: UnsafeCell::new(None),
+        }
     }
 
     pub(in crate::metal::processor) unsafe fn switch(&self, incoming: &Self, argument: *const ()) {
-        unsafe { native::switch(self.0.get(), incoming.0.get(), argument) };
+        unsafe { native::switch(self.saved.get(), incoming.saved.get(), argument) };
     }
 }
 
@@ -40,7 +51,16 @@ impl Context {
 pub(crate) struct LeaveReceipt<Occupancy> {
     pub(in crate::metal::processor) occupancy: Occupancy,
     #[cfg(target_arch = "riscv64")]
-    pub(in crate::metal::processor) discarded: bool,
+    pub(in crate::metal::processor) departure: Departure,
+}
+
+#[cfg(target_arch = "riscv64")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::metal::processor) enum Departure {
+    Cooperative,
+    Discarded,
+    Suspended,
+    Unused,
 }
 
 #[derive(Clone, Copy)]
@@ -56,8 +76,12 @@ pub(in crate::metal::processor) const DISPATCH_BYTES: usize = 32 * 1024;
 #[derive(Clone, Copy)]
 pub(in crate::metal::processor) enum Stop {
     Closed,
-    Allowed { start: usize, end: usize },
-    Returning,
+    Allowed {
+        start: usize,
+        end: usize,
+        retain: Option<&'static Context>,
+    },
+    Returning(Departure),
 }
 
 pub(crate) struct Dispatcher<Occupancy> {

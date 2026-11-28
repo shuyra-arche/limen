@@ -97,6 +97,11 @@ impl<'clock> Sample<'clock> {
         self.count
     }
 
+    #[cfg(limen_target)]
+    pub(super) fn count_for(self, clock: &Clock) -> Option<u64> {
+        core::ptr::eq(self.counter, &clock.counter).then_some(self.count)
+    }
+
     /// Elapsed time rounded down to a nanosecond. Stale ordering, another
     /// counter or a wrapped counter fails instead of implying calibration.
     pub fn elapsed_since(self, earlier: Self) -> Option<Duration> {
