@@ -1,11 +1,8 @@
-//! One owned tree in an originally inactive local TTBR1.
+//! Retain an owned tree through its original local native root installation.
 
-use super::{Exposure, Node, TableError, TableFormat, TableId, TableStore};
+use super::{Exposure, Node, TableError, TableId, TableStore};
 use crate::metal::{
-    memory::mmu::{
-        aarch64::internal::format::Root,
-        treaty::{Context, LocalContext, SwitchError},
-    },
+    memory::mmu::treaty::{Context, LocalContext, SwitchError},
     sync::treaty::TurnMode,
 };
 
@@ -36,10 +33,11 @@ impl TableStore {
     ///
     /// # Safety
     /// The caller keeps the original working mappings of every table page,
-    /// the whole lower translation context and all affected leaves valid.
-    /// This PE exclusively owns the selected upper context and no other
-    /// software or hardware walks the owned tree. Live code, stacks and
-    /// handlers must stay in the retained lower context through both switches.
+    /// the original context and all affected leaves valid. This processor
+    /// exclusively owns the local installation and no other processor or
+    /// device walks this tree. The actual mappings preserve code, stacks,
+    /// handlers, tables and live data across both switches; executable and
+    /// writable image ranges must retain their distinct permissions.
     pub unsafe fn prepare_local<'control, 'scope>(
         &'static self,
         id: TableId,
@@ -47,17 +45,14 @@ impl TableStore {
         mode: TurnMode,
     ) -> Result<LocalRoot<'control, 'scope>, TableError> {
         let previous = control.current().ok_or(TableError::State)?;
-        let format = previous.profile();
-        if format.root() != Root::Upper
-            || previous.root().is_some()
-            || self.format != TableFormat::Aarch64(format)
-            || self.level + 1 != self.format.levels()
-        {
+        if self.level + 1 != self.format.levels() {
             return Err(TableError::Layout);
         }
         let next = self.with_node(id, mode, |node, held| {
             let page = node.private()?;
-            let next = unsafe { control.prepare_root(page.cell.physical().start()) }
+            let next = unsafe {
+                control.prepare_table(self.format, page.cell.physical().start())
+            }
                 .map_err(|_| TableError::Scope)?;
             page.cell.freeze(held, &page.access)?;
             page.exposure = Exposure::Local;
@@ -78,7 +73,7 @@ impl LocalRoot<'_, '_> {
     /// Publish the original tree and settle its native installation.
     ///
     /// # Safety
-    /// Continue the original tree and lower-context obligations on this PE.
+    /// Continue the original tree and context obligations on this processor.
     pub unsafe fn install(&mut self) -> Result<(), SwitchError> {
         match self.stage {
             Stage::Prepared | Stage::Installing => {
@@ -94,8 +89,9 @@ impl LocalRoot<'_, '_> {
     /// Withdraw the original tree, with native maintenance and readback.
     ///
     /// # Safety
-    /// Upper users must have left and must remain excluded. Continue the
-    /// original tree and lower-context obligations through settlement.
+    /// Users of the candidate tree must have left and remain excluded,
+    /// except the accesses needed for the verified switch itself.
+    /// Continue both trees and their mappings through actual settlement.
     pub unsafe fn restore(&mut self) -> Result<(), SwitchError> {
         match self.stage {
             Stage::Installed | Stage::Restoring => {

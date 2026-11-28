@@ -221,7 +221,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     assert!(boot.image().covers(extent(witness, witness + PAGE)));
     assert_ne!(translation(UPPER) & 1, 0);
     unsafe {
-        leaf.map_aarch64_leaf(
+        leaf.map_leaf(
             leaf_id,
             0,
             PhysicalAddress::new(witness),

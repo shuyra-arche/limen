@@ -30,9 +30,9 @@ const ENTRIES: usize = 512;
 mod branch;
 pub use branch::TableBranch;
 
-#[cfg(all(limen_target, target_arch = "aarch64"))]
+#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
 mod local;
-#[cfg(all(limen_target, target_arch = "aarch64"))]
+#[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
 pub use local::LocalRoot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +55,21 @@ impl TableFormat {
             Self::Riscv64(_) => riscv64::internal::format::Format::branch(address),
             Self::Aarch64(format) => format.branch(address),
             Self::X86_64(format) => format.branch(address, Privilege::Kernel),
+        }
+    }
+
+    fn leaf(
+        self,
+        address: PhysicalAddress,
+        level: usize,
+        access: LeafAccess,
+        memory: Memory,
+    ) -> Option<u64> {
+        match self {
+            Self::Riscv64(format) if memory == Memory::Normal => format.leaf(address, level, access),
+            Self::Aarch64(format) => format.leaf(address, level, Privilege::Kernel, access, memory),
+            // IA-32e requires an admitted PAT and memory attribute relation.
+            _ => None,
         }
     }
 
@@ -151,7 +166,7 @@ enum Exposure {
         parent: TableId,
         index: usize,
     },
-    #[cfg(all(limen_target, target_arch = "aarch64"))]
+    #[cfg(all(limen_target, any(target_arch = "aarch64", target_arch = "riscv64")))]
     Local,
 }
 
@@ -415,13 +430,14 @@ impl TableStore {
         })
     }
 
-    /// Construct a native AArch64 EL1 leaf in this private table.
+    /// Construct a native supervisor-only leaf in this private table.
+    /// The actual format must support the requested memory attributes.
     ///
     /// # Safety
     /// The caller must own or retain the actual mapped material and its
     /// matching attributes and rights through all subsequent native uses of
     /// the tree. The leaf cannot manufacture that authority from an address.
-    pub unsafe fn map_aarch64_leaf(
+    pub unsafe fn map_leaf(
         &self,
         id: TableId,
         index: usize,
@@ -430,11 +446,9 @@ impl TableStore {
         memory: Memory,
         mode: TurnMode,
     ) -> Result<(), TableError> {
-        let TableFormat::Aarch64(format) = self.format else {
-            return Err(TableError::Layout);
-        };
-        let leaf = format
-            .leaf(physical, self.level, Privilege::Kernel, access, memory)
+        let leaf = self
+            .format
+            .leaf(physical, self.level, access, memory)
             .ok_or(TableError::Layout)?;
         self.with_node(id, mode, |node, held| {
             let entry = node.entry(held, index)?;

@@ -42,7 +42,8 @@ SECTIONS
            "image must supply a nonempty aligned major stack")
     *(.bss .bss.* .sbss .sbss.*)
     *(COMMON)
-    . = ALIGN(8);
+    /* The fixed image owns complete leaf pages, including the tail. */
+    . = ALIGN(0x1000);
     _bss_end = .;
   } :writable
 

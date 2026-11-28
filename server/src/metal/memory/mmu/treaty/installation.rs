@@ -56,10 +56,6 @@ mod bound {
             self.root
         }
 
-        #[cfg(target_arch = "aarch64")]
-        pub(in crate::metal::memory::mmu) fn profile(self) -> Profile {
-            self.profile
-        }
     }
 
     /// Hardware readback of this local installation and its original context.
@@ -222,8 +218,50 @@ mod bound {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    impl LocalContext<'_> {
+        /// Qualify the owned upper tree against the original inactive walk.
+        pub(in crate::metal::memory::mmu) unsafe fn prepare_table(
+            &self,
+            table: crate::metal::memory::mmu::table::TableFormat,
+            root: PhysicalAddress,
+        ) -> Result<Context, SwitchError> {
+            use crate::metal::memory::mmu::{
+                aarch64::internal::format::Root, table::TableFormat,
+            };
+            let previous = self.current().ok_or(SwitchError::Unconfirmed)?;
+            let format = self.native.profile();
+            if previous.root().is_some()
+                || format.root() != Root::Upper
+                || table != TableFormat::Aarch64(format)
+            {
+                return Err(SwitchError::Scope);
+            }
+            unsafe { self.prepare_root(root) }
+        }
+    }
+
     #[cfg(target_arch = "riscv64")]
     impl LocalContext<'_> {
+        /// Qualify the owned successor of the original bare supervisor context.
+        pub(in crate::metal::memory::mmu) unsafe fn prepare_table(
+            &self,
+            table: crate::metal::memory::mmu::table::TableFormat,
+            root: PhysicalAddress,
+        ) -> Result<Context, SwitchError> {
+            use crate::metal::memory::mmu::table::TableFormat;
+            let previous = self.current().ok_or(SwitchError::Unconfirmed)?;
+            let TableFormat::Riscv64(format) = table else {
+                return Err(SwitchError::Scope);
+            };
+            if previous.controls != Controls::BARE {
+                return Err(SwitchError::Scope);
+            }
+            let next = Controls::paged(format, root).ok_or(SwitchError::Scope)?;
+            unsafe { self.prepare_context(next) }
+        }
+
+
         /// Qualify the exact retained Bare or ASID-zero paged context.
         ///
         /// # Safety
