@@ -77,7 +77,7 @@ static STEP: AtomicUsize = AtomicUsize::new(0);
 static STACK: AtomicUsize = AtomicUsize::new(0);
 
 fn wait(phase: usize) {
-    while PHASE.load(Relaxed) != phase {
+    while PHASE.load(Acquire) != phase {
         spin_loop();
     }
 }
@@ -171,17 +171,20 @@ fn schedule_minor(_: &'static ()) -> ! {
     assert_eq!(execution.attach(), Err(Error::Busy));
     OBSERVED.store(PEER.load(Relaxed), Release);
 
+    #[cfg(target_arch = "riscv64")]
+    sbi::dispatch_notified(execution, PEER.load(Relaxed));
+
     wait(1);
     // The original processor has not returned its occupation yet.
     assert_eq!(execution.enter(), Ok(None));
-    PHASE.store(2, Relaxed);
+    PHASE.store(2, Release);
     wait(3);
     let control = registers::control();
     let receipt = dispatch(execution);
     assert_eq!(receipt.processor(), PEER.load(Relaxed));
     assert_eq!(registers::control(), control);
     execution.vacate(receipt).expect("minor departure");
-    PHASE.store(4, Relaxed);
+    PHASE.store(4, Release);
     loop {
         spin_loop();
     }
@@ -240,6 +243,9 @@ fn run(
         Err(StartError::Busy)
     );
 
+    #[cfg(target_arch = "riscv64")]
+    sbi::submit_and_notify(&boot, execution, target);
+
     let initial = Initial {
         major,
         major_stack,
@@ -267,6 +273,10 @@ fn schedule_major(initial: &'static Initial) -> ! {
     assert_eq!(execution.attach(), Err(Error::Busy));
     let major = initial.major;
 
+    let idle = execution
+        .observe_idle()
+        .unwrap()
+        .expect("initial queue empty");
     let unit = unsafe { execution.create_migratable(migratable) }.expect("migratable Unit");
     let dormant = unsafe { execution.create(never) }.expect("dormant Unit");
     execution
@@ -276,16 +286,18 @@ fn schedule_major(initial: &'static Initial) -> ! {
     execution.finish_end(dormant).unwrap();
     assert_eq!(execution.reap(dormant), Ok(End::Cancelled));
     execution.submit(unit).unwrap();
+    assert!(idle.changed());
+    assert!(execution.observe_idle().unwrap().is_none());
 
     let control = registers::control();
     let first = dispatch(execution);
     assert_eq!(first.unit(), unit);
     assert_eq!(first.processor(), major);
     assert_eq!(registers::control(), control);
-    PHASE.store(1, Relaxed);
+    PHASE.store(1, Release);
     wait(2);
     execution.vacate(first).expect("major departure");
-    PHASE.store(3, Relaxed);
+    PHASE.store(3, Release);
     wait(4);
     let last = dispatch(execution);
     assert_eq!(last.unit(), unit);
@@ -303,6 +315,8 @@ fn schedule_major(initial: &'static Initial) -> ! {
     let receipt = dispatch(execution);
     finish(execution, reused, receipt, 41);
     assert_eq!(execution.enter(), Ok(None));
+    let idle = execution.observe_idle().unwrap().expect("queue drained");
+    assert!(!idle.changed());
     boot_diagnostic::write(
         "PASS cooperative-execution processors=2 migrated=2 abi=1 control=1 cancelled=1 stale=1 reused=1\n",
     );

@@ -1,12 +1,12 @@
 //! QEMU virt hands the guest an identity-mapped physical GIC with a single
 //! security state. Keep the PE IRQ/FIQ masks closed and poll its real IAR.
 
-use kernel::entry::hook::Binding;
 use kernel::metal::interrupt::treaty::{AbsoluteTimer, ClaimId, Completion, HardwareClaim};
 use kernel::metal::platform::boot::treaty as boot_diagnostic;
 use kernel::metal::processor::treaty::{
     InstallError, Irq, LocalStorage, Minor, RuntimeTrap, Stack, Startup,
 };
+use kernel::{basis::room::IdleObservation, entry::hook::Binding};
 
 #[path = "spi.rs"]
 mod spi;
@@ -116,6 +116,8 @@ static SIGNAL_WORK: AtomicUsize = AtomicUsize::new(0);
 static SIGNAL_ISSUED: AtomicUsize = AtomicUsize::new(0);
 static SIGNAL_OBSERVED: AtomicUsize = AtomicUsize::new(0);
 const SIGNAL_ID: u8 = 12;
+const OCCUPIED_ROUND: usize = 4;
+const ROOM_IDLE_ROUND: usize = 5;
 
 struct Reception {
     processor: usize,
@@ -248,7 +250,9 @@ fn observe_minor(processor: usize, _: usize) -> ! {
         Err(InstallError::Occupied)
     );
     for round in 1..=3 {
-        frame = run_sgi_round(frame, processor, round);
+        frame = run_sgi_round(frame, processor, round, |receiver| {
+            check_idle(receiver, round)
+        });
     }
     super::occupied::start(frame)
 }
@@ -257,10 +261,48 @@ pub(super) fn resume_minor(frame: Frame<'static>) -> ! {
     spi::on_minor(frame)
 }
 
-pub(super) fn run_sgi_round(
+pub(super) fn interrupt_unit(frame: Frame<'static>, processor: usize) -> Frame<'static> {
+    run_sgi_round(frame, processor, OCCUPIED_ROUND, |_| {
+        await_round(&SIGNAL_ISSUED, OCCUPIED_ROUND)
+    })
+}
+
+pub(super) fn wake_room(
+    frame: Frame<'static>,
+    processor: usize,
+    idle: &IdleObservation,
+) -> Frame<'static> {
+    run_sgi_round(frame, processor, ROOM_IDLE_ROUND, |receiver| {
+        let limit = time_count() + 3 * time_frequency();
+        let mut announced = false;
+        loop {
+            let wake = unsafe {
+                receiver.wait_for_sgi(SIGNAL_ID, || {
+                    let ready = idle.changed();
+                    if !announced {
+                        assert!(!ready);
+                        FINAL_CHECK.store(ROOM_IDLE_ROUND, Ordering::Release);
+                        announced = true;
+                    }
+                    ready
+                })
+            }
+            .unwrap();
+            if wake != Wake::Recheck {
+                break;
+            }
+            assert!(time_count() < limit, "Room idle wake timeout");
+        }
+        await_round(&SIGNAL_ISSUED, ROOM_IDLE_ROUND);
+        assert!(idle.changed());
+    })
+}
+
+fn run_sgi_round(
     frame: Frame<'static>,
     processor: usize,
     round: usize,
+    wait: impl FnOnce(&mut CpuInterface<'static>),
 ) -> Frame<'static> {
     let mut receiver = unsafe { CpuInterface::admit(frame) }
         .unwrap_or_else(|(_, reason)| panic!("original SGI CPU Interface: {reason:?}"));
@@ -287,11 +329,7 @@ pub(super) fn run_sgi_round(
     );
     unsafe { asm!("msr ICC_PMR_EL1, {}", "isb", in(reg) 0x80u64, options(nostack)) };
     SIGNAL_READY.store(round, Ordering::Release);
-    if round <= 3 {
-        check_idle(&mut receiver, round);
-    } else {
-        await_round(&SIGNAL_ISSUED, round);
-    }
+    wait(&mut receiver);
     assert!(!RETURN_READY.load(Ordering::Acquire));
     let signal = MINOR_SIGNAL
         .acquire(Option::take)
@@ -419,12 +457,12 @@ pub(super) fn await_round(state: &AtomicUsize, round: usize) {
 fn check_signal(frame: Frame<'static>) -> Frame<'static> {
     let mut sender = unsafe { CpuInterface::admit(frame) }
         .unwrap_or_else(|(_, reason)| panic!("original SGI sender: {reason:?}"));
-    for round in 1..=4 {
+    for round in 1..=ROOM_IDLE_ROUND {
         await_round(&SIGNAL_READY, round);
-        if (2..=3).contains(&round) {
+        if matches!(round, 2 | 3 | ROOM_IDLE_ROUND) {
             await_round(&FINAL_CHECK, round);
         }
-        if round == 3 {
+        if matches!(round, 3 | ROOM_IDLE_ROUND) {
             let send_after = time_count() + time_frequency() / 100;
             while time_count() < send_after {
                 core::hint::spin_loop();
@@ -434,7 +472,11 @@ fn check_signal(frame: Frame<'static>) -> Frame<'static> {
             .acquire(Option::take)
             .unwrap()
             .expect("admitted minor SGI");
-        SIGNAL_WORK.store(round, Ordering::Release);
+        if round == ROOM_IDLE_ROUND {
+            super::occupied::publish_ready();
+        } else {
+            SIGNAL_WORK.store(round, Ordering::Release);
+        }
         sender.send_sgi(&mut signal).unwrap();
         assert!(sender.send_sgi(&mut signal).is_err());
         MINOR_SIGNAL
@@ -448,8 +490,9 @@ fn check_signal(frame: Frame<'static>) -> Frame<'static> {
     }
     super::occupied::check_departure();
     boot_diagnostic::write(
-        "PASS arm-sgi target=1 irq=4 claim=4 eoi=4 restored=4 retired=4 idle=3 occupied=1 leave=2\n",
+        "PASS arm-sgi target=1 irq=5 claim=5 eoi=5 restored=5 retired=5 idle=3 occupied=1 leave=2\n",
     );
+    boot_diagnostic::write("PASS arm-room-idle ready=1 sgi=1 dispatched=1 leave=1\n");
     sender
         .release()
         .unwrap_or_else(|_| panic!("major SGI interface busy"))

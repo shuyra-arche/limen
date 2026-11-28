@@ -3,7 +3,7 @@
 use core::{
     arch::asm,
     cell::UnsafeCell,
-    hint::spin_loop,
+    hint::{black_box, spin_loop},
     mem::MaybeUninit,
     ptr,
     sync::atomic::{
@@ -13,6 +13,11 @@ use core::{
 };
 
 use kernel::{
+    basis::{
+        execution::{Current, Error, Execution, KernelBinding, RuntimeEntry},
+        room::{Occupancy, Participants},
+        unit::{End, Stacks, UnitRecord},
+    },
     entry::{boot::Boot, hook::Binding},
     metal::{
         interrupt::{
@@ -23,7 +28,9 @@ use kernel::{
         },
         memory::access::treaty::device::DeviceWindow,
         platform::{boot::treaty::write, description::treaty::acpi::Madt},
-        processor::treaty::{Irq, LocalStorage, Minor, ProcessorId, RuntimeTrap, Stack, Startup},
+        processor::treaty::{
+            Dispatchers, Irq, LocalStorage, Minor, ProcessorId, RuntimeTrap, Stack, Startup,
+        },
         sync::treaty::{Supply, TurnAcquireError, TurnLock},
     },
 };
@@ -34,6 +41,8 @@ use uefi_fixture as fixture;
 mod hardware;
 
 const VECTOR: u8 = 0xf3;
+const ROOM_ROUND: usize = 4;
+const RESULT: u64 = 42;
 static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
 static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());
 static MINOR: Minor = Minor::new(&MINOR_STACK, &MINOR_LOCAL);
@@ -42,6 +51,12 @@ static WORK: AtomicUsize = AtomicUsize::new(0);
 static WINDOW: AtomicUsize = AtomicUsize::new(0);
 static RECHECKED: AtomicUsize = AtomicUsize::new(0);
 static RECEIVED: AtomicUsize = AtomicUsize::new(0);
+static mut STACKS: Stacks = Stacks::new();
+static mut RECORDS: [UnitRecord<KernelBinding>; 1] = [const { UnitRecord::EMPTY }; 1];
+static mut PARTICIPANTS: Participants<1> = Participants::new();
+static mut DISPATCHERS: Dispatchers<Occupancy, 1> = Dispatchers::new();
+static mut EXECUTION: MaybeUninit<Execution> = MaybeUninit::uninit();
+static RUNTIME: RuntimeEntry<()> = RuntimeEntry::new(schedule, ());
 
 struct Receiver {
     controller: UnsafeCell<Option<LocalApic<'static>>>,
@@ -96,6 +111,15 @@ fn masked() -> bool {
     flags & (1 << 9) == 0
 }
 
+fn execution() -> &'static Execution {
+    // The major initializes this before releasing the minor.
+    unsafe { (&*(&raw const EXECUTION)).assume_init_ref() }
+}
+
+fn unit(_: &mut Current) -> u64 {
+    RESULT
+}
+
 fn minor(processor: usize, argument: usize) -> ! {
     fixture::check_minor(&MINOR, processor);
     // The major retains the immutable launch arguments until this guest exits.
@@ -130,6 +154,21 @@ fn minor(processor: usize, argument: usize) -> ! {
         Err(Failure::Scope)
     ));
 
+    assert!(matches!(execution().attach(), Err(Error::Unsupported)));
+    unsafe { execution().run(&RUNTIME) }.expect("resident minor dispatcher")
+}
+
+fn schedule(_: &'static ()) -> ! {
+    let mark = black_box(0u8);
+    assert!(
+        !MINOR
+            .stack_range()
+            .contains(&ptr::from_ref(black_box(&mark)).addr())
+    );
+    let execution = execution();
+    execution.attach().expect("attach from resident dispatcher");
+    let receiver = HOOK.owner();
+    let endpoint = unsafe { (&*receiver.endpoint.get()).assume_init_ref() };
     let idle = || {
         let controller = unsafe { (&mut *receiver.controller.get()).as_mut().unwrap() };
         endpoint.idle(controller)
@@ -174,6 +213,37 @@ fn minor(processor: usize, argument: usize) -> ! {
         assert_eq!(controller.reception(), Reception::Idle);
         RECHECKED.store(round, Release);
     }
+
+    let observation = execution.observe_idle().unwrap().expect("Room empty");
+    let mut first = true;
+    let observation_changed = unsafe {
+        idle().unwrap().wait(|| {
+            let changed = observation.changed();
+            if first {
+                first = false;
+                assert!(!changed);
+                WINDOW.store(ROOM_ROUND, Release);
+            }
+            changed
+        })
+    };
+    assert_eq!(observation_changed, Ok(Wake::Ready));
+    assert!(masked());
+    assert_eq!(RECEIVED.load(Acquire), 3);
+    let controller = unsafe { (&*receiver.controller.get()).as_ref().unwrap() };
+    assert_eq!(controller.reception(), Reception::Idle);
+    let occupied = execution.enter().unwrap().expect("original Ready Unit");
+    assert_eq!(occupied.processor(), fixture::q35::processor());
+    assert_eq!(execution.pending_leave(), Ok(Some(occupied)));
+    execution.vacate(occupied).expect("matching native leave");
+    assert_eq!(execution.pending_leave(), Ok(None));
+    execution.finish_end(occupied.unit()).unwrap();
+    assert_eq!(
+        execution.reap(occupied.unit()),
+        Ok(End::Returned { value: RESULT })
+    );
+    assert!(execution.observe_idle().unwrap().is_some());
+    RECHECKED.store(ROOM_ROUND, Release);
     loop {
         spin_loop()
     }
@@ -198,7 +268,22 @@ fn issue(sender: &mut IpiRoute<'_, '_>) {
     }
 }
 
-pub fn check(boot: Boot<'_>) {
+pub fn check(mut boot: Boot<'_>) {
+    let major = boot.take_major().expect("admitted major");
+    let runtime = Execution::new(
+        major,
+        boot.terminal(),
+        unsafe { &mut *(&raw mut STACKS) },
+        unsafe { &mut *(&raw mut RECORDS) },
+        unsafe { &mut *(&raw mut PARTICIPANTS) },
+        unsafe { &mut *(&raw mut DISPATCHERS) },
+    )
+    .map_err(|failure| failure.reason)
+    .expect("admit cooperative profile");
+    unsafe { (&mut *(&raw mut EXECUTION)).write(runtime) };
+    let execution = execution();
+    let unit = unsafe { execution.create_migratable(unit) }.expect("native wake Unit");
+
     let view = fixture::check_handoff(&boot, Some(&MINOR));
     let mut startup = fixture::inspect(&boot, &view);
     let madt = boot.acpi().unwrap().madt().unwrap();
@@ -238,4 +323,10 @@ pub fn check(boot: Boot<'_>) {
     issue(&mut sender);
     await_phase(&RECHECKED, 3);
     write("PASS x86 native idle: final-check=2 receive=2 eoi=2 if-masked=2 ready=2 recheck=1\n");
+    await_phase(&WINDOW, ROOM_ROUND);
+    execution.submit(unit).expect("original Room Ready");
+    issue(&mut sender);
+    await_phase(&RECHECKED, ROOM_ROUND);
+    assert_eq!(execution.lifecycle(unit), Err(Error::Gone));
+    write("PASS x86 room-idle resident=1 ready=1 ipi=1 eoi=1 dispatched=1 leave=1 reaped=1\n");
 }

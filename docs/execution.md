@@ -70,8 +70,10 @@ The native return leads back to Room to choose and occupy an actual Unit.
 
 The caller must keep an effective wake path to the dispatcher until the wait
 returns. The publisher commits Ready before issuing a native notification.
-RISC-V migration verification uses the real Ready publication from `vacate`
-and a peer SBI IPI, then dispatches the original Unit from Room.
+The resident dispatch scenarios have the major submit before its own
+attachment and notify the minor through the original SBI, GIC, or xAPIC
+route. The minor attaches on its permanent dispatcher stack, acknowledges
+the IRQ and runs the Unit from the same Room.
 
 ## Same-level IRQ entry
 
