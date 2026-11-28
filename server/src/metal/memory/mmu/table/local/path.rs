@@ -36,7 +36,11 @@ pub(super) enum Path {
     Leaf(Position),
 }
 
-pub(super) fn coordinate(format: TableFormat, address: InternalAddress, level: usize) -> Option<usize> {
+pub(super) fn coordinate(
+    format: TableFormat,
+    address: InternalAddress,
+    level: usize,
+) -> Option<usize> {
     match format {
         TableFormat::Riscv64(format) => format.index(address, level),
         TableFormat::Aarch64(format) => format.index(address, level),
@@ -49,7 +53,11 @@ impl LocalRoot<'_, '_> {
     /// invalid descriptor is a usable hole only when no original child
     /// occupies that entry. A nonzero descriptor without an owned branch
     /// may be a borrowed firmware path or a large leaf; reject it.
-    pub(super) fn path(&self, address: InternalAddress, mode: TurnMode) -> Result<Path, TableError> {
+    pub(super) fn path(
+        &self,
+        address: InternalAddress,
+        mode: TurnMode,
+    ) -> Result<Path, TableError> {
         if self.installed().is_none() || self.has_pending_supply() {
             return Err(TableError::State);
         }
@@ -75,7 +83,10 @@ impl LocalRoot<'_, '_> {
                     if unsafe { word.as_ptr().read_volatile() } != 0 {
                         return Err(TableError::Scope);
                     }
-                    Ok(Path::Missing { parent: position, index })
+                    Ok(Path::Missing {
+                        parent: position,
+                        index,
+                    })
                 });
             };
             if branch.detached
@@ -121,7 +132,8 @@ impl LocalRoot<'_, '_> {
                 if first.get() >> 21 != last.get() >> 21 {
                     return Ok(false);
                 }
-                let start = coordinate(position.store.format, first, 0).ok_or(TableError::Layout)?;
+                let start =
+                    coordinate(position.store.format, first, 0).ok_or(TableError::Layout)?;
                 let end = coordinate(position.store.format, last, 0).ok_or(TableError::Layout)?;
                 position.store.with_node(position.id, mode, |node, held| {
                     let page = position.page(node)?;

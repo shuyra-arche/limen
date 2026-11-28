@@ -13,7 +13,7 @@ use kernel::{
         sync::treaty::TurnMode::Fast,
     },
 };
-use limen_treaty::model::{InternalAddress, PhysicalAddress, PhysicalRange};
+use limen_treaty::model::{ByteLength, InternalAddress, PhysicalAddress, PhysicalRange};
 
 use super::super::memory::{self, extent};
 
@@ -76,7 +76,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     let original = unsafe { Controls::current() };
     let (mut control, profile) = unsafe { admit_inactive_upper(boot.processor()) }.unwrap();
     let mut tree =
-        unsafe { Tree::prepare(boot, range, evidence, TableFormat::Aarch64(profile), 2) };
+        unsafe { Tree::prepare(boot, range, evidence, TableFormat::Aarch64(profile), 3) };
     let [leaf, _, _, root] = tree.nodes;
 
     let lower = ptr::from_ref(&WITNESS).addr() as u64;
@@ -133,11 +133,11 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     let address = InternalAddress::new(UPPER + PAGE);
     let target = PhysicalAddress::new(witness);
     let mut edit = active
-        .prepare_translation(address, target, LeafAccess::ReadOnly, Fast)
+        .prepare_translation(address, target, ByteLength::new(PAGE), LeafAccess::ReadOnly, Fast)
         .unwrap();
     assert_eq!(edit.phase(), TranslationPhase::Prepared);
     assert!(matches!(
-        active.prepare_translation(address, target, LeafAccess::ReadOnly, Fast),
+        active.prepare_translation(address, target, ByteLength::new(PAGE), LeafAccess::ReadOnly, Fast),
         Err(kernel::metal::memory::mmu::treaty::TableError::Occupied)
     ));
     assert_eq!(unsafe { active.restore() }, Err(SwitchError::Current));
@@ -164,6 +164,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
         .prepare_translation(
             address,
             PhysicalAddress::new(replacement_physical),
+            ByteLength::new(PAGE),
             LeafAccess::ReadOnly,
             Fast,
         )
@@ -178,7 +179,7 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     assert_eq!(value, REPLACEMENT.0[0]);
     unsafe { active.remove_translation(&mut replacement, Fast) }.unwrap();
     let mut cancelled = active
-        .prepare_translation(address, target, LeafAccess::ReadOnly, Fast)
+        .prepare_translation(address, target, ByteLength::new(PAGE), LeafAccess::ReadOnly, Fast)
         .unwrap();
     unsafe { active.remove_translation(&mut cancelled, Fast) }.unwrap();
     assert_eq!(cancelled.phase(), TranslationPhase::Removed);
@@ -192,12 +193,14 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
             .write(Nest::new(&mut *(&raw mut SPANS), &mut *(&raw mut MAPPINGS)).unwrap())
     };
     let mut owner = nest.publish(active).ok().unwrap();
-    let data_start = range.start().get() + 6 * PAGE;
-    let data = extent(data_start, data_start + PAGE);
+    let spare_start = range.start().get() + 6 * PAGE;
+    let data_start = (spare_start + PAGE).next_multiple_of(2 * PAGE);
+    let data = extent(data_start, data_start + 2 * PAGE);
+    assert!(range.covers(data));
     let spare = unsafe {
         tree.prepare_leaf(
             TableFormat::Aarch64(profile),
-            extent(data_start + PAGE, data_start + 2 * PAGE),
+            extent(spare_start, spare_start + PAGE),
         )
     };
     let expanded = tree.allowance.balance().unwrap();
@@ -212,23 +215,26 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
             &[(spare.store, spare.id)],
             memory::mapped,
             |address| {
+                let physical = data_start + (address - dynamic_address);
                 let observed = translation(address);
-                assert_eq!(observed & (OUTPUT | 1), data_start);
+                assert_eq!(observed & (OUTPUT | 1), physical);
                 assert_eq!(
                     observed & MEMORY_ATTRIBUTES,
-                    translation(data_start) & MEMORY_ATTRIBUTES
+                    translation(physical) & MEMORY_ATTRIBUTES
                 );
                 let value: u64;
                 asm!("ldr {}, [{}]", out(reg) value, in(reg) address, options(nostack, readonly));
                 value
             },
             |address, value| {
-                assert_eq!(write_translation(address) & (OUTPUT | 1), data_start);
+                let physical = data_start + (address - dynamic_address);
+                assert_eq!(write_translation(address) & (OUTPUT | 1), physical);
                 asm!("str {}, [{}]", in(reg) value, in(reg) address, options(nostack));
             },
         )
     };
     assert_ne!(translation(dynamic_address) & 1, 0);
+    assert_ne!(translation(dynamic_address + PAGE) & 1, 0);
     assert_eq!(tree.allowance.balance(), Ok(expanded));
     owner.begin_delete().unwrap();
     owner.begin_drain().unwrap();

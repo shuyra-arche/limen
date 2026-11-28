@@ -2,7 +2,7 @@
 
 use core::ptr;
 
-use limen_treaty::model::{ByteLength, ByteRange, PhysicalAddress};
+use limen_treaty::model::{ByteLength, ByteRange, InternalRange, PhysicalAddress, PhysicalRange};
 
 use crate::{
     basis::nest::MappingId,
@@ -22,8 +22,8 @@ fn leaf(rights: Rights) -> Result<LeafAccess, Error> {
     }
 }
 
-fn physical(base: PhysicalAddress, range: ByteRange) -> Result<PhysicalAddress, Error> {
-    if range.length() != ByteLength::new(4096) {
+fn physical(base: PhysicalAddress, range: ByteRange) -> Result<PhysicalRange, Error> {
+    if !range.length().get().is_multiple_of(4096) {
         return Err(Error::Access);
     }
     let start = base
@@ -32,7 +32,7 @@ fn physical(base: PhysicalAddress, range: ByteRange) -> Result<PhysicalAddress, 
     if !start.get().is_multiple_of(4096) {
         return Err(Error::Scope);
     }
-    Ok(start)
+    start.range(range.length()).ok_or(Error::Scope)
 }
 
 /// Discovery snapshot of a real preparation. None of these copied values
@@ -44,7 +44,7 @@ pub(in crate::basis) struct MappingInput {
     id: AccessId,
     range: ByteRange,
     rights: Rights,
-    physical: PhysicalAddress,
+    physical: PhysicalRange,
 }
 
 impl AccessPreparation {
@@ -84,7 +84,7 @@ impl AccessPreparation {
 }
 
 impl MappingInput {
-    pub(in crate::basis) fn physical(&self) -> PhysicalAddress {
+    pub(in crate::basis) fn physical(&self) -> PhysicalRange {
         self.physical
     }
 
@@ -110,11 +110,13 @@ impl MappingInput {
         &self,
         held: &mut TurnAccess<'_>,
         owner: MappingId,
+        range: InternalRange,
         translation: &LocalTranslation,
     ) -> Result<AcceptedAccess, Error> {
         let cell_id = self.id.0.scope();
         if translation.phase() != TranslationPhase::Prepared
             || translation.physical() != self.physical
+            || translation.range() != range
             || translation.access() != self.leaf()
         {
             return Err(Error::Scope);

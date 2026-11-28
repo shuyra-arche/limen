@@ -49,14 +49,17 @@ pub(super) unsafe fn check(
     store: impl Fn(u64, u64),
 ) {
     const PAGE: u64 = 4096;
+    const LENGTH: u64 = 2 * PAGE;
+    assert_eq!(physical.length(), ByteLength::new(LENGTH));
+    assert!(physical.start().get().is_multiple_of(LENGTH));
     let balance = allowance.balance().unwrap();
     let mut spending = None;
     let mut closing = None;
     unsafe {
         DATA_SPENDING.publish_initial(
             allowance,
-            ByteLength::new(PAGE),
-            Alignment::new(PAGE).unwrap(),
+            ByteLength::new(LENGTH),
+            Alignment::new(LENGTH).unwrap(),
             InitialPend {
                 spending: &mut spending,
                 closing: &mut closing,
@@ -67,8 +70,8 @@ pub(super) unsafe fn check(
     .unwrap();
     let spending = spending.unwrap();
     let request = Request::new(
-        ByteLength::new(PAGE),
-        Alignment::new(PAGE).unwrap(),
+        ByteLength::new(LENGTH),
+        Alignment::new(LENGTH).unwrap(),
         physical,
         None,
         RamPurpose::Cell,
@@ -104,8 +107,8 @@ pub(super) unsafe fn check(
         .unwrap();
     closing.unwrap().revoke().unwrap();
     spending.release().unwrap();
-    let bytes = ByteRange::new(ByteOffset::new(0), ByteOffset::new(PAGE)).unwrap();
-    let virtual_range = range(address, address + 2 * PAGE);
+    let bytes = ByteRange::new(ByteOffset::new(0), ByteOffset::new(LENGTH)).unwrap();
+    let virtual_range = range(address, address + 2 * LENGTH);
     let span = owner.reserve_span(virtual_range).unwrap();
     let first = DATA_CONSTRUCTION
         .prepare(cell, bytes, Rights::READ_WRITE, &FIRST_ACCESS, Fast)
@@ -114,7 +117,7 @@ pub(super) unsafe fn check(
         .prepare(cell, bytes, Rights::READ, &SECOND_ACCESS, Fast)
         .unwrap();
     let virtual_address = InternalAddress::new(address);
-    let other_address = InternalAddress::new(address + PAGE);
+    let other_address = InternalAddress::new(address + LENGTH);
     assert!(!supplied.is_empty());
     assert_eq!(
         owner.missing_table(span, virtual_address, Fast),
@@ -142,7 +145,7 @@ pub(super) unsafe fn check(
             unsafe {
                 owner.supply_table(
                     span,
-                    InternalAddress::new(address + 2 * PAGE),
+                    InternalAddress::new(address + 2 * LENGTH),
                     store,
                     id,
                     Fast,
@@ -175,6 +178,7 @@ pub(super) unsafe fn check(
     assert_eq!(accepted.phase, MappingPhase::Installing);
     assert_eq!(accepted.access, first);
     assert_eq!(accepted.rights, Rights::READ_WRITE);
+    assert_eq!(accepted.range, range(address, address + LENGTH));
     assert_eq!(
         unsafe { owner.map(span, virtual_address, &SECOND_ACCESS, second, Fast) },
         Err(nest::Error::Conflict)
@@ -184,13 +188,58 @@ pub(super) unsafe fn check(
         Err(nest::Error::Capacity)
     );
     assert_eq!(SECOND_ACCESS.observe(), Ok(Some(second)));
+
+    // Cancel after the first real leaf was made, but before the second.
+    // The full address range and the accepted physical use remain occupied.
     assert_eq!(
         unsafe { owner.advance_mapping(mapping, Fast) },
-        Ok(MappingProgress::Active)
+        Ok(MappingProgress::Pending)
+    );
+    assert_eq!(
+        owner.observe_mapping(mapping).unwrap().phase,
+        MappingPhase::Installing
     );
     assert_eq!(load(address), 0);
+    owner.begin_unmap(mapping).unwrap();
+    assert_eq!(
+        unsafe { owner.advance_mapping(mapping, Fast) },
+        Ok(MappingProgress::Pending)
+    );
+    assert_eq!(
+        unsafe { owner.map(span, virtual_address, &SECOND_ACCESS, second, Fast) },
+        Err(nest::Error::Conflict)
+    );
+    let mut cancelled = None;
+    assert_eq!(
+        unsafe { DATA_CONSTRUCTION.retire(cell, &mut cancelled, Fast) },
+        Err(cell::Error::Access)
+    );
+    assert!(cancelled.is_none());
+    assert_eq!(
+        unsafe { owner.advance_mapping(mapping, Fast) },
+        Ok(MappingProgress::Removed)
+    );
+    assert_eq!(owner.observe_mapping(mapping), Err(nest::Error::Gone));
+    let first = DATA_CONSTRUCTION
+        .prepare(cell, bytes, Rights::READ_WRITE, &FIRST_ACCESS, Fast)
+        .unwrap();
+    let complete = unsafe { owner.map(span, virtual_address, &FIRST_ACCESS, first, Fast) }.unwrap();
+    assert_ne!(complete, mapping);
+    assert_eq!(
+        unsafe { owner.advance_mapping(complete, Fast) },
+        Ok(MappingProgress::Pending)
+    );
+    assert_eq!(
+        unsafe { owner.advance_mapping(complete, Fast) },
+        Ok(MappingProgress::Active)
+    );
+    let mapping = complete;
+    assert_eq!(load(address), 0);
+    assert_eq!(load(address + PAGE), 0);
     let written = 0x1742_ace0_dad0_3210u64;
+    let adjacent = 0xe84b_9913_1020_321fu64;
     store(address, written);
+    store(address + PAGE, adjacent);
     owner.begin_unmap(mapping).unwrap();
     assert_eq!(
         owner.observe_mapping(mapping).unwrap().phase,
@@ -204,6 +253,18 @@ pub(super) unsafe fn check(
     assert!(retired.is_none());
     assert_eq!(
         unsafe { owner.advance_mapping(mapping, Fast) },
+        Ok(MappingProgress::Pending)
+    );
+    assert_eq!(
+        owner.observe_mapping(mapping).unwrap().phase,
+        MappingPhase::Removing
+    );
+    assert_eq!(
+        unsafe { DATA_CONSTRUCTION.retire(cell, &mut retired, Fast) },
+        Err(cell::Error::Access)
+    );
+    assert_eq!(
+        unsafe { owner.advance_mapping(mapping, Fast) },
         Ok(MappingProgress::Removed)
     );
     assert_eq!(owner.observe_mapping(mapping), Err(nest::Error::Gone));
@@ -214,9 +275,14 @@ pub(super) unsafe fn check(
     assert_eq!(owner.begin_unmap(mapping), Err(nest::Error::Gone));
     assert_eq!(
         unsafe { owner.advance_mapping(replacement, Fast) },
+        Ok(MappingProgress::Pending)
+    );
+    assert_eq!(
+        unsafe { owner.advance_mapping(replacement, Fast) },
         Ok(MappingProgress::Active)
     );
     assert_eq!(load(address), written);
+    assert_eq!(load(address + PAGE), adjacent);
     let late = DATA_CONSTRUCTION
         .prepare(cell, bytes, Rights::READ, &FIRST_ACCESS, Fast)
         .unwrap();
@@ -233,6 +299,11 @@ pub(super) unsafe fn check(
         Err(nest::Error::Shut)
     );
     assert_eq!(FIRST_ACCESS.observe(), Ok(Some(late)));
+    assert_eq!(
+        unsafe { owner.advance_mapping(replacement, Fast) },
+        Ok(MappingProgress::Pending)
+    );
+    assert_eq!(owner.finish_release_span(span), Err(nest::Error::Busy));
     assert_eq!(
         unsafe { owner.advance_mapping(replacement, Fast) },
         Ok(MappingProgress::Removed)
@@ -265,6 +336,6 @@ pub(super) unsafe fn check(
     receipt.acknowledge().unwrap();
     assert_eq!(allowance.balance(), Ok(balance));
     kernel::metal::platform::boot::treaty::write(
-        "PASS ordinary-mapping allocation=1 zero=1 joint=1 conflict=1 capacity=1 rw=1 remap=1 close=1 revoke=1 finish=1 refund=1 supply=1\n",
+        "PASS ordinary-mapping allocation=1 zero=1 joint=1 conflict=1 capacity=1 rw=1 remap=1 close=1 revoke=1 finish=1 refund=1 supply=1 leaves=2 partial=1\n",
     );
 }

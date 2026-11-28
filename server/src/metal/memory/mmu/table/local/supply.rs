@@ -101,12 +101,21 @@ impl LocalRoot<'_, '_> {
             // All recoverable checks have succeeded. First publish custody
             // and the exact outstanding effect, then make the initialized
             // child hardware-reachable. No ordinary failure follows.
-            page.exposure = Exposure::Child { parent: parent.id, index };
+            page.exposure = Exposure::Child {
+                parent: parent.id,
+                index,
+            };
             let (state, _) = parent_slot.together(held, &table.state);
-            let page = parent.page(&mut state.node).expect("original retained parent");
+            let page = parent
+                .page(&mut state.node)
+                .expect("original retained parent");
             page.children = children;
             state.set_branch(position, Some(branch));
-            self.supply = Some(Pending { parent, branch, physical });
+            self.supply = Some(Pending {
+                parent,
+                branch,
+                physical,
+            });
             unsafe {
                 self.control.order_table();
                 word.as_ptr().write_volatile(encoded.to_le());
@@ -130,12 +139,14 @@ impl LocalRoot<'_, '_> {
             return Err(TableError::State);
         }
         unsafe { self.control.synchronize_tree(self.next) }.map_err(TableError::Switch)?;
-        let Pending { parent, branch, physical } = *pending;
-        parent.store.with_branch(
-            parent.id,
+        let Pending {
+            parent,
             branch,
-            mode,
-            |held, parent_slot, child_slot| {
+            physical,
+        } = *pending;
+        parent
+            .store
+            .with_branch(parent.id, branch, mode, |held, parent_slot, child_slot| {
                 let (state, mut locked) = parent_slot.together(held, &parent.store.state);
                 let retained = state.branch(branch.index).ok_or(TableError::State)?.1;
                 if retained.id != branch.id
@@ -145,7 +156,9 @@ impl LocalRoot<'_, '_> {
                     return Err(TableError::Scope);
                 }
                 let page = parent.page(&mut state.node)?;
-                let word = page.cell.retained_word(&mut locked, &page.access, branch.index)?;
+                let word = page
+                    .cell
+                    .retained_word(&mut locked, &page.access, branch.index)?;
                 let observed = u64::from_le(unsafe { word.as_ptr().read_volatile() });
                 if !parent.store.format.matches_branch(physical, observed) {
                     return Err(TableError::State);
@@ -161,8 +174,7 @@ impl LocalRoot<'_, '_> {
                     return Err(TableError::Scope);
                 }
                 Ok(())
-            },
-        )?;
+            })?;
         self.supply = None;
         Ok(())
     }

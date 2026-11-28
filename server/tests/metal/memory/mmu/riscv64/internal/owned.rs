@@ -269,12 +269,12 @@ pub fn check(boot: &Boot<'_>) {
                 regions: 1,
                 grains: PAGES,
                 roots: 8,
-                allocations: CAPACITY + 1,
-                returns: CAPACITY + 1,
+                allocations: CAPACITY + 2,
+                returns: CAPACITY + 2,
                 allowances: 1,
                 edits: 128,
             },
-            (CAPACITY as u64 + 1) * PAGE,
+            (CAPACITY as u64 + 2) * PAGE,
             &mut allowance,
             &mut [],
         )
@@ -362,11 +362,11 @@ pub fn check(boot: &Boot<'_>) {
     let address = InternalAddress::new(ALIAS + PAGE);
     let target = PhysicalAddress::new(witness);
     let mut edit = active
-        .prepare_translation(address, target, LeafAccess::ReadOnly, Fast)
+        .prepare_translation(address, target, ByteLength::new(PAGE), LeafAccess::ReadOnly, Fast)
         .unwrap();
     assert_eq!(edit.phase(), TranslationPhase::Prepared);
     assert!(matches!(
-        active.prepare_translation(address, target, LeafAccess::ReadOnly, Fast),
+        active.prepare_translation(address, target, ByteLength::new(PAGE), LeafAccess::ReadOnly, Fast),
         Err(kernel::metal::memory::mmu::treaty::TableError::Occupied)
     ));
     assert_eq!(unsafe { active.restore() }, Err(SwitchError::Current));
@@ -389,6 +389,7 @@ pub fn check(boot: &Boot<'_>) {
         .prepare_translation(
             address,
             PhysicalAddress::new(replacement_physical),
+            ByteLength::new(PAGE),
             LeafAccess::ReadOnly,
             Fast,
         )
@@ -403,7 +404,7 @@ pub fn check(boot: &Boot<'_>) {
     assert_eq!(value, REPLACEMENT.0[0]);
     unsafe { active.remove_translation(&mut replacement, Fast) }.unwrap();
     let mut cancelled = active
-        .prepare_translation(address, target, LeafAccess::ReadOnly, Fast)
+        .prepare_translation(address, target, ByteLength::new(PAGE), LeafAccess::ReadOnly, Fast)
         .unwrap();
     unsafe { active.remove_translation(&mut cancelled, Fast) }.unwrap();
     assert_eq!(cancelled.phase(), TranslationPhase::Removed);
@@ -425,7 +426,7 @@ pub fn check(boot: &Boot<'_>) {
             .write(Nest::new(&mut *(&raw mut SPANS), &mut *(&raw mut MAPPINGS)).unwrap())
     };
     let mut owner = nest.publish(active).ok().unwrap();
-    let data_start = BASE + (PAGES as u64 - 1) * PAGE;
+    let data_start = BASE + (PAGES as u64 - 2) * PAGE;
     assert!(data_start >= BASE + (BACKING + CAPACITY) as u64 * PAGE);
     // Grow a previously absent top-level Sv39 branch using the two
     // real supplied levels, without touching the original ALIAS branch.
@@ -433,12 +434,15 @@ pub fn check(boot: &Boot<'_>) {
     let middle = tree.node(1, dynamic_address);
     let leaf = tree.node(0, dynamic_address);
     let expanded = allowance.balance().unwrap();
-    assert_eq!(expanded.occupied().get(), charged.occupied().get() + 2 * PAGE);
+    assert_eq!(
+        expanded.occupied().get(),
+        charged.occupied().get() + 2 * PAGE
+    );
     unsafe {
         mapping::check(
             &mut owner,
             allowance,
-            extent(data_start, data_start + PAGE),
+            extent(data_start, data_start + 2 * PAGE),
             dynamic_address,
             &[(middle.store, middle.id), (leaf.store, leaf.id)],
             mapped,

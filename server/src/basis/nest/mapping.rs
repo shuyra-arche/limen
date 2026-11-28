@@ -2,7 +2,7 @@
 
 use core::{cmp::Ordering, ptr};
 
-use limen_treaty::model::{ByteLength, InternalAddress, InternalRange};
+use limen_treaty::model::{InternalAddress, InternalRange};
 
 use crate::{
     basis::cell::{AcceptedAccess, AccessId, AccessPreparation, MappingInput, Rights},
@@ -10,7 +10,7 @@ use crate::{
         identity::treaty::{Entry, GenerationTable, Key, ReserveError},
         index::{Insertion, Link, Tree},
         memory::mmu::treaty::{LocalTranslation, TranslationPhase},
-        sync::treaty::{TurnMode, TurnWorkspace},
+        sync::treaty::{TurnAcquireError, TurnMode, TurnWorkspace},
     },
 };
 
@@ -224,8 +224,9 @@ impl LocalNest<'_, '_> {
         if self.work.prepared.is_some() {
             return Err(Error::Busy);
         }
-        let end = address.advance(ByteLength::new(4096)).ok_or(Error::Scope)?;
-        let range = InternalRange::new(address, end).ok_or(Error::Scope)?;
+        let input: MappingInput = receiver.mapping(access).map_err(Error::Cell)?;
+        let physical = input.physical();
+        let range = address.range(physical.length()).ok_or(Error::Scope)?;
         let binding = self.binding;
         binding.state().acquire(|state| {
             if state.record(binding.id())?.phase == Phase::Draining {
@@ -235,10 +236,9 @@ impl LocalNest<'_, '_> {
             state.mappings.prepare(binding.id(), range)?;
             Ok(())
         })??;
-        let input: MappingInput = receiver.mapping(access).map_err(Error::Cell)?;
         let translation = self
             .root
-            .prepare_translation(address, input.physical(), input.leaf(), mode)
+            .prepare_translation(address, physical.start(), physical.length(), input.leaf(), mode)
             .map_err(Error::Table)?;
         self.work.prepared = Some(translation);
 
@@ -258,6 +258,7 @@ impl LocalNest<'_, '_> {
                     .accept(
                         held,
                         id,
+                        range,
                         self.work
                             .prepared
                             .as_ref()
@@ -293,8 +294,16 @@ impl LocalNest<'_, '_> {
     /// Settle an unaccepted native preparation. It never wrote a leaf.
     pub fn cancel_preparation(&mut self, mode: TurnMode) -> Result<(), Error> {
         if let Some(translation) = self.work.prepared.as_mut() {
-            assert_eq!(translation.phase(), TranslationPhase::Prepared);
-            unsafe { self.root.remove_translation(translation, mode) }.map_err(Error::Table)?;
+            assert!(matches!(
+                translation.phase(),
+                TranslationPhase::Prepared | TranslationPhase::Removing
+            ));
+            // At most four original, never-written leaves. A failed step
+            // retains the exact remaining claims for a later cancellation.
+            while translation.phase() != TranslationPhase::Removed {
+                unsafe { self.root.remove_translation(translation, mode) }
+                    .map_err(Error::Table)?;
+            }
             self.work.prepared = None;
         }
         Ok(())
@@ -376,8 +385,13 @@ impl LocalNest<'_, '_> {
             if let Err(error) =
                 unsafe { self.root.install_translation(&mut work.translation, mode) }
             {
-                work.failed_install = true;
+                if error != TableError::Acquire(TurnAcquireError::Busy) {
+                    work.failed_install = true;
+                }
                 return Err(Error::Table(error));
+            }
+            if work.translation.phase() != TranslationPhase::Active {
+                return Ok(MappingProgress::Pending);
             }
             return binding.state().acquire(|state| {
                 let original = state.mappings.original(id)?;
@@ -394,6 +408,9 @@ impl LocalNest<'_, '_> {
 
         unsafe { self.root.remove_translation(&mut work.translation, mode) }
             .map_err(Error::Table)?;
+        if work.translation.phase() != TranslationPhase::Removed {
+            return Ok(MappingProgress::Pending);
+        }
         let slot = binding
             .state()
             .acquire(|state| Ok::<_, Error>(state.mappings.original(id)?.access.slot()))??;
@@ -412,6 +429,9 @@ impl LocalNest<'_, '_> {
             let (state, mut cell_locked) = slot.together(held, binding.state());
             let original = state.mappings.original(id)?;
             let work = self.work.active.as_ref().expect("removed original work");
+            if work.translation.range() != original.range {
+                return Err(Error::Scope);
+            }
             original
                 .access
                 .finish_locked(&mut cell_locked, id, &work.translation)

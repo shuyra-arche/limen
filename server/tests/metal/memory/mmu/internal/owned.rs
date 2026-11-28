@@ -23,7 +23,7 @@ use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
 use super::memory::{extent, mapped};
 
-pub(super) const PAGES: usize = 8;
+pub(super) const PAGES: usize = 12;
 const PAGE: u64 = 4096;
 const LEVELS: usize = 4;
 
@@ -130,7 +130,7 @@ impl Tree {
             maximum: ByteLength::new(range.length().get()),
             regions: 1,
             grains: PAGES,
-            roots: 4,
+            roots: 8,
             allocations: pages,
             returns: pages,
             allowances: 1,
@@ -216,13 +216,16 @@ impl Tree {
     ) -> Node {
         assert!(self.spare.is_none());
         let store: &'static TableStore = unsafe {
-            (&mut *(&raw mut SPARE_TABLE)).write(
-                TableStore::for_level(format, 0, &mut *(&raw mut SPARE_BRANCHES)).unwrap(),
-            )
+            (&mut *(&raw mut SPARE_TABLE))
+                .write(TableStore::for_level(format, 0, &mut *(&raw mut SPARE_BRANCHES)).unwrap())
         };
         let (id, allocation) =
             unsafe { make_table(store, self.allowance, self.handle, LEVELS, range) };
-        let node = Node { store, id, allocation };
+        let node = Node {
+            store,
+            id,
+            allocation,
+        };
         self.spare = Some(node);
         node
     }

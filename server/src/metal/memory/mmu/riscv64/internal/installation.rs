@@ -84,7 +84,12 @@ impl NativeRoot<'_> {
     #[cfg(limen_cooperative)]
     pub(in crate::metal::memory::mmu) unsafe fn synchronize_tree() {
         unsafe {
-            asm!("fence rw, rw", "sfence.vma x0, x0", "fence rw, rw", options(nostack));
+            asm!(
+                "fence rw, rw",
+                "sfence.vma x0, x0",
+                "fence rw, rw",
+                options(nostack)
+            );
         }
     }
 

@@ -204,7 +204,10 @@ impl NativeRoot {
     pub(in crate::metal::memory::mmu) unsafe fn synchronize_tree() {
         unsafe {
             asm!(
-                "dsb ishst", "tlbi vmalle1is", "dsb ish", "isb",
+                "dsb ishst",
+                "tlbi vmalle1is",
+                "dsb ish",
+                "isb",
                 options(nostack, preserves_flags)
             );
         }

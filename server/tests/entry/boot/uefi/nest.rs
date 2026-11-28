@@ -130,7 +130,7 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         .find(|&index| unsafe { old.as_ptr().add(index).read_volatile() } == 0)
         .expect("unused original PML4 slot");
     let mut tree =
-        unsafe { Tree::prepare(&boot, physical, &evidence, TableFormat::X86_64(format), 2) };
+        unsafe { Tree::prepare(&boot, physical, &evidence, TableFormat::X86_64(format), 3) };
     let [leaf, _, _, root] = tree.nodes;
     let witness = ptr::from_ref(&WITNESS).addr() as u64;
     assert!(boot.image().covers(memory::extent(witness, witness + 4096)));
@@ -204,18 +204,21 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     owner.finish_release_span(second).unwrap();
     // Supply a new leaf table at the missing next 2 MiB path. Its actual
     // table page is separate from the ordinary data allocation.
-    let data_start = physical.start().get() + 6 * 4096;
+    let spare_start = physical.start().get() + 6 * 4096;
+    let data_start = (spare_start + 4096).next_multiple_of(8192);
+    let data = memory::extent(data_start, data_start + 8192);
+    assert!(physical.covers(data));
     let spare = unsafe {
         tree.prepare_leaf(
             TableFormat::X86_64(format),
-            memory::extent(data_start + 4096, data_start + 8192),
+            memory::extent(spare_start, spare_start + 4096),
         )
     };
     unsafe {
         mapping::check(
             &mut owner,
             tree.allowance,
-            memory::extent(data_start, data_start + 4096),
+            data,
             alias + (1 << 21),
             &[(spare.store, spare.id)],
             memory::mapped,
