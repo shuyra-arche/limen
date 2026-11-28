@@ -1,7 +1,7 @@
 //! Independent funded native stops on two actual processors of one Room.
 
 use core::{
-    arch::{asm, naked_asm},
+    arch::naked_asm,
     cell::UnsafeCell,
     hint::spin_loop,
     mem::MaybeUninit,
