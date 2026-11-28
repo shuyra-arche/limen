@@ -16,8 +16,9 @@ use limen_treaty::model::InternalAddress;
 mod observation;
 
 guest::entry! {
-    platform: platform::Platform::native(1),
+    platform: platform::Platform::native(4),
     test: |boot| {
+        uefi_fixture::check_handoff(&boot, None);
         let description = boot.acpi().unwrap().hpet().unwrap().expect("original HPET");
         let range = description.registers();
         // The q35 fixture retains the early identity device mapping with
