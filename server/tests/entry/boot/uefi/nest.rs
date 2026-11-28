@@ -168,7 +168,10 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     owner.begin_delete().unwrap();
     check_refs(id, Phase::Shutting, 2);
     assert_eq!(owner.begin_drain(), Err(nest::Error::Busy));
-    assert_eq!(unsafe { owner.advance_retirement() }, Err(nest::Error::Busy));
+    assert_eq!(
+        unsafe { owner.advance_retirement() },
+        Err(nest::Error::Busy)
+    );
     assert_eq!(
         unsafe { execution.create(never) },
         Err(Error::Nest(nest::Error::Shut))
@@ -239,7 +242,10 @@ fn schedule(initial: &'static Initial) -> ! {
     // belongs to its Draining Nest and cannot be made private.
     check_refs(initial.id, Phase::Draining, 0);
     assert_eq!(unsafe { owner.advance_retirement() }, Ok(Progress::Pending));
-    assert_eq!(root.store.descriptor(root.id, 0, Fast), Err(TableError::State));
+    assert_eq!(
+        root.store.descriptor(root.id, 0, Fast),
+        Err(TableError::State)
+    );
     assert_eq!(
         unsafe { root.store.retire_private(root.id, &mut retired, Fast) },
         Err(TableError::State)

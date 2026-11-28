@@ -23,7 +23,8 @@ use kernel::{
                     installation::admit_context,
                 },
                 treaty::{
-                    LeafAccess, Memory, TableBranch, TableError, TableFormat, TableProgress, TableId, TableStore,
+                    LeafAccess, Memory, TableBranch, TableError, TableFormat, TableId,
+                    TableProgress, TableStore,
                 },
             },
         },
@@ -230,8 +231,6 @@ impl Tree<'_> {
             }
         }
     }
-
-
 }
 
 pub fn check(boot: &Boot<'_>) {
@@ -371,7 +370,10 @@ pub fn check(boot: &Boot<'_>) {
             break;
         }
     }
-    assert_eq!(unsafe { active.advance_retirement(Fast) }, Ok(TableProgress::Complete));
+    assert_eq!(
+        unsafe { active.advance_retirement(Fast) },
+        Ok(TableProgress::Complete)
+    );
     drop(active);
     assert_eq!(control.current().unwrap().root(), None);
     assert_eq!(unsafe { (&raw const WRITABLE).read_volatile() }, 0x5678);

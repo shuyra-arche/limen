@@ -131,7 +131,10 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
             break;
         }
     }
-    assert_eq!(unsafe { active.advance_retirement(Fast) }, Ok(TableProgress::Complete));
+    assert_eq!(
+        unsafe { active.advance_retirement(Fast) },
+        Ok(TableProgress::Complete)
+    );
     drop(active);
     assert_eq!(control.current().unwrap().root(), None);
     tree.settle();

@@ -1,13 +1,13 @@
 //! Retain an owned tree through its original local native root installation.
 
+#[cfg(limen_cooperative)]
+use super::retirement::{Retirement, TableProgress};
 use super::{Exposure, Node, TableError, TableId, TablePage, TableStore};
 use crate::metal::{
     memory::mmu::treaty::{Context, LocalContext, SwitchError},
     sync::treaty::TurnMode,
 };
 use limen_treaty::model::PhysicalAddress;
-#[cfg(limen_cooperative)]
-use super::retirement::{Retirement, TableProgress};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Stage {

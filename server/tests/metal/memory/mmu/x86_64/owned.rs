@@ -141,8 +141,14 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
     assert_eq!(unsafe { Controls::current() }, original);
     // Restoration settles the hardware access, but the private root
     // must remain closed until its original retirement is complete.
-    assert_eq!(unsafe { active.advance_retirement(Fast) }, Ok(TableProgress::Pending));
-    assert_eq!(root.store.descriptor(root.id, INHERITED, Fast), Err(TableError::State));
+    assert_eq!(
+        unsafe { active.advance_retirement(Fast) },
+        Ok(TableProgress::Pending)
+    );
+    assert_eq!(
+        root.store.descriptor(root.id, INHERITED, Fast),
+        Err(TableError::State)
+    );
     let after = unsafe { old.as_ptr().add(INHERITED).read_volatile() };
     assert_eq!(after & !ACCESSED, before & !ACCESSED);
     assert_eq!(unsafe { old.as_ptr().add(slot).read_volatile() }, 0);
@@ -155,7 +161,10 @@ pub(super) unsafe fn check(boot: &Boot<'_>, range: PhysicalRange, evidence: &Ret
             break;
         }
     }
-    assert_eq!(unsafe { active.advance_retirement(Fast) }, Ok(TableProgress::Complete));
+    assert_eq!(
+        unsafe { active.advance_retirement(Fast) },
+        Ok(TableProgress::Complete)
+    );
     drop(active);
     assert_eq!(control.current(), Some(original_context));
     tree.settle();

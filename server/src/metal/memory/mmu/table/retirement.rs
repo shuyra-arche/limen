@@ -76,16 +76,26 @@ impl Retirement {
                     pending.phase = Phase::Returning;
                 }
                 Phase::Returning => {
-                    let returned = pending.receipt.as_ref().expect("original receipt")
-                        .finish(mode).map_err(TableError::Return)?;
-                    if returned.allocation != pending.allocation || returned.physical != pending.physical {
+                    let returned = pending
+                        .receipt
+                        .as_ref()
+                        .expect("original receipt")
+                        .finish(mode)
+                        .map_err(TableError::Return)?;
+                    if returned.allocation != pending.allocation
+                        || returned.physical != pending.physical
+                    {
                         return Err(TableError::Scope);
                     }
                     pending.phase = Phase::Refunded;
                 }
                 Phase::Refunded => {
-                    pending.receipt.as_ref().expect("completed receipt")
-                        .acknowledge().map_err(TableError::Return)?;
+                    pending
+                        .receipt
+                        .as_ref()
+                        .expect("completed receipt")
+                        .acknowledge()
+                        .map_err(TableError::Return)?;
                     pending.receipt = None;
                     pending.phase = Phase::Acknowledged;
                 }
@@ -120,7 +130,10 @@ impl Retirement {
                 return Err(TableError::State);
             }
             parent = Some(Parent { position, branch });
-            position = Position { store: branch.child, id: branch.id };
+            position = Position {
+                store: branch.child,
+                id: branch.id,
+            };
         }
         Err(TableError::State)
     }
@@ -151,37 +164,54 @@ impl Position {
         if self.store.level != child.level + 1 || self.store.format != child.format {
             return Err(TableError::Layout);
         }
-        self.store.with_branch(self.id, branch, mode, |held, parent_slot, child_slot| {
-            let (parent, mut cell) = parent_slot.together(held, &self.store.state);
-            let (index, original) = parent.branch(branch.index).ok_or(TableError::State)?;
-            if original.id != branch.id || original.detached {
-                return Err(TableError::Scope);
-            }
-            let page = retiring(&mut parent.node, root)?;
-            let encoded = TablePage::read(page.entry(&mut cell, branch.index)?);
+        self.store
+            .with_branch(self.id, branch, mode, |held, parent_slot, child_slot| {
+                let (parent, mut cell) = parent_slot.together(held, &self.store.state);
+                let (index, original) = parent.branch(branch.index).ok_or(TableError::State)?;
+                if original.id != branch.id || original.detached {
+                    return Err(TableError::Scope);
+                }
+                let page = retiring(&mut parent.node, root)?;
+                let encoded = TablePage::read(page.entry(&mut cell, branch.index)?);
 
-            let (child_state, mut cell) = child_slot.together(held, &child.state);
-            let Node::Admitted(page) = &mut child_state.node else {
-                return Err(TableError::State);
-            };
-            if page.exposure != (Exposure::Child { parent: self.id, index: branch.index })
-                || !self.store.format.matches_branch(page.cell.physical().start(), encoded)
-            {
-                return Err(TableError::State);
-            }
-            // This parent is already unreachable by native hardware and
-            // cannot be republished. Thaw the exact child into retirement,
-            // never into ordinary private access.
-            unsafe { page.cell.thaw(&mut cell, &page.access) }?;
-            page.exposure = Exposure::Retiring(root);
+                let (child_state, mut cell) = child_slot.together(held, &child.state);
+                let Node::Admitted(page) = &mut child_state.node else {
+                    return Err(TableError::State);
+                };
+                if page.exposure
+                    != (Exposure::Child {
+                        parent: self.id,
+                        index: branch.index,
+                    })
+                    || !self
+                        .store
+                        .format
+                        .matches_branch(page.cell.physical().start(), encoded)
+                {
+                    return Err(TableError::State);
+                }
+                // This parent is already unreachable by native hardware and
+                // cannot be republished. Thaw the exact child into retirement,
+                // never into ordinary private access.
+                unsafe { page.cell.thaw(&mut cell, &page.access) }?;
+                page.exposure = Exposure::Retiring(root);
 
-            let (parent, mut cell) = parent_slot.together(held, &self.store.state);
-            let page = retiring(&mut parent.node, root).expect("original retiring parent");
-            TablePage::write(page.entry(&mut cell, branch.index).expect("original entry"), 0);
-            // Keep both the child locator and its counted obligation.
-            parent.set_branch(index, Some(Branch { detached: true, ..branch }));
-            Ok(())
-        })
+                let (parent, mut cell) = parent_slot.together(held, &self.store.state);
+                let page = retiring(&mut parent.node, root).expect("original retiring parent");
+                TablePage::write(
+                    page.entry(&mut cell, branch.index).expect("original entry"),
+                    0,
+                );
+                // Keep both the child locator and its counted obligation.
+                parent.set_branch(
+                    index,
+                    Some(Branch {
+                        detached: true,
+                        ..branch
+                    }),
+                );
+                Ok(())
+            })
     }
 
     fn return_page(
@@ -201,7 +231,9 @@ impl Position {
             }
             let allocation = page.cell.allocation();
             let physical = page.cell.physical();
-            let material = page.cell.retire_private(held, self.id, Some(&page.access))?;
+            let material = page
+                .cell
+                .retire_private(held, self.id, Some(&page.access))?;
             *node = Node::Returning { root, allocation };
             // Publish the exact material into its prepaid receiver while
             // the original table state is still protected.
@@ -236,7 +268,11 @@ impl Pending {
     /// intact, so retry cannot repeat the refund or its acknowledgement.
     fn release(&self, root: TableId, mode: TurnMode) -> Result<(), TableError> {
         let store = self.position.store;
-        let Some(Parent { position: parent, branch }) = self.parent else {
+        let Some(Parent {
+            position: parent,
+            branch,
+        }) = self.parent
+        else {
             if self.position.id != root {
                 return Err(TableError::Scope);
             }
@@ -251,12 +287,16 @@ impl Pending {
         plan.insert(&parent.store.state).expect("parent retirement");
         plan.insert(&store.state).expect("original return node");
         plan.acquire(mode, |held| {
-            let (parent_state, child_state) = held.access_pair(&parent.store.state, &store.state)
+            let (parent_state, child_state) = held
+                .access_pair(&parent.store.state, &store.state)
                 .expect("original parent and child");
             self.check(root, child_state)?;
             parent.store.check(parent_state, parent.id)?;
             let (index, retained) = parent_state.branch(branch.index).ok_or(TableError::State)?;
-            if retained.id != self.position.id || !retained.detached || !core::ptr::eq(retained.child, store) {
+            if retained.id != self.position.id
+                || !retained.detached
+                || !core::ptr::eq(retained.child, store)
+            {
                 return Err(TableError::Scope);
             }
             let page = retiring(&mut parent_state.node, root)?;
