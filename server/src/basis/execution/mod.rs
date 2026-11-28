@@ -16,6 +16,7 @@ pub use fund::{
 
 use crate::{
     basis::{
+        nest::{self, Binding as NestBinding, LocalNest, NestId, NestRef},
         room::{
             self, AdmissionId, IdleObservation, LeaveDestination, Occupancy, Participants, Queue,
             Room,
@@ -49,6 +50,7 @@ pub enum Error {
     Timing,
     State,
     Unsupported,
+    Nest(nest::Error),
     #[cfg(target_arch = "riscv64")]
     Budget,
 }
@@ -66,6 +68,12 @@ pub enum DeadlineProgress {
 pub enum DeadlineError<T> {
     Execution(Error),
     Timer(T),
+}
+
+impl From<nest::Error> for Error {
+    fn from(error: nest::Error) -> Self {
+        Self::Nest(error)
+    }
 }
 
 impl From<unit::Error> for Error {
@@ -139,6 +147,7 @@ pub struct KernelBinding {
     entry: Entry,
     affinity: Option<ProcessorId>,
     queue: Queue,
+    nest: Option<NestRef>,
     #[cfg(target_arch = "riscv64")]
     span: Option<(usize, usize)>,
 }
@@ -164,6 +173,7 @@ impl<T: 'static> RuntimeEntry<T> {
 /// Cooperative coordination of Unit and Room across participating Executors.
 pub struct Execution {
     terminal: Terminal,
+    nest: Option<NestBinding>,
     units: TurnLock<Units<KernelBinding>>,
     room: TurnLock<Room<STACK_CAPACITY>>,
     dispatchers: &'static [Dispatcher<Occupancy>],
@@ -202,10 +212,31 @@ impl Execution {
         }
         Ok(Self {
             terminal,
+            nest: None,
             units: TurnLock::new(Units::new(stacks, records)),
             room: TurnLock::new(participants.room()),
             dispatchers: dispatchers.records(),
         })
+    }
+
+    /// Select the actual installed Kernel Nest before publishing any Unit.
+    /// The inherited boot execution prefix has no Nest identity; it must
+    /// not manufacture one from a firmware address or Bare mode.
+    pub fn bind_nest(&mut self, owner: &LocalNest<'_, '_>) -> Result<(), Error> {
+        if self.nest.is_some() || !self.units.acquire(|units| units.fresh())? {
+            return Err(Error::Busy);
+        }
+        let binding = owner.binding();
+        binding.check_open()?;
+        self.nest = Some(binding);
+        Ok(())
+    }
+
+    fn check_nest(&self) -> Result<(), Error> {
+        if let Some(binding) = self.nest {
+            binding.check_current()?;
+        }
+        Ok(())
     }
 
     fn with_unit_room<R>(
@@ -243,7 +274,9 @@ impl Execution {
         if !local.on_dispatcher_stack() {
             return Err(Error::Protection);
         }
-        if turn_capacity().ok_or(Error::Protection)? < 2 {
+        self.check_nest()?;
+        let required = if self.nest.is_some() { 3 } else { 2 };
+        if turn_capacity().ok_or(Error::Protection)? < required {
             return Err(Error::Capacity);
         }
         self.room.acquire(|room| room.attach(id))??;
@@ -281,16 +314,45 @@ impl Execution {
             entry,
             affinity,
             queue: Queue::Ordinary,
+            nest: None,
             #[cfg(target_arch = "riscv64")]
             span: None,
         })
     }
 
-    fn publish_unit(&self, binding: KernelBinding) -> Result<UnitId, Error> {
-        self.units.acquire(|units| {
+    fn publish_unit(&self, mut binding: KernelBinding) -> Result<UnitId, Error> {
+        let Some(nest) = self.nest else {
+            return self.units.acquire(|units| {
+                let unit = units.vacant()?;
+                units.publish(unit, binding, start)?;
+                Ok(unit)
+            })?;
+        };
+        let mut workspace = TurnWorkspace::<2>::new();
+        let mut plan = workspace.plan();
+        plan.insert(&self.units).expect("Unit owner");
+        plan.insert(nest.state()).expect("original Nest owner");
+        plan.acquire(TurnMode::Slow, |held| {
+            let (units, state) = held.access_pair(&self.units, nest.state()).expect("joint creation");
             let unit = units.vacant()?;
-            units.publish(unit, binding, start)?;
+            let affinity = binding.affinity.ok_or(Error::Unsupported)?;
+            // The initial Nest is local. No remote or migratable admission
+            // is inferred from one actual processor's root installation.
+            let reference = state.retain(nest.id(), affinity.get())?;
+            binding.nest = Some(reference);
+            if let Err(error) = units.publish(unit, binding, start) {
+                // The attempted binding was never published or observable.
+                state.release(nest.id()).expect("original unpublished reference");
+                return Err(error.into());
+            }
             Ok(unit)
+        })?
+    }
+
+    /// The exact execution relation while the Unit is recoverable, including Ending.
+    pub fn unit_nest(&self, unit: UnitId) -> Result<Option<NestId>, Error> {
+        self.units.acquire(|units| {
+            Ok(units.binding(unit)?.and_then(|binding| binding.nest.as_ref().map(NestRef::id)))
         })?
     }
 
@@ -330,6 +392,7 @@ impl Execution {
         if !treaty::can_switch() {
             return Err(Error::Protection);
         }
+        self.check_nest()?;
         unsafe {
             treaty::start_runtime(
                 self.dispatchers,
@@ -355,6 +418,7 @@ impl Execution {
                 Error::Protection
             });
         }
+        self.check_nest()?;
         Ok((id, local))
     }
 
@@ -622,16 +686,39 @@ impl Execution {
     }
 
     pub fn finish_end(&self, unit: UnitId) -> Result<(), Error> {
-        self.with_unit_room(|units, room| {
+        let Some(nest) = self.nest else {
+            return self.with_unit_room(|units, room| {
+                units.lifecycle(unit)?;
+                if room.admitted(unit) {
+                    return Err(Error::Busy);
+                }
+                // Released admission proves no native continuation remains.
+                let _ = unsafe { units.finish_end(unit) }?;
+                Ok(())
+            });
+        };
+        let mut workspace = TurnWorkspace::<3>::new();
+        let mut plan = workspace.plan();
+        plan.insert(&self.units).expect("Unit owner");
+        plan.insert(&self.room).expect("Room owner");
+        plan.insert(nest.state()).expect("original Nest owner");
+        plan.acquire(TurnMode::Slow, |held| {
+            let (units, room) = held.access_pair(&self.units, &self.room).expect("original owners");
             units.lifecycle(unit)?;
             if room.admitted(unit) {
                 return Err(Error::Busy);
             }
-            // Released admission proves either no entry occurred or the exact
-            // machine leave receipt was settled by Room.
-            unsafe { units.finish_end(unit) }?;
+            // The same joint commit publishes Ended, returns the native
+            // continuation, and releases its one recoverable NestRef.
+            let binding = unsafe { units.finish_end(unit) }?;
+            if let Some(binding) = binding {
+                let reference = binding.nest.expect("bound Unit retains its original Nest");
+                assert_eq!(reference.id(), nest.id());
+                held.access(nest.state()).expect("original Nest protection")
+                    .release(reference.id()).expect("original retained reference");
+            }
             Ok(())
-        })
+        })?
     }
 
     pub fn reap(&self, unit: UnitId) -> Result<End, Error> {

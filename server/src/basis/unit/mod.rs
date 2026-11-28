@@ -112,6 +112,10 @@ impl<Binding: 'static> Units<Binding> {
         }
     }
 
+    pub(super) fn fresh(&self) -> bool {
+        self.records.iter().all(|record| record.generation.is_none())
+    }
+
     pub(crate) fn vacant(&self) -> Result<UnitId, Error> {
         let slot = self.free.ok_or_else(|| {
             if self.retired == self.records.len() {
@@ -175,6 +179,14 @@ impl<Binding: 'static> Units<Binding> {
         })
     }
 
+    pub(super) fn binding(&mut self, id: UnitId) -> Result<Option<&Binding>, Error> {
+        Ok(match self.record(id)? {
+            State::Live(bound) | State::Ending { binding: bound, .. } => Some(&bound.binding),
+            State::Ended(_) => None,
+            State::Vacant(_) | State::Retired => unreachable!(),
+        })
+    }
+
     pub(super) fn live(&mut self, id: UnitId) -> Result<(&Binding, &'static Context), Error> {
         match self.record(id)? {
             State::Live(bound) => Ok((&bound.binding, bound.stack.context())),
@@ -202,11 +214,11 @@ impl<Binding: 'static> Units<Binding> {
     ///
     /// The caller holds the protection that proves Room has released the
     /// admission and Metal no longer holds any use of the continuation.
-    pub(super) unsafe fn finish_end(&mut self, id: UnitId) -> Result<(), Error> {
+    pub(super) unsafe fn finish_end(&mut self, id: UnitId) -> Result<Option<Binding>, Error> {
         let state = self.record(id)?;
         let end = match state {
             State::Ending { end, .. } => *end,
-            State::Ended(_) => return Ok(()),
+            State::Ended(_) => return Ok(None),
             _ => return Err(Error::NotEnding),
         };
         let State::Ending { binding, .. } = core::mem::replace(state, State::Ended(end)) else {
@@ -214,7 +226,7 @@ impl<Binding: 'static> Units<Binding> {
         };
         // Clear and return the continuation before the protected End can be read.
         unsafe { self.stacks.release(binding.stack) };
-        Ok(())
+        Ok(Some(binding.binding))
     }
 
     pub(crate) fn reap(&mut self, id: UnitId) -> Result<End, Error> {

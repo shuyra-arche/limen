@@ -17,7 +17,7 @@ use kernel::{
 };
 use limen_treaty::model::{PhysicalAddress, PhysicalRange};
 
-use super::super::memory::extent;
+use super::super::memory::{self, extent};
 
 #[path = "../internal/owned.rs"]
 mod tree;

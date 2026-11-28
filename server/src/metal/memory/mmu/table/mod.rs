@@ -106,6 +106,7 @@ pub enum TableError {
     Acquire(TurnAcquireError),
     Pend(pend::Error),
     Cell(cell::Error),
+    Switch(super::treaty::SwitchError),
     Layout,
     Scope,
     State,

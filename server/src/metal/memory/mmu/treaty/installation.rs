@@ -55,6 +55,18 @@ mod bound {
         pub fn root(self) -> Option<PhysicalAddress> {
             self.root
         }
+
+        /// Verify the actual local controls, not merely the last recorded write.
+        #[cfg(limen_cooperative)]
+        pub(crate) fn is_current(self) -> bool {
+            Native::check(self.processor).is_ok()
+                && unsafe { Native::observe() } == self.controls
+        }
+
+        #[cfg(limen_cooperative)]
+        pub(crate) fn processor(self) -> usize {
+            self.processor
+        }
     }
 
     /// Hardware readback of this local installation and its original context.

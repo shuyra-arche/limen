@@ -447,6 +447,11 @@ impl Execution {
     ) -> Result<UnitId, Error> {
         fund.check_local()?;
         fund.check_execution(self)?;
+        // The initial local Nest has not qualified the funded native
+        // entry and stop profile with its new translation environment.
+        if self.nest.is_some() {
+            return Err(Error::Unsupported);
+        }
         if span.is_empty() {
             return Err(Error::State);
         }
@@ -455,6 +460,7 @@ impl Execution {
             entry,
             affinity: Some(affinity),
             queue: Queue::Funded(fund.id()),
+            nest: None,
             span: Some((span.start, span.end)),
         })
     }

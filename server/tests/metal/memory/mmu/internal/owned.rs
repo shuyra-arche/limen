@@ -22,7 +22,7 @@ use kernel::{
 };
 use limen_treaty::model::{Alignment, ByteLength, PhysicalRange};
 
-use super::super::super::memory::{extent, mapped};
+use super::memory::{extent, mapped};
 
 pub(super) const PAGES: usize = 8;
 const PAGE: u64 = 4096;
