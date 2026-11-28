@@ -393,6 +393,15 @@ impl Execution {
         let (next, due) = self
             .settle_deadlines(sign, budget.get().min(N))
             .map_err(DeadlineError::Execution)?;
+        Self::program_deadlines(sign, timer, next, due)
+    }
+
+    fn program_deadlines<T: AbsoluteTimer, const N: usize>(
+        sign: &Sign<'_, N>,
+        timer: &mut T,
+        next: Option<u64>,
+        due: bool,
+    ) -> Result<DeadlineProgress, DeadlineError<T::Failure>> {
         let timer_error = DeadlineError::Timer;
         if timer.pending_effect().map_err(timer_error)?.is_some() {
             timer.confirm_effect().map_err(timer_error)?;
@@ -702,7 +711,7 @@ pub struct Current {
     unit: UnitId,
     local: PhantomData<*mut ()>,
     #[cfg(target_arch = "riscv64")]
-    funded: bool,
+    fund: Option<&'static Fund<'static>>,
 }
 
 impl Current {
@@ -731,7 +740,7 @@ impl Current {
     /// A switch or terminal return closes this permission.
     #[cfg(target_arch = "riscv64")]
     pub unsafe fn allow_stop_in(&mut self, span: Range<usize>) -> Result<Occupancy, Error> {
-        if self.funded {
+        if self.fund.is_some() {
             return Err(Error::Unsupported);
         }
         if !treaty::cooperative_ready() || !treaty::can_switch() {
@@ -752,7 +761,7 @@ impl Current {
     /// continuation.
     pub fn yield_now(&mut self) -> Result<(), Error> {
         #[cfg(target_arch = "riscv64")]
-        if self.funded {
+        if self.fund.is_some() {
             return Err(Error::Unsupported);
         }
         self.execution.leave(self.unit, None)
@@ -762,17 +771,23 @@ impl Current {
     /// Success follows a trustworthy local sample reaching the original target.
     ///
     /// # Safety
-    /// The resident dispatcher retains this exact Sign and its dedicated
+    /// The resident dispatcher retains this exact Sign and its original
     /// comparator. It must be able to service every accepted wait, even
     /// while this Unit is off the processor, and keep a valid native wake path.
+    /// For funded execution, the admitted stop bounds must also cover the
+    /// complete masked Arm path, including every acquisition and release of
+    /// its ordinary Turn and all failure paths to the covered span or actual
+    /// departure. A single attempt or Fast mode alone does not prove this
+    /// bound. The initial single-processor profile excludes all competing
+    /// access to those owners during the masked path.
     pub unsafe fn wait_until<const N: usize>(
         &mut self,
         sign: &Sign<'_, N>,
         deadline: Deadline<'_>,
     ) -> Result<(), Error> {
         #[cfg(target_arch = "riscv64")]
-        if self.funded {
-            return Err(Error::Unsupported);
+        if let Some(fund) = self.fund {
+            fund.check_wait(self, sign, deadline)?;
         }
         self.execution.wait_until(self.unit, sign, deadline)
     }
@@ -798,7 +813,7 @@ extern "C" fn start(argument: *const ()) -> ! {
         unit,
         local: PhantomData,
         #[cfg(target_arch = "riscv64")]
-        funded: start.fund.is_some(),
+        fund: start.fund,
     };
     let value = entry(&mut current);
     #[cfg(target_arch = "riscv64")]

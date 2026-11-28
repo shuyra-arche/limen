@@ -2,7 +2,7 @@
 
 use core::time::Duration;
 
-use super::{Error, LeaveDestination, Occupancy, Queue, Room, UnitId};
+use super::{Error, LeaveDestination, LeaveRequest, Occupancy, Placement, Queue, Room, UnitId};
 use crate::metal::{
     chrono::treaty::{DurationBounds, MeterReceipt},
     processor::treaty::{LeaveReceipt, ProcessorId},
@@ -128,16 +128,18 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
         Ok(occupancy)
     }
 
+    /// A new destination is supplied for a stop or terminal return.
+    /// None consumes only an already published Wait and a cooperative Leave.
     pub(in crate::basis) fn settle_funded(
         &mut self,
         fund: usize,
         leave: LeaveReceipt<Occupancy>,
         meter: MeterReceipt<Occupancy>,
-        destination: LeaveDestination,
+        destination: Option<LeaveDestination>,
     ) -> Result<ChargeSettlement, Error> {
         let occupancy = leave.occupancy();
         let index = occupancy.participation;
-        self.check_occupied(occupancy)?;
+        let slot = self.active(occupancy)?;
         if self.participants[index.0]
             .as_ref()
             .expect("participant")
@@ -147,7 +149,23 @@ impl<const CAPACITY: usize> Room<CAPACITY> {
             return Err(Error::Gone);
         }
         let settlement = self.period(index).settlement(occupancy, meter)?;
-        self.request_leave(occupancy, destination)?;
+        if let Some(destination) = destination {
+            self.request_leave(occupancy, destination)?;
+        } else {
+            if leave.suspended() || leave.unused() || leave.discarded() {
+                return Err(Error::State);
+            }
+            let entry = self.units[slot].as_ref().expect("occupied Unit");
+            if !matches!(
+                entry.placement,
+                Placement::Occupied {
+                    leave: Some(LeaveRequest::Wait { .. }),
+                    ..
+                }
+            ) {
+                return Err(Error::State);
+            }
+        }
         self.vacate(leave).expect("exact funded departure");
         self.period_mut(index).settle(settlement);
         Ok(settlement)

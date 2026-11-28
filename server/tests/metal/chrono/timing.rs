@@ -65,6 +65,18 @@ fn window_and_start_recheck_use_full_read_interval_and_strict_latest_entry() {
 }
 
 #[test]
+fn earlier_confirmed_comparison_must_cover_the_stop_and_leave_the_full_start_tail() {
+    let timing = timing();
+    let start = stop().start;
+    assert!(timing.covers_start(1_000, 900, 1_118, 1_118, start));
+    assert!(timing.covers_start(1_000, 900, 1_118, 1_023, start));
+    assert!(!timing.covers_start(1_000, 900, 1_118, 1_022, start));
+    assert!(!timing.covers_start(1_000, 900, 1_118, 1_119, start));
+    assert!(!timing.covers_start(1_000, 900, 1_118, 999, start));
+    assert!(!timing.covers_start(1_000, 900, 20_000, 1_100, start));
+}
+
+#[test]
 fn measured_charge_rounds_outward_and_rejects_expired_or_reversed_reads() {
     let timing = timing();
     assert_eq!(

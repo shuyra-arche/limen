@@ -4,14 +4,19 @@ use core::{
     arch::{asm, naked_asm},
     hint::spin_loop,
     mem::MaybeUninit,
+    num::NonZeroUsize,
     sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     time::Duration,
 };
 
 use kernel::{
     basis::{
-        execution::{ChargeSettlement, Current, Error, Execution, Fund, FundConfig, FundError},
+        execution::{
+            ChargeSettlement, Current, DeadlineProgress, Error, Execution, Fund, FundConfig,
+            FundError,
+        },
         room::Occupancy,
+        sign::Sign,
         unit::{End, Lifecycle},
     },
     entry::{boot::Boot, hook::Binding},
@@ -36,6 +41,12 @@ const STOP: StopBounds = StopBounds {
 const RETURNED: u64 = 33;
 
 static mut FUND: MaybeUninit<Fund<'static>> = MaybeUninit::uninit();
+static mut SIGN: MaybeUninit<Sign<'static, 2>> = MaybeUninit::uninit();
+static WAIT_AT: AtomicU64 = AtomicU64::new(0);
+static WAIT_SPANS: AtomicUsize = AtomicUsize::new(0);
+static SHARED_SPANS: AtomicUsize = AtomicUsize::new(0);
+static SHARED_COMPARISON: AtomicU64 = AtomicU64::new(0);
+static SHARED_FINISH: AtomicBool = AtomicBool::new(false);
 static FIRST_ENTRY: AtomicU64 = AtomicU64::new(0);
 static FIRST_COMPARISON: AtomicU64 = AtomicU64::new(0);
 static ENTRIES: AtomicUsize = AtomicUsize::new(0);
@@ -91,7 +102,9 @@ fn dispatch(
     };
     // The original timer line and counter are resident. The test admits only
     // the bounded native code span on this isolated Hart under this profile.
-    let owner = unsafe { Fund::new(timer, timing, configuration) }.expect("original Fund");
+    let sign: &'static Sign<'static, 2> =
+        unsafe { (&mut *(&raw mut SIGN)).write(Sign::new(clock)) };
+    let owner = unsafe { Fund::new(timer, timing, configuration, sign) }.expect("original Fund");
     let owner = unsafe { (&mut *(&raw mut FUND)).write(owner) };
     unsafe { VECTORS.install() }.expect("permanent native timer entry");
     let execution = setup::execution();
@@ -103,7 +116,7 @@ fn dispatch(
     let admission = execution.submit(unit).expect("one original admission");
 
     let first = execution
-        .enter_funded(owner)
+        .enter_funded(owner, sign)
         .unwrap()
         .expect("stopped occupancy");
     assert_eq!(first.unit(), unit);
@@ -111,7 +124,7 @@ fn dispatch(
     assert_eq!(execution.pending_leave(), Ok(Some(first)));
     assert_eq!(execution.lifecycle(unit), Ok(Lifecycle::Live));
     assert_eq!(execution.finish_end(unit), Err(Error::Busy));
-    assert!(execution.enter_funded(owner).is_err());
+    assert!(execution.enter_funded(owner, sign).is_err());
     assert_eq!(execution.vacate(first), Err(Error::Unsupported));
     assert_eq!(execution.pending_leave(), Ok(Some(first)));
     assert_eq!(ENTRIES.load(Ordering::Relaxed), 1);
@@ -134,7 +147,7 @@ fn dispatch(
 
     MAY_FINISH.store(true, Ordering::Release);
     let second = execution
-        .enter_funded(owner)
+        .enter_funded(owner, sign)
         .unwrap()
         .expect("resumed occupancy");
     assert_ne!(second, first);
@@ -161,11 +174,14 @@ fn dispatch(
     check_charge(&second_charge);
 
     assert_eq!(execution.pending_leave(), Ok(None));
-    assert!(execution.enter_funded(owner).unwrap().is_none());
+    assert_eq!(service(execution, owner, sign), DeadlineProgress::Idle);
+    assert!(execution.enter_funded(owner, sign).unwrap().is_none());
     execution
         .finish_end(unit)
         .expect("returned continuation retired");
     assert_eq!(execution.reap(unit), Ok(End::Returned { value: RETURNED }));
+
+    shared_deadline(execution, owner, sign, span.clone(), second_charge);
 
     let blocked = unsafe { execution.create_funded(owner, work, span) }.unwrap();
     execution.submit(blocked).unwrap();
@@ -176,7 +192,7 @@ fn dispatch(
     // This Period has remaining quota, but less elapsed time than the
     // admitted stop tail. There is no comparison that can cover a Start.
     assert!(matches!(
-        execution.enter_funded(owner),
+        execution.enter_funded(owner, sign),
         Err(FundError::Execution(Error::Timing))
     ));
     assert_eq!(execution.pending_leave(), Ok(None));
@@ -184,8 +200,206 @@ fn dispatch(
     assert_eq!(ENTRIES.load(Ordering::Relaxed), 1);
     assert_eq!(comparison(), u64::MAX);
 
-    write("PASS rv64-fund armed=2 stop=1 resume=1 native-meter=2 joined-leave=2 denied-start=1\n");
+    write("PASS rv64-fund budget-stop=1 shared-stop=1 sign-resume=1 idle-sign=1 denied-start=1\n");
     complete()
+}
+
+fn service(execution: &Execution, owner: &Fund<'_>, sign: &Sign<'_, 2>) -> DeadlineProgress {
+    let source = setup::counter();
+    let limit = source.read().unwrap() + source.clock().frequency().get();
+    loop {
+        match execution.service_funded_deadlines(owner, sign, NonZeroUsize::MIN) {
+            Ok(DeadlineProgress::Recheck) | Err(FundError::Timer(Failure::Busy)) => {
+                assert!(
+                    source.read().unwrap() < limit,
+                    "original comparison did not settle"
+                );
+                spin_loop();
+            }
+            progress => return progress.expect("original Sign service"),
+        }
+    }
+}
+
+fn shared_deadline(
+    execution: &'static Execution,
+    owner: &'static Fund<'static>,
+    sign: &'static Sign<'static, 2>,
+    span: core::ops::Range<usize>,
+    previous: ChargeSettlement,
+) {
+    let source = setup::counter();
+    let hertz = source.clock().frequency().get();
+    let wrong = Sign::<1>::new(source.clock());
+    assert_eq!(
+        execution.service_funded_deadlines(owner, &wrong, NonZeroUsize::MIN),
+        Err(FundError::Execution(Error::Timing)),
+    );
+
+    let waiter = unsafe { execution.create_funded(owner, wait_for_sign, span.clone()) }.unwrap();
+    let runner = unsafe { execution.create_funded(owner, shared_work, span.clone()) }.unwrap();
+    let deadline = source.read().unwrap() + hertz / 10;
+    WAIT_AT.store(deadline, Ordering::Relaxed);
+    let wait_admission = execution.submit(waiter).unwrap();
+    let parked = execution.enter_funded(owner, sign).unwrap().unwrap();
+    assert_eq!(parked.unit(), waiter);
+    assert_eq!(parked.admission(), wait_admission);
+    assert_eq!(execution.pending_leave(), Ok(Some(parked)));
+    assert_eq!(execution.vacate(parked), Err(Error::Unsupported));
+    let wait_charge = settle(execution, owner, parked);
+    check_charge(&wait_charge);
+    assert_eq!(
+        wait_charge.spent,
+        previous.spent + wait_charge.evidence.maximum,
+    );
+    assert_eq!(WAIT_SPANS.load(Ordering::Relaxed), 1);
+
+    assert_eq!(service(execution, owner, sign), DeadlineProgress::Armed);
+    assert_eq!(comparison(), deadline);
+    assert!(source.read().unwrap() < deadline);
+    assert!(execution.enter_funded(owner, sign).unwrap().is_none());
+
+    let runner_admission = execution.submit(runner).unwrap();
+    let interrupts = INTERRUPTS.load(Ordering::Relaxed);
+    let stopped = execution.enter_funded(owner, sign).unwrap().unwrap();
+    assert_eq!(stopped.unit(), runner);
+    assert_eq!(stopped.admission(), runner_admission);
+    assert_eq!(SHARED_COMPARISON.load(Ordering::Relaxed), deadline);
+    assert_eq!(comparison(), deadline);
+    assert!(source.read().unwrap() >= deadline);
+    assert_eq!(INTERRUPTS.load(Ordering::Relaxed), interrupts + 1);
+    assert_eq!(WAIT_SPANS.load(Ordering::Relaxed), 1);
+    let stopped_charge = settle(execution, owner, stopped);
+    check_charge(&stopped_charge);
+    assert_eq!(
+        stopped_charge.spent,
+        wait_charge.spent + stopped_charge.evidence.maximum,
+    );
+    assert_eq!(service(execution, owner, sign), DeadlineProgress::Idle);
+
+    // The real comparison was accepted and the original charged Unit
+    // left its stack before the Sign waiter could become Ready.
+    SHARED_FINISH.store(true, Ordering::Release);
+    let returned = execution.enter_funded(owner, sign).unwrap().unwrap();
+    assert_eq!(returned.unit(), runner);
+    assert_eq!(returned.admission(), runner_admission);
+    assert_ne!(returned, stopped);
+    assert_eq!(SHARED_SPANS.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        execution.vacate_funded(owner, stopped),
+        Err(FundError::Execution(Error::Gone)),
+    );
+    let returned_charge = settle(execution, owner, returned);
+    check_charge(&returned_charge);
+    execution.finish_end(runner).unwrap();
+    assert_eq!(execution.reap(runner), Ok(End::Returned { value: RETURNED }));
+
+    let resumed = execution.enter_funded(owner, sign).unwrap().unwrap();
+    assert_eq!(resumed.unit(), waiter);
+    assert_eq!(resumed.admission(), wait_admission);
+    assert_ne!(resumed, parked);
+    assert_eq!(WAIT_SPANS.load(Ordering::Relaxed), 2);
+    let resumed_charge = settle(execution, owner, resumed);
+    check_charge(&resumed_charge);
+    assert_eq!(
+        resumed_charge.spent,
+        returned_charge.spent + resumed_charge.evidence.maximum,
+    );
+    execution.finish_end(waiter).unwrap();
+    assert_eq!(execution.reap(waiter), Ok(End::Returned { value: RETURNED }));
+    assert_eq!(service(execution, owner, sign), DeadlineProgress::Idle);
+
+    // The same owner must also accept a native Sign IRQ while no Charge
+    // is active, not require a fictitious running Unit.
+    let idle_waiter = unsafe { execution.create_funded(owner, wait_for_sign, span) }.unwrap();
+    let idle_deadline = source.read().unwrap() + hertz / 10;
+    WAIT_AT.store(idle_deadline, Ordering::Relaxed);
+    let idle_admission = execution.submit(idle_waiter).unwrap();
+    let idle_parked = execution.enter_funded(owner, sign).unwrap().unwrap();
+    assert_eq!(idle_parked.unit(), idle_waiter);
+    check_charge(&settle(execution, owner, idle_parked));
+    assert_eq!(service(execution, owner, sign), DeadlineProgress::Armed);
+    assert_eq!(comparison(), idle_deadline);
+    receive_idle(idle_deadline + hertz);
+    assert_eq!(service(execution, owner, sign), DeadlineProgress::Idle);
+    let idle_resumed = execution.enter_funded(owner, sign).unwrap().unwrap();
+    assert_eq!(idle_resumed.unit(), idle_waiter);
+    assert_eq!(idle_resumed.admission(), idle_admission);
+    assert_ne!(idle_resumed, idle_parked);
+    check_charge(&settle(execution, owner, idle_resumed));
+    execution.finish_end(idle_waiter).unwrap();
+    assert_eq!(execution.reap(idle_waiter), Ok(End::Returned { value: RETURNED }));
+    assert_eq!(service(execution, owner, sign), DeadlineProgress::Idle);
+}
+
+fn receive_idle(until: u64) {
+    let previous = INTERRUPTS.load(Ordering::Relaxed);
+    unsafe {
+        asm!(
+            "csrsi sstatus, 2",
+            "2: ld t0, 0({interrupts})",
+            "bne t0, {previous}, 3f",
+            "rdtime t1",
+            "bltu t1, {until}, 2b",
+            "3: csrci sstatus, 2",
+            interrupts = in(reg) INTERRUPTS.as_ptr(),
+            previous = in(reg) previous,
+            until = in(reg) until,
+            out("t0") _,
+            out("t1") _,
+            options(nostack),
+        );
+    }
+    assert_eq!(INTERRUPTS.load(Ordering::Relaxed), previous + 1);
+}
+
+fn wait_for_sign(current: &mut Current) -> u64 {
+    let source = setup::counter();
+    let hertz = source.clock().frequency().get();
+    let deadline = WAIT_AT.load(Ordering::Relaxed);
+    let now = source.read().unwrap();
+    assert!(now < deadline);
+    let original = unsafe {
+        budget_work(
+            MAY_FINISH.as_ptr(),
+            now + hertz,
+            hertz / 500,
+            WAIT_SPANS.as_ptr(),
+        )
+    };
+    assert_eq!(original, RETURNED);
+    let sign = unsafe { (&*(&raw const SIGN)).assume_init_ref() };
+    // The real QEMU fixture has one processor and no competing Turn
+    // access. Its masked Arm and departure are included in STOP.
+    // A reached deadline completes in this original Occupancy, without
+    // publishing a Tock or consuming another Charge.
+    unsafe { current.wait_until(sign, source.deadline(now)) }.unwrap();
+    unsafe { current.wait_until(sign, source.deadline(deadline)) }.unwrap();
+    let now = source.read().unwrap();
+    assert!(now >= deadline);
+    unsafe {
+        budget_work(
+            MAY_FINISH.as_ptr(),
+            now + hertz,
+            hertz / 500,
+            WAIT_SPANS.as_ptr(),
+        )
+    }
+}
+
+fn shared_work(_: &mut Current) -> u64 {
+    let source = setup::counter();
+    let now = source.read().unwrap();
+    let hertz = source.clock().frequency().get();
+    SHARED_COMPARISON.store(comparison(), Ordering::Relaxed);
+    unsafe {
+        budget_work(
+            SHARED_FINISH.as_ptr(),
+            now + hertz,
+            hertz / 500,
+            SHARED_SPANS.as_ptr(),
+        )
+    }
 }
 
 fn settle(execution: &Execution, owner: &Fund<'_>, occupancy: Occupancy) -> ChargeSettlement {

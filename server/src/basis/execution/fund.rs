@@ -1,16 +1,20 @@
-//! One fixed-local Fund, from confirmed native comparison to joint settlement.
+//! One fixed-local Fund, sharing its original comparator with Sign.
 
 use core::{
     cell::{Cell, UnsafeCell},
+    num::NonZeroUsize,
     ops::Range,
     ptr,
     time::Duration,
 };
 
-use super::{Current, Entry, Error, Execution, KernelBinding, Start};
+use super::{
+    Current, DeadlineError, DeadlineProgress, Entry, Error, Execution, KernelBinding, Start,
+};
 use crate::{
     basis::{
         room::{LeaveDestination, Occupancy, Period, Queue},
+        sign::Sign,
         unit::{End, UnitId},
     },
     metal::{
@@ -63,6 +67,15 @@ impl From<Failure> for FundError {
     }
 }
 
+impl From<DeadlineError<Failure>> for FundError {
+    fn from(value: DeadlineError<Failure>) -> Self {
+        match value {
+            DeadlineError::Execution(error) => Self::Execution(error),
+            DeadlineError::Timer(error) => Self::Timer(error),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Active<'clock> {
     occupancy: Occupancy,
@@ -85,12 +98,15 @@ enum State<'clock> {
     Closed(Closed),
 }
 
-/// Owner of one original Timer and one ordinary window on an isolated Hart.
-/// All mutable state stays on that Hart. Room owns the Period and Charge.
+/// One original Timer and one ordinary window on an isolated processor.
+/// Sign owns the absolute waits; Room owns the Period and Charge.
 pub struct Fund<'clock> {
     timing: LocalTiming<'clock>,
     config: FundConfig<'clock>,
     timer: UnsafeCell<Timer<'clock>>,
+    // The typed Sign is supplied explicitly by the resident dispatcher.
+    // Its storage is borrowed for the original clock lifetime at admission.
+    sign: usize,
     execution: Cell<Option<usize>>,
     state: Cell<State<'clock>>,
 }
@@ -100,22 +116,26 @@ pub struct Fund<'clock> {
 unsafe impl Sync for Fund<'_> {}
 
 impl<'clock> Fund<'clock> {
-    /// Bind the original local clock and settled, dedicated comparator.
+    /// Bind the original local clock, resident Sign and settled comparator.
     ///
     /// # Safety
     /// The trusted platform must reserve this processor's funded execution
     /// supply and comparator for this window and connect the original Timer
-    /// Hook to this resident Fund. Supply timing bounds for this exact
-    /// machine, IRQ configuration, permitted native spans and Rust entry
-    /// and exit tails. Account for programming, delivery and masking,
+    /// Hook to this resident Fund. Only this local dispatcher may service the
+    /// bound Sign or program its comparator; the Sign must remain resident.
+    /// Supply timing bounds for this exact machine, IRQ configuration,
+    /// permitted native spans and Rust entry and exit tails.
+    /// Account for programming, delivery and masking,
     /// the machine switch, and the final meter read. A nominal frequency
     /// or observed emulator timing does not establish those bounds.
-    pub unsafe fn new(
+    pub unsafe fn new<const N: usize>(
         timer: Timer<'clock>,
         timing: LocalTiming<'clock>,
         config: FundConfig<'clock>,
+        sign: &'clock Sign<'clock, N>,
     ) -> Result<Self, FundEstablishFailure<'clock>> {
         let result = if !ptr::eq(timer.clock(), timing.clock())
+            || !ptr::eq(sign.clock, timing.clock())
             || config.quota < config.ceiling
             || config.ceiling.is_zero()
             || !timing.window_valid(config.opens, config.shuts)
@@ -135,6 +155,7 @@ impl<'clock> Fund<'clock> {
             timing,
             config,
             timer: UnsafeCell::new(timer),
+            sign: ptr::from_ref(sign).addr(),
             execution: Cell::new(None),
             state: Cell::new(State::Idle),
         })
@@ -161,14 +182,43 @@ impl<'clock> Fund<'clock> {
         Ok(())
     }
 
-    fn drain(&self) -> Result<(), FundError> {
-        // The dispatcher is masked and either no Start occurred or the
-        // actual dispatcher return proved that the Unit can no longer run.
+    fn check_sign<const N: usize>(&self, sign: &Sign<'_, N>) -> Result<(), Error> {
+        if self.sign != ptr::from_ref(sign).addr() || !ptr::eq(sign.clock, self.timing.clock()) {
+            return Err(Error::Timing);
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_wait<const N: usize>(
+        &self,
+        current: &Current,
+        sign: &Sign<'_, N>,
+        deadline: Deadline<'_>,
+    ) -> Result<(), Error> {
+        self.check_local()?;
+        self.check_execution(current.execution)?;
+        self.check_sign(sign)?;
+        let State::Measuring(active) = self.state.get() else {
+            return Err(Error::State);
+        };
+        let (_, local) = current.execution.local()?;
+        if active.occupancy.unit() != current.unit || local.running() != Some(active.occupancy) {
+            return Err(Error::Gone);
+        }
+        let count = sign.clock.count_for(deadline).ok_or(Error::Timing)?;
+        let shuts = sign.clock.count_for(self.config.shuts).ok_or(Error::Timing)?;
+        if count >= shuts {
+            return Err(Error::Timing);
+        }
+        Ok(())
+    }
+
+    fn confirm_timer(&self) -> Result<(), FundError> {
         let timer = unsafe { &mut *self.timer.get() };
         if timer.pending_effect()?.is_some() {
             timer.confirm_effect()?;
         }
-        unsafe { timer.clear() }?;
+        // A live comparison can still cover an original Sign wait.
         Ok(())
     }
 
@@ -183,8 +233,10 @@ impl<'clock> Fund<'clock> {
             return Err(Error::Protection.into());
         }
         self.check_execution(execution)?;
-        let State::Measuring(active) = self.state.get() else {
-            return Err(Error::State.into());
+        let active = match self.state.get() {
+            State::Measuring(active) => Some(active),
+            State::Idle | State::Closed(_) => None,
+            State::Armed(_) => return Err(Error::State.into()),
         };
         let timer = unsafe { &mut *self.timer.get() };
         match unsafe { timer.accept_interrupt(&interrupt) } {
@@ -194,13 +246,15 @@ impl<'clock> Fund<'clock> {
                 .terminal
                 .reject(format_args!("FAIL Fund timer {error:?}")),
         }
-        if let Err(error) = execution.request_stop(interrupt, active.occupancy) {
-            // The platform and Unit promised a covered span at every
-            // interruptible point. There is no safe original return once
-            // an expired stop comparison has been accepted and masked.
-            execution
-                .terminal
-                .reject(format_args!("FAIL Fund stop {error:?}"));
+        if let Some(active) = active {
+            if let Err(error) = execution.request_stop(interrupt, active.occupancy) {
+                // Any accepted comparison can be the only remaining stop
+                // coverage. Leave the original occupancy even when Sign
+                // supplied the earlier trigger. Never resume it uncovered.
+                execution
+                    .terminal
+                    .reject(format_args!("FAIL Fund stop {error:?}"));
+            }
         }
         Ok(true)
     }
@@ -279,11 +333,39 @@ impl Execution {
         })
     }
 
-    /// Confirm the original stop comparison before opening the Meter or
-    /// exposing any chargeable Unit execution.
-    pub fn enter_funded(
+    /// Recheck the bound Sign on the original comparator, without a live
+    /// Charge. An expired setting is left for its actual native receiver.
+    pub fn service_funded_deadlines<const N: usize>(
+        &self,
+        fund: &Fund<'_>,
+        sign: &Sign<'_, N>,
+        budget: NonZeroUsize,
+    ) -> Result<DeadlineProgress, FundError> {
+        self.dispatcher()?;
+        fund.check_local()?;
+        fund.check_execution(self)?;
+        fund.check_sign(sign)?;
+        if !matches!(fund.state.get(), State::Idle) {
+            return Err(Error::Busy.into());
+        }
+        let (next, due) = self.settle_deadlines(sign, budget.get().min(N))?;
+        let timer = unsafe { &mut *fund.timer.get() };
+        let progress = Self::program_deadlines(sign, timer, next, due)?;
+        if next.is_none() && !due && progress == DeadlineProgress::Armed {
+            // There is no live Charge or Sign registration left to cover.
+            // All publication of these local waits occurs on this processor.
+            unsafe { timer.clear() }?;
+            return Ok(DeadlineProgress::Idle);
+        }
+        Ok(progress)
+    }
+
+    /// Confirm coverage of the original stop bound before opening the Meter.
+    /// The actual setting can be an earlier comparison owned by the same Timer.
+    pub fn enter_funded<const N: usize>(
         &'static self,
         fund: &'static Fund<'static>,
+        sign: &Sign<'_, N>,
     ) -> Result<Option<Occupancy>, FundError> {
         let (processor, local) = self.dispatcher()?;
         fund.check_local()?;
@@ -291,7 +373,12 @@ impl Execution {
         if !matches!(fund.state.get(), State::Idle) {
             return Err(Error::Busy.into());
         }
-        fund.drain()?;
+        match self.service_funded_deadlines(fund, sign, NonZeroUsize::MIN)? {
+            DeadlineProgress::Armed | DeadlineProgress::Idle => {}
+            DeadlineProgress::Recheck | DeadlineProgress::AwaitInterrupt => {
+                return Err(Error::Busy.into());
+            }
+        }
         let config = &fund.config;
         let Some(unit) = self
             .room
@@ -311,7 +398,17 @@ impl Execution {
             .ok_or(Error::Timing)?;
         let prepared = (|| {
             let timer = unsafe { &mut *fund.timer.get() };
-            timer.arm_at(planned)?;
+            let clock = fund.timing.clock();
+            let target = clock.count_for(planned).ok_or(Error::Timing)?;
+            let armed = timer
+                .confirmed_deadline()?
+                .map(|deadline| clock.count_for(deadline).ok_or(Error::Timing))
+                .transpose()?;
+            match armed {
+                None => timer.arm_at(planned)?,
+                Some(old) if old > target => timer.advance_deadline(planned)?,
+                Some(_) => {}
+            }
             let confirmed = timer.confirmed_deadline()?.ok_or(Error::Timing)?;
             Ok(self.with_unit_room(|units, room| {
                 let (binding, context) = units.live(unit)?;
@@ -337,10 +434,8 @@ impl Execution {
         let (occupancy, context, entry, span) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
-                // No Charge or Start committed. Finish every recoverable
-                // native write before returning. A retained effect stays with
-                // this Fund and is rechecked on the next dispatch.
-                fund.drain()?;
+                // No Charge or Start committed. Keep any native effect and
+                // existing Sign coverage for the next dispatcher recheck.
                 return Err(error);
             }
         };
@@ -402,7 +497,7 @@ impl Execution {
     ) -> Result<ChargeSettlement, FundError> {
         fund.check_local()?;
         fund.check_execution(self)?;
-        let (_, local) = self.local()?;
+        let (_, local) = self.dispatcher()?;
         let State::Closed(closed) = fund.state.get() else {
             return Err(Error::Gone.into());
         };
@@ -421,11 +516,14 @@ impl Execution {
             leave.suspended() || leave.unused(),
             leave.discarded(),
         ) {
-            (None, true, false) => LeaveDestination::Ready,
-            (Some(_), false, false) => LeaveDestination::Release,
+            (None, true, false) => Some(LeaveDestination::Ready),
+            (Some(_), false, false) => Some(LeaveDestination::Release),
+            // Cooperative Wait already published its exact destination with
+            // Sign before physically leaving the Unit.
+            (None, false, false) => None,
             _ => return Err(Error::State.into()),
         };
-        fund.drain()?;
+        fund.confirm_timer()?;
         let result = self.with_unit_room(|units, room| {
             units.live(occupancy.unit())?;
             let result = room.settle_funded(fund.id(), leave, closed.receipt, destination)?;

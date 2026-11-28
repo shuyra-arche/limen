@@ -111,6 +111,23 @@ impl TimingBounds {
             .is_some_and(|latest_entry| latest_entry < target)
     }
 
+    #[cfg(any(limen_target, test))]
+    fn covers_start(
+        &self,
+        count: u64,
+        opens: u64,
+        planned: u64,
+        confirmed: u64,
+        start: Duration,
+    ) -> bool {
+        confirmed <= planned
+            && self.window_valid(opens, planned)
+            && self.in_window(count, opens, confirmed)
+            && self
+                .observed(count)
+                .is_some_and(|observed| self.can_start(*observed.end(), confirmed, start))
+    }
+
     fn measure(&self, start: u64, end: u64) -> Option<DurationBounds> {
         // Reject a backwards native count even if the error intervals would
         // overlap. Trustworthy continuity across a wrap needs another profile.
@@ -209,8 +226,9 @@ impl<'clock> LocalTiming<'clock> {
         (target < u64::MAX).then(|| self.clock.deadline(target))
     }
 
-    /// Recheck the exact confirmed original comparison against a fresh
-    /// sample and the certified remaining Start tail.
+    /// Recheck the confirmed original comparison against a fresh sample.
+    /// An earlier shared comparison covers the planned stop only when it
+    /// also leaves the certified remaining Start tail.
     pub fn can_start(
         &self,
         observed: Sample<'_>,
@@ -219,19 +237,19 @@ impl<'clock> LocalTiming<'clock> {
         confirmed: Deadline<'_>,
         start: Duration,
     ) -> bool {
-        let Some(upper) = observed
-            .count_for(self.clock)
-            .and_then(|count| self.bounds.observed(count))
-            .map(|count| *count.end())
-        else {
+        let Some(count) = observed.count_for(self.clock) else {
             return false;
         };
-        let Some(target) = self.clock.count_for(planned) else {
+        let Some(opens) = self.clock.count_for(opens) else {
             return false;
         };
-        self.clock.count_for(confirmed) == Some(target)
-            && self.in_window(observed, opens, planned)
-            && self.bounds.can_start(upper, target, start)
+        let Some(planned) = self.clock.count_for(planned) else {
+            return false;
+        };
+        let Some(confirmed) = self.clock.count_for(confirmed) else {
+            return false;
+        };
+        self.bounds.covers_start(count, opens, planned, confirmed, start)
     }
 
     /// Bound the elapsed occupancy interval using its two actual readings.
