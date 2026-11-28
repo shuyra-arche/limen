@@ -1,11 +1,11 @@
 //! Organize early physical ranges and reserve explicitly mapped root storage.
 
-use super::{Boot, Exclusions, Retirement, bump::Bump};
+use super::{Boot, Exclusions, Retirement};
 use crate::metal::{
     memory::access::treaty::ram::MappedRange,
-    memory::allocator::bootstrap::RootInitialization,
     memory::allocator::treaty::{
-        Allocator, Allowance, Config, Error, Initial, RegionDescription, RegionOrigin, RootStorage,
+        Allocator, Allowance, Config, Error, Initial, InitialRegions, RegionDescription,
+        RegionOrigin, RootInitialization, RootReservation, RootStorage,
     },
     platform::{
         description::treaty::devicetree::memory::DtbMemory,
@@ -35,7 +35,6 @@ pub struct Regions<'a> {
 struct RootPlan {
     index: usize,
     region: RegionDescription,
-    physical: PhysicalRange,
     reserved: PhysicalRange,
 }
 
@@ -52,29 +51,6 @@ impl RootPlan {
             part(physical.start(), self.reserved.start()),
             part(self.reserved.end(), physical.end()),
         ]
-    }
-
-    fn take_storage<'m>(&self, mapping: &mut Option<MappedRange<'m>>) -> RootStorage<'m> {
-        let mut storage = mapping.take().expect("checked mapping");
-        let start = storage.physical().start();
-        if self.physical.start() != start {
-            let offset = self
-                .physical
-                .start()
-                .distance(start)
-                .expect("checked root offset");
-            let (_, suffix) = storage.split(offset).ok().expect("checked root start");
-            storage = suffix;
-        }
-        if self.physical.end() != storage.physical().end() {
-            let (prefix, _) = storage
-                .split(self.physical.length())
-                .ok()
-                .expect("checked root end");
-            storage = prefix;
-        }
-        assert_eq!(storage.physical(), self.physical);
-        RootStorage::new(storage, self.reserved, self.region.origin)
     }
 }
 
@@ -223,9 +199,12 @@ impl<'a> Regions<'a> {
         mapping: &mut Option<MappedRange<'m>>,
         layout: Layout,
     ) -> Result<Option<RootStorage<'m>>, RegionError> {
-        Ok(self
-            .plan_root(mapping.as_ref(), layout)?
-            .map(|plan| self.take_root(mapping, plan)))
+        let Some((plan, root)) = self.plan_root(mapping, layout)? else {
+            return Ok(None);
+        };
+        let storage = root.reserve();
+        self.remove_root(plan);
+        Ok(Some(storage))
     }
 
     /// Establish the fixed root and deliver initial Issued allocations before
@@ -252,42 +231,31 @@ impl<'a> Regions<'a> {
         if config.granule != ByteLength::new(self.granule.get()) {
             return Err(Error::Layout);
         }
-        let Some(plan) = self
-            .plan_root(mapping.as_ref(), config.layout()?)
+        let Some((plan, root)) = self
+            .plan_root(mapping, config.layout()?)
             .map_err(root_error)?
         else {
             return Ok(None);
         };
         let prepared = RootInitialization::prepare(
             config,
+            root,
             self.after_root(&plan),
             capacity,
             allowance_receiver,
             initial,
         )?;
-        // Consume the mapped root without mutating the list borrowed by
-        // the exact prepared iterator. All fallible checks have completed.
-        let storage = plan.take_storage(mapping);
-        let source = unsafe { prepared.install(storage) };
+        let source = unsafe { prepared.install() };
         self.clear();
         Ok(Some(source))
     }
 
-    fn after_root<'r>(
-        &'r self,
-        plan: &'r RootPlan,
-    ) -> impl Iterator<Item = RegionDescription> + Clone + 'r {
-        self.entries[..plan.index]
-            .iter()
-            .flatten()
-            .copied()
-            .chain(plan.remainder().into_iter().flatten())
-            .chain(
-                self.entries[plan.index + 1..self.length]
-                    .iter()
-                    .flatten()
-                    .copied(),
-            )
+    fn after_root(&self, plan: &RootPlan) -> InitialRegions<'_> {
+        InitialRegions {
+            before: &self.entries[..plan.index],
+            remainder: plan.remainder(),
+            after: &self.entries[plan.index + 1..self.length],
+        }
     }
 
     fn clear(&mut self) {
@@ -295,12 +263,12 @@ impl<'a> Regions<'a> {
         self.length = 0;
     }
 
-    fn plan_root(
+    fn plan_root<'r, 'm>(
         &self,
-        mapping: Option<&MappedRange<'_>>,
+        mapping: &'r mut Option<MappedRange<'m>>,
         layout: Layout,
-    ) -> Result<Option<RootPlan>, RegionError> {
-        let Some(mapped) = mapping else {
+    ) -> Result<Option<(RootPlan, RootReservation<'r, 'm>)>, RegionError> {
+        let Some(mapped) = mapping.as_ref() else {
             return Ok(None);
         };
         let Some((index, region)) = self
@@ -310,58 +278,35 @@ impl<'a> Regions<'a> {
         else {
             return Ok(None);
         };
-        let address = mapped.address();
-        let limit = address
-            .checked_add(mapped.length())
-            .ok_or(RegionError::Range)?;
-        if layout.size() == 0
-            || mapped.physical().start().get() % layout.align() as u64
-                != (address % layout.align()) as u64
-        {
-            return Err(RegionError::Layout);
-        }
-        let mut bump = Bump::new(address..limit).ok_or(RegionError::Layout)?;
-        let bytes = bump.reserve(layout).ok_or(RegionError::Layout)?;
-        let offset = u64::try_from(bytes.start - address).map_err(|_| RegionError::Range)?;
-        let length = u64::try_from(bytes.len()).map_err(|_| RegionError::Range)?;
-        // Bump proved the offsets within the slice, whose length matches
-        // the checked physical extent.
-        let physical = mapped
-            .physical()
-            .start()
-            .advance(ByteLength::new(offset))
-            .and_then(|start| start.range(ByteLength::new(length)))
-            .ok_or(RegionError::Range)?;
-        let reserved = PhysicalRange::new(
-            physical.start().align_down(self.granule),
-            physical
-                .end()
-                .align_up(self.granule)
-                .ok_or(RegionError::Range)?,
-        )
-        .ok_or(RegionError::Range)?;
+        let Some(root) =
+            RootReservation::prepare(mapping, layout, self.granule, region).map_err(|error| {
+                match error {
+                    Error::Range => RegionError::Range,
+                    _ => RegionError::Layout,
+                }
+            })?
+        else {
+            return Ok(None);
+        };
+        let reserved = root.reserved();
         let left = region.physical.start() < reserved.start();
         let right = reserved.end() < region.physical.end();
         if left && right && self.length == self.entries.len() {
             return Err(RegionError::Capacity);
         }
-
-        Ok(Some(RootPlan {
-            index,
-            region,
-            physical,
-            reserved,
-        }))
+        Ok(Some((
+            RootPlan {
+                index,
+                region,
+                reserved,
+            },
+            root,
+        )))
     }
 
-    fn take_root<'m>(
-        &mut self,
-        mapping: &mut Option<MappedRange<'m>>,
-        plan: RootPlan,
-    ) -> RootStorage<'m> {
+    fn remove_root(&mut self, plan: RootPlan) {
         let [left, right] = plan.remainder();
         let index = plan.index;
-        let storage = plan.take_storage(mapping);
         match (left, right) {
             (Some(left), Some(right)) => {
                 self.entries.copy_within(index + 1..self.length, index + 2);
@@ -378,7 +323,6 @@ impl<'a> Regions<'a> {
                 self.entries[self.length] = None;
             }
         }
-        storage
     }
 }
 

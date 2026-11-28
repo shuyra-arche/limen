@@ -5,15 +5,19 @@
 The firmware or loader enters one major CPU. The trusted image provides its
 ordinary stack and local storage with a fixed Sync node supply. Metal enters
 the supplied stack, masks interrupts and installs the architecture's terminal
-vectors. All three backends then call `entry::boot::start`.
+vectors. All three backends then enter the shared Metal admission path.
 
 Common major admission checks the hardware stack pointer against the reserved
 range, reads back the installed CPU state and compares the CPU identity with
 the supplied ID. The selected firmware adapter validates its input. The entry
 calls the image-defined `limen_platform_ready(Boot)` once. The image receives the
 major ID and the admitted device-tree extent or firmware map when available.
-A rejected handoff uses early diagnostics and requests failure shutdown.
-[Entry](../server/src/entry/boot/mod.rs) · [Admission](../server/src/metal/platform/boot/major.rs)
+Metal validates the resident stack ranges against the image under the original
+trusted identity mapping. It delivers a single owned Admission through the
+Boot Treaty. Entry then calls the image; it uses the physical stack and
+firmware-buffer ranges carried by admission. A rejected handoff uses early
+diagnostics and requests failure shutdown.
+[Entry](../server/src/entry/boot/mod.rs) · [Boot Treaty](../server/src/metal/platform/boot/treaty/mod.rs)
 
 On RV64 the image links its materials with `limen_riscv_major!`. OpenSBI enters
 one major Hart. The entry loads the linked stack pointer and installs the

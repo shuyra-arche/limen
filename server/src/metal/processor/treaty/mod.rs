@@ -87,3 +87,6 @@ pub use super::executor::launch::{Minor, StartError, Startup};
 
 #[cfg(limen_target)]
 pub use super::executor::local::{LocalStorage, stack::Stack};
+
+#[cfg(limen_firmware = "sbi")]
+pub use super::description::riscv64::cpu::RiscvCpus;

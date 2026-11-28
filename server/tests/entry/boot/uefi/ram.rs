@@ -1,93 +1,31 @@
-use core::{
-    arch::asm,
-    sync::atomic::{AtomicUsize, Ordering},
-};
-
 use kernel::{
     entry::boot::{Boot, Condition, Retirement},
     metal::memory::allocator::treaty::RegionOrigin,
 };
 use limen_treaty::model::ByteLength;
-use uefi::{
-    Status,
-    boot::{self as firmware, AllocateType, MemoryType, PAGE_SIZE},
-    mem::memory_map::MemoryMap,
-};
+use uefi::{Status, boot::PAGE_SIZE};
 
-use super::{foundation, memory};
+use super::{foundation, window::Window};
 
-const BYTES: usize = foundation::PAGES * PAGE_SIZE;
-static WINDOW: AtomicUsize = AtomicUsize::new(0);
-static ROOT: AtomicUsize = AtomicUsize::new(0);
-
-fn translation_root() -> usize {
-    let root;
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        asm!("mov {}, cr3", out(reg) root, options(nomem, nostack, preserves_flags));
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        asm!("mrs {}, ttbr0_el1", out(reg) root, options(nomem, nostack, preserves_flags));
-    }
-    root
-}
+static WINDOW: Window<{ foundation::PAGES }> = Window::new();
 
 pub(super) fn prepare() -> Result<(), Status> {
-    let map = firmware::memory_map(MemoryType::LOADER_DATA).map_err(|error| error.status())?;
-    // Select from the real map. Use the low end of the largest conventional
-    // descriptor so allocating the final map at the high end leaves room.
-    let start = map
-        .entries()
-        .filter(|entry| entry.ty == MemoryType::CONVENTIONAL && entry.phys_start >= 0x10_0000)
-        .max_by_key(|entry| entry.page_count)
-        .filter(|entry| entry.page_count >= foundation::PAGES as u64)
-        .ok_or(Status::NOT_FOUND)?
-        .phys_start;
-    drop(map);
-    let pages = firmware::allocate_pages(
-        AllocateType::Address(start),
-        MemoryType::LOADER_DATA,
-        foundation::PAGES,
-    )
-    .map_err(|error| error.status())?;
-    assert_eq!(pages.as_ptr().addr() as u64, start);
-    // This is the fixture's unused private grant. The firmware may scrub it
-    // on free. The final map must establish that it stayed conventional RAM.
-    unsafe { firmware::free_pages(pages, foundation::PAGES) }.map_err(|error| error.status())?;
-    ROOT.store(translation_root(), Ordering::Relaxed);
-    WINDOW.store(pages.as_ptr().addr(), Ordering::Release);
-    Ok(())
+    WINDOW.prepare()
 }
 
 pub(super) fn check(boot: &Boot<'_>) {
-    let start = WINDOW.load(Ordering::Acquire);
-    assert_ne!(start, 0);
-    assert_eq!(translation_root(), ROOT.load(Ordering::Relaxed));
-    let scope = memory::extent(start as u64, (start + BYTES) as u64);
-    let map = boot.firmware_map().unwrap();
-    assert!(map.regions().any(|region| {
-        region.kind == MemoryType::CONVENTIONAL.0 && region.physical.covers(scope)
-    }));
-    assert!(
-        boot.exclusions()
-            .entries()
-            .all(|entry| !entry.physical.overlaps(scope))
-    );
-
+    let scope = WINDOW.inspect(boot);
     let mut evidence = Retirement::new(scope);
     let mut descriptions = [None; 1];
     // The scope was granted to this guest as conventional RAM and stayed
     // conventional through the final map. It contained no firmware stack,
     // translation tables, or device buffers. The QEMU fixture never submits
-    // the grant to a device or to another processor. The active identity view
-    // remains the canonical one, and the major is now on its resident stack.
-    for condition in [
-        Condition::RuntimeStack,
-        Condition::ReadersGone,
-        Condition::TranslationRetired,
-    ] {
-        unsafe { evidence.record(condition) };
+    // the grant to a device or to another processor. The unchanged root
+    // still provides the canonical view, and no old translation user of
+    // this particular extent survives the firmware handoff.
+    unsafe {
+        evidence.record(Condition::NoEarlyBorrow);
+        evidence.record(Condition::TranslationRetired);
     }
     let granule = ByteLength::new(PAGE_SIZE as u64);
     assert!(

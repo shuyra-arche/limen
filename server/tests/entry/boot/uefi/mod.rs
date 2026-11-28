@@ -22,6 +22,8 @@ mod memory;
 mod ram;
 #[path = "../../../metal/sync/native.rs"]
 mod synchronization;
+#[path = "../material/window.rs"]
+mod window;
 
 static MINOR_STACK: Stack<{ 32 * 1024 }> = Stack::new();
 static MINOR_LOCAL: LocalStorage<5> = LocalStorage::new(Supply::new());

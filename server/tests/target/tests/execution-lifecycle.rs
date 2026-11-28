@@ -11,6 +11,7 @@ mod native;
 
 guest::entry! {
     platform: platform::Platform::native(4),
+    prepare: native::prepare_uefi,
     test: |boot| {
         native::check(boot, guest::finish)
     },

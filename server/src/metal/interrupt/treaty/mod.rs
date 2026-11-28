@@ -13,3 +13,6 @@ pub use ipi::{Issuance, NotifyProcessor};
 #[cfg(limen_target)]
 pub use reminder::{Reminder, ReminderError, ReminderProgress};
 pub use route::{RouteControl, RouteOperation, RouteState};
+
+#[cfg(all(limen_target, target_arch = "riscv64"))]
+pub use super::riscv64::internal::supervisor::Supervisor;

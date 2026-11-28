@@ -19,8 +19,9 @@ fn every_condition_must_cover_the_requested_physical_scope() {
         image(),
         range(0x1100, 0x1200),
         range(0x1300, 0x1400),
-        Some(0x6001..0x6010),
+        Some(range(0x6001, 0x6010)),
         Some(map),
+        Some(range(0xb000, 0xb078)),
         None,
     );
     let page = range(0x4000, 0x5000);
@@ -61,8 +62,9 @@ fn fixed_claims_outlive_retirement_evidence_and_preserve_partial_pages() {
         image(),
         range(0x1100, 0x1200),
         range(0x1300, 0x1400),
-        Some(0x6001..0x6010),
+        Some(range(0x6001, 0x6010)),
         Some(map),
+        Some(range(0xb000, 0xb078)),
         None,
     );
     assert!(
@@ -75,7 +77,21 @@ fn fixed_claims_outlive_retirement_evidence_and_preserve_partial_pages() {
             .entries()
             .any(|entry| entry.occupant == Occupant::MajorStack && entry.fixed())
     );
-    let mut retirement = Retirement::new(range(0x1000, 0x7000));
+    let scope = range(0x1000, 0x7000);
+    let mut independent = Retirement::new(scope);
+    let free = range(0x2000, 0x3000);
+    unsafe {
+        independent.record(Condition::NoEarlyBorrow);
+        independent.record(Condition::TranslationRetired);
+    }
+    assert!(early.retains(free, Some(&independent)));
+    unsafe { independent.record(Condition::DevicesIsolated) };
+    assert!(!early.retains(free, Some(&independent)));
+    assert!(early.retains(range(0x1000, 0x2000), Some(&independent)));
+    assert!(early.retains(range(0x3000, 0x4000), Some(&independent)));
+    assert!(early.retains(range(0x7000, 0x8000), Some(&independent)));
+
+    let mut retirement = Retirement::new(scope);
     for condition in CONDITIONS {
         unsafe { retirement.record(condition) };
     }
