@@ -6,6 +6,7 @@ use crate::metal::{
     memory::allocator::treaty::{
         self as allocator, AllocationConstruction, AllocationId, AllocationPermit,
         AllocationPermitSlot, Allowance, Candidate, InitialAccess, LayoutLimit, MappedStorage,
+        RamPurpose,
     },
     sync::treaty::{TurnAccess, TurnAcquireError, TurnLock, TurnMode, TurnPlan, TurnWorkspace},
 };
@@ -111,6 +112,13 @@ impl PendSpace {
         Self::with_permit(AllocationPermitSlot::page_tables())
     }
 
+    /// Supply the permanent initial spending position for ordinary RAM Cells.
+    /// The original issuer bounds the first publication to Read/Write; this
+    /// spending position does not itself grant access to a published Cell.
+    pub const fn for_cells() -> Self {
+        Self::with_permit(AllocationPermitSlot::cells())
+    }
+
     const fn with_permit(permit_slot: AllocationPermitSlot) -> Self {
         Self {
             permit_slot,
@@ -212,9 +220,13 @@ impl Handle {
         self,
         held: &mut TurnAccess<'_>,
         storage: &MappedStorage<'_>,
+        purpose: RamPurpose,
     ) -> Result<InitialAccess, Error> {
         let permit = self.resolve(held)?;
         let initial = storage.initial_access(permit)?;
+        if permit.purpose() != purpose {
+            return Err(allocator::Error::PermitLimit.into());
+        }
         permit.check_allowance(held)?;
         Ok(initial)
     }

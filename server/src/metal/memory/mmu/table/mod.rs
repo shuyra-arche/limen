@@ -14,7 +14,9 @@ use crate::{
     },
     metal::{
         identity::treaty::Generation,
-        memory::allocator::treaty::{AllocationId, InitialAccess, MappedStorage, Retired},
+        memory::allocator::treaty::{
+            AllocationId, InitialAccess, MappedStorage, RamPurpose, Retired,
+        },
         sync::treaty::{TurnAcquireError, TurnLock, TurnMode, TurnWorkspace},
     },
 };
@@ -300,8 +302,11 @@ impl TableStore {
         cell.plan(&mut plan);
         plan.insert(&self.state).expect("original TableStore");
         let committed = plan.acquire(mode, |held| {
-            let InitialAccess::ReadWrite =
-                issuer.initial_access(held, original.as_ref().expect("unpublished material"))?;
+            let InitialAccess::ReadWrite = issuer.initial_access(
+                held,
+                original.as_ref().expect("unpublished material"),
+                RamPurpose::PageTable,
+            )?;
             let state = held.access(&self.state).expect("original TableStore");
             if !matches!(&state.node, Node::Vacant) {
                 return Err(TableError::Occupied);

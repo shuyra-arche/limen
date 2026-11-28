@@ -35,6 +35,13 @@ impl AllocationPermitSlot {
         }
     }
 
+    pub(crate) const fn cells() -> Self {
+        Self {
+            purpose: RamPurpose::Cell,
+            initial: Some(InitialAccess::ReadWrite),
+        }
+    }
+
     pub(in crate::metal::memory::allocator) fn initial_access(&self) -> Option<InitialAccess> {
         self.initial
     }
@@ -76,6 +83,10 @@ impl AllocationPermit {
 
     pub(crate) fn allowance(self) -> AllowanceId {
         self.allowance
+    }
+
+    pub(crate) fn purpose(self) -> RamPurpose {
+        self.slot.purpose
     }
 
     pub(crate) fn plan_allowance(self, plan: &mut TurnPlan<'_, '_>) -> Result<(), Error> {
