@@ -7,8 +7,7 @@
 use core::{hint::spin_loop, time::Duration};
 use guest::platform;
 use kernel::metal::{
-    chrono::x86_64::hpet::Hpet,
-    memory::access::treaty::device::DeviceWindow,
+    chrono::x86_64::hpet::Hpet, memory::access::treaty::device::DeviceWindow,
     platform::boot::treaty::write,
 };
 use limen_treaty::model::InternalAddress;

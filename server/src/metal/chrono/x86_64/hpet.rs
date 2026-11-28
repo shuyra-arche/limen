@@ -184,8 +184,7 @@ mod native {
         register(window, CONFIGURATION) & LEGACY == 0
             && register(window, STATUS) == 0
             && (0..timers).all(|timer| {
-                register(window, TIMER_BASE + timer * TIMER_STRIDE) & (TIMER_IRQ | TIMER_FSB)
-                    == 0
+                register(window, TIMER_BASE + timer * TIMER_STRIDE) & (TIMER_IRQ | TIMER_FSB) == 0
             })
     }
 
