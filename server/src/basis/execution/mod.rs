@@ -25,7 +25,7 @@ use crate::{
     },
     metal::{
         chrono::treaty::Deadline,
-        interrupt::treaty::AbsoluteTimer,
+        interrupt::treaty::{Reminder, ReminderError, ReminderProgress},
         processor::treaty::{
             self, Dispatcher, Dispatchers, LeaveReceipt, LocalExecution, Major, ProcessorId,
             Terminal,
@@ -382,7 +382,7 @@ impl Execution {
     /// Reuse its original receiver through any unsettled native effects.
     /// Keep its interrupt handler from borrowing the comparator during this
     /// ordinary exclusive access.
-    pub unsafe fn service_deadlines<T: AbsoluteTimer, const N: usize>(
+    pub unsafe fn service_deadlines<T: Reminder, const N: usize>(
         &self,
         sign: &Sign<'_, N>,
         timer: &mut T,
@@ -399,59 +399,30 @@ impl Execution {
         Self::program_deadlines(sign, timer, next, due)
     }
 
-    fn program_deadlines<T: AbsoluteTimer, const N: usize>(
+    fn program_deadlines<T: Reminder, const N: usize>(
         sign: &Sign<'_, N>,
         timer: &mut T,
         next: Option<u64>,
         due: bool,
     ) -> Result<DeadlineProgress, DeadlineError<T::Failure>> {
-        let timer_error = DeadlineError::Timer;
-        if timer.pending_effect().map_err(timer_error)?.is_some() {
-            timer.confirm_effect().map_err(timer_error)?;
-            return Ok(DeadlineProgress::Recheck);
-        }
-        let armed = timer
-            .confirmed_deadline()
-            .map_err(timer_error)?
-            .map(|deadline| sign.clock.count_for(deadline).ok_or(Error::Timing))
-            .transpose()
-            .map_err(DeadlineError::Execution)?;
-        let now = sign
-            .clock
-            .sample()
-            .ok_or(DeadlineError::Execution(Error::Timing))?
-            .count();
-        if armed.is_some_and(|count| count <= now) {
-            // Preserve the source until its receiver acquires the original
-            // IRQ. Deasserting a level source earlier can lose its claim.
-            return Ok(DeadlineProgress::AwaitInterrupt);
-        }
-        if due || next.is_some_and(|count| count <= now) {
-            return Ok(DeadlineProgress::Recheck);
-        }
-
-        let (result, count) = match (armed, next) {
-            (None, Some(count)) => (timer.arm_at(sign.clock.deadline(count)), count),
-            (Some(old), Some(count)) if count < old => {
-                (timer.advance_deadline(sign.clock.deadline(count)), count)
-            }
-            (None, None) => return Ok(DeadlineProgress::Idle),
-            _ => return Ok(DeadlineProgress::Armed),
+        // A remaining Due entry requires ordinary progress before a new
+        // request. A live physical expiry still owns its actual reception.
+        let next = if due {
+            None
+        } else {
+            next.map(|count| sign.clock.deadline(count))
         };
-        if let Err(error) = result {
-            // The backend samples again just before programming. If the
-            // deadline was crossed and no effect escaped, ordinary expiry
-            // can take over without retrying the obsolete write.
-            let reached = sign
-                .clock
-                .sample()
-                .is_some_and(|sample| sample.count() >= count);
-            if reached && matches!(timer.pending_effect(), Ok(None)) {
-                return Ok(DeadlineProgress::Recheck);
-            }
-            return Err(timer_error(error));
-        }
-        Ok(DeadlineProgress::Armed)
+        let progress = timer.recheck(sign.clock, next).map_err(|error| match error {
+            ReminderError::Timing => DeadlineError::Execution(Error::Timing),
+            ReminderError::Timer(error) => DeadlineError::Timer(error),
+        })?;
+        Ok(match progress {
+            ReminderProgress::AwaitInterrupt => DeadlineProgress::AwaitInterrupt,
+            ReminderProgress::Recheck => DeadlineProgress::Recheck,
+            _ if due => DeadlineProgress::Recheck,
+            ReminderProgress::Idle => DeadlineProgress::Idle,
+            ReminderProgress::Armed => DeadlineProgress::Armed,
+        })
     }
 
     fn settle_deadlines<const N: usize>(

@@ -109,6 +109,11 @@ mod deadline;
 #[cfg(all(limen_target, target_arch = "x86_64"))]
 pub use deadline::DeadlineTimer;
 
+#[cfg(any(test, all(limen_target, target_arch = "x86_64")))]
+mod reminder;
+#[cfg(all(limen_target, target_arch = "x86_64"))]
+pub use reminder::CountdownTimer;
+
 mod ipi;
 pub use ipi::{IpiIssue, IpiRoute, IpiTarget};
 
