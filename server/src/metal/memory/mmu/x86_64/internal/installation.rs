@@ -122,6 +122,16 @@ impl NativeRoot {
         )
     }
 
+    #[cfg(limen_cooperative)]
+    pub(in crate::metal::memory::mmu) unsafe fn synchronize_leaf(
+        address: limen_treaty::model::InternalAddress,
+    ) {
+        unsafe {
+            asm!("mfence", "invlpg [{address}]", "mfence",
+                address = in(reg) address.get(), options(nostack, preserves_flags));
+        }
+    }
+
     pub(in crate::metal::memory::mmu) unsafe fn install(&self, next: Controls) {
         unsafe {
             asm!("mov cr3, {next}", next = in(reg) next.cr3, options(nostack, preserves_flags));

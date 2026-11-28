@@ -207,7 +207,8 @@ impl Tree {
 
     #[cfg(any(limen_cooperative, test))]
     fn location(&self, node: Slot) -> Option<(Slot, Side)> {
-        self.parent(node).map(|parent| (parent, self.side(parent, node)))
+        self.parent(node)
+            .map(|parent| (parent, self.side(parent, node)))
     }
 
     #[cfg(any(limen_cooperative, test))]
@@ -275,7 +276,9 @@ impl Tree {
     fn repair(&mut self, mut child: Option<Slot>, mut hole: Option<(Slot, Side)>) {
         while child != self.root && !self.red(child) {
             let (parent, side) = hole.expect("non-root black deficit");
-            let mut sibling = self.child(parent, side.other()).expect("black-height sibling");
+            let mut sibling = self
+                .child(parent, side.other())
+                .expect("black-height sibling");
             if self.red(Some(sibling)) {
                 self.color(sibling, Color::Black);
                 self.color(parent, Color::Red);

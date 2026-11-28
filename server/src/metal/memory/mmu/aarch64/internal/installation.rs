@@ -195,6 +195,17 @@ impl NativeRoot {
         })
     }
 
+    #[cfg(limen_cooperative)]
+    pub(in crate::metal::memory::mmu) unsafe fn synchronize_leaf(
+        address: limen_treaty::model::InternalAddress,
+    ) {
+        let operand = (address.get() >> 12) & ((1u64 << 44) - 1);
+        unsafe {
+            asm!("dsb ish", "tlbi vaae1is, {operand}", "dsb ish", "isb",
+                operand = in(reg) operand, options(nostack, preserves_flags));
+        }
+    }
+
     pub(in crate::metal::memory::mmu) unsafe fn install(&self, next: Controls) {
         let disable_walk = match self.format.root {
             Root::Lower => LOWER_WALK_DISABLED,

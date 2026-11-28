@@ -173,15 +173,16 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
         owner.reserve_span(range(base, base + 8192)),
         Err(nest::Error::Conflict)
     );
-    let second = owner
-        .reserve_span(range(base + 4096, base + 8192))
-        .unwrap();
+    let second = owner.reserve_span(range(base + 4096, base + 8192)).unwrap();
     assert_eq!(
         owner.reserve_span(range(base + 8192, base + 12288)),
         Err(nest::Error::Capacity)
     );
     owner.begin_release_span(first).unwrap();
-    assert_eq!(owner.observe_span(first).unwrap().phase, SpanPhase::Shutting);
+    assert_eq!(
+        owner.observe_span(first).unwrap().phase,
+        SpanPhase::Shutting
+    );
     assert_eq!(
         owner.reserve_span(range(base, base + 4096)),
         Err(nest::Error::Conflict)
@@ -194,6 +195,11 @@ pub fn check(mut boot: Boot<'_>, complete: fn() -> !) -> ! {
     owner.finish_release_span(replacement).unwrap();
     owner.begin_release_span(second).unwrap();
     owner.finish_release_span(second).unwrap();
+    // An already populated owned branch may still contain exact vacant
+    // leaves. Reserving such a leaf must not admit its occupied neighbor.
+    let vacant_leaf = owner.reserve_span(range(alias + 4096, alias + 8192)).unwrap();
+    owner.begin_release_span(vacant_leaf).unwrap();
+    owner.finish_release_span(vacant_leaf).unwrap();
     // The original Nest retirement must close and settle this reservation
     // before it can withdraw its native root.
     let remaining = owner.reserve_span(range(base, base + 4096)).unwrap();

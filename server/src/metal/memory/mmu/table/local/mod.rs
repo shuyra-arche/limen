@@ -11,6 +11,11 @@ use limen_treaty::model::PhysicalAddress;
 #[cfg(limen_cooperative)]
 use limen_treaty::model::{InternalAddress, InternalRange};
 
+#[cfg(limen_cooperative)]
+mod translation;
+#[cfg(limen_cooperative)]
+pub use translation::{LocalTranslation, TranslationPhase};
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Stage {
     Prepared,
@@ -46,6 +51,8 @@ pub struct LocalRoot<'control, 'scope> {
     stage: Stage,
     #[cfg(limen_cooperative)]
     available: [u64; 8],
+    #[cfg(limen_cooperative)]
+    translations: usize,
     #[cfg(limen_cooperative)]
     retirement: Retirement,
 }
@@ -166,6 +173,8 @@ impl TableStore {
             #[cfg(limen_cooperative)]
             available,
             #[cfg(limen_cooperative)]
+            translations: 0,
+            #[cfg(limen_cooperative)]
             retirement: Retirement::new(self, id),
         })
     }
@@ -181,15 +190,25 @@ impl LocalRoot<'_, '_> {
         .then_some((self.id, self.next))
     }
 
-    /// Whether a range belongs to the original owned root's empty branches.
-    /// This is a fixed layout boundary, not a claim that no current mapping
-    /// occupies the range. The Nest is responsible for subsequent reservations.
     #[cfg(limen_cooperative)]
-    pub(crate) fn admits_span(&self, range: InternalRange) -> bool {
+    pub(crate) fn has_translations(&self) -> bool {
+        self.translations != 0
+    }
+
+    /// Admit an original vacant layout range or an exactly checked vacant
+    /// interval of one already owned leaf table. Borrowed firmware paths
+    /// never qualify. The exclusive LocalRoot owner preserves the layout
+    /// check until the Nest commits its address reservation.
+    #[cfg(limen_cooperative)]
+    pub(crate) fn admits_span(
+        &self,
+        range: InternalRange,
+        mode: TurnMode,
+    ) -> Result<bool, TableError> {
         use super::TableFormat;
 
         if self.installed().is_none() {
-            return false;
+            return Ok(false);
         }
         let first = range.start();
         let last = InternalAddress::new(range.end().get() - 1);
@@ -204,14 +223,18 @@ impl LocalRoot<'_, '_> {
             TableFormat::X86_64(format) if format.is_canonical_range(range) => {
                 (format.index(first, level), format.index(last, level))
             }
-            _ => return false,
+            _ => return Ok(false),
         };
-        let (Some(first), Some(last)) = indices else {
-            return false;
+        let (Some(start), Some(end)) = indices else {
+            return Ok(false);
         };
-        first <= last
-            && last < super::ENTRIES
-            && (first..=last).all(|index| self.available[index / 64] & (1 << (index % 64)) != 0)
+        if start <= end
+            && end < super::ENTRIES
+            && (start..=end).all(|index| self.available[index / 64] & (1 << (index % 64)) != 0)
+        {
+            return Ok(true);
+        }
+        self.vacant_leaf_range(first, last, mode)
     }
 
     /// Advance the actual native withdrawal and whole-tree settlement.
@@ -270,6 +293,10 @@ impl LocalRoot<'_, '_> {
     /// except the accesses needed for the verified switch itself.
     /// Continue both trees and their mappings through actual settlement.
     pub unsafe fn restore(&mut self) -> Result<(), SwitchError> {
+        #[cfg(limen_cooperative)]
+        if self.translations != 0 {
+            return Err(SwitchError::Current);
+        }
         match self.stage {
             Stage::Installed | Stage::Restoring => {
                 self.stage = Stage::Restoring;

@@ -76,6 +76,16 @@ impl NativeRoot<'_> {
             .is_none_or(|mode| self.profile().supports(mode))
     }
 
+    #[cfg(limen_cooperative)]
+    pub(in crate::metal::memory::mmu) unsafe fn synchronize_leaf(
+        address: limen_treaty::model::InternalAddress,
+    ) {
+        unsafe {
+            asm!("fence rw, rw", "sfence.vma {address}, x0", "fence rw, rw",
+                address = in(reg) address.get(), options(nostack));
+        }
+    }
+
     pub(in crate::metal::memory::mmu) unsafe fn install(&self, next: Context) {
         // All supported paged contexts share ASID zero.
         unsafe {

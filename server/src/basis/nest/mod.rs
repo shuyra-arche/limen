@@ -7,8 +7,8 @@ use core::ptr;
 use limen_treaty::model::InternalRange;
 
 mod span;
-pub use span::{SpanId, SpanObservation, SpanPhase, SpanStorage};
 use span::SpanIndex;
+pub use span::{SpanId, SpanObservation, SpanPhase, SpanStorage};
 
 use crate::metal::{
     identity::treaty::Generation,
@@ -185,6 +185,9 @@ impl Nest {
         &'static self,
         root: LocalRoot<'control, 'scope>,
     ) -> Result<LocalNest<'control, 'scope>, (LocalRoot<'control, 'scope>, Error)> {
+        if root.has_translations() {
+            return Err((root, Error::Busy));
+        }
         let Some((table, context)) = root.installed() else {
             return Err((root, Error::State));
         };
@@ -256,9 +259,7 @@ impl LocalNest<'_, '_> {
     /// root's original unoccupied layout. This trusted owner does not imply
     /// a public NestPermit or a Recoverable Span.
     pub fn reserve_span(&mut self, range: InternalRange) -> Result<SpanId, Error> {
-        if !range.start().get().is_multiple_of(4096)
-            || !range.end().get().is_multiple_of(4096)
-        {
+        if !range.start().get().is_multiple_of(4096) || !range.end().get().is_multiple_of(4096) {
             return Err(Error::Scope);
         }
         self.binding.state().acquire(|state| {
@@ -266,8 +267,17 @@ impl LocalNest<'_, '_> {
             if record.phase != Phase::Open {
                 return Err(Error::Shut);
             }
-            if !self.root.admits_span(range) {
-                return Err(Error::Scope);
+            Ok(())
+        })??;
+        // The exclusive LocalRoot keeps this layout check valid across the
+        // Nest Turn acquisition. Never acquire table Turns under the Nest.
+        if !self.root.admits_span(range, TurnMode::Slow).map_err(Error::Table)? {
+            return Err(Error::Scope);
+        }
+        self.binding.state().acquire(|state| {
+            let record = state.record(self.id())?;
+            if record.phase != Phase::Open {
+                return Err(Error::Shut);
             }
             state.spans.reserve(self.id(), range)
         })?

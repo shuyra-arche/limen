@@ -198,6 +198,25 @@ mod bound {
             self.settle(unsafe { Native::observe() })
         }
 
+        /// Synchronize one actual leaf under the same confirmed local scope.
+        /// A context change is not a substitute for this completion.
+        #[cfg(limen_cooperative)]
+        pub(in crate::metal::memory::mmu) unsafe fn synchronize_leaf(
+            &self,
+            expected: Context,
+            address: limen_treaty::model::InternalAddress,
+        ) -> Result<(), SwitchError> {
+            Native::check(self.installation.processor())?;
+            if self.current() != Some(expected) || !expected.is_current() {
+                return Err(SwitchError::Current);
+            }
+            unsafe { Native::synchronize_leaf(address) };
+            if !expected.is_current() {
+                return Err(SwitchError::Unconfirmed);
+            }
+            Ok(())
+        }
+
         fn settle(&mut self, observed: Controls) -> Result<LocalInstall, SwitchError> {
             let (previous, installed) = self.installation.complete(observed)?;
             Ok(LocalInstall {

@@ -33,6 +33,22 @@ pub(crate) struct RetainedRange<'a> {
 unsafe impl Send for RetainedRange<'_> {}
 
 impl<'a> RetainedRange<'a> {
+    /// Locate one naturally aligned descriptor without recreating a Rust
+    /// reference to storage that the original hardware may still access.
+    #[cfg(limen_cooperative)]
+    pub(crate) fn word(&self, index: usize) -> Option<NonNull<u64>> {
+        let offset = index.checked_mul(core::mem::size_of::<u64>())?;
+        let end = offset.checked_add(core::mem::size_of::<u64>())?;
+        if end > self.bytes.len() {
+            return None;
+        }
+        let pointer = self.bytes.as_ptr().cast::<u8>().wrapping_add(offset);
+        if !pointer.addr().is_multiple_of(core::mem::align_of::<u64>()) {
+            return None;
+        }
+        NonNull::new(pointer.cast())
+    }
+
     /// Recover exclusive access through the original pointer and mapping.
     ///
     /// # Safety

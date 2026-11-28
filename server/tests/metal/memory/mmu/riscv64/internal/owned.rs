@@ -55,6 +55,7 @@ unsafe extern "C" {
 struct Witness([u64; 512]);
 
 static WITNESS: Witness = Witness([0x51ab_0dcd_1234_abcd; 512]);
+static REPLACEMENT: Witness = Witness([0x8c11_772e_3210_6543; 512]);
 static mut WRITABLE: u64 = 0x1234;
 static SPENDING: PendSpace = PendSpace::for_page_tables();
 static CONSTRUCTION: [AllocationConstruction; CAPACITY] =
@@ -349,6 +350,52 @@ pub fn check(boot: &Boot<'_>) {
     let value: u64;
     unsafe { asm!("ld {}, 0({})", out(reg) value, in(reg) ALIAS, options(nostack, readonly)) };
     assert_eq!(value, WITNESS.0[0]);
+
+    // Retain the actual live leaf slot, not a second private byte borrow.
+    use kernel::metal::memory::mmu::treaty::{SwitchError, TranslationPhase};
+    let address = InternalAddress::new(ALIAS + PAGE);
+    let target = PhysicalAddress::new(witness);
+    let mut edit = active
+        .prepare_translation(address, target, LeafAccess::ReadOnly, Fast)
+        .unwrap();
+    assert_eq!(edit.phase(), TranslationPhase::Prepared);
+    assert!(matches!(
+        active.prepare_translation(address, target, LeafAccess::ReadOnly, Fast),
+        Err(kernel::metal::memory::mmu::treaty::TableError::Occupied)
+    ));
+    assert_eq!(unsafe { active.restore() }, Err(SwitchError::Current));
+    unsafe { active.install_translation(&mut edit, Fast) }.unwrap();
+    assert_eq!(edit.phase(), TranslationPhase::Active);
+    let value: u64;
+    unsafe { asm!("ld {}, 0({})", out(reg) value, in(reg) address.get(), options(nostack, readonly)) };
+    assert_eq!(value, WITNESS.0[0]);
+    unsafe { active.remove_translation(&mut edit, Fast) }.unwrap();
+    assert_eq!(edit.phase(), TranslationPhase::Removed);
+    let replacement_physical = ptr::from_ref(&REPLACEMENT).addr() as u64;
+    assert!(extent(read_only, writable)
+        .covers(extent(replacement_physical, replacement_physical + PAGE)));
+    assert_ne!(replacement_physical, witness);
+    let mut replacement = active
+        .prepare_translation(
+            address,
+            PhysicalAddress::new(replacement_physical),
+            LeafAccess::ReadOnly,
+            Fast,
+        )
+        .unwrap();
+    // Repeated retirement of the original cannot cancel the replacement.
+    unsafe { active.remove_translation(&mut edit, Fast) }.unwrap();
+    unsafe { active.install_translation(&mut replacement, Fast) }.unwrap();
+    let value: u64;
+    unsafe { asm!("ld {}, 0({})", out(reg) value, in(reg) address.get(), options(nostack, readonly)) };
+    assert_eq!(value, REPLACEMENT.0[0]);
+    unsafe { active.remove_translation(&mut replacement, Fast) }.unwrap();
+    let mut cancelled = active
+        .prepare_translation(address, target, LeafAccess::ReadOnly, Fast)
+        .unwrap();
+    unsafe { active.remove_translation(&mut cancelled, Fast) }.unwrap();
+    assert_eq!(cancelled.phase(), TranslationPhase::Removed);
+
     unsafe {
         (&raw mut WRITABLE).write_volatile(0x5678);
         assert_eq!((&raw const WRITABLE).read_volatile(), 0x5678);

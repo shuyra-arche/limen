@@ -37,6 +37,8 @@ mod local;
 #[cfg(limen_target)]
 pub use local::LocalRoot;
 #[cfg(limen_cooperative)]
+pub use local::{LocalTranslation, TranslationPhase};
+#[cfg(limen_cooperative)]
 mod retirement;
 #[cfg(limen_cooperative)]
 pub use retirement::TableProgress;
@@ -151,6 +153,8 @@ struct TablePage {
     initialized: bool,
     exposure: Exposure,
     children: usize,
+    #[cfg(limen_cooperative)]
+    claims: [u64; 8],
 }
 
 impl TablePage {
@@ -399,6 +403,8 @@ impl TableStore {
                 initialized: false,
                 exposure: Exposure::Private,
                 children: 0,
+                #[cfg(limen_cooperative)]
+                claims: [0; 8],
             });
             Ok(())
         })

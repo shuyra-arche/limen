@@ -169,7 +169,10 @@ impl SpanIndex {
         let Some(slot) = self.tree.first() else {
             return false;
         };
-        let (_, span) = self.entries.published_at(slot.index()).expect("indexed Span");
+        let (_, span) = self
+            .entries
+            .published_at(slot.index())
+            .expect("indexed Span");
         let id = span.id;
         match span.phase {
             SpanPhase::Open => self.close(id).expect("original open Span"),

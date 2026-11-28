@@ -64,6 +64,15 @@ impl Format {
         self.branch(address, Privilege::Kernel) == Some(observed & !(1 << 5))
     }
 
+    /// Verify the exact installed leaf, allowing native A/D updates only.
+    pub fn matches_leaf(self, expected: u64, observed: u64) -> bool {
+        const ACCESSED: u64 = 1 << 5;
+        const DIRTY: u64 = 1 << 6;
+        const WRITABLE: u64 = 1 << 1;
+        let mutable = ACCESSED | if expected & WRITABLE != 0 { DIRTY } else { 0 };
+        expected & !mutable == observed & !mutable
+    }
+
     /// An initialized leaf for an offline table using the admitted PAT.
     /// The caller retains the physical memory-type and alias relation.
     pub fn leaf(

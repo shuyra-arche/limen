@@ -542,6 +542,30 @@ impl Cell {
         mapping.bytes().get_mut(start..end).ok_or(Error::Scope)
     }
 
+    /// Locate one descriptor of this exact accepted, retained table use.
+    /// The caller must keep the TableStore and Cell protected during the
+    /// actual native access. The pointer does not grant a Rust byte borrow.
+    #[cfg(limen_cooperative)]
+    pub(crate) fn retained_word(
+        &self,
+        held: &mut CellTurn<'_>,
+        access: &CellAccess,
+        index: usize,
+    ) -> Result<core::ptr::NonNull<u64>, Error> {
+        let state = self.state(held)?;
+        let registered = state.accesses.table_accepted(access)?;
+        if registered.range != full_range(self.physical)
+            || registered.rights != Rights::READ_WRITE
+        {
+            return Err(Error::Scope);
+        }
+        let record = state.cell.as_ref().expect("live Cell");
+        let Storage::Retained(storage) = &record.storage else {
+            return Err(Error::Access);
+        };
+        storage.word(index).ok_or(Error::Scope)
+    }
+
     /// Retain the exact storage while ending its exclusive byte reference.
     pub(crate) fn freeze(&self, held: &mut CellTurn<'_>, access: &CellAccess) -> Result<(), Error> {
         let state = self.state(held)?;
